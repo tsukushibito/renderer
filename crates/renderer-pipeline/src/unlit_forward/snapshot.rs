@@ -1,9 +1,11 @@
 //! Standard linear RGBA8 rendering for engine snapshots.
 
+use crate::unlit_forward::{FrameSnapshot, View};
 #[cfg(feature = "vulkan")]
-use renderer::{EngineRenderError, PreparedEngineFrame, RenderedFrame, VulkanEngine};
+use renderer::vulkan::{EngineRenderError, PreparedEngineFrame, RenderedFrame, VulkanEngine};
 
-use renderer::engine::{FrameGraph, FrameSnapshot, SnapshotInputs};
+use renderer::geometry::SnapshotInputs;
+use renderer::graph::FrameGraph;
 use renderer::graph::{Graph, GraphError, GraphPool, ImageDesc, ImageHandle};
 
 use super::{ForwardConfig, forward};
@@ -19,7 +21,7 @@ pub fn build_graph(
 ) -> Result<FrameGraph, GraphError> {
     let mut graph = pool.begin()?;
     let inputs = snapshot.connect_graph(&mut graph)?;
-    let output = append_view(&mut graph, inputs, extension)?;
+    let output = append_view(&mut graph, snapshot.view(), inputs, extension)?;
     FrameGraph::select_output(graph, output, readback.then_some("view readback"))
 }
 
@@ -34,7 +36,7 @@ pub fn build_vulkan(
 ) -> Result<PreparedEngineFrame, EngineRenderError> {
     let mut prepared = engine.begin_graph()?;
     let inputs = engine.connect_snapshot(&mut prepared, snapshot)?;
-    let output = append_view(&mut prepared.graph, inputs, extension)?;
+    let output = append_view(&mut prepared.graph, snapshot.view(), inputs, extension)?;
     Ok(prepared.select_output(output, readback)?)
 }
 
@@ -52,10 +54,10 @@ pub fn render_vulkan(
 
 fn append_view(
     graph: &mut Graph,
+    view: &View,
     inputs: SnapshotInputs<'_>,
     extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
 ) -> Result<ImageHandle, GraphError> {
-    let view = inputs.view();
     let desc = ImageDesc::rgba8(view.width, view.height);
     let draws = inputs.draws();
     let name = if draws.len() == 0 {

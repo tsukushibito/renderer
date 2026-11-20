@@ -1,4 +1,4 @@
-use renderer::engine;
+use renderer_pipeline::unlit_forward::{Vertex, mesh_data};
 
 #[path = "../fixtures/engine_geometry.rs"]
 mod engine_geometry;

@@ -129,17 +129,20 @@ impl Prepared {
 
     /// Declare scene drawing and the standard output stage. Discard the
     /// frame Graph if a declaration fails.
-    pub fn add_passes(
+    pub fn add_scene_and_sdr_output(
         &mut self,
         graph: &mut Graph,
         frame: Frame<'_>,
         lights: &[PointLight],
+        exposure: f32,
     ) -> Result<FrameImages, GraphError> {
         self.check_lights(lights)?;
         match self {
-            Self::Forward(recipe) => recipe.add_passes(graph, frame),
-            Self::ForwardPlus(recipe) => recipe.add_passes(graph, frame, lights),
-            Self::Deferred(recipe) => recipe.add_passes(graph, frame),
+            Self::Forward(recipe) => recipe.add_scene_and_sdr_output(graph, frame, exposure),
+            Self::ForwardPlus(recipe) => {
+                recipe.add_scene_and_sdr_output(graph, frame, lights, exposure)
+            }
+            Self::Deferred(recipe) => recipe.add_scene_and_sdr_output(graph, frame, exposure),
         }
     }
 

@@ -228,7 +228,7 @@ impl VulkanRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RuntimeErrorKind;
+    use crate::vulkan::RuntimeErrorKind;
 
     #[test]
     fn exported_snapshots_are_indexed_and_still_check_graph_and_resource_kind() {

@@ -151,7 +151,7 @@ pub(super) fn build(
         index_count: scene.primitives[index].index_count,
         material: scene.primitives[index].material,
     };
-    let draw = |index| Draw::Indexed(geometry(index));
+    let draw = |index| Draw::WorldSpaceIndexed(geometry(index));
 
     inputs.opaque.clear();
     let indirect = if let Some(packed) = &packed {
@@ -244,7 +244,6 @@ pub(super) fn build(
             .placements
             .as_ref()
             .map_or(&[], |placements| &placements.transforms[..]),
-        exposure: 2.0,
     };
     let lights = resident
         .local_lights

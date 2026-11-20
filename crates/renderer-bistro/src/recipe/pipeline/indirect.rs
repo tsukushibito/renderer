@@ -303,7 +303,7 @@ impl Frame<'_> {
                     .iter()
                     .zip(commands)
                     .filter_map(|(group, args)| {
-                        args.map(|args| pbr::Draw::Indirect {
+                        args.map(|args| pbr::Draw::WorldSpaceIndirect {
                             args,
                             material: group.material,
                         })
@@ -317,7 +317,7 @@ impl Frame<'_> {
                     .filter(|group| include_material(group.material))
                     .flat_map(|group| {
                         group.visible_draws(&visible).map(move |draw| {
-                            pbr::Draw::Indexed(pbr::IndexedDraw {
+                            pbr::Draw::WorldSpaceIndexed(pbr::IndexedDraw {
                                 vertices: self.vertices,
                                 indices: self.indices,
                                 first_index: draw.range.first_index,

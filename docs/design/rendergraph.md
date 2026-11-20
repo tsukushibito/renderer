@@ -42,7 +42,7 @@ upload/copyによる保証の確立・失効、未知の穴の拒否、容量と
 nativeのresource／sampled view／depth viewの形式は用途ごとに導出し、
 共通format型の採用を未対応の用途やformatを許可する理由にはしない。
 
-Graphから`engine`の型を参照しない。`MeshData::upload_graph_slice`は不変なstreamと
+Graphはメッシュ台帳に依存しない。`GeometryData::upload_graph_slice`は不変なstreamと
 既存のindex要約を選び、Graphの狭いprivate builderがowner/全stream長/alignment/範囲を検査して追加する。
 engine側からGraphのpassを直接変更せず、任意のpublic byte uploadからmesh provenanceを作らない。
 元のArc、slice位置とappend失敗時の状態を維持し、chunkごとのpayload複製や追加scanを入れない。
@@ -233,7 +233,7 @@ poolを先に破棄しても残存planは安全に読めるが、通常処理を
 runtimeのowner・世代・内容revisionとの照合契約は維持する。
 `ImportRangesPool`を変更するときも、旧tokenのconsumerが残るpoolを通常frame中の最終解放へ移さない。
 
-CPU assetとsnapshotの準備は後述の`EngineCapacity`と`SnapshotPool`が担当する。
+CPU assetとsnapshotの準備は後述の`MeshCapacity`と`SnapshotPool`が担当する。
 native実行枠・物理資源・readback結果の準備は各backendの所有契約で別に管理する。
 全段階の達成可否は[通常フレームの規約](implementation-policy.md#steady-state-memory)と
 [検証状況](../verification/current.md)で確認し、この共通所有契約だけから
@@ -396,7 +396,7 @@ planはslotの予約領域を保持するため、culledを含む入力本文・
 領域内に残り得る。これはculled passを実行したり、最終内容を初期化済みにする意味ではない。
 全plan consumerが終わった後の次の`begin`で領域をresetし、配列の容量は解放しない。
 private asset参照の明示保守は`GraphPool::release_idle()`で行い、使用中slotには触れない。
-旧版assetの退役は、後述の`Engine::collect_retired_meshes()`と合わせて扱う。
+旧版assetの退役は、後述の`MeshRegistry::collect_retired_meshes()`と合わせて扱う。
 
 `graph-diagnostics`だけが追加の依存・寿命の解析情報を保持し、`CompiledGraph::dump()`と
 `culled_pass_names()`を提供する。dump文字列は要求時に一度生成し、追加の費用として別計測する。
@@ -529,7 +529,7 @@ exportする資源の全域にも有効な内容を要求する。
 
 メッシュは7個のf32（xyz、linear rgba）、stride 28 byte、u32の三角形indexを使う。
 CPUのRust構造体を直接キャストせず、各値を明示的にbyteへ変換する。
-`MeshData::new`はindex内容を一度検査し、最大値とcountを不変byte列に対応づける。
+`GeometryData::new`はindex内容を一度検査し、最大値とcountを不変byte列に対応づける。
 privateな管理下uploadはこの保証と既知のprefixを引き継ぐ。全量が確立した通常mesh描画は
 index本文を走査せず、頂点数と実Device上限を要約から照合する。検査用のupload Arcも保持しない。
 CPU assetや投入前のstaging入力自体の所有は別の必要な寿命である。
@@ -1050,21 +1050,21 @@ callbackは保持せず、完成命令は入力を所有する。準備済み容
 そのRGBA8・View寸法の契約は標準描画の便利経路で適用する。入力接続は利用側の任意の構成で使える。
 [公開標準パスと標準グラフ](#公開標準パスと標準グラフ)を同じ入力接続から選択できる。
 
-GPU非依存の`engine::Engine`は`EngineCapacity { meshes, materials, retired_mesh_versions }`で
-mesh/materialと変更済み旧版の容量を準備する。`Engine::new`の資源登録容量と、
+GPU非依存の`geometry::MeshRegistry`は`MeshCapacity { meshes, retired_mesh_versions }`で
+meshと変更済み旧版の容量を準備する。`MeshRegistry::new`の資源登録容量と、
 frameごとのdraw数・同時snapshot数の容量は別である。
 型付きハンドルはowner・index・generationを検査し、更新は同じハンドルの内容を進め、
-削除と再登録では世代を分ける。meshは不変の入力byte列、materialはlinear RGBA tintに限定する。
+削除と再登録では世代を分ける。meshは GeometryData の不変バイト列を保持する。UnlitのDrawはlinear RGBA tintを値として渡す。
 scene、ECS、asset loader、カメラの意味は呼び出し側が所有する。
 RendererはModel構造を持たず、mesh/materialと描画入力を扱う。
 Modelを含めない責務境界と理由は[実装方針](implementation-policy.md#21-ゲームエンジンへ提供するもの)を参照する。
 
 `SnapshotPool::new(draw_capacity, slots)`を準備し、
-`Engine::snapshot(&pool, &view, &draws)`で可変の`View`・`Draw`をcaptureする。
+`unlit_forward::FrameSnapshot::capture(&meshes, &pool, &view, &draws)`で可変の`View`・`Draw`をcaptureする。
 `FrameSnapshot`はmeshの版とtint・行列を所有し、
 後続のCPU更新・削除や一時借用に依存しない。`Matrix4`はcolumn-major、column vectorとし、
 `clip_from_world * world_from_model`を合成する。clip depthは0〜W、viewport高さは正、通常Zである。
-drawパラメーターはsnapshot作成時に公開の不変`RasterParameters`へ確定し、owned Raster構築で再走査しない。
+Unlitのdrawパラメーターはsnapshot作成時に `RasterParameters` を介して `RasterConstants` に確定し、owned Raster構築で再走査しない。
 利用側も同じ生成時保証を使い、途中失敗時はRaster passを追加しない。
 snapshotはCloneせず、必要な同時frame数のslotを準備する。capture途中の失敗と通常Dropは
 draw配列・mesh解決用scratchをpoolへ返す。元のEngineとSnapshotPoolは通常処理の間保持し、
@@ -1114,23 +1114,23 @@ GPU完了後までのnative保持は通常のRuntimeの仕事であり、frame m
 GPU・windowなしで標準Graphを構築できる。
 この単独経路はmeshをGraph内でuploadするため、小さい入力やCPU解析用とする。
 mesh解決はsnapshot slotの予約済み配列とsort/index検索で行い、frameごとの一時BTreeMapを作らない。
-`renderer::engine::FrameGraph::select_output(graph, output, readback)`は、使用するGraphと画像から
+`renderer::graph::FrameGraph::select_output(graph, output, readback)`は、使用するGraphと画像から
 最終出力・export・任意readback・登録解除責任を確定する。`readback`には必要な場合だけパス名を渡す。
 任意の描画構成でこのAPIを使える。
 `graph()`は読み取り専用で、`output()`／`readback()`／`output_ownership()`も確定時の対応を保つ。
 拡張と出力の選択は`build_graph`のcallback内で済ませる。任意の後続構築が必要なら
 `connect_graph`と通常のGraph APIを使う。公開fieldの差し替えで所有情報だけが古く残る経路は設けない。
 `FrameGraph::compile(self)`は同じbackingを不変planへ移し、構築Graphを残すための複製を行わない。
-持続的な実行では、利用側の`Engine`がCPU assetとsnapshotを所有し、`VulkanEngine`は
+持続的な実行では、利用側が `MeshRegistry` と取得したスナップショットを所有し、`VulkanEngine`は
 runtimeとGPU常駐を所有する。同じsnapshotを独立したrendererへ渡すことができ、
 バックエンド別のCPU asset登録は要求しない。
 
 meshの更新・削除は、既存snapshotが持つ版と両byte streamのanchorを
 予約済みretired領域へ移してから公開状態を進める。retired容量不足なら変更を拒否し、
-現在版・handleを部分的に更新しない。外側の`Arc<MeshData>`だけでなく、
-private uploadや複製した`MeshData`が持つvertex/index streamも旧版の保持条件に含める。
+現在版・handleを部分的に更新しない。外側の`Arc<GeometryData>`だけでなく、
+private uploadや複製した`GeometryData`が持つvertex/index streamも旧版の保持条件に含める。
 変更に紐づく明示保守では、idleなGraph slotのpinを`GraphPool::release_idle()`で返し、
-`Engine::collect_retired_meshes()`が最後の必要なstream anchorまで確認して退役させる。
+`MeshRegistry::collect_retired_meshes()`が最後の必要なstream anchorまで確認して退役させる。
 streamを共有する複数の内部版があっても、外部consumerが残る最後のanchorを失わない。
 通常frameの入力配列返却を保守例外へ移す方式ではない。
 
@@ -1147,7 +1147,7 @@ CPU更新・削除後の旧snapshotも、そのimmutableな版として独立し
 
 `unload_mesh`は対象数を返して論理退役をmarkし、`unload_all_meshes`と`cancel_uploads`もmarkのみを行う。
 旧assetのMap node・native登録・CPU sourceの実回収は、資源変更に紐づく明示的な
-`VulkanEngine::collect_retired_meshes(Option<&Engine>)`へ分離する。通常のsubmit/pollは
+`VulkanEngine::collect_retired_meshes(Option<&MeshRegistry>)`へ分離する。通常のsubmit/pollは
 frame・execution・readbackのleaseを従来どおり返すが、旧assetを最後に解放しない。
 準備済みframeがpinする登録は保守でも維持し、回収待ちentryもmesh予算へ含める。
 新assetの入場に不足する場合は、明示的な保守と再試行を呼び出し側で選ぶ。

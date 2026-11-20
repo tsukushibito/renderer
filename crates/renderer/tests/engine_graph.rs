@@ -11,18 +11,17 @@
 ))]
 
 use renderer::ImageFormat;
+use renderer_pipeline::unlit_forward::{Draw, FrameSnapshot, IDENTITY, Vertex, View, mesh_data};
 use std::time::{Duration, Instant};
 
-use renderer::engine::{
-    Draw, Engine, EngineCapacity, FrameOutputOwnership, FrameSnapshot, IDENTITY, Material,
-    MeshData, SnapshotPool, Vertex, View,
-};
+use renderer::geometry::{GeometryData, MeshCapacity, MeshRegistry, SnapshotPool};
+use renderer::graph::FrameOutputOwnership;
 use renderer::graph::{
     Attachment, Binding, BindingResource, BufferDesc, Graph, GraphCapacity, GraphErrorKind,
     ImageDesc, ImageHandle, LoadOp, PassHandle, RasterAttachments, StoreOp,
 };
 use renderer::program::{ManagedProgram, ManagedRasterProgram};
-use renderer::{
+use renderer::vulkan::{
     EngineFrameCapacity, EngineRenderError, FrameCapacity, FrameId, MeshCacheConfig,
     MeshPreparationError, MeshUploadState, ResourceClass, RuntimeConfig, ValidationMode,
     VulkanEngine, VulkanRuntime,
@@ -57,8 +56,8 @@ fn hdr(width: u32, height: u32) -> ImageDesc {
     }
 }
 
-fn quad(color: [f32; 4]) -> MeshData {
-    MeshData::new(
+fn quad(color: [f32; 4]) -> GeometryData {
+    mesh_data(
         &[
             [-1.0, -1.0, 0.5],
             [1.0, -1.0, 0.5],
@@ -181,18 +180,17 @@ fn without_snapshot(engine: &mut VulkanEngine) {
 }
 
 fn resident_versions(engine: &mut VulkanEngine) {
-    let mut assets = Engine::new(EngineCapacity {
+    let mut assets = MeshRegistry::new(MeshCapacity {
         meshes: 1,
-        materials: 1,
         retired_mesh_versions: 3,
     })
     .unwrap();
     let snapshots = SnapshotPool::new(1, 2).unwrap();
     let mesh = assets.create_mesh(quad([2.0, 0.0, 0.0, 1.0])).unwrap();
-    let material = assets.create_material(Material::default()).unwrap();
+    let tint = [1.0; 4];
     let draw = Draw {
         mesh,
-        material,
+        tint,
         world_from_model: IDENTITY,
     };
     let view = View {
@@ -201,7 +199,7 @@ fn resident_versions(engine: &mut VulkanEngine) {
         clip_from_world: IDENTITY,
         clear_color: [0.0; 4],
     };
-    let old = assets.snapshot(&snapshots, &view, &[draw]).unwrap();
+    let old = FrameSnapshot::capture(&assets, &snapshots, &view, &[draw]).unwrap();
     let mut not_ready = engine.begin_graph().unwrap();
     assert!(matches!(
         engine.connect_snapshot(&mut not_ready, &old),
@@ -219,7 +217,7 @@ fn resident_versions(engine: &mut VulkanEngine) {
         height: 13,
         ..view
     };
-    let new = assets.snapshot(&snapshots, &other_view, &[draw]).unwrap();
+    let new = FrameSnapshot::capture(&assets, &snapshots, &other_view, &[draw]).unwrap();
     prepare(engine, &new);
 
     let mut cancelled = engine.begin_graph().unwrap();
@@ -240,8 +238,8 @@ fn resident_versions(engine: &mut VulkanEngine) {
     let mut frame = engine.begin_graph().unwrap();
     let old_inputs = engine.connect_snapshot(&mut frame, &old).unwrap();
     let new_inputs = engine.connect_snapshot(&mut frame, &new).unwrap();
-    assert_eq!(*old_inputs.view(), view);
-    assert_eq!(*new_inputs.view(), other_view);
+    assert_eq!(*old.view(), view);
+    assert_eq!(*new.view(), other_view);
     let (vertices, indices) = {
         let draw = old_inputs.draws().next().unwrap();
         (draw.vertices, draw.indices)
@@ -299,7 +297,7 @@ fn resident_versions(engine: &mut VulkanEngine) {
     drop((old_inputs, new_inputs));
     drop((old, new));
     assets.delete_mesh(mesh).unwrap();
-    assets.delete_material(material).unwrap();
+
     let plan = frame.compile().unwrap();
     engine.unload_mesh(mesh);
     engine.collect_retired_meshes(Some(&assets)).unwrap();
@@ -450,32 +448,31 @@ fn mesh_only_capacity(mode: ValidationMode) {
         EngineFrameCapacity::default(),
     )
     .unwrap();
-    let mut assets = Engine::new(EngineCapacity {
+    let mut assets = MeshRegistry::new(MeshCapacity {
         meshes: 1,
-        materials: 1,
         retired_mesh_versions: 1,
     })
     .unwrap();
     let snapshots = SnapshotPool::new(1, 1).unwrap();
     let mesh = assets.create_mesh(quad([2.0, 0.0, 0.0, 1.0])).unwrap();
-    let material = assets.create_material(Material::default()).unwrap();
+    let tint = [1.0; 4];
     let view = View {
         width: 100,
         height: 100,
         clip_from_world: IDENTITY,
         clear_color: [0.0; 4],
     };
-    let snapshot = assets
-        .snapshot(
-            &snapshots,
-            &view,
-            &[Draw {
-                mesh,
-                material,
-                world_from_model: IDENTITY,
-            }],
-        )
-        .unwrap();
+    let snapshot = FrameSnapshot::capture(
+        &assets,
+        &snapshots,
+        &view,
+        &[Draw {
+            mesh,
+            tint,
+            world_from_model: IDENTITY,
+        }],
+    )
+    .unwrap();
     assert!(matches!(
         engine.prepare_snapshot(&snapshot, 1),
         Err(EngineRenderError::Preparation(
@@ -502,7 +499,7 @@ fn mesh_only_capacity(mode: ValidationMode) {
     drop(inputs);
     drop(snapshot);
     assets.delete_mesh(mesh).unwrap();
-    assets.delete_material(material).unwrap();
+
     let plan = frame.compile().unwrap();
     engine.unload_mesh(mesh);
     engine.collect_retired_meshes(Some(&assets)).unwrap();

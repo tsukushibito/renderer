@@ -12,9 +12,12 @@ use renderer::program::{
     RasterParameterLayout, RasterProgramDescriptor, ShaderStages, VertexAttribute, VertexFormat,
 };
 use renderer::{
-    D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
-    D3D12ValidationMode, FrameCapacity, ImageFormat, ResourceClass, RuntimeConfig, ValidationMode,
-    VulkanRuntime,
+    ImageFormat,
+    d3d12::{
+        D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
+        D3D12ValidationMode,
+    },
+    vulkan::{FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode, VulkanRuntime},
 };
 use std::{error::Error, time::Duration};
 

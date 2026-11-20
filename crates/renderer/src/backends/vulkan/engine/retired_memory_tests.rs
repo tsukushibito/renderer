@@ -2,13 +2,12 @@
 
 use super::test_input::{build_snapshot, render_snapshot};
 use super::*;
+use crate::unlit_test_input::{Draw, FrameSnapshot, IDENTITY, Vertex, View, mesh_data};
 use crate::{
-    FrameCapacity, ResourceClass, RuntimeConfig,
-    engine::{
-        Draw, Engine, EngineCapacity, IDENTITY, Material, MeshData, SnapshotPool, Vertex, View,
-    },
+    geometry::{MeshCapacity, MeshRegistry, SnapshotPool},
     graph::ImageDesc,
     measurement::Snapshot,
+    vulkan::{FrameCapacity, ResourceClass, RuntimeConfig},
 };
 use std::time::Instant;
 
@@ -19,14 +18,13 @@ fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
     if cfg!(debug_assertions) {
         panic!("allocation acceptance requires --release");
     }
-    let mut assets = Engine::new(EngineCapacity {
+    let mut assets = MeshRegistry::new(MeshCapacity {
         meshes: 2,
-        materials: 1,
         retired_mesh_versions: 1,
     })
     .unwrap();
     let input = || {
-        MeshData::new(
+        mesh_data(
             &[[-0.4, -0.4, 0.25], [0.4, -0.4, 0.25], [0.0, 0.4, 0.25]].map(|position| Vertex {
                 position,
                 color: [1.0; 4],
@@ -37,7 +35,7 @@ fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
     };
     let old = assets.create_mesh(input()).unwrap();
     let current = assets.create_mesh(input()).unwrap();
-    let material = assets.create_material(Material::default()).unwrap();
+    let tint = [1.0; 4];
     let snapshots = SnapshotPool::new(2, 3).unwrap();
     let view = View {
         width: 8,
@@ -47,13 +45,12 @@ fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
     };
     let draw = |mesh| Draw {
         mesh,
-        material,
+        tint,
         world_from_model: IDENTITY,
     };
-    let old_snapshot = assets.snapshot(&snapshots, &view, &[draw(old)]).unwrap();
-    let current_snapshot = assets
-        .snapshot(&snapshots, &view, &[draw(current)])
-        .unwrap();
+    let old_snapshot = FrameSnapshot::capture(&assets, &snapshots, &view, &[draw(old)]).unwrap();
+    let current_snapshot =
+        FrameSnapshot::capture(&assets, &snapshots, &view, &[draw(current)]).unwrap();
     let runtime = VulkanRuntime::new(RuntimeConfig {
         execution_slots: 3,
         resource_capacity: 16,
@@ -143,7 +140,7 @@ fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
     consume(&mut renderer, pending);
     for count in [0, 1, 2, 1] {
         let draws = [draw(current); 2];
-        let snapshot = assets.snapshot(&snapshots, &view, &draws[..count]).unwrap();
+        let snapshot = FrameSnapshot::capture(&assets, &snapshots, &view, &draws[..count]).unwrap();
         renderer.prepare_snapshot(&snapshot, 2).unwrap();
         let frame = render_snapshot(&mut renderer, &snapshot, true, |_, color| Ok(color)).unwrap();
         consume(&mut renderer, frame);

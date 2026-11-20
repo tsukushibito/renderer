@@ -498,10 +498,10 @@ fn report<B: Backend>(
 }
 
 #[cfg(feature = "vulkan")]
-impl Backend for renderer::VulkanRuntime {
+impl Backend for renderer::vulkan::VulkanRuntime {
     const RECORDING_CANCEL: bool = false;
-    type Pending = renderer::Submission;
-    type Completed = renderer::SubmissionResult;
+    type Pending = renderer::vulkan::Submission;
+    type Completed = renderer::vulkan::SubmissionResult;
     fn cancel_recording(&mut self, _: &CompiledGraph) {}
     fn submit(&mut self, graph: &CompiledGraph) -> Self::Pending {
         self.submit(graph).unwrap()
@@ -544,7 +544,7 @@ pub fn vulkan(baseline: bool) {
         panic!("memory acceptance requires --release");
     }
     let start = Snapshot::now();
-    let mut runtime = renderer::VulkanRuntime::new(renderer::RuntimeConfig {
+    let mut runtime = renderer::vulkan::VulkanRuntime::new(renderer::vulkan::RuntimeConfig {
         execution_slots: IN_FLIGHT,
         resource_capacity: 64,
         staging_bytes: 16 * 1024,
@@ -556,42 +556,42 @@ pub fn vulkan(baseline: bool) {
     assert_ne!(info.device_type, "CPU");
     let monitor = runtime.validation_monitor();
     let classes = [
-        renderer::ResourceClass::Buffer {
+        renderer::vulkan::ResourceClass::Buffer {
             desc: BufferDesc { size: 84 },
             count: IN_FLIGHT,
         },
-        renderer::ResourceClass::Buffer {
+        renderer::vulkan::ResourceClass::Buffer {
             desc: BufferDesc { size: 12 },
             count: IN_FLIGHT,
         },
-        renderer::ResourceClass::Buffer {
+        renderer::vulkan::ResourceClass::Buffer {
             desc: BufferDesc { size: 512 },
             count: IN_FLIGHT,
         },
-        renderer::ResourceClass::Image {
+        renderer::vulkan::ResourceClass::Image {
             desc: ImageDesc::rgba8(WIDTH, HEIGHT),
             count: IN_FLIGHT,
         },
-        renderer::ResourceClass::Image {
+        renderer::vulkan::ResourceClass::Image {
             desc: hdr(WIDTH, HEIGHT),
             count: IN_FLIGHT,
         },
-        renderer::ResourceClass::Image {
+        renderer::vulkan::ResourceClass::Image {
             desc: ImageDesc::depth32(WIDTH, HEIGHT),
             count: IN_FLIGHT,
         },
-        renderer::ResourceClass::Image {
+        renderer::vulkan::ResourceClass::Image {
             desc: ImageDesc::rgba8(1, 1),
             count: IN_FLIGHT * 2,
         },
-        renderer::ResourceClass::Image {
+        renderer::vulkan::ResourceClass::Image {
             desc: hdr(1, 1),
             count: IN_FLIGHT * 2,
         },
     ];
     runtime
         .prepare_working_set(
-            renderer::FrameCapacity {
+            renderer::vulkan::FrameCapacity {
                 graph: capacity(),
                 work_slots: IN_FLIGHT,
                 result_slots: IN_FLIGHT * 2,
@@ -628,9 +628,12 @@ pub fn vulkan(baseline: bool) {
         assert_eq!(validation.core_validation, Some(true));
         assert_eq!(validation.synchronization_validation, Some(true));
     } else {
-        assert_eq!(validation.requested, renderer::ValidationMode::Disabled);
+        assert_eq!(
+            validation.requested,
+            renderer::vulkan::ValidationMode::Disabled
+        );
     }
-    report::<renderer::VulkanRuntime>(
+    report::<renderer::vulkan::VulkanRuntime>(
         "vulkan_owned_raster_full_lifecycle",
         baseline,
         startup,
@@ -642,10 +645,10 @@ pub fn vulkan(baseline: bool) {
 }
 
 #[cfg(all(feature = "d3d12", windows))]
-impl Backend for renderer::D3D12Runtime {
+impl Backend for renderer::d3d12::D3D12Runtime {
     const RECORDING_CANCEL: bool = true;
-    type Pending = renderer::D3D12Submission;
-    type Completed = renderer::D3D12SubmissionResult;
+    type Pending = renderer::d3d12::D3D12Submission;
+    type Completed = renderer::d3d12::D3D12SubmissionResult;
     fn cancel_recording(&mut self, graph: &CompiledGraph) {
         drop(self.prepare(graph).unwrap());
     }
@@ -685,7 +688,7 @@ pub fn d3d12(baseline: bool) {
         panic!("memory acceptance requires --release");
     }
     let start = Snapshot::now();
-    let mut config = renderer::D3D12RuntimeConfig::default();
+    let mut config = renderer::d3d12::D3D12RuntimeConfig::default();
     config.capacity.executions = IN_FLIGHT;
     config.capacity.results = IN_FLIGHT * 2;
     config.capacity.resources = 16;
@@ -697,30 +700,30 @@ pub fn d3d12(baseline: bool) {
     config.capacity.upload_bytes = 16 * 1024;
     config.capacity.readback_bytes = 16 * 1024;
     config.capacity.scratch_bytes = 512;
-    let mut runtime = renderer::D3D12Runtime::new(config).unwrap();
+    let mut runtime = renderer::d3d12::D3D12Runtime::new(config).unwrap();
     let info = runtime.device_info();
     let monitor = runtime.validation_monitor();
     runtime
         .prepare_graph_working_set(
             None,
             &[
-                renderer::D3D12ImageClass {
+                renderer::d3d12::D3D12ImageClass {
                     desc: ImageDesc::rgba8(WIDTH, HEIGHT),
                     count: IN_FLIGHT,
                 },
-                renderer::D3D12ImageClass {
+                renderer::d3d12::D3D12ImageClass {
                     desc: hdr(WIDTH, HEIGHT),
                     count: IN_FLIGHT,
                 },
-                renderer::D3D12ImageClass {
+                renderer::d3d12::D3D12ImageClass {
                     desc: ImageDesc::depth32(WIDTH, HEIGHT),
                     count: IN_FLIGHT,
                 },
-                renderer::D3D12ImageClass {
+                renderer::d3d12::D3D12ImageClass {
                     desc: ImageDesc::rgba8(1, 1),
                     count: 2 * IN_FLIGHT,
                 },
-                renderer::D3D12ImageClass {
+                renderer::d3d12::D3D12ImageClass {
                     desc: hdr(1, 1),
                     count: 2 * IN_FLIGHT,
                 },
@@ -752,7 +755,7 @@ pub fn d3d12(baseline: bool) {
         validation.gpu_based_validation_enabled,
         cfg!(feature = "development-validation")
     );
-    report::<renderer::D3D12Runtime>(
+    report::<renderer::d3d12::D3D12Runtime>(
         "d3d12_owned_raster_full_lifecycle",
         baseline,
         startup,

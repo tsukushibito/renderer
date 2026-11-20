@@ -5,7 +5,7 @@ use std::{
     process::Command,
 };
 
-use renderer::{MemoryStats, RuntimeStats};
+use renderer::vulkan::{MemoryStats, RuntimeStats};
 
 use super::{IN_FLIGHT, MAX_SHADER_BINDINGS, Options, RunReport, Sample, frame_scaling};
 
@@ -412,7 +412,7 @@ fn memory(output: &mut String, s: &MemoryStats) -> std::fmt::Result {
     Ok(())
 }
 
-fn staging(output: &mut String, s: &renderer::StagingMemoryStats) -> std::fmt::Result {
+fn staging(output: &mut String, s: &renderer::vulkan::StagingMemoryStats) -> std::fmt::Result {
     write!(
         output,
         "{{\"capacity_bytes\":{},\"used_bytes\":{},\"reserved_bytes\":{},\"peak_reserved_bytes\":{},\"live_ranges\":{}}}",

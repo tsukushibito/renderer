@@ -161,7 +161,7 @@ impl D3D12Runtime {
 mod tests {
     use super::*;
     use crate::{
-        D3D12BufferClass, D3D12FrameCapacity, D3D12RuntimeConfig, D3D12RuntimeErrorKind,
+        d3d12::{D3D12BufferClass, D3D12FrameCapacity, D3D12RuntimeConfig, D3D12RuntimeErrorKind},
         graph::{BufferDesc, Graph},
     };
 

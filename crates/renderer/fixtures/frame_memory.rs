@@ -1,11 +1,9 @@
 //! Fixed-storage measurement driver. Report construction is outside the window.
 
 use super::image_transform::{self, Transform};
+use renderer_pipeline::unlit_forward::{Draw, FrameSnapshot, IDENTITY, Vertex, View, mesh_data};
 
-use renderer::engine::{
-    Draw, Engine, EngineCapacity, EngineErrorKind, FrameSnapshot, IDENTITY, Material, MeshData,
-    SnapshotPool, Vertex, View,
-};
+use renderer::geometry::{MeshCapacity, MeshErrorKind, MeshRegistry, SnapshotPool};
 use renderer::graph::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, Binding, BufferDesc, CompiledGraph,
     Graph, GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, LoadOp, PassKind,
@@ -88,7 +86,7 @@ fn recycle_graph_slots<const N: usize>(pool: &mut GraphPool) -> usize {
 }
 
 fn cpu_frames(
-    engine: &Engine,
+    engine: &MeshRegistry,
     snapshots: &SnapshotPool,
     pool: &mut GraphPool,
     draws: &[Draw; 4],
@@ -114,16 +112,15 @@ fn cpu_frames(
         phase(&mut phases[0], || {
             let over_capacity = [draws[0]; 5];
             assert_eq!(
-                engine
-                    .snapshot(snapshots, &view, &over_capacity)
+                FrameSnapshot::capture(engine, snapshots, &view, &over_capacity)
                     .err()
                     .unwrap()
                     .kind(),
-                EngineErrorKind::CapacityExhausted
+                MeshErrorKind::CapacityExhausted
             );
             // Abandon an acquired snapshot without building a frame. Its slot
             // must return without waiting or allocating replacement storage.
-            drop(engine.snapshot(snapshots, &view, &[]).unwrap());
+            drop(FrameSnapshot::capture(engine, snapshots, &view, &[]).unwrap());
         });
         phase(&mut phases[1], || {
             // Fill the prepared resource capacity exactly, reject the next
@@ -145,9 +142,7 @@ fn cpu_frames(
             drop(canceled);
         });
         let captured = phase(&mut phases[0], || {
-            engine
-                .snapshot(snapshots, &view, &draws[..draw_count])
-                .unwrap()
+            FrameSnapshot::capture(engine, snapshots, &view, &draws[..draw_count]).unwrap()
         });
         let extra_passes = frame % 3;
         let graph = phase(&mut phases[1], || {
@@ -194,8 +189,11 @@ fn cpu_frames(
         if frame >= IN_FLIGHT - 1 {
             phase(&mut phases[0], || {
                 assert_eq!(
-                    engine.snapshot(snapshots, &view, &[]).err().unwrap().kind(),
-                    EngineErrorKind::CapacityExhausted
+                    FrameSnapshot::capture(engine, snapshots, &view, &[])
+                        .err()
+                        .unwrap()
+                        .kind(),
+                    MeshErrorKind::CapacityExhausted
                 );
             });
             phase(&mut phases[1], || {
@@ -720,9 +718,8 @@ pub fn cpu_lifecycle(baseline: bool) {
         panic!("memory acceptance requires --release");
     }
     let start = Snapshot::now();
-    let mut engine = Engine::new(EngineCapacity {
+    let mut engine = MeshRegistry::new(MeshCapacity {
         meshes: 1,
-        materials: 1,
         retired_mesh_versions: 1,
     })
     .unwrap();
@@ -734,7 +731,7 @@ pub fn cpu_lifecycle(baseline: bool) {
     let mut shader_pool = GraphPool::new(shader_graph_capacity(), IN_FLIGHT).unwrap();
     let mesh = engine
         .create_mesh(
-            MeshData::new(
+            mesh_data(
                 &[
                     Vertex {
                         position: [-1.0, -1.0, 0.5],
@@ -754,10 +751,10 @@ pub fn cpu_lifecycle(baseline: bool) {
             .unwrap(),
         )
         .unwrap();
-    let material = engine.create_material(Material::default()).unwrap();
+    let tint = [1.0; 4];
     let draws = [Draw {
         mesh,
-        material,
+        tint,
         world_from_model: IDENTITY,
     }; 4];
     cpu_frames(&engine, &snapshots, &mut pool, &draws, WARMUP);
@@ -1176,11 +1173,11 @@ mod buffer {
     }
 
     #[cfg(feature = "vulkan")]
-    impl Backend for renderer::VulkanRuntime {
+    impl Backend for renderer::vulkan::VulkanRuntime {
         const RECORDING_CANCEL: bool = false;
         const DETACHED_REAP: bool = false;
-        type Pending = renderer::Submission;
-        type Completed = renderer::SubmissionResult;
+        type Pending = renderer::vulkan::Submission;
+        type Completed = renderer::vulkan::SubmissionResult;
         fn cancel_recording(&mut self, _: &CompiledGraph) {}
         fn reap_detached(&mut self) {}
         fn collect_retired(&mut self) {
@@ -1190,7 +1187,7 @@ mod buffer {
         fn reject_capacity(&mut self, graph: &CompiledGraph) {
             assert_eq!(
                 self.submit(graph).err().unwrap().kind(),
-                renderer::RuntimeErrorKind::CapacityExhausted
+                renderer::vulkan::RuntimeErrorKind::CapacityExhausted
             );
         }
         fn submit(&mut self, graph: &CompiledGraph) -> Self::Pending {
@@ -1204,7 +1201,7 @@ mod buffer {
             let mut wrong = [0xcc; 15];
             assert_eq!(
                 result.readback_into(pass, &mut wrong).unwrap_err().kind(),
-                renderer::RuntimeErrorKind::InvalidInput
+                renderer::vulkan::RuntimeErrorKind::InvalidInput
             );
             assert_eq!(wrong, [0xcc; 15]);
             assert_eq!(result.readback_len(pass).unwrap(), 16);
@@ -1220,17 +1217,17 @@ mod buffer {
             panic!("memory acceptance requires --release");
         }
         let start = Snapshot::now();
-        let config = renderer::RuntimeConfig {
+        let config = renderer::vulkan::RuntimeConfig {
             execution_slots: IN_FLIGHT,
             resource_capacity: 8,
             staging_bytes: 16 * 1024,
             staging_ranges: 32,
             max_shader_bindings: 8,
         };
-        let mut runtime = renderer::VulkanRuntime::new(config).unwrap();
+        let mut runtime = renderer::vulkan::VulkanRuntime::new(config).unwrap();
         assert_ne!(runtime.device_info().device_type, "CPU");
         let monitor = runtime.validation_monitor();
-        let frame_capacity = renderer::FrameCapacity {
+        let frame_capacity = renderer::vulkan::FrameCapacity {
             graph: graph_capacity(),
             work_slots: IN_FLIGHT,
             result_slots: IN_FLIGHT * 2,
@@ -1244,11 +1241,11 @@ mod buffer {
             .prepare_working_set(
                 frame_capacity,
                 &[
-                    renderer::ResourceClass::Buffer {
+                    renderer::vulkan::ResourceClass::Buffer {
                         desc: BufferDesc { size: 32 },
                         count: IN_FLIGHT,
                     },
-                    renderer::ResourceClass::Buffer {
+                    renderer::vulkan::ResourceClass::Buffer {
                         desc: BufferDesc { size: 16 },
                         count: IN_FLIGHT,
                     },
@@ -1292,9 +1289,12 @@ mod buffer {
             assert_eq!(validation.core_validation, Some(true));
             assert_eq!(validation.synchronization_validation, Some(true));
         } else {
-            assert_eq!(validation.requested, renderer::ValidationMode::Disabled);
+            assert_eq!(
+                validation.requested,
+                renderer::vulkan::ValidationMode::Disabled
+            );
         }
-        report::<renderer::VulkanRuntime>(
+        report::<renderer::vulkan::VulkanRuntime>(
             "vulkan_buffer_full_lifecycle",
             baseline,
             startup,
@@ -1319,18 +1319,18 @@ mod buffer {
     }
 
     #[cfg(all(feature = "d3d12", windows))]
-    impl Backend for renderer::D3D12Runtime {
+    impl Backend for renderer::d3d12::D3D12Runtime {
         const RECORDING_CANCEL: bool = true;
         const DETACHED_REAP: bool = true;
-        type Pending = renderer::D3D12Submission;
-        type Completed = renderer::D3D12SubmissionResult;
+        type Pending = renderer::d3d12::D3D12Submission;
+        type Completed = renderer::d3d12::D3D12SubmissionResult;
         fn cancel_recording(&mut self, graph: &CompiledGraph) {
             drop(self.prepare(graph).unwrap());
         }
         fn reject_capacity(&mut self, graph: &CompiledGraph) {
             assert_eq!(
                 self.prepare(graph).err().unwrap().kind(),
-                renderer::D3D12RuntimeErrorKind::CapacityExhausted
+                renderer::d3d12::D3D12RuntimeErrorKind::CapacityExhausted
             );
         }
         fn reap_detached(&mut self) {
@@ -1360,7 +1360,7 @@ mod buffer {
             let mut wrong = [0xcc; 15];
             assert_eq!(
                 result.readback_into(pass, &mut wrong).unwrap_err().kind(),
-                renderer::D3D12RuntimeErrorKind::InvalidInput
+                renderer::d3d12::D3D12RuntimeErrorKind::InvalidInput
             );
             assert_eq!(wrong, [0xcc; 15]);
             assert_eq!(result.readback_len(pass).unwrap(), 16);
@@ -1376,7 +1376,7 @@ mod buffer {
             panic!("memory acceptance requires --release");
         }
         let start = Snapshot::now();
-        let mut config = renderer::D3D12RuntimeConfig::default();
+        let mut config = renderer::d3d12::D3D12RuntimeConfig::default();
         config.capacity.executions = IN_FLIGHT;
         config.capacity.results = IN_FLIGHT * 2;
         config.capacity.resources = 2;
@@ -1388,7 +1388,7 @@ mod buffer {
         config.capacity.upload_bytes = 32;
         config.capacity.readback_bytes = 16;
         config.capacity.scratch_bytes = 16;
-        let mut runtime = renderer::D3D12Runtime::new(config).unwrap();
+        let mut runtime = renderer::d3d12::D3D12Runtime::new(config).unwrap();
         let monitor = runtime.validation_monitor();
         let (inputs, expected) = inputs();
         let mut pool = GraphPool::new(graph_capacity(), GRAPH_SLOTS).unwrap();
@@ -1415,7 +1415,7 @@ mod buffer {
             validation.gpu_based_validation_enabled,
             cfg!(feature = "development-validation")
         );
-        report::<renderer::D3D12Runtime>(
+        report::<renderer::d3d12::D3D12Runtime>(
             "d3d12_buffer_full_lifecycle",
             baseline,
             startup,

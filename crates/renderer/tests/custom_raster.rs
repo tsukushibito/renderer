@@ -216,13 +216,18 @@ fn custom_raster_draw_capacity_fails_before_implicit_growth() {
 mod native {
     use super::*;
     use renderer::{
-        D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
-        D3D12RuntimeErrorKind, D3D12ValidationMode, FrameCapacity, ResourceClass, RuntimeConfig,
-        RuntimeErrorKind, ValidationMode, VulkanRuntime,
+        d3d12::{
+            D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
+            D3D12RuntimeErrorKind, D3D12ValidationMode,
+        },
         graph::{
             BindingResource, BufferDesc, BufferHandle, CompiledGraph, ImageHandle, PassHandle,
         },
         program::ManagedRasterProgram,
+        vulkan::{
+            FrameCapacity, ResourceClass, RuntimeConfig, RuntimeErrorKind, ValidationMode,
+            VulkanRuntime,
+        },
     };
     use serde_json::json;
     use std::time::Duration;

@@ -72,9 +72,9 @@ pub struct IndexedDraw {
 /// vertices.
 #[derive(Clone, Copy, Debug)]
 pub enum Draw {
-    Indexed(IndexedDraw),
+    WorldSpaceIndexed(IndexedDraw),
     /// Opaque or alpha-masked geometry. The argument contains its geometry.
-    Indirect {
+    WorldSpaceIndirect {
         args: IndexedIndirectArgs,
         material: usize,
     },
@@ -93,6 +93,17 @@ pub enum Draw {
         first_transform: u32,
         instance_count: u32,
     },
+}
+
+impl Draw {
+    /// Draw a single model-space mesh using the indexed frame transform.
+    pub const fn model(geometry: IndexedDraw, transform_index: u32) -> Self {
+        Self::Instanced {
+            geometry,
+            first_transform: transform_index,
+            instance_count: 1,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -167,7 +178,7 @@ impl Batch {
         for draw in draws {
             // Frame preflight checked material indices and instance ranges.
             let command = match *draw {
-                Draw::Indexed(draw) => {
+                Draw::WorldSpaceIndexed(draw) => {
                     let bindings = Self::material_binding(
                         &mut self.bindings,
                         graph,
@@ -179,7 +190,7 @@ impl Batch {
                     )?;
                     Command::Indexed(indexed(draw, bindings, 1, parameters))
                 }
-                Draw::Indirect { args, material } => {
+                Draw::WorldSpaceIndirect { args, material } => {
                     let bindings = Self::material_binding(
                         &mut self.bindings,
                         graph,

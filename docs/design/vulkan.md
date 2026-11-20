@@ -619,6 +619,7 @@ pool所有者は通常処理中保持し、pool先終了後の最後のbacking�
 
 ### 大きなmeshの準備
 
+常駐側は `renderer::geometry::MeshSnapshot` のメッシュ版と描画定数を保持する。Unlitのビュー、色、行列は上位の `renderer_pipeline::unlit_forward` が解釈する。
 常駐入力の利用側Graphは`VulkanEngine::begin_graph`から始め、必要なsnapshotだけを`connect_snapshot`する。
 既存の準備済みframe scratchがmesh handleとrevisionごとの登録pinを保持し、Graphと一緒にcompile・cancel・submitへ進む。
 接続はRasterや出力を追加せず、出力の形式・寸法・個数をViewへ固定しない。

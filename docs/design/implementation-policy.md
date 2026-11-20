@@ -227,7 +227,7 @@ Forward/GGX、静的IBL、CSM/PCF、RGBA16F、Neutral、FXAAを第15章の出発
 
 | 整理前の結合 | 現在の責務境界 |
 |---|---|
-| `graph.rs`の資源型・固定操作・builderと`engine::MeshData`依存 | `graph.rs`は公開facadeとGraph所有状態。`graph/{resource,pass,error,builder}.rs`と既存解析を分離。meshの不変stream/provenance選択は`engine/graph.rs`、検査と追加はGraph内の狭いbuilderが所有し、Graphからengineへの依存を除去 |
+| `graph.rs`の資源型・固定操作・builderと`engine::MeshData`依存 | `graph.rs`は公開facadeとGraph所有状態。`graph/{resource,pass,error,builder}.rs`と既存解析を分離。meshの不変stream/provenance選択は`geometry.rs`、検査と追加はGraph内の狭いbuilderが所有し、Graphからengineへの依存を除去 |
 | Vulkan固定Programの作成、descriptor arena/cache、native記録 | `program.rs`が不変publicationを所有し、`program/{creation,bindings,record}.rs`へ分離。BindingPoolはinlineで容量・cache・leaseを管理し、追加allocation/Arc/lockなし。Graph型への依存はrecordの固定描画引数だけ |
 | Graph配下の物理資源所有とVulkan実行エラー | 両backendの`resources.rs`へ物理buffer/image/CPU Mapを分離し、Vulkanエラーは`error.rs`へ移した。工場はGraph型に依存しない。D3D12のCPUアクセスは作成・完了・排他的所有のprivate unsafe契約を明記し、runtime work/resultがDevice所有を保持 |
 | Vulkan表示のSwapchain所有、slot/cancel、記録と公開入口 | native `presentation/{surface,swapchain,slots,program,commands}.rs`が所有・退役・記録を担当。Graph側`presentation/{state,presenter,runtime,work}.rs`だけがcanonical状態とleaseを保持し、native側にGraph型を持ち込まない |
@@ -336,7 +336,7 @@ Rendererが制御しないdriver内部の確保は保証と区別し、未観測
 
 | 準備境界 | 通常フレームで使うものと容量 |
 |---|---|
-| `Engine::new(EngineCapacity)` | mesh/materialの登録枠、更新・削除された旧mesh版のretired枠 |
+| `MeshRegistry::new(MeshCapacity)` | meshの登録枠、更新・削除された旧mesh版のretired枠 |
 | `SnapshotPool::new(draw_capacity, slots)` | 可変draw入力のcapture、mesh解決scratch、同時snapshotの所有 |
 | `GraphPool::new(GraphCapacity, slots)` | resource/pass/access/draw、明示依存、初期化range、名前/upload byte、解析edge/区間/readerの予約領域 |
 | `ImportRangesPool::new(range_capacity, slots)` | runtimeが公開する不変な初期化範囲snapshot、Clone・返却用slot |
@@ -668,7 +668,7 @@ Graphの共通解析・backendへ、opaqueやBloom等の効果選択を追加す
 レンダーグラフへ組み立てる定義である。レンダーグラフはフレームごとのパスと資源の依存関係を表し、
 各パスはRaster、Compute、copyなどの処理単位となる。
 
-Engineはasset管理や不変なframe入力のcaptureを提供できる。runtimeは資源の常駐、同期、投入、GPU完了と退役を担う。
+`geometry::MeshRegistry` はメッシュの版を管理し、描画定数とともに不変な入力をcaptureする。Unlitの入力形式・tintは上位のレシピが扱う。runtimeは資源の常駐、同期、投入、GPU完了と退役を担う。
 入力のGraph接続自体が標準opaqueを追加する設計にはしない。
 `renderer_pipeline::unlit_forward::snapshot`は、Engineの入力接続とunlit Forwardを組み合わせた便利APIを提供する。
 利用側は同じ資源接続・実行経路で独自のGraphを構築できる。

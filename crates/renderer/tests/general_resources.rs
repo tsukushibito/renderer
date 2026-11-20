@@ -9,12 +9,14 @@ mod fixture;
 mod working_set;
 
 use renderer::{
-    D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode,
-    FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode, VulkanRuntime,
+    d3d12::{
+        D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode,
+    },
     graph::{
         Binding, BindingResource, BufferDesc, BufferHandle, CompiledGraph, GraphCapacity,
         GraphPool, ImageDesc, ImageHandle, ImportBuffer, ImportImage, PassHandle, ResourceKey,
     },
+    vulkan::{FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode, VulkanRuntime},
 };
 use std::time::Duration;
 
@@ -52,8 +54,8 @@ trait Backend {
     fn reconfigure(&mut self, classes: &[ResourceClass]) -> Result<(), String>;
 }
 impl Backend for VulkanRuntime {
-    type Pending = renderer::Submission;
-    type Result = renderer::SubmissionResult;
+    type Pending = renderer::vulkan::Submission;
+    type Result = renderer::vulkan::SubmissionResult;
     fn submit(&mut self, graph: &CompiledGraph) -> Result<Self::Pending, String> {
         VulkanRuntime::submit(self, graph).map_err(|e| format!("{:?}", e.kind()))
     }
@@ -101,8 +103,8 @@ impl Backend for VulkanRuntime {
     }
 }
 impl Backend for D3D12Runtime {
-    type Pending = renderer::D3D12Submission;
-    type Result = renderer::D3D12SubmissionResult;
+    type Pending = renderer::d3d12::D3D12Submission;
+    type Result = renderer::d3d12::D3D12SubmissionResult;
     fn submit(&mut self, graph: &CompiledGraph) -> Result<Self::Pending, String> {
         D3D12Runtime::submit(self, graph).map_err(|e| format!("{:?}", e.kind()))
     }
@@ -411,7 +413,7 @@ fn recording_transactions(dx: &mut D3D12Runtime) {
     let mut update = dx.submit(&write.compile().unwrap()).unwrap();
     assert_eq!(
         dx.submit_prepared(prepared).err().unwrap().kind(),
-        renderer::D3D12RuntimeErrorKind::StaleResource
+        renderer::d3d12::D3D12RuntimeErrorKind::StaleResource
     );
     // A stale recording must return all its native/metadata leases immediately.
     let fresh = dx.refresh_image(image.key()).unwrap();
@@ -556,7 +558,7 @@ fn failed_export_capture(strict: bool) {
     let plan = graph.compile().unwrap();
     assert_eq!(
         dx.prepare(&plan).err().unwrap().kind(),
-        renderer::D3D12RuntimeErrorKind::CapacityExhausted
+        renderer::d3d12::D3D12RuntimeErrorKind::CapacityExhausted
     );
     drop(plan);
     let mut graph = pool.begin().unwrap();

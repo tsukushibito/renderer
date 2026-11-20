@@ -39,9 +39,9 @@ pub struct Runtime {
 )]
 enum RuntimeInner {
     #[cfg(feature = "vulkan")]
-    Vulkan(crate::VulkanRuntime),
+    Vulkan(crate::vulkan::VulkanRuntime),
     #[cfg(all(feature = "d3d12", windows))]
-    D3D12(crate::D3D12Runtime),
+    D3D12(crate::d3d12::D3D12Runtime),
 }
 
 impl Runtime {
@@ -172,7 +172,7 @@ impl Runtime {
 
     /// Inspect Vulkan-specific device information, validation, or memory.
     #[cfg(feature = "vulkan")]
-    pub fn as_vulkan(&self) -> Option<&crate::VulkanRuntime> {
+    pub fn as_vulkan(&self) -> Option<&crate::vulkan::VulkanRuntime> {
         match &self.inner {
             RuntimeInner::Vulkan(runtime) => Some(runtime),
             #[cfg(all(feature = "d3d12", windows))]
@@ -182,7 +182,7 @@ impl Runtime {
 
     /// Inspect D3D12-specific device information, validation, or memory.
     #[cfg(all(feature = "d3d12", windows))]
-    pub fn as_d3d12(&self) -> Option<&crate::D3D12Runtime> {
+    pub fn as_d3d12(&self) -> Option<&crate::d3d12::D3D12Runtime> {
         match &self.inner {
             #[cfg(feature = "vulkan")]
             RuntimeInner::Vulkan(_) => None,

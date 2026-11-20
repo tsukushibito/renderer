@@ -2,9 +2,11 @@
 
 use super::{Backend, fixture, raster_capacity, raster_imports};
 use renderer::{
-    D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode,
-    FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode, VulkanRuntime,
+    d3d12::{
+        D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode,
+    },
     graph::{Binding, BindingResource, BufferDesc, GraphPool, ImageDesc},
+    vulkan::{FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode, VulkanRuntime},
 };
 
 fn return_without_allocating<T>(value: T) {
@@ -20,7 +22,7 @@ fn return_without_allocating<T>(value: T) {
 }
 
 pub(super) fn metadata(strict: bool) {
-    use renderer::D3D12RuntimeErrorKind::CapacityExhausted;
+    use renderer::d3d12::D3D12RuntimeErrorKind::CapacityExhausted;
 
     let mut dx = D3D12Runtime::new(D3D12RuntimeConfig {
         validation: if strict {
@@ -109,7 +111,7 @@ pub(super) fn metadata(strict: bool) {
         .unwrap();
     assert_eq!(
         dx.refresh_image(snapshot.key()).unwrap_err().kind(),
-        renderer::D3D12RuntimeErrorKind::StaleResource
+        renderer::d3d12::D3D12RuntimeErrorKind::StaleResource
     );
     dx.shutdown().unwrap();
 }

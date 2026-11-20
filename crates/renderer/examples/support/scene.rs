@@ -1,14 +1,15 @@
 //! The same small scene and external Graph extension for headless and display.
 
 use super::image_transform::{self, Transform};
+use renderer_pipeline::unlit_forward::{Draw, IDENTITY, Vertex, View, mesh_data};
 
 use renderer::{
-    engine::{Draw, EngineError, IDENTITY, MaterialHandle, MeshData, MeshHandle, Vertex, View},
+    geometry::{GeometryData, MeshError, MeshHandle},
     graph::{Graph, GraphError, ImageHandle},
 };
 
-pub fn triangle(color: [f32; 4]) -> Result<MeshData, EngineError> {
-    MeshData::new(
+pub fn triangle(color: [f32; 4]) -> Result<GeometryData, MeshError> {
+    mesh_data(
         &[
             Vertex {
                 position: [-0.75, -0.75, 0.25],
@@ -36,12 +37,12 @@ pub fn view(width: u32, height: u32) -> View {
     }
 }
 
-pub fn draw(mesh: MeshHandle, material: MaterialHandle, translation_x: f32) -> Draw {
+pub fn draw(mesh: MeshHandle, tint: [f32; 4], translation_x: f32) -> Draw {
     let mut world_from_model = IDENTITY;
     world_from_model[3][0] = translation_x;
     Draw {
         mesh,
-        material,
+        tint,
         world_from_model,
     }
 }

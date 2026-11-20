@@ -341,7 +341,7 @@ mod tests {
     #[ignore = "requires real D3D12 hardware; root serializes native acceptance"]
     fn d3d12_transition_batch_releases_temporary_com_references_on_every_exit() {
         use super::super::super::resources::DeviceBuffer;
-        use crate::{D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode};
+        use crate::d3d12::{D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode};
         use windows_core::{IUnknown, Interface};
         fn references(resource: &ID3D12Resource) -> u32 {
             // SAFETY: IUnknown is the prefix of this real resource's COM

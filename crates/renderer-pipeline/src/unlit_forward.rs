@@ -1,5 +1,7 @@
 //! An unlit Forward recipe assembled from the common raster passes.
 
+mod input;
+pub use input::{Draw, FrameSnapshot, IDENTITY, Matrix4, Vertex, View, mesh_data};
 pub mod snapshot;
 
 use std::borrow::Borrow;

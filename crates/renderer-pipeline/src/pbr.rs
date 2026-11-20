@@ -22,7 +22,7 @@ pub use draw::{Draw, IndexedDraw, Material, MaterialTextures};
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::{MAX_TRANSFORMS, Transform};
-pub use material::{AlphaMode, MaterialFactors, MaterialUniform, ResidentMaterial};
+pub use material::{AlphaMode, MaterialFactors, MaterialUniform, ResidentMaterialUniform};
 pub use recipe::{Prepared, Technique};
 pub use unshadowed::UnshadowedView;
 pub use vertex::PbrVertex;
@@ -220,14 +220,12 @@ pub struct Frame<'a> {
     pub camera_target: Option<BufferHandle>,
     /// Transforms referenced by the view's instance ranges.
     pub transforms: &'a [Transform],
-    /// Positive linear exposure passed to the Neutral tone mapper.
-    pub exposure: f32,
 }
 
 impl<'a> Frame<'a> {
     /// Select shadow input from the prepared view. Enabled shadows use a
     /// common caster list. Disabled shadows use the shared default depth.
-    pub fn with_defaults(
+    pub fn new(
         view: &'a PreparedView,
         materials: &'a [Material],
         opaque: &'a [Draw],
@@ -236,7 +234,13 @@ impl<'a> Frame<'a> {
         defaults: DefaultViews,
     ) -> Result<Self, GraphError> {
         if view.shadow_matrices().is_some() {
-            Ok(Self::new(view, materials, opaque, transparent, casters))
+            Ok(Self::with_cascades(
+                view,
+                materials,
+                opaque,
+                transparent,
+                casters,
+            ))
         } else {
             Ok(Self::unshadowed(
                 view,
@@ -248,9 +252,9 @@ impl<'a> Frame<'a> {
         }
     }
 
-    /// Use a common caster list for all cascades, transient targets and unit
-    /// exposure. Change `shadows` to supply per-cascade culling or reuse.
-    pub fn new(
+    /// Render all cascades to transient targets using the same caster list.
+    /// Override `shadows` for per-cascade culling or history reuse.
+    pub fn with_cascades(
         view: &'a PreparedView,
         materials: &'a [Material],
         opaque: &'a [Draw],
@@ -270,7 +274,6 @@ impl<'a> Frame<'a> {
             ),
             camera_target: None,
             transforms: &[],
-            exposure: 1.0,
         }
     }
 
@@ -284,7 +287,7 @@ impl<'a> Frame<'a> {
     ) -> Self {
         Self {
             shadows: FrameShadows::Disabled(placeholder),
-            ..Self::new(view, materials, opaque, transparent, &[])
+            ..Self::with_cascades(view, materials, opaque, transparent, &[])
         }
     }
 }

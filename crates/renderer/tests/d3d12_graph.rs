@@ -23,8 +23,8 @@ use renderer::graph::{
 };
 use renderer::program::{ManagedProgram, ManagedRasterProgram, SamplerDescriptor};
 use renderer::{
-    D3D12Runtime, D3D12RuntimeConfig, D3D12RuntimeErrorKind, D3D12ValidationMode, ResourceClass,
-    RuntimeConfig, RuntimeErrorKind, ValidationMode, VulkanRuntime,
+    d3d12::{D3D12Runtime, D3D12RuntimeConfig, D3D12RuntimeErrorKind, D3D12ValidationMode},
+    vulkan::{ResourceClass, RuntimeConfig, RuntimeErrorKind, ValidationMode, VulkanRuntime},
 };
 use serde_json::{Value, json};
 

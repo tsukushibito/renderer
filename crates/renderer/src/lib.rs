@@ -18,10 +18,13 @@ extern crate self as renderer;
 mod image_transform;
 
 pub mod capacity;
-pub mod engine;
 pub mod geometry;
 pub mod graph;
 mod image;
+// Native unit tests exercise the public Unlit inputs against this test build of renderer.
+#[cfg(test)]
+#[path = "../../renderer-pipeline/src/unlit_forward/input.rs"]
+mod unlit_test_input;
 pub use image::ImageFormat;
 pub mod profiling;
 pub use profiling::{GpuTiming, PresentationMetrics, SubmissionMetrics};
@@ -46,36 +49,10 @@ static TEST_ALLOCATOR: measurement::CountingAllocator<std::alloc::System> =
 mod backends;
 
 #[cfg(feature = "vulkan")]
-pub use backends::vulkan::engine::{
-    CompiledEngineFrame, CompiledEngineGraph, EngineFrameCapacity, EngineRenderError,
-    MeshCacheConfig, MeshCacheStats, MeshPreparationError, MeshUploadProgress, MeshUploadState,
-    PreparedEngineFrame, PreparedEngineGraph, RenderedFrame, VulkanEngine,
-};
-
-#[cfg(feature = "vulkan")]
-pub use backends::vulkan::graph::{
-    DeviceInfo, FrameCapacity, FrameCompletion, FrameId, FrameSubmission, MemoryHeapStats,
-    MemoryStats, ResourceClass, RuntimeConfig, RuntimeError, RuntimeErrorKind, RuntimeStats,
-    StagingMemoryStats, Submission, SubmissionResult, ValidationMonitor, ValidationReport,
-    VulkanRuntime,
-};
-
-#[cfg(feature = "vulkan")]
-pub use backends::vulkan::ValidationMode;
+pub mod vulkan;
 
 #[cfg(all(feature = "d3d12", windows))]
-pub use backends::d3d12::{
-    D3D12BufferClass, D3D12CommittedHeapStats, D3D12CommittedMemoryStats, D3D12DeviceInfo,
-    D3D12FrameCapacity, D3D12ImageClass, D3D12MemoryStats, D3D12PreparedGraph, D3D12Runtime,
-    D3D12RuntimeConfig, D3D12RuntimeError, D3D12RuntimeErrorKind, D3D12StagingMemoryStats,
-    D3D12Submission, D3D12SubmissionResult, D3D12ValidationMessage, D3D12ValidationMode,
-    D3D12ValidationMonitor, D3D12ValidationReport, D3D12VideoMemoryInfo,
-};
+pub mod d3d12;
 
-#[cfg(all(feature = "d3d12", feature = "presentation", windows))]
-pub use backends::d3d12::D3D12Presenter;
 #[cfg(feature = "presentation")]
 pub use presentation::{PresentOutcome, PresentationConfig};
-
-#[cfg(all(feature = "presentation", feature = "vulkan", windows))]
-pub use backends::vulkan::graph::Presenter;

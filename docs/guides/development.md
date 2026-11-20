@@ -1336,7 +1336,7 @@ Runtimeが未完了処理を所有し、容量不足なら利用側がpollや明
 readback結果は`FrameCompletion::result`から消費でき、未読結果の保持中にも完了済みnative資源を再利用できます。
 終了時の`drain_frames(timeout)`は結果を破棄するため、必要な結果を先に受け取ります。
 
-`engine::Engine`はGPUなしでmesh/materialとowned View/draw snapshotを扱い、
+`geometry::MeshRegistry`はGPUなしでメッシュの版を管理し、UnlitのView・Drawは `renderer_pipeline::unlit_forward` で捕捉します。
 `VulkanEngine`は外部で作ったsnapshotを上限付きGPU mesh cacheと通常のGraphへ接続します。
 `MeshCacheConfig`で常駐件数・論理byte数・未回収upload数を指定します。
 `prepare_snapshot(snapshot, non_mesh_resources)`／`poll_uploads`で分割転送を進め、必要なら`wait_uploads(timeout)`で明示的に待ちます。

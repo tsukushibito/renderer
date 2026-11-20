@@ -1392,7 +1392,10 @@ mod tests {
             #[cfg(feature = "development-validation")]
             crate::backends::vulkan::assert_real_validation(&runtime.diagnostics);
             #[cfg(not(feature = "development-validation"))]
-            assert_eq!(monitor.report().requested, crate::ValidationMode::Disabled);
+            assert_eq!(
+                monitor.report().requested,
+                crate::vulkan::ValidationMode::Disabled
+            );
             super::super::tests::prepare_scenario(
                 &mut runtime,
                 2,

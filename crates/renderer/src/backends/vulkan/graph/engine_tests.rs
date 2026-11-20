@@ -1,22 +1,25 @@
 //! Real engine-input contracts, including pending versions and external passes.
 
 use crate::image_transform::{self, Transform};
+use crate::unlit_test_input::{Draw, FrameSnapshot, IDENTITY, Vertex, View, mesh_data};
 use std::time::{Duration, Instant};
 
 use super::{FrameCapacity, ResourceClass, RuntimeConfig, VulkanRuntime};
 use crate::backends::vulkan::engine::{
     EngineFrameCapacity,
-    test_input::{Assets as Engine, build_snapshot, graph, render_snapshot},
+    test_input::{Assets, build_snapshot, graph, render_snapshot},
 };
 use crate::{
-    EngineRenderError, FrameId, MeshCacheConfig, MeshUploadState, PreparedEngineFrame,
-    RenderedFrame, VulkanEngine,
-    engine::{Draw, FrameSnapshot, IDENTITY, Material, MeshData, Vertex, View},
+    geometry::GeometryData,
     graph::{BufferDesc, Graph, GraphError, ImageDesc, PassHandle},
+    vulkan::{
+        EngineRenderError, FrameId, MeshCacheConfig, MeshUploadState, PreparedEngineFrame,
+        RenderedFrame, VulkanEngine,
+    },
 };
 
-fn mesh(color: [f32; 4]) -> MeshData {
-    MeshData::new(
+fn mesh(color: [f32; 4]) -> GeometryData {
+    mesh_data(
         &[[-0.4, -0.4, 0.25], [0.4, -0.4, 0.25], [0.0, 0.4, 0.25]]
             .map(|position| Vertex { position, color }),
         &[0, 1, 2],
@@ -24,7 +27,7 @@ fn mesh(color: [f32; 4]) -> MeshData {
     .unwrap()
 }
 
-fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Engine)) {
+fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Assets)) {
     let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
     tracing::dispatcher::with_default(&dispatch, || {
         let mut runtime = VulkanRuntime::new(RuntimeConfig {
@@ -86,7 +89,7 @@ fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Engine)) {
             EngineFrameCapacity::default(),
         )
         .unwrap();
-        let mut assets = Engine::new(4, 4).unwrap();
+        let mut assets = Assets::new(4).unwrap();
         test(&mut engine, &mut assets);
         engine.unload_all_meshes();
         assert!(
@@ -118,7 +121,7 @@ fn prepare_meshes(engine: &mut VulkanEngine, snapshot: &FrameSnapshot) {
 
 fn build_frame(
     engine: &mut VulkanEngine,
-    assets: &Engine,
+    assets: &Assets,
     view: &View,
     draws: &[Draw],
     readback: bool,
@@ -134,7 +137,7 @@ fn build_frame(
 
 fn render_frame(
     engine: &mut VulkanEngine,
-    assets: &Engine,
+    assets: &Assets,
     view: &View,
     draws: &[Draw],
     readback: bool,
@@ -175,11 +178,7 @@ fn collect(engine: &mut VulkanEngine, expected: &[(FrameId, PassHandle, usize, [
 fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
     with_engine(|engine, assets| {
         let mesh_handle = assets.create_mesh(mesh([1.0; 4])).unwrap();
-        let material = assets
-            .create_material(Material {
-                tint: [1.0, 0.0, 0.0, 1.0],
-            })
-            .unwrap();
+        let tint = [1.0, 0.0, 0.0, 1.0];
         let mut view = View {
             width: 32,
             height: 32,
@@ -188,7 +187,7 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
         };
         let mut draw = Draw {
             mesh: mesh_handle,
-            material,
+            tint,
             world_from_model: IDENTITY,
         };
         let mut first =
@@ -200,14 +199,7 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             16 * 32 + 16,
             [255, 0, 0, 255],
         )];
-        assets
-            .update_material(
-                material,
-                Material {
-                    tint: [0.0, 1.0, 0.0, 1.0],
-                },
-            )
-            .unwrap();
+        draw.tint = [0.0, 1.0, 0.0, 1.0];
         draw.world_from_model[3][0] = -0.75;
         let mut shifted =
             render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
@@ -219,14 +211,7 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             [0, 255, 0, 255],
         ));
         view.clip_from_world[3][0] = 0.75;
-        assets
-            .update_material(
-                material,
-                Material {
-                    tint: [0.0, 0.0, 1.0, 1.0],
-                },
-            )
-            .unwrap();
+        draw.tint = [0.0, 0.0, 1.0, 1.0];
         let mut camera =
             render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
         engine.release_output(&mut camera).unwrap();
@@ -241,9 +226,7 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
         assets
             .update_mesh(mesh_handle, mesh([1.0, 0.0, 1.0, 1.0]))
             .unwrap();
-        assets
-            .update_material(material, Material::default())
-            .unwrap();
+        draw.tint = [1.0; 4];
         let mut replaced =
             render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
         engine.release_output(&mut replaced).unwrap();
@@ -256,7 +239,7 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
         assets.delete_mesh(mesh_handle).unwrap();
         engine.unload_mesh(mesh_handle);
         engine.collect_retired_meshes(Some(assets)).unwrap();
-        assets.delete_material(material).unwrap();
+
         assert_eq!(engine.runtime().pending_frames(), 4);
         collect(engine, &expected);
         assert!(assets.snapshot(&view, &[draw]).is_err());
@@ -264,7 +247,7 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
 }
 
 #[test]
-#[ignore = "real-GPU opaque draw-list ownership through pending mesh/material deletion; requires Core/SyncVal"]
+#[ignore = "real-GPU opaque draw-list ownership through pending mesh/tint deletion; requires Core/SyncVal"]
 fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
     with_engine(|engine, assets| {
         let near = assets.create_mesh(mesh([1.0; 4])).unwrap();
@@ -273,38 +256,26 @@ fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
                 position,
                 color: [1.0; 4],
             });
-        let farther = MeshData::new(&far_vertices, &[0, 1, 2]).unwrap();
+        let farther = mesh_data(&far_vertices, &[0, 1, 2]).unwrap();
         let far = assets.create_mesh(farther).unwrap();
         let equal = assets.create_mesh(mesh([1.0; 4])).unwrap();
-        let red = assets
-            .create_material(crate::engine::Material {
-                tint: [1.0, 0.0, 0.0, 1.0],
-            })
-            .unwrap();
-        let green = assets
-            .create_material(crate::engine::Material {
-                tint: [0.0, 1.0, 0.0, 1.0],
-            })
-            .unwrap();
-        let blue = assets
-            .create_material(crate::engine::Material {
-                tint: [0.0, 0.0, 1.0, 1.0],
-            })
-            .unwrap();
-        let draws = [
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let green = [0.0, 1.0, 0.0, 1.0];
+        let blue = [0.0, 0.0, 1.0, 1.0];
+        let mut draws = [
             Draw {
                 mesh: near,
-                material: red,
+                tint: red,
                 world_from_model: IDENTITY,
             },
             Draw {
                 mesh: far,
-                material: green,
+                tint: green,
                 world_from_model: IDENTITY,
             },
             Draw {
                 mesh: equal,
-                material: blue,
+                tint: blue,
                 world_from_model: IDENTITY,
             },
         ]
@@ -328,14 +299,11 @@ fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
         };
         let mut first = render_frame(engine, assets, &view, &draws, true, extension).unwrap();
         engine.release_output(&mut first).unwrap();
-        assets
-            .update_material(
-                red,
-                crate::engine::Material {
-                    tint: [0.0, 1.0, 0.0, 1.0],
-                },
-            )
-            .unwrap();
+        for draw in &mut draws {
+            if draw.mesh == near {
+                draw.tint = [0.0, 1.0, 0.0, 1.0];
+            }
+        }
         assets.update_mesh(near, mesh([1.0; 4])).unwrap();
         let mut second = render_frame(engine, assets, &view, &draws, true, extension).unwrap();
         engine.release_output(&mut second).unwrap();
@@ -344,9 +312,6 @@ fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
             engine.unload_mesh(handle);
         }
         engine.collect_retired_meshes(Some(assets)).unwrap();
-        for handle in [red, green, blue] {
-            assets.delete_material(handle).unwrap();
-        }
         assert_eq!(engine.runtime().pending_frames(), 2);
         collect(
             engine,
@@ -422,10 +387,10 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
             ..view
         };
         let handle = assets.create_mesh(mesh([1.0; 4])).unwrap();
-        let material = assets.create_material(Material::default()).unwrap();
+        let tint = [1.0; 4];
         let draw = Draw {
             mesh: handle,
-            material,
+            tint,
             world_from_model: IDENTITY,
         };
         let captured = assets.snapshot(&black_view, &[draw]).unwrap();
@@ -485,7 +450,7 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         assets.delete_mesh(handle).unwrap();
         engine.unload_mesh(handle);
         engine.collect_retired_meshes(Some(assets)).unwrap();
-        assets.delete_material(material).unwrap();
+
         collect(
             engine,
             &[(
@@ -522,7 +487,7 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
 
     let mut runtime = VulkanRuntime::new_with_validation(
         RuntimeConfig::default(),
-        crate::ValidationMode::Disabled,
+        crate::vulkan::ValidationMode::Disabled,
     )
     .unwrap();
     assert_ne!(
@@ -559,12 +524,12 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
         EngineFrameCapacity::default(),
     )
     .unwrap();
-    let mut assets = Engine::new(4, 4).unwrap();
+    let mut assets = Assets::new(4).unwrap();
     let data = mesh([1.0, 0.0, 0.0, 1.0]);
     let vertices = Arc::downgrade(&data.vertices);
     let indices = Arc::downgrade(&data.indices);
     let mesh_handle = assets.create_mesh(data).unwrap();
-    let material = assets.create_material(Material::default()).unwrap();
+    let tint = [1.0; 4];
     let view = View {
         width: 32,
         height: 32,
@@ -573,7 +538,7 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
     };
     let draw = Draw {
         mesh: mesh_handle,
-        material,
+        tint,
         world_from_model: IDENTITY,
     };
     let snapshot = assets.snapshot(&view, &[draw]).unwrap();
@@ -582,7 +547,7 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
     let prepared = prepared.compile().unwrap();
     drop(snapshot);
     assets.delete_mesh(mesh_handle).unwrap();
-    assets.delete_material(material).unwrap();
+
     engine.release_idle_inputs();
     engine.collect_retired_meshes(Some(&assets)).unwrap();
     assets.collect_retired_meshes();
@@ -624,7 +589,7 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
     );
     drop(engine);
     let report = monitor.report();
-    assert_eq!(report.requested, crate::ValidationMode::Disabled);
+    assert_eq!(report.requested, crate::vulkan::ValidationMode::Disabled);
     assert!(report.is_clean());
     assert!(report.layer_status_messages.is_empty());
     assert!(!report.startup_status_recognized);

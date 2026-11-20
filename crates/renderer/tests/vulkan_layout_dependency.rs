@@ -16,8 +16,10 @@ use renderer::program::{
     VertexFormat,
 };
 use renderer::{
-    FrameCapacity, ImageFormat, ResourceClass, RuntimeConfig, Submission, ValidationMode,
-    VulkanRuntime,
+    ImageFormat,
+    vulkan::{
+        FrameCapacity, ResourceClass, RuntimeConfig, Submission, ValidationMode, VulkanRuntime,
+    },
 };
 
 const WAIT: Duration = Duration::from_secs(10);

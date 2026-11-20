@@ -184,9 +184,12 @@ impl MaterialUniform {
 
     /// Acquire the export from the matching accepted submission.
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn accept(self, submission: &FrameSubmission) -> Result<ResidentMaterial, ExecutionError> {
+    pub fn accept(
+        self,
+        submission: &FrameSubmission,
+    ) -> Result<ResidentMaterialUniform, ExecutionError> {
         let snapshot = submission.export_buffer(self.buffer)?;
-        Ok(ResidentMaterial {
+        Ok(ResidentMaterialUniform {
             key: snapshot.key(),
             snapshot: Some(snapshot),
             alpha_mode: self.alpha_mode,
@@ -254,14 +257,14 @@ impl MaterialUniform {
 /// new material, then release the old registration.
 #[derive(Debug)]
 #[must_use = "release the registration when the material is no longer needed"]
-pub struct ResidentMaterial {
+pub struct ResidentMaterialUniform {
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     key: ResourceKey,
     snapshot: Option<ImportBuffer>,
     alpha_mode: AlphaMode,
 }
 
-impl ResidentMaterial {
+impl ResidentMaterialUniform {
     pub const fn alpha_mode(&self) -> AlphaMode {
         self.alpha_mode
     }

@@ -12,6 +12,7 @@ indexed meshと深度、利用側shaderによるRaster/Compute、import/export�
 `renderer-pipeline`はUnlit Forward、PBR Forward、Forward+、Deferredの描画レシピと、再利用できる`passes`を提供します。
 `renderer::capacity`でレシピと独自パスの要求を集約し、同じ`renderer::graph`に[Rustで合成](docs/guides/tooling.md#rust-pipeline)できます。
 同期、資源の寿命、不要パスの除去はGraphが扱います。
+GPU実行の共通入口は `renderer::runtime` です。個別APIは `renderer::vulkan` と `renderer::d3d12` から使えます。
 標準PBRの方式は `pbr::Prepared` で選びます。各方式はIBL、任意の4カスケードの影、HDRと任意のSDR出力を構築します。
 PBR Forward／Forward+は1×と4×、Deferredは1×に対応します。
 `renderer-bistro`の`bistro`は標準レシピを使い、MSAAやBloomなどの構成をVulkanとD3D12で実行します。

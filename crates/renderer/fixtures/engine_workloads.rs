@@ -1,5 +1,6 @@
 //! Shared executable acceptance scenarios. GPU creation is always explicit.
 
+use renderer_pipeline::unlit_forward::{Draw, FrameSnapshot, IDENTITY, View};
 #[path = "image_transform.rs"]
 mod image_transform;
 use image_transform::Transform;
@@ -12,14 +13,14 @@ use std::{
 };
 
 use renderer::{
-    FrameCapacity, FrameId, GpuTiming, MeshCacheConfig, MeshUploadState, PreparedEngineFrame,
-    RenderedFrame, ResourceClass, RuntimeConfig, ValidationMode, ValidationReport, VulkanEngine,
-    VulkanRuntime,
-    engine::{
-        Draw, Engine, EngineCapacity, FrameSnapshot, IDENTITY, Material, MeshHandle, SnapshotPool,
-        View,
-    },
+    GpuTiming,
+    geometry::{MeshCapacity, MeshHandle, MeshRegistry, SnapshotPool},
     graph::{ImageDesc, PassHandle},
+    vulkan::{
+        FrameCapacity, FrameId, MeshCacheConfig, MeshUploadState, PreparedEngineFrame,
+        RenderedFrame, ResourceClass, RuntimeConfig, ValidationMode, ValidationReport,
+        VulkanEngine, VulkanRuntime,
+    },
 };
 use renderer_pipeline::unlit_forward::{self, ForwardConfig};
 
@@ -207,7 +208,7 @@ impl Driver {
     ) -> Result<PreparedEngineFrame> {
         let mut prepared = self.renderer.begin_graph()?;
         let inputs = self.renderer.connect_snapshot(&mut prepared, snapshot)?;
-        let view = inputs.view();
+        let view = snapshot.view();
         let scene = unlit_forward::forward(
             &mut prepared.graph,
             if snapshot.draw_count() == 0 {
@@ -383,18 +384,19 @@ fn view(width: u32, height: u32) -> View {
 }
 
 fn snapshot(
-    assets: &Engine,
+    assets: &MeshRegistry,
     snapshots: &SnapshotPool,
     mesh: MeshHandle,
-    material: renderer::engine::MaterialHandle,
+    tint: [f32; 4],
     view: &View,
 ) -> Result<FrameSnapshot> {
-    Ok(assets.snapshot(
+    Ok(FrameSnapshot::capture(
+        assets,
         snapshots,
         view,
         &[Draw {
             mesh,
-            material,
+            tint,
             world_from_model: IDENTITY,
         }],
     )?)
@@ -451,18 +453,13 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     let mut driver = Driver::new(mode)?;
     let monitor = driver.renderer.runtime().validation_monitor();
     let device = driver.renderer.runtime().device_info();
-    let mut assets = Engine::new(EngineCapacity {
+    let mut assets = MeshRegistry::new(MeshCapacity {
         meshes: 64,
-        materials: 8,
         retired_mesh_versions: 64,
     })?;
     let snapshots = SnapshotPool::new(2, 8)?;
-    let red = assets.create_material(Material {
-        tint: [1.0, 0.0, 0.0, 1.0],
-    })?;
-    let blue = assets.create_material(Material {
-        tint: [0.0, 0.0, 1.0, 1.0],
-    })?;
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let blue = [0.0, 0.0, 1.0, 1.0];
     let large = grid(400);
     let large_vertices = large.vertex_count;
     let large_indices = large.index_count;
@@ -475,18 +472,19 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     let secondary = assets.create_mesh(secondary_grid.mesh)?;
     drop(secondary_grid.vertices);
     drop(secondary_grid.indices);
-    let both = assets.snapshot(
+    let both = FrameSnapshot::capture(
+        &assets,
         &snapshots,
         &view(64, 64),
         &[
             Draw {
                 mesh,
-                material: red,
+                tint: red,
                 world_from_model: IDENTITY,
             },
             Draw {
                 mesh: secondary,
-                material: red,
+                tint: red,
                 world_from_model: IDENTITY,
             },
         ],
@@ -520,12 +518,13 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     let mut transform = IDENTITY;
     transform[0][0] = 0.5;
     transform[3][0] = 0.125;
-    let b = assets.snapshot(
+    let b = FrameSnapshot::capture(
+        &assets,
         &snapshots,
         &view(48, 32),
         &[Draw {
             mesh,
-            material: blue,
+            tint: blue,
             world_from_model: transform,
         }],
     )?;
@@ -584,7 +583,7 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     // The same owned snapshot survives CPU deletion and remains an input to a
     // second independent backend residency cache.
     assets.delete_mesh(stream[0])?;
-    assets.delete_material(blue)?;
+
     let mut second = Driver::new(mode)?;
     let second_monitor = second.renderer.runtime().validation_monitor();
     second.ready(&replay)?;

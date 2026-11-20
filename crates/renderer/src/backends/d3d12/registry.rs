@@ -1009,8 +1009,8 @@ mod tests {
     #[test]
     #[ignore = "requires real D3D12 hardware; root serializes native acceptance"]
     fn d3d12_working_set_shrink_removes_old_classes_and_preserves_registered_contents() {
+        use crate::d3d12::{D3D12RuntimeConfig, D3D12ValidationMode};
         use crate::graph::{GraphCapacity, GraphPool};
-        use crate::{D3D12RuntimeConfig, D3D12ValidationMode};
         use std::time::Duration;
 
         let strict = cfg!(feature = "d3d12-diagnostics");

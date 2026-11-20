@@ -398,7 +398,7 @@ pub fn build_graph(
         None => post.defaults.selection().upload(&mut graph)?,
     };
     let (indexed, materials) = triangle.upload(&mut graph, &defaults)?;
-    let single = [Draw::Indexed(indexed)];
+    let single = [Draw::WorldSpaceIndexed(indexed)];
     #[cfg(test)]
     let (test_draws, transforms) = placed_draws(indexed, placement)?;
     let draws = match placement {
@@ -428,7 +428,7 @@ pub fn build_graph(
     } else {
         (draws, &[][..])
     };
-    let mut frame = Frame::with_defaults(&view, &materials, opaque, transparent, opaque, defaults)?;
+    let mut frame = Frame::new(&view, &materials, opaque, transparent, opaque, defaults)?;
     #[cfg(test)]
     if placement.uses_transforms() {
         frame.transforms = &transforms;
@@ -444,7 +444,7 @@ pub fn build_graph(
         &[]
     };
     let (sdr, scene_depth, shadow_images) = if post.copy_hdr || post.bloom.is_some() {
-        let exposure = frame.exposure;
+        let exposure = 1.0;
         let scene = prepared.add_scene(&mut graph, frame, lights)?;
         let mut hdr = scene.hdr;
         if post.copy_hdr {
@@ -461,7 +461,7 @@ pub fn build_graph(
             scene.shadows,
         )
     } else {
-        let images = prepared.add_passes(&mut graph, frame, lights)?;
+        let images = prepared.add_scene_and_sdr_output(&mut graph, frame, lights, 1.0)?;
         (images.sdr, images.depth, images.shadows)
     };
     #[cfg(test)]
@@ -506,11 +506,7 @@ fn placed_draws(
             [0.0, scale, 0.0, 0.0],
             [0.0, 0.0, scale, 0.0],
         ])?;
-        let draw = Draw::Instanced {
-            geometry: indexed,
-            first_transform: 0,
-            instance_count: 1,
-        };
+        let draw = Draw::model(indexed, 0);
         return Ok(([draw; 2], [transform, Transform::IDENTITY]));
     }
     if let Placement::Mirrored { .. } = placement {
@@ -519,11 +515,7 @@ fn placed_draws(
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0],
         ])?;
-        let draw = Draw::Instanced {
-            geometry: indexed,
-            first_transform: 0,
-            instance_count: 1,
-        };
+        let draw = Draw::model(indexed, 0);
         return Ok(([draw; 2], [transform, Transform::IDENTITY]));
     }
     let place = |x| {
@@ -544,11 +536,7 @@ fn placed_draws(
                     1
                 },
             },
-            Draw::Instanced {
-                geometry: indexed,
-                first_transform: 1,
-                instance_count: 1,
-            },
+            Draw::model(indexed, 1),
         ],
         [place(-0.45)?, place(0.45)?],
     ))

@@ -1,170 +1,18 @@
 //! Lower owned engine input into ordinary, GPU-independent Graph operations.
 
-use std::ops::Range;
-
-use super::{FrameSnapshot, MeshData, SnapshotDraw, SnapshotMesh, View};
-use crate::graph::{
-    BufferDesc, BufferHandle, CompiledGraph, Graph, GraphError, ImageHandle, MeshUpload, PassHandle,
-};
-
-/// Responsibility for the final output's runtime registration. This does not
-/// imply GPU completion or ownership of the native resource itself.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FrameOutputOwnership {
-    /// This frame creates the registration; release it after scheduling consumers.
-    Frame,
-    /// The output is an imported registration retained by its original caller.
-    Caller,
-}
-
-/// A finalized graph with one selected image output and optional readback.
-///
-/// The output, its registration ownership and the readback selection stay
-/// together until [`Self::compile`] consumes the frame. Build with ordinary
-/// Graph operations, then call [`Self::select_output`] to finalize the selection.
-///
-/// The final selection cannot be reassigned independently of its ownership:
-/// ```compile_fail
-/// use renderer::engine::FrameGraph;
-/// use renderer::graph::ImageHandle;
-/// fn change_output(frame: &mut FrameGraph, output: ImageHandle) {
-///     frame.output = output;
-/// }
-/// ```
-/// Replacing the graph after finalization is also disallowed:
-/// ```compile_fail
-/// use renderer::engine::FrameGraph;
-/// use renderer::graph::Graph;
-/// fn replace_graph(frame: &mut FrameGraph, graph: Graph) {
-///     frame.graph = graph;
-/// }
-/// ```
-pub struct FrameGraph {
-    graph: Graph,
-    output: ImageHandle,
-    readback: Option<PassHandle>,
-    output_ownership: FrameOutputOwnership,
-}
-
-impl FrameGraph {
-    /// Export a graph-local image and optionally append a readback of it.
-    /// Imported registrations remain caller-owned. Graph compilation validates
-    /// the contents needed for the export and readback.
-    pub fn select_output(
-        mut graph: Graph,
-        output: ImageHandle,
-        readback: Option<&str>,
-    ) -> Result<Self, GraphError> {
-        graph.export_image(output)?;
-        let output_ownership = if graph.resources[output.index].import.is_some() {
-            FrameOutputOwnership::Caller
-        } else {
-            FrameOutputOwnership::Frame
-        };
-        let readback = readback
-            .map(|name| graph.readback_image(name, output))
-            .transpose()?;
-        Ok(Self {
-            graph,
-            output,
-            readback,
-            output_ownership,
-        })
-    }
-
-    /// Inspect the finalized declarations without changing their identity,
-    /// selected output or readback association.
-    pub fn graph(&self) -> &Graph {
-        &self.graph
-    }
-
-    /// The exported final output selected during graph construction.
-    /// The handle belongs only to this frame's graph.
-    pub fn output(&self) -> ImageHandle {
-        self.output
-    }
-
-    /// The readback of [`Self::output`], if requested during construction.
-    /// Save this handle before compilation to identify its eventual CPU result.
-    ///
-    /// Its association cannot be edited separately from the finalized output:
-    /// ```compile_fail
-    /// use renderer::engine::FrameGraph;
-    /// fn remove_readback(frame: &mut FrameGraph) {
-    ///     frame.readback = None;
-    /// }
-    /// ```
-    pub fn readback(&self) -> Option<PassHandle> {
-        self.readback
-    }
-
-    /// Reports who releases the final output registration after GPU consumers
-    /// have been scheduled. Imported outputs remain owned by their caller.
-    pub fn output_ownership(&self) -> FrameOutputOwnership {
-        self.output_ownership
-    }
-
-    /// Consume the finalized declarations and compile them without loading a
-    /// native backend. Output and readback handles obtained above remain valid
-    /// for the resulting plan. Failure returns the graph slot to its pool.
-    pub fn compile(self) -> Result<CompiledGraph, GraphError> {
-        self.graph.compile()
-    }
-
-    /// The native adapter transfers the complete finalized selection together.
-    #[cfg(feature = "vulkan")]
-    pub(crate) fn into_parts(
-        self,
-    ) -> (Graph, ImageHandle, Option<PassHandle>, FrameOutputOwnership) {
-        (
-            self.graph,
-            self.output,
-            self.readback,
-            self.output_ownership,
-        )
-    }
-}
-
-impl MeshData {
-    /// Upload one aligned slice of an immutable mesh stream. Only this bridge
-    /// establishes mesh provenance; arbitrary public byte uploads cannot do so.
-    pub(crate) fn upload_graph_slice(
-        &self,
-        graph: &mut Graph,
-        name: impl AsRef<str>,
-        dst: BufferHandle,
-        indices: bool,
-        source: Range<usize>,
-    ) -> Result<PassHandle, GraphError> {
-        let (bytes, provenance) = if indices {
-            (
-                &self.indices,
-                MeshUpload::Indices {
-                    byte_len: self.indices.len() as u64,
-                    maximum: self.index_maximum,
-                },
-            )
-        } else {
-            (&self.vertices, MeshUpload::Vertices)
-        };
-        graph.upload_mesh_slice(name.as_ref(), dst, bytes, source, provenance)
-    }
-}
+use super::{MeshSnapshot, SnapshotDraw, SnapshotMesh};
+use crate::graph::{BufferDesc, BufferHandle, Graph, GraphError};
 
 /// A temporary connection of one snapshot to a particular Graph. Draws borrow
 /// this lease only during construction; Graph commands own their parameters.
 /// Drop it before reconnecting the same snapshot. Other snapshots can be
 /// connected independently, including different versions of the same mesh.
 pub struct SnapshotInputs<'a> {
-    snapshot: &'a FrameSnapshot,
+    snapshot: &'a MeshSnapshot,
     meshes: Vec<SnapshotMesh>,
 }
 
 impl SnapshotInputs<'_> {
-    pub fn view(&self) -> &View {
-        &self.snapshot.view
-    }
-
     /// Immutable indexed operands for the ordinary public Raster builder.
     /// Their mesh buffers are read-only Graph inputs. Copy to another buffer
     /// when mutable contents or a persistent export are needed.
@@ -181,7 +29,7 @@ impl SnapshotInputs<'_> {
                 first_index: 0,
                 index_count: draw.data.index_count,
                 instance_count: 1,
-                parameters: draw.parameters.into(),
+                parameters: draw.parameters,
                 bindings: None,
             }
         })
@@ -200,7 +48,7 @@ impl Drop for SnapshotInputs<'_> {
     }
 }
 
-impl FrameSnapshot {
+impl MeshSnapshot {
     /// Connect immutable mesh and draw inputs to a caller-created Graph.
     /// Adds mesh buffers/uploads only; no Raster, image, export or readback is
     /// selected. Unused uploads are culled normally. Native residency uses
@@ -227,20 +75,10 @@ impl FrameSnapshot {
                     size: draw.data.indices.len() as u64,
                 },
             )?;
-            draw.data.upload_graph_slice(
-                graph,
-                "mesh vertex upload",
-                vertices,
-                false,
-                0..draw.data.vertices.len(),
-            )?;
-            draw.data.upload_graph_slice(
-                graph,
-                "mesh index upload",
-                indices,
-                true,
-                0..draw.data.indices.len(),
-            )?;
+            draw.data
+                .upload_vertices(graph, "mesh vertex upload", vertices)?;
+            draw.data
+                .upload_indices(graph, "mesh index upload", indices)?;
             graph.protect_input(vertices, true)?;
             graph.protect_input(indices, true)?;
             Ok((vertices, indices))
@@ -299,7 +137,10 @@ impl FrameSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::{FrameGraph, FrameOutputOwnership, MeshData, Vertex};
+    use crate::unlit_test_input::{Vertex, mesh_data};
+
+    use crate::geometry::GeometryData;
+    use crate::graph::{FrameGraph, FrameOutputOwnership};
     use crate::graph::{
         GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, ImportImage, ResourceKey,
     };
@@ -316,8 +157,8 @@ mod tests {
         .unwrap()
     }
 
-    fn triangle() -> MeshData {
-        MeshData::new(
+    fn triangle() -> GeometryData {
+        mesh_data(
             &[[-0.5, -0.5, 0.25], [0.5, -0.5, 0.25], [0.0, 0.5, 0.25]].map(|position| Vertex {
                 position,
                 color: [1.0; 4],

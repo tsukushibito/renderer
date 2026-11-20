@@ -1,6 +1,9 @@
 //! Deterministic draw-count workloads; input generation is outside frame timing.
 
-use renderer::engine::{Draw, IDENTITY, MaterialHandle, MeshHandle};
+use renderer::geometry::MeshHandle;
+#[cfg(test)]
+use renderer_pipeline::unlit_forward::FrameSnapshot;
+use renderer_pipeline::unlit_forward::{Draw, IDENTITY};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MeshLayout {
@@ -56,7 +59,7 @@ pub(super) fn grid_dimensions(count: usize) -> (usize, usize) {
 
 pub(super) fn draws(
     meshes: &[MeshHandle],
-    material: MaterialHandle,
+    tint: [f32; 4],
     count: usize,
     layout: Layout,
     translation_x: f32,
@@ -67,7 +70,7 @@ pub(super) fn draws(
         .map(|index| {
             let mesh = meshes[if meshes.len() == 1 { 0 } else { index }];
             if layout == Layout::Overlap {
-                return super::scene::draw(mesh, material, translation_x);
+                return super::scene::draw(mesh, tint, translation_x);
             }
             let mut world_from_model = IDENTITY;
             world_from_model[0][0] = 1.0 / columns as f32;
@@ -76,7 +79,7 @@ pub(super) fn draws(
             world_from_model[3][1] = -1.0 + (2 * (index / columns) + 1) as f32 / rows as f32;
             Draw {
                 mesh,
-                material,
+                tint,
                 world_from_model,
             }
         })
@@ -132,30 +135,29 @@ pub(super) fn verify(
 mod tests {
     use super::*;
     use renderer::{
-        engine::{Engine, EngineCapacity, Material, SnapshotPool},
+        geometry::{MeshCapacity, MeshRegistry, SnapshotPool},
         graph::{GraphCapacity, GraphPool, ImageDesc},
     };
     use renderer_pipeline::unlit_forward::{self, ForwardConfig};
 
     #[test]
     fn grid_draws_share_assets_and_samples_cover_every_draw_and_empty_cell() {
-        let mut assets = Engine::new(EngineCapacity {
+        let mut assets = MeshRegistry::new(MeshCapacity {
             meshes: 1,
-            materials: 1,
             retired_mesh_versions: 0,
         })
         .unwrap();
         let mesh = assets
             .create_mesh(super::super::scene::triangle([1.0, 0.0, 0.0, 1.0]).unwrap())
             .unwrap();
-        let material = assets.create_material(Material::default()).unwrap();
-        let draws = draws(&[mesh], material, 5, Layout::Grid, 0.0);
+        let tint = [1.0; 4];
+        let draws = draws(&[mesh], tint, 5, Layout::Grid, 0.0);
         assert_eq!(grid_dimensions(5), (3, 2));
         assert_eq!(draws.len(), 5);
         assert!(
             draws
                 .iter()
-                .all(|draw| draw.mesh == mesh && draw.material == material)
+                .all(|draw| draw.mesh == mesh && draw.tint == tint)
         );
         assert_eq!(draws[0].world_from_model[0][0], 1.0 / 3.0);
         assert_eq!(draws[4].world_from_model[3][1], 0.5);
@@ -175,9 +177,8 @@ mod tests {
 
     #[test]
     fn distinct_meshes_keep_shared_geometry_placement_and_draw_order() {
-        let mut assets = Engine::new(EngineCapacity {
+        let mut assets = MeshRegistry::new(MeshCapacity {
             meshes: 5,
-            materials: 1,
             retired_mesh_versions: 0,
         })
         .unwrap();
@@ -187,7 +188,7 @@ mod tests {
         let meshes = (0..5)
             .map(|_| assets.create_mesh(geometry.clone()).unwrap())
             .collect::<Vec<_>>();
-        let material = assets.create_material(Material::default()).unwrap();
+        let tint = [1.0; 4];
         assert_eq!(
             meshes
                 .iter()
@@ -196,15 +197,15 @@ mod tests {
             5
         );
         for layout in [Layout::Overlap, Layout::Grid] {
-            let shared = draws(&meshes[..1], material, 5, layout, 0.0);
-            let distinct = draws(&meshes, material, 5, layout, 0.0);
+            let shared = draws(&meshes[..1], tint, 5, layout, 0.0);
+            let distinct = draws(&meshes, tint, 5, layout, 0.0);
             for (index, (shared, distinct)) in shared.iter().zip(&distinct).enumerate() {
                 assert_eq!(distinct.mesh, meshes[index]);
-                assert_eq!(distinct.material, shared.material);
+                assert_eq!(distinct.tint, shared.tint);
                 assert_eq!(distinct.world_from_model, shared.world_from_model);
             }
             let view = super::super::scene::view(64, 64);
-            let snapshot = assets.snapshot(&snapshots, &view, &distinct).unwrap();
+            let snapshot = FrameSnapshot::capture(&assets, &snapshots, &view, &distinct).unwrap();
             let mut graph = graph_pool.begin().unwrap();
             let inputs = snapshot.connect_graph(&mut graph).unwrap();
             let scene = unlit_forward::forward(
@@ -229,7 +230,7 @@ mod tests {
                 "equal immutable geometry must retain distinct mesh resource identities"
             );
         }
-        assert!(draws(&[], material, 0, Layout::Grid, 0.0).is_empty());
+        assert!(draws(&[], tint, 0, Layout::Grid, 0.0).is_empty());
     }
 
     #[test]

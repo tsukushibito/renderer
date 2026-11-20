@@ -29,9 +29,9 @@ pub struct WindowPresenter {
 
 enum WindowPresenterInner {
     #[cfg(feature = "vulkan")]
-    Vulkan(crate::Presenter),
+    Vulkan(crate::vulkan::Presenter),
     #[cfg(feature = "d3d12")]
-    D3D12(crate::D3D12Presenter),
+    D3D12(crate::d3d12::D3D12Presenter),
 }
 
 impl Runtime {
@@ -49,12 +49,13 @@ impl Runtime {
             #[cfg(feature = "vulkan")]
             RuntimeConfig::Vulkan(settings) => {
                 let capacity = limits.vulkan_capacity()?;
-                let (mut runtime, presenter) = crate::VulkanRuntime::for_window_with_validation(
-                    limits.vulkan_config(settings, presentation.max_frames)?,
-                    window,
-                    presentation,
-                    settings.validation,
-                )?;
+                let (mut runtime, presenter) =
+                    crate::vulkan::VulkanRuntime::for_window_with_validation(
+                        limits.vulkan_config(settings, presentation.max_frames)?,
+                        window,
+                        presentation,
+                        settings.validation,
+                    )?;
                 runtime.set_frame_limit(limits.frames)?;
                 runtime.prepare_graph_working_set(Some(capacity), working_set)?;
                 Ok((

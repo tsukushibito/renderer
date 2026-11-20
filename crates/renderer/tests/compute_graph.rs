@@ -290,9 +290,15 @@ mod native {
         RuntimeConfig as BackendConfig, RuntimeLimits, VulkanConfig, WorkingSet,
     };
     use renderer::{
-        D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
-        D3D12RuntimeErrorKind, D3D12ValidationMode, FrameCapacity, ImageFormat, ResourceClass,
-        RuntimeConfig, RuntimeErrorKind, ValidationMode, VulkanRuntime,
+        ImageFormat,
+        d3d12::{
+            D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime,
+            D3D12RuntimeConfig, D3D12RuntimeErrorKind, D3D12ValidationMode,
+        },
+        vulkan::{
+            FrameCapacity, ResourceClass, RuntimeConfig, RuntimeErrorKind, ValidationMode,
+            VulkanRuntime,
+        },
     };
     use serde_json::{Value, json};
     use std::path::Path;

@@ -44,6 +44,7 @@ mod compile;
 mod dispatch;
 mod error;
 mod indirect;
+mod output;
 mod pass;
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub(crate) mod provenance;
@@ -57,6 +58,7 @@ pub(crate) use dispatch::BindingOperands;
 pub use dispatch::{Binding, BindingResource, RasterBindings};
 pub use error::{GraphCapacityError, GraphCapacityKind, GraphError, GraphErrorKind};
 pub use indirect::{IndexedIndirectArgs, IndexedIndirectTable, IndexedIndirectTemplate};
+pub use output::{FrameGraph, FrameOutputOwnership};
 pub use pass::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, ImageAspect, LoadOp, PassKind,
     RasterAttachments, RasterConstants, RasterDraw, RasterParameters, ResourceHandle, StoreOp,

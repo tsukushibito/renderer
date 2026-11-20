@@ -584,8 +584,10 @@ fn validate_draws(
     let mut transform_end = 0;
     for (index, draw) in draws.iter().enumerate() {
         let (material, range) = match *draw {
-            Draw::Indexed(draw) => (draw.material, None),
-            Draw::Indirect { material, .. } if mode == DrawMode::Indirect => (material, None),
+            Draw::WorldSpaceIndexed(draw) => (draw.material, None),
+            Draw::WorldSpaceIndirect { material, .. } if mode == DrawMode::Indirect => {
+                (material, None)
+            }
             Draw::TransformedIndirect {
                 material,
                 transform,
@@ -598,7 +600,9 @@ fn validate_draws(
             } if has_model => (geometry.material, Some((first_transform, instance_count))),
             _ => {
                 let kind = match draw {
-                    Draw::Indirect { .. } | Draw::TransformedIndirect { .. } => "indirect",
+                    Draw::WorldSpaceIndirect { .. } | Draw::TransformedIndirect { .. } => {
+                        "indirect"
+                    }
                     _ => "instanced",
                 };
                 return Err(GraphError::invalid_input(format!(

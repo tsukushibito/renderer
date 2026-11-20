@@ -1,4 +1,4 @@
-//! Caller-owned right-handed camera. Matrices are column-major, depth is [0,1].
+//! Caller-owned right-handed camera. Matrices are column-major, depth is `[0, 1]`.
 
 use super::{Error, shadow::Bounds};
 use serde_json::Value;

@@ -228,11 +228,11 @@ fn disabled_shadows_omit_maps_and_reject_cascade_inputs() {
             .is_none()
     );
     let materials = [material];
-    let draws = [Draw::Indexed(draw)];
+    let draws = [Draw::WorldSpaceIndexed(draw)];
     let error = recipe
         .add_scene(
             &mut graph,
-            Frame::new(&view, &materials, &draws, &[], &draws),
+            Frame::with_cascades(&view, &materials, &draws, &[], &draws),
         )
         .unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
@@ -241,7 +241,7 @@ fn disabled_shadows_omit_maps_and_reject_cascade_inputs() {
     let scene = recipe
         .add_scene(
             &mut graph,
-            Frame::with_defaults(&view, &materials, &draws, &[], &draws, defaults).unwrap(),
+            Frame::new(&view, &materials, &draws, &[], &draws, defaults).unwrap(),
         )
         .unwrap();
     assert!(scene.shadows.is_none());
@@ -272,8 +272,9 @@ fn standard_techniques_share_output_and_reject_unsupported_lights() {
         let mut graph = pool.begin().unwrap();
         let (view, material, draw) = inputs(&recipe(), &mut graph);
         let materials = [material.with_sampler(SamplerDescriptor::NearestClamp)];
-        let draws = [Draw::Indexed(draw)];
-        let frame = || Frame::new(&view, &materials, &draws, &[], &draws);
+        let draws = [Draw::WorldSpaceIndexed(draw)];
+        let defaults = Defaults::Materials.upload(&mut graph).unwrap();
+        let frame = || Frame::new(&view, &materials, &draws, &[], &draws, defaults).unwrap();
         let supported_lights = if technique.supports_point_lights() {
             lights.as_slice()
         } else {
@@ -284,7 +285,7 @@ fn standard_techniques_share_output_and_reject_unsupported_lights() {
             &[]
         };
         let images = prepared
-            .add_passes(&mut graph, frame(), supported_lights)
+            .add_scene_and_sdr_output(&mut graph, frame(), supported_lights, 1.0)
             .unwrap();
         assert_eq!(images.gbuffer.is_some(), technique.provides_gbuffer());
         assert_eq!(
@@ -347,12 +348,12 @@ fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
     )
     .unwrap();
     let materials = [material, Material::new(factors, material.textures())];
-    let draws = [Draw::Indexed(draw)];
-    let transparent = [Draw::Indexed(IndexedDraw {
+    let draws = [Draw::WorldSpaceIndexed(draw)];
+    let transparent = [Draw::WorldSpaceIndexed(IndexedDraw {
         material: 1,
         ..draw
     })];
-    let mut frame = Frame::new(&view, &materials, &draws, &transparent, &draws);
+    let mut frame = Frame::with_cascades(&view, &materials, &draws, &transparent, &draws);
     let FrameShadows::Cascades(cascades) = &mut frame.shadows else {
         unreachable!()
     };
@@ -363,7 +364,7 @@ fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
     cascades[2] = ShadowSource::Reuse(reused);
     let error = recipe.add_scene(&mut graph, frame).unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
-    let mut frame = Frame::new(&view, &materials, &draws, &transparent, &draws);
+    let mut frame = Frame::with_cascades(&view, &materials, &draws, &transparent, &draws);
     let FrameShadows::Cascades(cascades) = &mut frame.shadows else {
         unreachable!()
     };
@@ -456,20 +457,24 @@ fn rejected_workload_does_not_consume_graph_or_recipe_scratch() {
     for casters in [true, false] {
         let mut graph = pool.begin().unwrap();
         let (view, material, draw) = inputs(&recipe, &mut graph);
-        let draws = [Draw::Indexed(draw); 3];
+        let draws = [Draw::WorldSpaceIndexed(draw); 3];
         let materials = [material];
         let overflow = if casters {
-            Frame::new(&view, &materials, &draws[..1], &[], &draws[..2])
+            Frame::with_cascades(&view, &materials, &draws[..1], &[], &draws[..2])
         } else {
-            Frame::new(&view, &materials, &draws, &[], &draws[..1])
+            Frame::with_cascades(&view, &materials, &draws, &[], &draws[..1])
         };
-        let error = recipe.add_passes(&mut graph, overflow).unwrap_err();
+        let error = recipe
+            .add_scene_and_sdr_output(&mut graph, overflow, 1.0)
+            .unwrap_err();
         assert_eq!(error.kind(), GraphErrorKind::CapacityExhausted);
         let bounds = error.capacity().unwrap();
         assert_eq!(bounds.kind, GraphCapacityKind::Draws);
         assert_eq!(bounds.required, Some(if casters { 2 } else { 3 }));
-        let valid = Frame::new(&view, &materials, &draws[..1], &[], &draws[..1]);
-        let output = recipe.add_passes(&mut graph, valid).unwrap();
+        let valid = Frame::with_cascades(&view, &materials, &draws[..1], &[], &draws[..1]);
+        let output = recipe
+            .add_scene_and_sdr_output(&mut graph, valid, 1.0)
+            .unwrap();
         output
             .sdr
             .capture()
@@ -502,11 +507,13 @@ fn hdr_only_preparation_does_not_reserve_output_images_or_programs() {
     let mut pool = graph_pool(&hdr_only);
     let mut graph = pool.begin().unwrap();
     let (view, _, _) = inputs(&hdr_only, &mut graph);
-    let frame = Frame::new(&view, &[], &[], &[], &[]);
-    let error = hdr_only.add_passes(&mut graph, frame).unwrap_err();
+    let frame = Frame::with_cascades(&view, &[], &[], &[], &[]);
+    let error = hdr_only
+        .add_scene_and_sdr_output(&mut graph, frame, 1.0)
+        .unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
     let scene = hdr_only
-        .add_scene(&mut graph, Frame::new(&view, &[], &[], &[], &[]))
+        .add_scene(&mut graph, Frame::with_cascades(&view, &[], &[], &[], &[]))
         .unwrap();
     graph.readback_image("HDR", scene.hdr).unwrap();
     graph.readback_image("depth", scene.depth.unwrap()).unwrap();
@@ -531,24 +538,24 @@ fn material_alpha_routes_to_the_matching_pass_before_graph_mutation() {
     .unwrap();
     let factors = MaterialUniform::upload_encoded(&mut graph, "blend factors", &encoded).unwrap();
     let materials = [opaque, Material::new(factors, opaque.textures())];
-    let opaque = [Draw::Indexed(draw)];
-    let blended = [Draw::Indexed(IndexedDraw {
+    let opaque = [Draw::WorldSpaceIndexed(draw)];
+    let blended = [Draw::WorldSpaceIndexed(IndexedDraw {
         material: 1,
         ..draw
     })];
     for (frame, pass, material) in [
         (
-            Frame::new(&view, &materials, &blended, &[], &[]),
+            Frame::with_cascades(&view, &materials, &blended, &[], &[]),
             "scene_opaque",
             1,
         ),
         (
-            Frame::new(&view, &materials, &[], &opaque, &[]),
+            Frame::with_cascades(&view, &materials, &[], &opaque, &[]),
             "scene_transparent",
             0,
         ),
         (
-            Frame::new(&view, &materials, &[], &[], &blended),
+            Frame::with_cascades(&view, &materials, &[], &[], &blended),
             "shadow_0",
             1,
         ),
@@ -562,8 +569,10 @@ fn material_alpha_routes_to_the_matching_pass_before_graph_mutation() {
                 .contains(&format!("draw 0 uses material {material}"))
         );
     }
-    let frame = Frame::new(&view, &materials, &opaque, &blended, &opaque);
-    let result = recipe.add_passes(&mut graph, frame).unwrap();
+    let frame = Frame::with_cascades(&view, &materials, &opaque, &blended, &opaque);
+    let result = recipe
+        .add_scene_and_sdr_output(&mut graph, frame, 1.0)
+        .unwrap();
     result
         .sdr
         .capture()
@@ -587,14 +596,19 @@ fn invalid_exposure_is_rejected_before_scene_declarations() {
     let mut graph = pool.begin().unwrap();
     let (view, material, draw) = inputs(&recipe, &mut graph);
     let materials = [material];
-    let draws = [Draw::Indexed(draw)];
-    let mut frame = Frame::new(&view, &materials, &draws, &[], &[]);
-    frame.exposure = f32::NAN;
-    let error = recipe.add_passes(&mut graph, frame).unwrap_err();
+    let draws = [Draw::WorldSpaceIndexed(draw)];
+    let frame = Frame::with_cascades(&view, &materials, &draws, &[], &[]);
+    let error = recipe
+        .add_scene_and_sdr_output(&mut graph, frame, f32::NAN)
+        .unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
     assert_eq!(error.pass_name(), Some("tone_map"));
     let output = recipe
-        .add_passes(&mut graph, Frame::new(&view, &materials, &draws, &[], &[]))
+        .add_scene_and_sdr_output(
+            &mut graph,
+            Frame::with_cascades(&view, &materials, &draws, &[], &[]),
+            1.0,
+        )
         .unwrap();
     output
         .sdr
@@ -630,15 +644,17 @@ fn msaa_resolves_empty_opaque_batches_and_transparent_batches_without_depth_outp
         )
         .unwrap();
         let materials = [Material::new(factors, material.textures())];
-        let draws = [Draw::Indexed(draw)];
-        let frame = Frame::new(
+        let draws = [Draw::WorldSpaceIndexed(draw)];
+        let frame = Frame::with_cascades(
             &view,
             &materials,
             &[],
             if transparent { &draws } else { &[] },
             &[],
         );
-        let output = recipe.add_passes(&mut graph, frame).unwrap();
+        let output = recipe
+            .add_scene_and_sdr_output(&mut graph, frame, 1.0)
+            .unwrap();
         assert!(output.depth.is_none());
         assert_eq!(
             graph.image_desc(output.hdr).unwrap().sample_count,
@@ -689,10 +705,12 @@ fn external_camera_can_be_uploaded_once_before_the_recipe() {
         .upload_buffer("caller view upload", camera, 0, view.uniform_bytes())
         .unwrap();
     let materials = [material];
-    let draws = [Draw::Indexed(draw)];
-    let mut frame = Frame::new(&view, &materials, &draws, &[], &draws);
+    let draws = [Draw::WorldSpaceIndexed(draw)];
+    let mut frame = Frame::with_cascades(&view, &materials, &draws, &[], &draws);
     frame.camera_target = Some(camera);
-    let output = recipe.add_passes(&mut graph, frame).unwrap();
+    let output = recipe
+        .add_scene_and_sdr_output(&mut graph, frame, 1.0)
+        .unwrap();
     assert_eq!(output.camera, camera);
     output
         .sdr
@@ -749,10 +767,13 @@ fn transformed_draws_check_ranges_before_appending_to_the_graph() {
         first_transform: 1,
         instance_count: 1,
     }];
-    let mut frame = Frame::new(&view, &materials, &invalid, &[], &[]);
+    let mut frame = Frame::with_cascades(&view, &materials, &invalid, &[], &[]);
     frame.transforms = &transforms;
     assert_eq!(
-        recipe.add_passes(&mut graph, frame).unwrap_err().kind(),
+        recipe
+            .add_scene_and_sdr_output(&mut graph, frame, 1.0)
+            .unwrap_err()
+            .kind(),
         GraphErrorKind::InvalidInput
     );
 
@@ -761,11 +782,13 @@ fn transformed_draws_check_ranges_before_appending_to_the_graph() {
         first_transform: 0,
         instance_count: 1,
     };
-    let opaque = [Draw::Indexed(draw), instanced];
+    let opaque = [Draw::WorldSpaceIndexed(draw), instanced];
     let casters = [instanced];
-    let mut frame = Frame::new(&view, &materials, &opaque, &[], &casters);
+    let mut frame = Frame::with_cascades(&view, &materials, &opaque, &[], &casters);
     frame.transforms = &transforms;
-    let output = recipe.add_passes(&mut graph, frame).unwrap();
+    let output = recipe
+        .add_scene_and_sdr_output(&mut graph, frame, 1.0)
+        .unwrap();
     output
         .sdr
         .capture()
@@ -822,7 +845,7 @@ fn opaque_indirect_group_uses_one_prepared_model_transform() {
     }];
     let materials = [material];
     let transforms = [Transform::IDENTITY];
-    let mut frame = Frame::new(&view, &materials, &opaque, &[], &[]);
+    let mut frame = Frame::with_cascades(&view, &materials, &opaque, &[], &[]);
     frame.transforms = &transforms;
     let scene = recipe.add_scene(&mut graph, frame).unwrap();
     graph

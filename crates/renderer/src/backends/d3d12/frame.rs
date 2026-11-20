@@ -1383,6 +1383,8 @@ impl Drop for FrameResult {
 
 #[cfg(test)]
 mod tests {
+    use crate::unlit_test_input::{Vertex, mesh_data};
+
     use std::{
         cell::Cell,
         panic::{AssertUnwindSafe, catch_unwind},
@@ -1447,12 +1449,12 @@ mod tests {
     #[test]
     #[ignore = "requires real D3D12 hardware; root serializes native acceptance"]
     fn d3d12_global_buffer_classes_preserve_capacity_after_smaller_reuse() {
+        use crate::d3d12::{D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode};
         use crate::graph::{BufferDesc, GraphCapacity, GraphPool};
         use crate::program::{
             ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups, ManagedProgram,
             ManagedRasterProgram, RasterProgramDescriptor, ShaderBinaries,
         };
-        use crate::{D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode};
         use std::time::Duration;
 
         static RASTER_METADATA: RasterProgramDescriptor = RasterProgramDescriptor {
@@ -1523,7 +1525,10 @@ mod tests {
                 .prepare_graph_working_set(None, &[], &[], &[missing_compute])
                 .unwrap_err(),
         ] {
-            assert_eq!(error.kind(), crate::D3D12RuntimeErrorKind::Unsupported);
+            assert_eq!(
+                error.kind(),
+                crate::d3d12::D3D12RuntimeErrorKind::Unsupported
+            );
             assert!(error.to_string().contains("has no DXIL"), "{error}");
         }
         assert_eq!(std::sync::Arc::as_ptr(&runtime.pool), before);
@@ -1637,7 +1642,7 @@ mod tests {
                 D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
                 D3D12RuntimeErrorKind, D3D12ValidationMode,
             },
-            engine::{MeshData, Vertex},
+            geometry::GeometryData,
             graph::{
                 Attachment, BufferDesc, CompiledGraph, GraphCapacity, GraphPool, ImageDesc, LoadOp,
                 PassHandle, RasterAttachments, RasterDraw, RasterParameters, StoreOp,
@@ -1648,7 +1653,7 @@ mod tests {
 
         fn raster(
             pool: &mut GraphPool,
-            mesh: &MeshData,
+            mesh: &GeometryData,
             arbitrary_split: Option<bool>,
         ) -> (CompiledGraph, PassHandle) {
             let mut graph = pool.begin().unwrap();
@@ -1710,7 +1715,7 @@ mod tests {
             (graph.compile().unwrap(), readback)
         }
 
-        let mesh = MeshData::new(
+        let mesh = mesh_data(
             &[[-1.0, -1.0, 0.5], [3.0, -1.0, 0.5], [-1.0, 3.0, 0.5]].map(|position| Vertex {
                 position,
                 color: [1.0; 4],

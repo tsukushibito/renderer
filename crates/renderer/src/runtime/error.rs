@@ -23,9 +23,9 @@ pub struct ExecutionError(ExecutionCause);
 #[derive(Debug)]
 enum ExecutionCause {
     #[cfg(feature = "vulkan")]
-    Vulkan(crate::RuntimeError),
+    Vulkan(crate::vulkan::RuntimeError),
     #[cfg(all(feature = "d3d12", windows))]
-    D3D12(crate::D3D12RuntimeError),
+    D3D12(crate::d3d12::D3D12RuntimeError),
     Local {
         kind: ExecutionErrorKind,
         message: &'static str,
@@ -39,7 +39,7 @@ impl ExecutionError {
         match &self.0 {
             #[cfg(feature = "vulkan")]
             ExecutionCause::Vulkan(error) => {
-                use crate::RuntimeErrorKind as Native;
+                use crate::vulkan::RuntimeErrorKind as Native;
                 match error.kind() {
                     Native::InvalidInput => Kind::InvalidInput,
                     Native::Unsupported => Kind::Unsupported,
@@ -53,7 +53,7 @@ impl ExecutionError {
             }
             #[cfg(all(feature = "d3d12", windows))]
             ExecutionCause::D3D12(error) => {
-                use crate::D3D12RuntimeErrorKind as Native;
+                use crate::d3d12::D3D12RuntimeErrorKind as Native;
                 match error.kind() {
                     Native::InvalidInput => Kind::InvalidInput,
                     Native::Unsupported => Kind::Unsupported,
@@ -140,15 +140,15 @@ impl Error for ExecutionError {
 }
 
 #[cfg(feature = "vulkan")]
-impl From<crate::RuntimeError> for ExecutionError {
-    fn from(error: crate::RuntimeError) -> Self {
+impl From<crate::vulkan::RuntimeError> for ExecutionError {
+    fn from(error: crate::vulkan::RuntimeError) -> Self {
         Self(ExecutionCause::Vulkan(error))
     }
 }
 
 #[cfg(all(feature = "d3d12", windows))]
-impl From<crate::D3D12RuntimeError> for ExecutionError {
-    fn from(error: crate::D3D12RuntimeError) -> Self {
+impl From<crate::d3d12::D3D12RuntimeError> for ExecutionError {
+    fn from(error: crate::d3d12::D3D12RuntimeError) -> Self {
         Self(ExecutionCause::D3D12(error))
     }
 }

@@ -192,7 +192,7 @@ fn require_stale(backend: &mut Runtime, plan: &CompiledGraph) -> Result<(), Erro
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn stale_plans(
     image: &ImportImage,
-    buffer: &renderer_pipeline::pbr::ResidentMaterial,
+    buffer: &renderer_pipeline::pbr::ResidentMaterialUniform,
 ) -> Result<(GraphPool, CompiledGraph, CompiledGraph), Error> {
     let mut pool = GraphPool::new(GraphCapacity::default(), 2)?;
     let mut graph = pool.begin()?;

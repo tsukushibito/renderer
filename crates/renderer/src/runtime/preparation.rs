@@ -18,7 +18,7 @@ pub enum RuntimeConfig {
 #[cfg(feature = "vulkan")]
 #[derive(Clone, Copy, Debug)]
 pub struct VulkanConfig {
-    pub validation: crate::ValidationMode,
+    pub validation: crate::vulkan::ValidationMode,
     /// Capacity of each shared upload and readback staging buffer.
     pub staging_bytes: u64,
     /// Retained staging range leases per shared buffer.
@@ -31,9 +31,9 @@ pub struct VulkanConfig {
 #[cfg(feature = "vulkan")]
 impl Default for VulkanConfig {
     fn default() -> Self {
-        let config = crate::RuntimeConfig::default();
+        let config = crate::vulkan::RuntimeConfig::default();
         Self {
-            validation: crate::ValidationMode::default(),
+            validation: crate::vulkan::ValidationMode::default(),
             staging_bytes: config.staging_bytes,
             staging_ranges: config.staging_ranges,
             max_shader_bindings: config.max_shader_bindings,
@@ -46,7 +46,7 @@ impl Default for VulkanConfig {
 #[cfg(all(feature = "d3d12", windows))]
 #[derive(Clone, Copy, Debug)]
 pub struct D3D12Config {
-    pub validation: crate::D3D12ValidationMode,
+    pub validation: crate::d3d12::D3D12ValidationMode,
     /// Buffer operands per Graph, including imported buffers.
     pub buffer_count: usize,
     /// Largest logical buffer operand.
@@ -62,9 +62,9 @@ pub struct D3D12Config {
 #[cfg(all(feature = "d3d12", windows))]
 impl Default for D3D12Config {
     fn default() -> Self {
-        let capacity = crate::D3D12FrameCapacity::default();
+        let capacity = crate::d3d12::D3D12FrameCapacity::default();
         Self {
-            validation: crate::D3D12ValidationMode::default(),
+            validation: crate::d3d12::D3D12ValidationMode::default(),
             buffer_count: capacity.buffers,
             max_buffer_bytes: capacity.buffer_bytes,
             upload_bytes: capacity.upload_bytes,
@@ -123,8 +123,8 @@ impl RuntimeLimits {
     }
 
     #[cfg(feature = "vulkan")]
-    pub(super) fn vulkan_capacity(self) -> Result<crate::FrameCapacity, ExecutionError> {
-        Ok(crate::FrameCapacity {
+    pub(super) fn vulkan_capacity(self) -> Result<crate::vulkan::FrameCapacity, ExecutionError> {
+        Ok(crate::vulkan::FrameCapacity {
             graph: self.graph,
             work_slots: self.frames,
             result_slots: self.results,
@@ -141,8 +141,8 @@ impl RuntimeLimits {
         self,
         settings: VulkanConfig,
         presentation_slots: usize,
-    ) -> Result<crate::RuntimeConfig, ExecutionError> {
-        Ok(crate::RuntimeConfig {
+    ) -> Result<crate::vulkan::RuntimeConfig, ExecutionError> {
+        Ok(crate::vulkan::RuntimeConfig {
             execution_slots: slot_total(self.frames, presentation_slots)?,
             resource_capacity: self.resource_capacity,
             staging_bytes: settings.staging_bytes,
@@ -152,10 +152,10 @@ impl RuntimeLimits {
     }
 
     #[cfg(all(feature = "d3d12", windows))]
-    fn d3d12_config(self, settings: D3D12Config) -> crate::D3D12RuntimeConfig {
-        crate::D3D12RuntimeConfig {
+    fn d3d12_config(self, settings: D3D12Config) -> crate::d3d12::D3D12RuntimeConfig {
+        crate::d3d12::D3D12RuntimeConfig {
             validation: settings.validation,
-            capacity: crate::D3D12FrameCapacity {
+            capacity: crate::d3d12::D3D12FrameCapacity {
                 executions: self.frames,
                 results: self.results,
                 resources: self.graph.resources,
@@ -189,7 +189,7 @@ impl Runtime {
             #[cfg(feature = "vulkan")]
             RuntimeConfig::Vulkan(settings) => {
                 let capacity = limits.vulkan_capacity()?;
-                let mut runtime = crate::VulkanRuntime::new_with_validation(
+                let mut runtime = crate::vulkan::VulkanRuntime::new_with_validation(
                     limits.vulkan_config(settings, 0)?,
                     settings.validation,
                 )?;
@@ -256,9 +256,9 @@ pub(super) fn new_d3d12(
     settings: D3D12Config,
     limits: RuntimeLimits,
     set: WorkingSet<'_>,
-) -> Result<crate::D3D12Runtime, ExecutionError> {
+) -> Result<crate::d3d12::D3D12Runtime, ExecutionError> {
     let classes = D3D12Classes::new(set.resources)?;
-    Ok(crate::D3D12Runtime::new_with_working_set(
+    Ok(crate::d3d12::D3D12Runtime::new_with_working_set(
         limits.d3d12_config(settings),
         &classes.buffers,
         &classes.images,
@@ -269,8 +269,8 @@ pub(super) fn new_d3d12(
 
 #[cfg(all(feature = "d3d12", windows))]
 struct D3D12Classes {
-    buffers: Vec<crate::D3D12BufferClass>,
-    images: Vec<crate::D3D12ImageClass>,
+    buffers: Vec<crate::d3d12::D3D12BufferClass>,
+    images: Vec<crate::d3d12::D3D12ImageClass>,
 }
 
 #[cfg(all(feature = "d3d12", windows))]
@@ -298,12 +298,14 @@ impl D3D12Classes {
             })?;
         for resource in resources {
             match *resource {
-                ResourceClass::Buffer { desc, count } => buffers.push(crate::D3D12BufferClass {
-                    size: desc.size,
-                    count,
-                }),
+                ResourceClass::Buffer { desc, count } => {
+                    buffers.push(crate::d3d12::D3D12BufferClass {
+                        size: desc.size,
+                        count,
+                    })
+                }
                 ResourceClass::Image { desc, count } => {
-                    images.push(crate::D3D12ImageClass { desc, count });
+                    images.push(crate::d3d12::D3D12ImageClass { desc, count });
                 }
             }
         }

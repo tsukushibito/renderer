@@ -9,10 +9,11 @@ use std::{
 };
 
 use renderer::{
-    D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
-    D3D12Submission, D3D12SubmissionResult, D3D12ValidationMode, FrameCapacity, GpuTiming,
-    ImageFormat, ResourceClass, RuntimeConfig, Submission, SubmissionMetrics, SubmissionResult,
-    ValidationMode, VulkanRuntime,
+    GpuTiming, ImageFormat, SubmissionMetrics,
+    d3d12::{
+        D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
+        D3D12Submission, D3D12SubmissionResult, D3D12ValidationMode,
+    },
     geometry::GeometryData,
     graph::{
         Attachment, Binding, BindingResource, BufferDesc, BufferHandle, CompiledGraph, Graph,
@@ -23,6 +24,10 @@ use renderer::{
         BindingLayout, BindingType, BlendState, D3D12RasterShaders, DepthState,
         ManagedRasterProgram, RasterParameterLayout, RasterProgramDescriptor, RasterShaderStages,
         ShaderBinaries, ShaderStages, VertexAttribute, VertexFormat,
+    },
+    vulkan::{
+        FrameCapacity, ResourceClass, RuntimeConfig, Submission, SubmissionResult, ValidationMode,
+        VulkanRuntime,
     },
 };
 use serde_json::{Value, json};

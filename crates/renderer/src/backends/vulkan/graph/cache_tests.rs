@@ -2,8 +2,8 @@
 
 use super::tests::prepare_scenario;
 use super::*;
-use crate::ValidationMode;
 use crate::graph::{BufferDesc, Graph, ImageDesc};
+use crate::vulkan::ValidationMode;
 
 const WAIT: Duration = Duration::from_secs(10);
 

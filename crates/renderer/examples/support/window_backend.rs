@@ -142,9 +142,9 @@ pub fn prepare_resources(runtime: &mut Runtime, extent: (u32, u32)) -> Result<()
 
 pub enum Monitor {
     #[cfg(feature = "vulkan")]
-    Vulkan(renderer::ValidationMonitor),
+    Vulkan(renderer::vulkan::ValidationMonitor),
     #[cfg(feature = "d3d12")]
-    D3d12(renderer::D3D12ValidationMonitor),
+    D3d12(renderer::d3d12::D3D12ValidationMonitor),
 }
 impl Monitor {
     pub fn new(runtime: &Runtime) -> Self {

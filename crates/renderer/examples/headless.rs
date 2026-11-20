@@ -11,8 +11,8 @@ use renderer::graph::{
 use std::{error::Error, io::Write, time::Duration};
 
 use renderer::{
-    FrameCapacity, ResourceClass, RuntimeConfig, VulkanRuntime,
     graph::{BufferDesc, GraphCapacity, GraphPool, ImageDesc},
+    vulkan::{FrameCapacity, ResourceClass, RuntimeConfig, VulkanRuntime},
 };
 
 fn main() -> Result<(), Box<dyn Error>> {

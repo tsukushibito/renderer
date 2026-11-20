@@ -1,9 +1,10 @@
-//! Shared bounded input setup for native Engine acceptance scenarios.
+//! Shared bounded input setup for native MeshRegistry acceptance scenarios.
 
+use crate::unlit_test_input::{Draw, FrameSnapshot, View};
 use std::ops::{Deref, DerefMut};
 
 use crate::{
-    engine::{Draw, Engine, EngineCapacity, EngineError, FrameSnapshot, SnapshotPool, View},
+    geometry::{MeshCapacity, MeshError, MeshRegistry, SnapshotPool},
     graph::{
         Attachment, Graph, GraphCapacity, GraphError, GraphPool, ImageDesc, ImageHandle, LoadOp,
         RasterAttachments, StoreOp,
@@ -14,33 +15,28 @@ use crate::{
 use super::{EngineRenderError, PreparedEngineFrame, RenderedFrame, VulkanEngine};
 
 pub(crate) struct Assets {
-    engine: Engine,
+    engine: MeshRegistry,
     snapshots: SnapshotPool,
 }
 
 impl Assets {
-    pub(crate) fn new(meshes: usize, materials: usize) -> Result<Self, EngineError> {
+    pub(crate) fn new(meshes: usize) -> Result<Self, MeshError> {
         Ok(Self {
-            engine: Engine::new(EngineCapacity {
+            engine: MeshRegistry::new(MeshCapacity {
                 meshes,
-                materials,
                 retired_mesh_versions: 32,
             })?,
             snapshots: SnapshotPool::new(256, 32)?,
         })
     }
 
-    pub(crate) fn snapshot(
-        &self,
-        view: &View,
-        draws: &[Draw],
-    ) -> Result<FrameSnapshot, EngineError> {
-        self.engine.snapshot(&self.snapshots, view, draws)
+    pub(crate) fn snapshot(&self, view: &View, draws: &[Draw]) -> Result<FrameSnapshot, MeshError> {
+        FrameSnapshot::capture(&self.engine, &self.snapshots, view, draws)
     }
 }
 
 impl Deref for Assets {
-    type Target = Engine;
+    type Target = MeshRegistry;
 
     fn deref(&self) -> &Self::Target {
         &self.engine
@@ -70,7 +66,7 @@ pub(crate) fn build_snapshot(
 ) -> Result<PreparedEngineFrame, EngineRenderError> {
     let mut frame = engine.begin_graph()?;
     let inputs = engine.connect_snapshot(&mut frame, snapshot)?;
-    let view = inputs.view();
+    let view = snapshot.view();
     let graph = &mut frame.graph;
     let color = graph.image("forward color", ImageDesc::rgba8(view.width, view.height))?;
     let depth = graph.image("forward depth", ImageDesc::depth32(view.width, view.height))?;

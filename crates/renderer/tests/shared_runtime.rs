@@ -7,7 +7,7 @@ use renderer::graph::{BufferDesc, GraphCapacity, GraphPool, ImageDesc, ResourceK
 use renderer::runtime::{
     D3D12Config, ResourceClass, Runtime, RuntimeConfig, RuntimeLimits, VulkanConfig, WorkingSet,
 };
-use renderer::{D3D12ValidationMode, ValidationMode};
+use renderer::{d3d12::D3D12ValidationMode, vulkan::ValidationMode};
 
 const BYTES: [u8; 8] = [0, 17, 63, 128, 255, 31, 3, 99];
 const WAIT: Duration = Duration::from_secs(5);

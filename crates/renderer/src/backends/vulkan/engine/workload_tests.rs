@@ -1,15 +1,15 @@
 //! Internal resident-buffer verification complements the public workload example.
 //! It observes actual engine-uploaded bytes without exposing a testing-only API.
 
+use crate::unlit_test_input::{Draw, IDENTITY, Vertex, View, mesh_data};
 use std::time::{Duration, Instant};
 
-use super::test_input::{Assets as Engine, build_snapshot, graph, render_snapshot};
+use super::test_input::{Assets, build_snapshot, graph, render_snapshot};
 use super::{EngineFrameCapacity, MeshCacheConfig, MeshUploadState, MeshVersionKey, VulkanEngine};
 use crate::{
-    RuntimeConfig, ValidationMode, VulkanRuntime,
     backends::vulkan::graph::{FrameCapacity, ResourceClass},
-    engine::{Draw, IDENTITY, Material, View},
     graph::{BufferDesc, ImageDesc, ResourceKey},
+    vulkan::{RuntimeConfig, ValidationMode, VulkanRuntime},
 };
 
 #[path = "../../../../fixtures/engine_geometry.rs"]
@@ -46,7 +46,7 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
         EngineFrameCapacity::default(),
     )
     .unwrap();
-    let mut assets = Engine::new(1, 1).unwrap();
+    let mut assets = Assets::new(1).unwrap();
     let generated = engine_geometry::grid(112);
     assert!(generated.vertices.len() as u64 > STAGING);
     renderer
@@ -70,7 +70,7 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
         )
         .unwrap();
     let mesh = assets.create_mesh(generated.mesh).unwrap();
-    let material = assets.create_material(Material::default()).unwrap();
+    let tint = [1.0; 4];
     let snapshot = assets
         .snapshot(
             &View {
@@ -81,7 +81,7 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
             },
             &[Draw {
                 mesh,
-                material,
+                tint,
                 world_from_model: IDENTITY,
             }],
         )
@@ -199,7 +199,7 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
         EngineFrameCapacity::default(),
     )
     .unwrap();
-    let mut assets = Engine::new(2, 1).unwrap();
+    let mut assets = Assets::new(2).unwrap();
     let generated = engine_geometry::grid(400);
     assert!(generated.vertices.len() > 4 * 1024 * 1024);
     renderer
@@ -223,7 +223,7 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
         )
         .unwrap();
     let mesh = assets.create_mesh(generated.mesh).unwrap();
-    let material = assets.create_material(Material::default()).unwrap();
+    let tint = [1.0; 4];
     let snapshot = assets
         .snapshot(
             &View {
@@ -234,7 +234,7 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
             },
             &[Draw {
                 mesh,
-                material,
+                tint,
                 world_from_model: IDENTITY,
             }],
         )
@@ -312,7 +312,7 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
         EngineFrameCapacity::default(),
     )
     .unwrap();
-    let mut assets = Engine::new(1, 1).unwrap();
+    let mut assets = Assets::new(1).unwrap();
     let generated = engine_geometry::grid(4);
     renderer
         .runtime_mut()
@@ -343,11 +343,7 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
         )
         .unwrap();
     let mesh = assets.create_mesh(generated.mesh).unwrap();
-    let material = assets
-        .create_material(Material {
-            tint: [0.0, 1.0, 1.0, 1.0],
-        })
-        .unwrap();
+    let tint = [0.0, 1.0, 1.0, 1.0];
     let snapshot = assets
         .snapshot(
             &View {
@@ -358,7 +354,7 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
             },
             &[Draw {
                 mesh,
-                material,
+                tint,
                 world_from_model: IDENTITY,
             }],
         )
@@ -467,7 +463,7 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
             .unwrap()
             .expect("caller output upload timed out"),
     );
-    let assets = Engine::new(1, 1).unwrap();
+    let assets = Assets::new(1).unwrap();
     let snapshot = assets
         .snapshot(
             &View {
@@ -485,7 +481,7 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
     .unwrap();
     assert_eq!(
         borrowed.output_ownership(),
-        crate::engine::FrameOutputOwnership::Caller
+        crate::graph::FrameOutputOwnership::Caller
     );
     let borrowed_pass = borrowed.readback.unwrap();
     renderer.release_output(&mut borrowed).unwrap();
@@ -504,7 +500,7 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
     let mut owned = render_snapshot(&mut renderer, &snapshot, true, |_, image| Ok(image)).unwrap();
     assert_eq!(
         owned.output_ownership(),
-        crate::engine::FrameOutputOwnership::Frame
+        crate::graph::FrameOutputOwnership::Frame
     );
     let original_key = owned.output.key();
     let owned_pass = owned.readback.unwrap();
@@ -591,25 +587,25 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
             ],
         )
         .unwrap();
-    let mut assets = Engine::new(3, 1).unwrap();
-    let material = assets.create_material(Material::default()).unwrap();
+    let mut assets = Assets::new(3).unwrap();
+    let tint = [1.0; 4];
     let colors = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]];
     let mut snapshots = Vec::new();
     let mut handles = Vec::new();
     for color in colors {
-        let tint = color.map(|component| component as f32 / 255.0);
+        let vertex_color = color.map(|component| component as f32 / 255.0);
         let vertices = [
             [-0.75, -0.75, 0.25],
             [0.75, -0.75, 0.25],
             [-0.75, 0.75, 0.25],
             [0.75, 0.75, 0.25],
         ]
-        .map(|position| crate::engine::Vertex {
+        .map(|position| crate::unlit_test_input::Vertex {
             position,
-            color: tint,
+            color: vertex_color,
         });
         let mesh = assets
-            .create_mesh(crate::engine::MeshData::new(&vertices, &[0, 1, 2, 1, 3, 2]).unwrap())
+            .create_mesh(mesh_data(&vertices, &[0, 1, 2, 1, 3, 2]).unwrap())
             .unwrap();
         handles.push(mesh);
         snapshots.push(
@@ -623,14 +619,14 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
                     },
                     &[Draw {
                         mesh,
-                        material,
+                        tint,
                         world_from_model: IDENTITY,
                     }],
                 )
                 .unwrap(),
         );
     }
-    let ready = |renderer: &mut VulkanEngine, snapshot: &crate::engine::FrameSnapshot| {
+    let ready = |renderer: &mut VulkanEngine, snapshot: &crate::unlit_test_input::FrameSnapshot| {
         let began = Instant::now();
         let mut progress = renderer.prepare_snapshot(snapshot, 2).unwrap();
         while progress.state != MeshUploadState::Ready || progress.pending_submissions != 0 {

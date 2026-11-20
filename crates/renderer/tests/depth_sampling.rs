@@ -28,9 +28,11 @@ use renderer::program::{
     ShaderBinaries, ShaderStages, VertexAttribute, VertexFormat,
 };
 use renderer::{
-    D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
-    D3D12ValidationMode, FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode,
-    VulkanRuntime,
+    d3d12::{
+        D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
+        D3D12ValidationMode,
+    },
+    vulkan::{FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode, VulkanRuntime},
 };
 use serde_json::json;
 use std::time::Duration;
@@ -553,7 +555,10 @@ fn run(strict: bool) {
         .submit(&plan)
         .err()
         .expect("undersized binding metadata must fail");
-    assert_eq!(error.kind(), renderer::RuntimeErrorKind::CapacityExhausted);
+    assert_eq!(
+        error.kind(),
+        renderer::vulkan::RuntimeErrorKind::CapacityExhausted
+    );
     let metadata = error.capacity().expect("typed binding metadata capacity");
     assert_eq!(
         metadata.resource,

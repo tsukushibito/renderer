@@ -11,7 +11,7 @@ pub struct FrameSubmission(SubmissionInner);
 
 enum SubmissionInner {
     #[cfg(feature = "vulkan")]
-    Vulkan(crate::FrameSubmission),
+    Vulkan(crate::vulkan::FrameSubmission),
     #[cfg(all(feature = "d3d12", windows))]
     D3D12(crate::backends::d3d12::QueuedFrameSubmission),
 }
@@ -60,8 +60,8 @@ impl FrameSubmission {
 }
 
 #[cfg(feature = "vulkan")]
-impl From<crate::FrameSubmission> for FrameSubmission {
-    fn from(submission: crate::FrameSubmission) -> Self {
+impl From<crate::vulkan::FrameSubmission> for FrameSubmission {
+    fn from(submission: crate::vulkan::FrameSubmission) -> Self {
         Self(SubmissionInner::Vulkan(submission))
     }
 }
@@ -80,7 +80,7 @@ pub struct FrameCompletion(CompletionInner);
 #[allow(clippy::large_enum_variant)] // Keep both native result leases inline.
 enum CompletionInner {
     #[cfg(feature = "vulkan")]
-    Vulkan(crate::FrameCompletion),
+    Vulkan(crate::vulkan::FrameCompletion),
     #[cfg(all(feature = "d3d12", windows))]
     D3D12(crate::backends::d3d12::QueuedFrameCompletion),
 }
@@ -132,8 +132,8 @@ impl FrameCompletion {
 }
 
 #[cfg(feature = "vulkan")]
-impl From<crate::FrameCompletion> for FrameCompletion {
-    fn from(completed: crate::FrameCompletion) -> Self {
+impl From<crate::vulkan::FrameCompletion> for FrameCompletion {
+    fn from(completed: crate::vulkan::FrameCompletion) -> Self {
         Self(CompletionInner::Vulkan(completed))
     }
 }

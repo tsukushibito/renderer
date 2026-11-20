@@ -316,7 +316,7 @@ mod tests {
     #[ignore = "explicit D3D12 hardware memory queries; isolated strict/shipping process"]
     fn d3d12_memory_stats_hardware() {
         use super::*;
-        use crate::D3D12RuntimeConfig;
+        use crate::d3d12::D3D12RuntimeConfig;
         let config = D3D12RuntimeConfig {
             capacity: super::super::frame::D3D12FrameCapacity {
                 executions: 1,

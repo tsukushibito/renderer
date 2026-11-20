@@ -179,13 +179,14 @@ impl Prepared {
 
     /// Append the scene and SDR output. Missing output or invalid exposure is
     /// rejected before declaring any work. Discard the Graph on later errors.
-    pub fn add_passes(
+    pub fn add_scene_and_sdr_output(
         &mut self,
         graph: &mut Graph,
         frame: Frame<'_>,
         lights: &[PointLight],
+        exposure: f32,
     ) -> Result<FrameImages, GraphError> {
-        let (output, exposure) = self.common.checked_output(frame.exposure)?;
+        let (output, exposure) = self.common.checked_output(exposure)?;
         let scene = self.add_scene(graph, frame, lights)?;
         let output =
             output.append_validated(graph, graph.image_view(scene.hdr, 0, 0)?, exposure)?;

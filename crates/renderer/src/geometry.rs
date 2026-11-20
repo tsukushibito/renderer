@@ -5,7 +5,13 @@
 //! nor a retained CPU copy solely to prove those bounds. Scene, material and
 //! vertex-attribute interpretation remain the caller's responsibility.
 
-use std::{fmt, sync::Arc};
+mod registry;
+pub use registry::{
+    MeshCapacity, MeshError, MeshErrorKind, MeshHandle, MeshRegistry, MeshSnapshot, SnapshotInputs,
+    SnapshotPool,
+};
+
+use std::{fmt, ops::Range, sync::Arc};
 
 use crate::graph::{BufferHandle, Graph, GraphError, GraphErrorKind, MeshUpload, PassHandle};
 
@@ -25,8 +31,8 @@ use crate::graph::{BufferHandle, Graph, GraphError, GraphErrorKind, MeshUpload, 
 /// CPU owner during that later frame.
 #[derive(Clone)]
 pub struct GeometryData {
-    vertices: Arc<[u8]>,
-    indices: Arc<[u8]>,
+    pub(crate) vertices: Arc<[u8]>,
+    pub(crate) indices: Arc<[u8]>,
     vertex_stride: u32,
     vertex_count: u64,
     index_count: u32,
@@ -151,13 +157,7 @@ impl GeometryData {
         name: &str,
         destination: BufferHandle,
     ) -> Result<PassHandle, GraphError> {
-        graph.upload_mesh_slice(
-            name,
-            destination,
-            &self.vertices,
-            0..self.vertices.len(),
-            MeshUpload::Vertices,
-        )
+        self.upload_graph_slice(graph, name, destination, false, 0..self.vertices.len())
     }
 
     /// Capture all indices and their private content maximum into an equally
@@ -172,16 +172,31 @@ impl GeometryData {
         name: &str,
         destination: BufferHandle,
     ) -> Result<PassHandle, GraphError> {
-        graph.upload_mesh_slice(
-            name,
-            destination,
-            &self.indices,
-            0..self.indices.len(),
-            MeshUpload::Indices {
-                byte_len: self.index_byte_len(),
-                maximum: self.index_maximum,
-            },
-        )
+        self.upload_graph_slice(graph, name, destination, true, 0..self.indices.len())
+    }
+
+    /// Upload one aligned slice of an immutable mesh stream. Only this bridge
+    /// establishes mesh provenance; arbitrary public byte uploads cannot do so.
+    pub(crate) fn upload_graph_slice(
+        &self,
+        graph: &mut Graph,
+        name: impl AsRef<str>,
+        dst: BufferHandle,
+        indices: bool,
+        source: Range<usize>,
+    ) -> Result<PassHandle, GraphError> {
+        let (bytes, provenance) = if indices {
+            (
+                &self.indices,
+                MeshUpload::Indices {
+                    byte_len: self.indices.len() as u64,
+                    maximum: self.index_maximum,
+                },
+            )
+        } else {
+            (&self.vertices, MeshUpload::Vertices)
+        };
+        graph.upload_mesh_slice(name.as_ref(), dst, bytes, source, provenance)
     }
 }
 

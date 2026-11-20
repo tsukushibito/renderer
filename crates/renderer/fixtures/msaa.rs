@@ -1,12 +1,14 @@
 use renderer::{
-    D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
-    D3D12ValidationMode, FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode,
-    VulkanRuntime,
+    d3d12::{
+        D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
+        D3D12ValidationMode,
+    },
     graph::{
         Attachment, BufferDesc, CompiledGraph, GraphCapacity, GraphPool, ImageDesc, LoadOp,
         PassHandle, RasterAttachments, RasterDraw, RasterParameters, SampleCount, StoreOp,
     },
     program::{ManagedRasterProgram, RasterPipelineRequest},
+    vulkan::{FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode, VulkanRuntime},
 };
 use std::time::Duration;
 

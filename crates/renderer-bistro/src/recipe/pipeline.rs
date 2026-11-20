@@ -23,7 +23,7 @@ use renderer::{
 };
 use renderer_pipeline::{
     pbr::{
-        self, MaterialUniform, ResidentMaterial, ShadowFrame, ShadowHistory, ShadowKey,
+        self, MaterialUniform, ResidentMaterialUniform, ShadowFrame, ShadowHistory, ShadowKey,
         ShadowUpdates,
     },
     pbr_forward, pbr_forward_plus,
@@ -534,7 +534,7 @@ impl Budget {
 pub(super) struct Resident {
     pub vertices: Vec<ImportBuffer>,
     pub indices: Vec<ImportBuffer>,
-    pub materials: Vec<ResidentMaterial>,
+    pub materials: Vec<ResidentMaterialUniform>,
     pub images: Vec<ImportImage>,
     pub environment: [ImportImage; 3],
     pub environment_mips: [u32; 3],
@@ -623,7 +623,7 @@ pub(super) fn upload_material(
     backend: &mut Runtime,
     owners: &mut Vec<GraphPool>,
     bytes: &[u8; program::MATERIAL_BYTES],
-) -> Result<ResidentMaterial, Error> {
+) -> Result<ResidentMaterialUniform, Error> {
     upload_asset(
         backend,
         owners,

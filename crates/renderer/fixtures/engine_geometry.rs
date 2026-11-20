@@ -1,9 +1,10 @@
 //! Deterministic geometry and independent full-image expectations for workloads.
 
-use crate::engine::{MeshData, Vertex};
+use super::{Vertex, mesh_data};
+use renderer::geometry::GeometryData;
 
 pub(super) struct GridData {
-    pub mesh: MeshData,
+    pub mesh: GeometryData,
     pub vertices: Vec<u8>,
     pub indices: Vec<u8>,
     pub vertex_count: usize,
@@ -52,7 +53,7 @@ pub(super) fn grid(cells: u32) -> GridData {
     }
     let encoded_indices = indices.iter().flat_map(|i| i.to_ne_bytes()).collect();
     GridData {
-        mesh: MeshData::new(&vertices, &indices).expect("valid generated grid"),
+        mesh: mesh_data(&vertices, &indices).expect("valid generated grid"),
         vertices: encoded_vertices,
         indices: encoded_indices,
         vertex_count,

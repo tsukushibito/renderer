@@ -1,4 +1,4 @@
-//! Whole Engine image frames through the ordinary public, prepared API.
+//! Whole MeshRegistry image frames through the ordinary public, prepared API.
 //! Resident uploads and capacity preparation are setup; all frame returns are
 //! measured. This headless probe does not exercise presentation.
 
@@ -7,18 +7,16 @@ use super::frame_memory::{
     semantics,
 };
 use super::image_transform::{self, Transform};
-use renderer::engine::{
-    Draw, Engine, EngineCapacity, FrameSnapshot, IDENTITY, Material, MaterialHandle, MeshData,
-    SnapshotPool, Vertex, View,
-};
+use renderer::geometry::{MeshCapacity, MeshRegistry, SnapshotPool};
 use renderer::graph::{Attachment, ImageDesc, LoadOp, PassHandle, StoreOp};
 use renderer::measurement::{HostEvent, NativeEvent, RustEvent, Snapshot};
 use renderer::program::ManagedRasterProgram;
-use renderer::{
+use renderer::vulkan::{
     EngineFrameCapacity, EngineRenderError, FrameCapacity, FrameCompletion, MeshCacheConfig,
     MeshPreparationError, MeshUploadState, PreparedEngineFrame, RenderedFrame, ResourceClass,
     RuntimeConfig, ValidationMode, VulkanEngine, VulkanRuntime,
 };
+use renderer_pipeline::unlit_forward::{Draw, FrameSnapshot, IDENTITY, Vertex, View, mesh_data};
 use renderer_pipeline::{passes, unlit_forward};
 use std::time::{Duration, Instant};
 
@@ -217,11 +215,10 @@ fn consume(mut held: Held) {
 }
 
 fn frames(
-    engine: &mut Engine,
+    engine: &mut MeshRegistry,
     snapshots: &SnapshotPool,
     renderer: &mut VulkanEngine,
     draws: &mut [Draw; 4],
-    material: MaterialHandle,
     count: usize,
 ) -> Report<6> {
     let mut pending: [Option<Pending>; IN_FLIGHT] = std::array::from_fn(|_| None);
@@ -281,23 +278,23 @@ fn frames(
             }
         }
         let snapshot = phase(&mut phases[0], || {
-            engine.update_material(material, Material { tint }).unwrap();
             for draw in draws.iter_mut() {
+                draw.tint = tint;
                 draw.world_from_model = IDENTITY;
                 draw.world_from_model[3][0] = if shifted_left { -0.25 } else { 0.25 };
             }
-            engine
-                .snapshot(
-                    snapshots,
-                    &View {
-                        width: WIDTH,
-                        height: HEIGHT,
-                        clip_from_world: IDENTITY,
-                        clear_color: [0.0, 0.0, (frame % 2) as f32, 1.0],
-                    },
-                    &draws[..draw_count],
-                )
-                .unwrap()
+            FrameSnapshot::capture(
+                engine,
+                snapshots,
+                &View {
+                    width: WIDTH,
+                    height: HEIGHT,
+                    clip_from_world: IDENTITY,
+                    clear_color: [0.0, 0.0, (frame % 2) as f32, 1.0],
+                },
+                &draws[..draw_count],
+            )
+            .unwrap()
         });
         phase(&mut phases[1], || cancel_and_exhaust(renderer, &snapshot));
         let prepared = phase(&mut phases[1], || {
@@ -391,16 +388,15 @@ pub fn lifecycle(baseline: bool) {
         panic!("memory acceptance requires --release");
     }
     let start = Snapshot::now();
-    let mut engine = Engine::new(EngineCapacity {
+    let mut engine = MeshRegistry::new(MeshCapacity {
         meshes: 1,
-        materials: 1,
         retired_mesh_versions: 1,
     })
     .unwrap();
     let snapshots = SnapshotPool::new(4, IN_FLIGHT).unwrap();
     let mesh = engine
         .create_mesh(
-            MeshData::new(
+            mesh_data(
                 &[[-0.4, -0.4, 0.25], [0.4, -0.4, 0.25], [0.0, 0.4, 0.25]].map(|position| Vertex {
                     position,
                     color: [1.0; 4],
@@ -410,10 +406,10 @@ pub fn lifecycle(baseline: bool) {
             .unwrap(),
         )
         .unwrap();
-    let material = engine.create_material(Material::default()).unwrap();
+    let tint = [1.0; 4];
     let mut draws = [Draw {
         mesh,
-        material,
+        tint,
         world_from_model: IDENTITY,
     }; 4];
     let runtime = VulkanRuntime::new(RuntimeConfig {
@@ -481,18 +477,18 @@ pub fn lifecycle(baseline: bool) {
             ManagedRasterProgram::mesh_prepassed(),
         ])
         .unwrap();
-    let resident = engine
-        .snapshot(
-            &snapshots,
-            &View {
-                width: WIDTH,
-                height: HEIGHT,
-                clip_from_world: IDENTITY,
-                clear_color: [0.0, 0.0, 0.0, 1.0],
-            },
-            &draws,
-        )
-        .unwrap();
+    let resident = FrameSnapshot::capture(
+        &engine,
+        &snapshots,
+        &View {
+            width: WIDTH,
+            height: HEIGHT,
+            clip_from_world: IDENTITY,
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+        },
+        &draws,
+    )
+    .unwrap();
     let mut upload = renderer.prepare_snapshot(&resident, 2).unwrap();
     let upload_start = Instant::now();
     while upload.state != MeshUploadState::Ready || upload.pending_submissions != 0 {
@@ -503,23 +499,9 @@ pub fn lifecycle(baseline: bool) {
         upload = renderer.wait_uploads(WAIT).unwrap();
     }
     drop(resident);
-    frames(
-        &mut engine,
-        &snapshots,
-        &mut renderer,
-        &mut draws,
-        material,
-        WARMUP,
-    );
+    frames(&mut engine, &snapshots, &mut renderer, &mut draws, WARMUP);
     let startup = Snapshot::now().since(start);
-    let measured = frames(
-        &mut engine,
-        &snapshots,
-        &mut renderer,
-        &mut draws,
-        material,
-        FRAMES,
-    );
+    let measured = frames(&mut engine, &snapshots, &mut renderer, &mut draws, FRAMES);
     let before_shutdown = Snapshot::now();
     drop((renderer, snapshots, engine));
     let shutdown = Snapshot::now().since(before_shutdown);
@@ -555,7 +537,7 @@ pub fn lifecycle(baseline: bool) {
         "x_translations": [-0.25, 0.25],
         "verified_pixels": { "left": [5, 8], "right": [10, 8], "background": "four corners" },
         "boundary_cases": ["compiled/uncompiled prepared cancel", "prepared frame capacity/busy rejection"],
-        "coverage": "ordinary public Engine snapshot/connection/build/compile, public standard forward/post and direct prepass/opaque, image Compute/output copy, runtime frame completion, caller readback_into and full result/output return; no WSI or asset churn",
+        "coverage": "ordinary public MeshRegistry snapshot/connection/build/compile, public standard forward/post and direct prepass/opaque, image Compute/output copy, runtime frame completion, caller readback_into and full result/output return; no WSI or asset churn",
         "caller": "fixed pending/result arrays and 1024-byte output; explicit per-frame fence waits only when pending array fills; report outside measurement",
         "unobserved": "driver/OS/native allocations outside the configured callbacks",
         "startup_positive_control": counts(startup),
@@ -568,7 +550,7 @@ pub fn lifecycle(baseline: bool) {
     if !baseline {
         assert!(
             measured.total.is_allocation_free(),
-            "Engine image lifecycle still allocates or frees: {:?}",
+            "MeshRegistry image lifecycle still allocates or frees: {:?}",
             measured.total
         );
     }

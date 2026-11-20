@@ -2,13 +2,10 @@
 
 use super::graph::{FrameSubmission, RuntimeError, Submission, VulkanRuntime};
 use crate::{
-    engine::{
-        EngineError, FrameGraph, FrameOutputOwnership, FrameSnapshot, MeshData, MeshHandle,
-        SnapshotInputs,
-    },
+    geometry::{GeometryData, MeshError, MeshHandle, MeshSnapshot, SnapshotInputs},
     graph::{
-        CompiledGraph, Graph, GraphCapacity, GraphError, GraphPool, ImageHandle, ImportImage,
-        PassHandle, ResourceKey,
+        CompiledGraph, FrameGraph, FrameOutputOwnership, Graph, GraphCapacity, GraphError,
+        GraphPool, ImageHandle, ImportImage, PassHandle, ResourceKey,
     },
 };
 use std::{
@@ -121,7 +118,7 @@ impl fmt::Display for MeshPreparationError {
 impl std::error::Error for MeshPreparationError {}
 #[derive(Debug)]
 pub enum EngineRenderError {
-    Input(EngineError),
+    Input(MeshError),
     Graph(GraphError),
     Runtime(RuntimeError),
     Preparation(MeshPreparationError),
@@ -146,8 +143,8 @@ impl std::error::Error for EngineRenderError {
         })
     }
 }
-impl From<EngineError> for EngineRenderError {
-    fn from(e: EngineError) -> Self {
+impl From<MeshError> for EngineRenderError {
+    fn from(e: MeshError) -> Self {
         Self::Input(e)
     }
 }
@@ -325,7 +322,7 @@ impl CompiledEngineFrame {
         self.output_ownership
     }
 }
-/// GPU residency consumes immutable snapshots from any CPU Engine; no asset registry.
+/// GPU residency consumes immutable snapshots from any CPU MeshRegistry; no asset registry.
 pub struct VulkanEngine {
     runtime: VulkanRuntime,
     config: MeshCacheConfig,
@@ -337,7 +334,7 @@ pub struct VulkanEngine {
     retired_sources: DeferredSources,
     active_upload: Option<ActiveUpload>,
     idle_upload_keys: Vec<MeshVersionKey>,
-    required_meshes: Vec<(MeshVersionKey, Arc<MeshData>)>,
+    required_meshes: Vec<(MeshVersionKey, Arc<GeometryData>)>,
     pending_uploads: Vec<Submission>,
     clock: AtomicU64,
     evictions: usize,
@@ -347,32 +344,37 @@ impl VulkanEngine {
         runtime: VulkanRuntime,
         config: MeshCacheConfig,
         frames: EngineFrameCapacity,
-    ) -> Result<Self, EngineError> {
+    ) -> Result<Self, MeshError> {
         if config.max_meshes == 0
             || config.max_meshes > u32::MAX as usize
             || config.max_bytes == 0
             || config.max_upload_submissions == 0
         {
-            return Err(EngineError::new(
+            return Err(MeshError::invalid_input(
                 "mesh residency and upload bounds must be nonzero; mesh count must fit u32",
             ));
         }
         let mut pending_uploads = Vec::new();
         pending_uploads
             .try_reserve_exact(config.max_upload_submissions)
-            .map_err(|_| EngineError::new("unable to reserve bounded upload bookkeeping"))?;
+            .map_err(|_| {
+                MeshError::invalid_input("unable to reserve bounded upload bookkeeping")
+            })?;
         let mut idle_upload_keys = Vec::new();
         let mut required_meshes = Vec::new();
         idle_upload_keys
             .try_reserve_exact(config.max_meshes)
-            .map_err(|_| EngineError::new("unable to reserve bounded mesh upload keys"))?;
+            .map_err(|_| MeshError::invalid_input("unable to reserve bounded mesh upload keys"))?;
         required_meshes
             .try_reserve_exact(config.max_meshes)
-            .map_err(|_| EngineError::new("unable to reserve bounded mesh admission scratch"))?;
-        let graph_pool = GraphPool::new(frames.graph, frames.graph_slots)
-            .map_err(|_| EngineError::new("unable to reserve Engine Graph storage"))?;
+            .map_err(|_| {
+                MeshError::invalid_input("unable to reserve bounded mesh admission scratch")
+            })?;
+        let graph_pool = GraphPool::new(frames.graph, frames.graph_slots).map_err(|_| {
+            MeshError::invalid_input("unable to reserve MeshRegistry Graph storage")
+        })?;
         let upload_graphs = GraphPool::new(frames.graph, config.max_upload_submissions)
-            .map_err(|_| EngineError::new("unable to reserve mesh upload Graph storage"))?;
+            .map_err(|_| MeshError::invalid_input("unable to reserve mesh upload Graph storage"))?;
         let frame_scratch = FrameScratchPool::new(config.max_meshes, frames.prepared_frames)?;
         Ok(Self {
             runtime,
@@ -423,10 +425,12 @@ impl VulkanEngine {
     pub fn connect_snapshot<'a>(
         &mut self,
         frame: &mut PreparedEngineGraph,
-        snapshot: &'a FrameSnapshot,
+        snapshot: &'a MeshSnapshot,
     ) -> Result<SnapshotInputs<'a>, EngineRenderError> {
         if !Arc::ptr_eq(&frame.owner, &self.owner) || frame.source_graph != frame.graph.id {
-            return Err(EngineError::new("prepared Graph belongs to another owner/Graph").into());
+            return Err(
+                MeshError::invalid_input("prepared Graph belongs to another owner/Graph").into(),
+            );
         }
         self.connect_inputs(&mut frame.graph, &mut frame.scratch, snapshot)
     }
@@ -435,7 +439,7 @@ impl VulkanEngine {
         &mut self,
         graph: &mut Graph,
         scratch: &mut FrameScratchLease,
-        snapshot: &'a FrameSnapshot,
+        snapshot: &'a MeshSnapshot,
     ) -> Result<SnapshotInputs<'a>, EngineRenderError> {
         let serial = self.next_use()?;
         // Resolve and pin before exposing logical handles to user code. Keys
@@ -490,7 +494,7 @@ impl VulkanEngine {
         frame: CompiledEngineGraph,
     ) -> Result<FrameSubmission, EngineRenderError> {
         if !Arc::ptr_eq(&frame.owner, &self.owner) {
-            return Err(EngineError::new("compiled Graph belongs to another owner").into());
+            return Err(MeshError::invalid_input("compiled Graph belongs to another owner").into());
         }
         let submission = self.runtime.submit_frame(&frame.graph)?;
         drop(frame.scratch);
@@ -506,7 +510,7 @@ impl VulkanEngine {
             || prepared.output != prepared.source_output
             || !prepared.graph.has_export(prepared.output.index)
         {
-            return Err(EngineError::new(
+            return Err(MeshError::invalid_input(
                 "prepared frame or compiled plan belongs to another owner/Graph",
             )
             .into());

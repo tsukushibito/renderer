@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::{EngineError, MeshPreparationError, MeshVersionKey, ResidentBuffers};
+use super::{MeshError, MeshPreparationError, MeshVersionKey, ResidentBuffers};
 use crate::graph::BufferHandle;
 
 pub(super) struct FrameScratch {
@@ -14,21 +14,23 @@ pub(super) struct FrameScratch {
 pub(super) struct FrameScratchPool(Arc<Mutex<Vec<FrameScratch>>>);
 
 impl FrameScratchPool {
-    pub(super) fn new(meshes: usize, slots: usize) -> Result<Self, EngineError> {
+    pub(super) fn new(meshes: usize, slots: usize) -> Result<Self, MeshError> {
         if slots == 0 {
-            return Err(EngineError::new("prepared frame capacity must be nonzero"));
+            return Err(MeshError::invalid_input(
+                "prepared frame capacity must be nonzero",
+            ));
         }
         let mut idle = Vec::new();
         idle.try_reserve_exact(slots)
-            .map_err(|_| EngineError::new("unable to reserve prepared frame slots"))?;
+            .map_err(|_| MeshError::invalid_input("unable to reserve prepared frame slots"))?;
         for _ in 0..slots {
             let mut resolved = Vec::new();
             let mut pins = Vec::new();
             resolved
                 .try_reserve_exact(meshes)
-                .map_err(|_| EngineError::new("unable to reserve resolved mesh scratch"))?;
+                .map_err(|_| MeshError::invalid_input("unable to reserve resolved mesh scratch"))?;
             pins.try_reserve_exact(meshes)
-                .map_err(|_| EngineError::new("unable to reserve prepared mesh pins"))?;
+                .map_err(|_| MeshError::invalid_input("unable to reserve prepared mesh pins"))?;
             idle.push(FrameScratch { resolved, pins });
         }
         Ok(Self(Arc::new(Mutex::new(idle))))

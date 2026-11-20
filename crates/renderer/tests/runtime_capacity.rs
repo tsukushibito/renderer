@@ -17,12 +17,12 @@ fn capacity_reports_are_native_independent_and_preserve_recovery_and_byte_counts
     assert!(error.to_string().contains("16777216"));
     #[cfg(feature = "vulkan")]
     {
-        let _: fn(&renderer::RuntimeError) -> Option<RuntimeCapacityError> =
-            renderer::RuntimeError::capacity;
+        let _: fn(&renderer::vulkan::RuntimeError) -> Option<RuntimeCapacityError> =
+            renderer::vulkan::RuntimeError::capacity;
     }
     #[cfg(all(feature = "d3d12", windows))]
     {
-        let _: fn(&renderer::D3D12RuntimeError) -> Option<RuntimeCapacityError> =
-            renderer::D3D12RuntimeError::capacity;
+        let _: fn(&renderer::d3d12::D3D12RuntimeError) -> Option<RuntimeCapacityError> =
+            renderer::d3d12::D3D12RuntimeError::capacity;
     }
 }

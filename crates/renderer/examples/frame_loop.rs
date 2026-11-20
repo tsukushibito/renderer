@@ -5,6 +5,7 @@
 //! GPU timestamps. Both modes use explicit bounded frame waits and read back every
 //! frame; their timings describe this small offscreen workload, not display FPS.
 
+use renderer_pipeline::unlit_forward::FrameSnapshot;
 #[path = "../fixtures/image_transform.rs"]
 mod image_transform;
 use image_transform::Transform;
@@ -17,13 +18,14 @@ use std::{
 };
 
 use renderer::{
-    EngineFrameCapacity, FrameCapacity, FrameId, GpuTiming, MemoryStats, MeshCacheConfig,
-    MeshUploadState, ResourceClass, RuntimeConfig, RuntimeStats, SubmissionResult, ValidationMode,
-    ValidationReport, VulkanEngine, VulkanRuntime,
-    engine::{
-        Engine, EngineCapacity, FrameSnapshot, Material, MaterialHandle, MeshHandle, SnapshotPool,
-    },
+    GpuTiming,
+    geometry::{MeshCapacity, MeshHandle, MeshRegistry, SnapshotPool},
     graph::{GraphCapacity, ImageDesc, ImportImage, PassHandle},
+    vulkan::{
+        EngineFrameCapacity, FrameCapacity, FrameId, MemoryStats, MeshCacheConfig, MeshUploadState,
+        ResourceClass, RuntimeConfig, RuntimeStats, SubmissionResult, ValidationMode,
+        ValidationReport, VulkanEngine, VulkanRuntime,
+    },
 };
 use renderer_pipeline::unlit_forward::{self, ForwardConfig};
 
@@ -260,7 +262,7 @@ struct RunReport {
     startup_mesh_upload_prepare_ns: u128,
     startup_mesh_upload_wait_ns: u128,
     startup_mesh_upload_bytes: u64,
-    device: renderer::DeviceInfo,
+    device: renderer::vulkan::DeviceInfo,
     validation: ValidationReport,
     samples: Vec<Sample>,
     warmed_stats: Option<RuntimeStats>,
@@ -574,18 +576,18 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
             graph: graph_capacity,
         },
     )?;
-    let mut assets = Engine::new(EngineCapacity {
+    let mut assets = MeshRegistry::new(MeshCapacity {
         meshes: options.mesh_capacity(),
-        materials: 4,
+
         retired_mesh_versions: 64,
     })?;
     let snapshots = SnapshotPool::new(options.draws, 2)?;
     let mut meshes = (0..options.mesh_asset_count())
         .map(|_| assets.create_mesh(geometry.clone()))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut material = assets.create_material(Material::default())?;
+    let mut tint = [1.0; 4];
     let view = scene::view(options.width, options.height);
-    let mut draws = frame_scaling::draws(&meshes, material, options.draws, options.layout, 0.0);
+    let mut draws = frame_scaling::draws(&meshes, tint, options.draws, options.layout, 0.0);
     let mut collector = Collector {
         pending: HashMap::with_capacity(IN_FLIGHT),
         samples: Vec::with_capacity(options.frames),
@@ -602,7 +604,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     };
     // Initial residency, including its explicit waits, precedes the measured loop.
     let startup_snapshot_start = Instant::now();
-    let startup_snapshot = assets.snapshot(&snapshots, &view, &draws)?;
+    let startup_snapshot = FrameSnapshot::capture(&assets, &snapshots, &view, &draws)?;
     let startup_snapshot_ns = startup_snapshot_start.elapsed().as_nanos();
     let startup_upload = prepare_meshes(&mut engine, &startup_snapshot, &mut collector, options)?;
     let startup_mesh_upload_bytes = geometry.byte_len() * options.unique_mesh_count() as u64;
@@ -629,18 +631,18 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
             engine.release_idle_inputs();
             engine.collect_retired_meshes(Some(&assets))?;
             assets.collect_retired_meshes();
-            change_assets(&mut assets, &mut meshes[0], &mut material, phase)?;
+            change_assets(&mut assets, &mut meshes[0], &mut tint, phase)?;
             asset_update_ns = asset_update_start.elapsed().as_nanos();
             draws = frame_scaling::draws(
                 &meshes,
-                material,
+                tint,
                 options.draws,
                 options.layout,
                 if phase == 1 { 0.1 } else { 0.0 },
             );
         }
         let snapshot_start = Instant::now();
-        let snapshot = assets.snapshot(&snapshots, &view, &draws)?;
+        let snapshot = FrameSnapshot::capture(&assets, &snapshots, &view, &draws)?;
         let snapshot_ns = snapshot_start.elapsed().as_nanos();
         let upload = prepare_meshes(&mut engine, &snapshot, &mut collector, options)?;
         let build_start = Instant::now();
@@ -782,7 +784,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     }
     engine.collect_retired_meshes(Some(&assets))?;
     assets.collect_retired_meshes();
-    assets.delete_material(material)?;
+
     if let (Some(path), Some(rgba)) = (&options.ppm, &collector.last_pixels) {
         frame_report::write_ppm(path, options.width, options.height, rgba)?;
     }
@@ -842,9 +844,9 @@ fn creations(stats: &RuntimeStats) -> [usize; 3] {
 }
 
 fn change_assets(
-    engine: &mut Engine,
+    engine: &mut MeshRegistry,
     mesh: &mut MeshHandle,
-    material: &mut MaterialHandle,
+    tint: &mut [f32; 4],
     phase: usize,
 ) -> Result<(), Box<dyn Error>> {
     let color = match phase {
@@ -852,22 +854,19 @@ fn change_assets(
         1 => [0.0, 1.0, 0.0, 1.0],
         _ => [0.0, 0.0, 1.0, 1.0],
     };
-    let value = Material {
-        tint: if phase == 1 {
-            [1.0, 0.0, 1.0, 1.0]
-        } else {
-            [1.0; 4]
-        },
+    let value = if phase == 1 {
+        [1.0, 0.0, 1.0, 1.0]
+    } else {
+        [1.0; 4]
     };
     if phase == 2 {
         engine.delete_mesh(*mesh)?;
-        engine.delete_material(*material)?;
+
         *mesh = engine.create_mesh(scene::triangle(color)?)?;
-        *material = engine.create_material(value)?;
     } else {
         engine.update_mesh(*mesh, scene::triangle(color)?)?;
-        engine.update_material(*material, value)?;
     }
+    *tint = value;
     Ok(())
 }
 

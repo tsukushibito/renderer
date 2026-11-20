@@ -1,19 +1,18 @@
+use renderer_pipeline::unlit_forward::FrameSnapshot;
+use renderer_pipeline::unlit_forward::{Draw, IDENTITY, Vertex, View, mesh_data};
 #[path = "../fixtures/image_transform.rs"]
 mod image_transform;
 use image_transform::Transform;
 
-use renderer::engine::{
-    Draw, Engine, EngineCapacity, FrameOutputOwnership, IDENTITY, Material, MeshData, SnapshotPool,
-    Vertex, View,
-};
+use renderer::geometry::{MeshCapacity, MeshRegistry, SnapshotPool};
+use renderer::graph::FrameOutputOwnership;
 use renderer::graph::{GraphCapacity, GraphPool};
 use renderer_pipeline::unlit_forward::snapshot::build_graph;
 
 #[test]
 fn owned_frame_inputs_need_no_gpu_or_window() {
-    let mut engine = Engine::new(EngineCapacity {
+    let mut engine = MeshRegistry::new(MeshCapacity {
         meshes: 2,
-        materials: 2,
         retired_mesh_versions: 2,
     })
     .unwrap();
@@ -21,7 +20,7 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
     let mut graphs = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let mesh = engine
         .create_mesh(
-            MeshData::new(
+            mesh_data(
                 &[Vertex {
                     position: [0.0, 0.0, 0.5],
                     color: [1.0; 4],
@@ -31,7 +30,7 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
             .unwrap(),
         )
         .unwrap();
-    let material = engine.create_material(Material::default()).unwrap();
+    let tint = [1.0; 4];
     let view = View {
         width: 32,
         height: 24,
@@ -40,12 +39,12 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
     };
     let draw = Draw {
         mesh,
-        material,
+        tint,
         world_from_model: IDENTITY,
     };
-    let captured = engine.snapshot(&snapshots, &view, &[draw]).unwrap();
+    let captured = FrameSnapshot::capture(&engine, &snapshots, &view, &[draw]).unwrap();
     engine.delete_mesh(mesh).unwrap();
-    engine.delete_material(material).unwrap();
+
     assert_eq!(captured.draw_count(), 1);
     assert_eq!(*captured.view(), view);
     let frame = build_graph(&captured, &mut graphs, true, |graph, color| {
@@ -95,10 +94,9 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
         plan.culled_pass_names()
             .any(|name| name == "unused custom branch")
     );
-    assert!(engine.snapshot(&snapshots, &view, &[draw]).is_err());
+    assert!(FrameSnapshot::capture(&engine, &snapshots, &view, &[draw]).is_err());
     assert_eq!(
-        engine
-            .snapshot(&snapshots, &view, &[])
+        FrameSnapshot::capture(&engine, &snapshots, &view, &[])
             .unwrap()
             .draw_count(),
         0
@@ -107,9 +105,8 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
 
 #[test]
 fn identity_extension_exports_its_input_without_a_copy() {
-    let engine = Engine::new(EngineCapacity {
+    let engine = MeshRegistry::new(MeshCapacity {
         meshes: 1,
-        materials: 1,
         retired_mesh_versions: 0,
     })
     .unwrap();
@@ -121,7 +118,7 @@ fn identity_extension_exports_its_input_without_a_copy() {
         clip_from_world: IDENTITY,
         clear_color: [0.0, 0.0, 0.0, 1.0],
     };
-    let snapshot = engine.snapshot(&snapshots, &view, &[]).unwrap();
+    let snapshot = FrameSnapshot::capture(&engine, &snapshots, &view, &[]).unwrap();
     let mut returned = None;
     let frame = build_graph(&snapshot, &mut graphs, false, |_, color| {
         returned = Some(color);
@@ -141,16 +138,15 @@ fn identity_extension_exports_its_input_without_a_copy() {
 fn caller_graph_connects_short_lived_inputs_without_selecting_passes_or_outputs() {
     use renderer::graph::{Attachment, BufferDesc, ImageDesc, LoadOp, RasterAttachments, StoreOp};
     use renderer::program::ManagedRasterProgram;
-    let mut engine = Engine::new(EngineCapacity {
+    let mut engine = MeshRegistry::new(MeshCapacity {
         meshes: 1,
-        materials: 1,
         retired_mesh_versions: 2,
     })
     .unwrap();
     let snapshots = SnapshotPool::new(2, 2).unwrap();
     let mut graphs = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let mut graph = graphs.begin().unwrap();
-    let data = MeshData::new(
+    let data = mesh_data(
         &[Vertex {
             position: [0.0, 0.0, 0.5],
             color: [1.0; 4],
@@ -159,10 +155,10 @@ fn caller_graph_connects_short_lived_inputs_without_selecting_passes_or_outputs(
     )
     .unwrap();
     let mesh = engine.create_mesh(data.clone()).unwrap();
-    let material = engine.create_material(Material::default()).unwrap();
+    let tint = [1.0; 4];
     let draw = Draw {
         mesh,
-        material,
+        tint,
         world_from_model: IDENTITY,
     };
     let first_view = View {
@@ -176,18 +172,17 @@ fn caller_graph_connects_short_lived_inputs_without_selecting_passes_or_outputs(
         height: 20,
         ..first_view
     };
-    let first = engine.snapshot(&snapshots, &first_view, &[draw]).unwrap();
+    let first = FrameSnapshot::capture(&engine, &snapshots, &first_view, &[draw]).unwrap();
     engine.update_mesh(mesh, data).unwrap();
-    engine
-        .update_material(material, Material { tint: [0.5; 4] })
-        .unwrap();
-    let second = engine
-        .snapshot(&snapshots, &second_view, &[draw, draw])
-        .unwrap();
+    let draw = Draw {
+        tint: [0.5; 4],
+        ..draw
+    };
+    let second = FrameSnapshot::capture(&engine, &snapshots, &second_view, &[draw, draw]).unwrap();
     let a = first.connect_graph(&mut graph).unwrap();
     let b = second.connect_graph(&mut graph).unwrap();
-    assert_eq!(a.view(), &first_view);
-    assert_eq!(b.view(), &second_view);
+    assert_eq!(first.view(), &first_view);
+    assert_eq!(second.view(), &second_view);
     assert_ne!(
         a.draws().next().unwrap().vertices,
         b.draws().next().unwrap().vertices
@@ -236,7 +231,7 @@ fn caller_graph_connects_short_lived_inputs_without_selecting_passes_or_outputs(
     drop((a, b));
     drop((first, second));
     engine.delete_mesh(mesh).unwrap();
-    engine.delete_material(material).unwrap();
+
     let plan = graph.compile().unwrap();
     assert_eq!(plan.pass_count(), 7); // four mesh uploads, two selected Raster passes, one copy.
     assert!(
@@ -249,16 +244,15 @@ fn caller_graph_connects_short_lived_inputs_without_selecting_passes_or_outputs(
 #[test]
 fn unused_snapshot_connection_is_culled_and_capacity_failure_returns_scratch() {
     use renderer::graph::{BufferDesc, GraphCapacityKind, GraphErrorKind};
-    let mut engine = Engine::new(EngineCapacity {
+    let mut engine = MeshRegistry::new(MeshCapacity {
         meshes: 1,
-        materials: 1,
         retired_mesh_versions: 1,
     })
     .unwrap();
     let snapshots = SnapshotPool::new(1, 1).unwrap();
     let mesh = engine
         .create_mesh(
-            MeshData::new(
+            mesh_data(
                 &[Vertex {
                     position: [0.0; 3],
                     color: [1.0; 4],
@@ -268,24 +262,24 @@ fn unused_snapshot_connection_is_culled_and_capacity_failure_returns_scratch() {
             .unwrap(),
         )
         .unwrap();
-    let material = engine.create_material(Material::default()).unwrap();
+    let tint = [1.0; 4];
     let view = View {
         width: 8,
         height: 8,
         clip_from_world: IDENTITY,
         clear_color: [0.0; 4],
     };
-    let snapshot = engine
-        .snapshot(
-            &snapshots,
-            &view,
-            &[Draw {
-                mesh,
-                material,
-                world_from_model: IDENTITY,
-            }],
-        )
-        .unwrap();
+    let snapshot = FrameSnapshot::capture(
+        &engine,
+        &snapshots,
+        &view,
+        &[Draw {
+            mesh,
+            tint,
+            world_from_model: IDENTITY,
+        }],
+    )
+    .unwrap();
     let mut small = GraphPool::new(
         GraphCapacity {
             resources: 1,

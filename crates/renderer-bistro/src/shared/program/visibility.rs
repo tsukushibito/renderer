@@ -10,9 +10,11 @@ mod native {
         Binding, BindingResource, BufferDesc, CompiledGraph, GraphPool, PassHandle,
     };
     use renderer::{
-        D3D12BufferClass, D3D12FrameCapacity, D3D12Runtime, D3D12RuntimeConfig,
-        D3D12ValidationMode, FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode,
-        VulkanRuntime,
+        d3d12::{
+            D3D12BufferClass, D3D12FrameCapacity, D3D12Runtime, D3D12RuntimeConfig,
+            D3D12ValidationMode,
+        },
+        vulkan::{FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode, VulkanRuntime},
     };
     use std::time::Duration;
 

@@ -2,7 +2,7 @@
 use super::super::graph::RuntimeErrorKind;
 use super::*;
 use crate::{
-    engine::Engine,
+    geometry::MeshRegistry,
     graph::{BufferDesc, GraphErrorKind},
 };
 use std::{
@@ -26,7 +26,7 @@ pub(super) struct ResidentBuffers {
 }
 pub(super) struct ResidentMesh {
     pub(super) buffers: Option<Arc<ResidentBuffers>>,
-    data: Option<Arc<MeshData>>,
+    data: Option<Arc<GeometryData>>,
     bytes: u64,
     uploaded: u64,
     pub(super) last_use: AtomicU64,
@@ -46,14 +46,14 @@ impl ResidentMesh {
 /// CPU source retirement is independent of GPU cache occupancy. Every source
 /// was admitted within max_bytes; this fixed version count bounds retention.
 pub(super) struct DeferredSources {
-    sources: Vec<Arc<MeshData>>,
+    sources: Vec<Arc<GeometryData>>,
     capacity: usize,
 }
 
 fn source_releasable<'a>(
-    data: &Arc<MeshData>,
-    assets: Option<&Engine>,
-    anchors: impl Iterator<Item = &'a Arc<MeshData>> + Clone,
+    data: &Arc<GeometryData>,
+    assets: Option<&MeshRegistry>,
+    anchors: impl Iterator<Item = &'a Arc<GeometryData>> + Clone,
 ) -> bool {
     if assets.is_some_and(|assets| assets.anchors_mesh_data(data))
         || anchors.clone().any(|other| Arc::ptr_eq(data, other))
@@ -72,20 +72,20 @@ fn source_releasable<'a>(
 }
 
 impl DeferredSources {
-    pub(super) fn new(capacity: usize) -> Result<Self, EngineError> {
+    pub(super) fn new(capacity: usize) -> Result<Self, MeshError> {
         let mut sources = Vec::new();
         sources
             .try_reserve_exact(capacity)
-            .map_err(|_| EngineError::new("unable to reserve retired mesh sources"))?;
+            .map_err(|_| MeshError::invalid_input("unable to reserve retired mesh sources"))?;
         Ok(Self { sources, capacity })
     }
 
-    fn can_retain(&self, data: &Arc<MeshData>) -> bool {
+    fn can_retain(&self, data: &Arc<GeometryData>) -> bool {
         self.sources.len() < self.capacity
             || self.sources.iter().any(|other| Arc::ptr_eq(data, other))
     }
 
-    fn retain(&mut self, data: Arc<MeshData>) {
+    fn retain(&mut self, data: Arc<GeometryData>) {
         if !self.sources.iter().any(|other| Arc::ptr_eq(&data, other)) {
             // The caller checked this bound before unregistering GPU resources.
             assert!(self.sources.len() < self.capacity);
@@ -95,7 +95,7 @@ impl DeferredSources {
 
     fn collect(
         &mut self,
-        assets: Option<&Engine>,
+        assets: Option<&MeshRegistry>,
         residents: &BTreeMap<MeshVersionKey, ResidentMesh>,
     ) {
         let mut index = 0;
@@ -204,7 +204,7 @@ impl VulkanEngine {
         self.clock
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
             .map(|old| old + 1)
-            .map_err(|_| EngineError::new("mesh use counter exhausted").into())
+            .map_err(|_| MeshError::invalid_input("mesh use counter exhausted").into())
     }
     /// Admit one immutable working set and submit at most one upload chunk.
     /// Oversized sets fail before eviction; a different active set requires explicit cancellation.
@@ -214,7 +214,7 @@ impl VulkanEngine {
     /// that the caller's complete Graph working set fits.
     pub fn prepare_snapshot(
         &mut self,
-        snapshot: &FrameSnapshot,
+        snapshot: &MeshSnapshot,
         non_mesh_resources: usize,
     ) -> Result<MeshUploadProgress, EngineRenderError> {
         let mut required = std::mem::take(&mut self.required_meshes);
@@ -227,9 +227,9 @@ impl VulkanEngine {
 
     fn prepare_snapshot_with_scratch(
         &mut self,
-        snapshot: &FrameSnapshot,
+        snapshot: &MeshSnapshot,
         non_mesh_resources: usize,
-        required: &mut Vec<(MeshVersionKey, Arc<MeshData>)>,
+        required: &mut Vec<(MeshVersionKey, Arc<GeometryData>)>,
     ) -> Result<MeshUploadProgress, EngineRenderError> {
         let mut required_bytes = 0u64;
         for draw in &snapshot.draws {
@@ -240,7 +240,7 @@ impl VulkanEngine {
             required_bytes = required_bytes
                 .checked_add(draw.data.vertices.len() as u64)
                 .and_then(|v| v.checked_add(draw.data.indices.len() as u64))
-                .ok_or_else(|| EngineError::new("mesh working set byte size overflows"))?;
+                .ok_or_else(|| MeshError::invalid_input("mesh working set byte size overflows"))?;
             if required.len() == self.config.max_meshes {
                 return Err(MeshPreparationError::WorkingSetTooLarge {
                     required_meshes: required.len() + 1,
@@ -565,7 +565,7 @@ impl VulkanEngine {
     fn remove_resident(
         &mut self,
         key: MeshVersionKey,
-        assets: Option<&Engine>,
+        assets: Option<&MeshRegistry>,
     ) -> Result<(), EngineRenderError> {
         let entry = &self.residents[&key];
         let retain_source = entry.data.as_ref().is_some_and(|data| {
@@ -599,7 +599,7 @@ impl VulkanEngine {
         Ok(())
     }
 
-    fn release_ready_sources(&mut self, assets: Option<&Engine>) {
+    fn release_ready_sources(&mut self, assets: Option<&MeshRegistry>) {
         while let Some(key) = self.residents.iter().find_map(|(key, entry)| {
             (entry.ready()
                 && entry.data.as_ref().is_some_and(|data| {
@@ -626,10 +626,10 @@ impl VulkanEngine {
     ///
     /// Pass the CPU asset owner when available. Pointer identity establishes
     /// that it anchors the same current or retired immutable version, allowing
-    /// this Engine to release ready resident sources as well as obsolete sources
+    /// this MeshRegistry to release ready resident sources as well as obsolete sources
     /// without waiting for CPU asset deletion. GPU mesh registrations and their
     /// prepared pins are independent of that CPU source ownership.
-    /// Keep that CPU Engine alive throughout ordinary processing of its derived
+    /// Keep that CPU MeshRegistry alive throughout ordinary processing of its derived
     /// frames; destroying it begins shutdown, including surviving consumers.
     /// An absent or unrelated owner retains sources until external snapshots and
     /// upload streams finish. `max_retired_sources` bounds that deferred storage.
@@ -639,7 +639,7 @@ impl VulkanEngine {
     /// deferred source occupancy is available through [`Self::mesh_cache_stats`].
     pub fn collect_retired_meshes(
         &mut self,
-        assets: Option<&Engine>,
+        assets: Option<&MeshRegistry>,
     ) -> Result<usize, EngineRenderError> {
         self.release_idle_inputs();
         self.release_ready_sources(assets);
@@ -733,11 +733,14 @@ impl VulkanEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::engine::{Draw, EngineCapacity, IDENTITY, Material, SnapshotPool, Vertex, View};
+    use crate::unlit_test_input::FrameSnapshot;
+    use crate::unlit_test_input::{Draw, IDENTITY, Vertex, View, mesh_data};
 
-    fn triangle() -> MeshData {
-        MeshData::new(
+    use super::*;
+    use crate::geometry::{MeshCapacity, SnapshotPool};
+
+    fn triangle() -> GeometryData {
+        mesh_data(
             &[[-0.4, -0.4, 0.25], [0.4, -0.4, 0.25], [0.0, 0.4, 0.25]].map(|position| Vertex {
                 position,
                 color: [1.0; 4],
@@ -781,37 +784,35 @@ mod tests {
         assert!(deferred.sources.is_empty());
         assert!(weak.upgrade().is_none());
 
-        let mut assets = Engine::new(EngineCapacity {
+        let mut assets = MeshRegistry::new(MeshCapacity {
             meshes: 1,
-            materials: 1,
             retired_mesh_versions: 1,
         })
         .unwrap();
-        let unrelated = Engine::new(EngineCapacity {
+        let unrelated = MeshRegistry::new(MeshCapacity {
             meshes: 1,
-            materials: 1,
             retired_mesh_versions: 1,
         })
         .unwrap();
         let mesh = assets.create_mesh(triangle()).unwrap();
-        let material = assets.create_material(Material::default()).unwrap();
+        let tint = [1.0; 4];
         let snapshots = SnapshotPool::new(1, 1).unwrap();
-        let snapshot = assets
-            .snapshot(
-                &snapshots,
-                &View {
-                    width: 8,
-                    height: 8,
-                    clip_from_world: IDENTITY,
-                    clear_color: [0.0, 0.0, 0.0, 1.0],
-                },
-                &[Draw {
-                    mesh,
-                    material,
-                    world_from_model: IDENTITY,
-                }],
-            )
-            .unwrap();
+        let snapshot = FrameSnapshot::capture(
+            &assets,
+            &snapshots,
+            &View {
+                width: 8,
+                height: 8,
+                clip_from_world: IDENTITY,
+                clear_color: [0.0, 0.0, 0.0, 1.0],
+            },
+            &[Draw {
+                mesh,
+                tint,
+                world_from_model: IDENTITY,
+            }],
+        )
+        .unwrap();
         deferred.retain(Arc::clone(&snapshot.draws[0].data));
         assets.delete_mesh(mesh).unwrap();
         deferred.collect(Some(&unrelated), &residents);
@@ -826,7 +827,7 @@ mod tests {
             "owners must not wait on one another"
         );
 
-        // Distinct MeshData versions can share immutable leaf streams. The
+        // Distinct GeometryData versions can share immutable leaf streams. The
         // sequential pass preserves the final anchor without retaining a cycle.
         let first = Arc::new(triangle());
         let second = Arc::new((*first).clone());

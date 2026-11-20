@@ -27,15 +27,15 @@ VulkanやD3D12のruntimeが、その中の生き残った処理をnative命令�
 | backend runtime | 実資源、stage/access/layout、記録・投入・退役 | `CompiledGraph` → native処理 |
 | 結果の利用側 | CPU結果をいつ消費・返却するか | 正常完了したreadback → 準備済み出力領域 |
 
-GraphからEngineの型には依存しません。Engineは不変mesh入力をGraphへ渡し、
+メッシュ台帳は不変の入力をGraphへ渡し、
 Graphのprivateな保証境界を通します。任意の生CommandBufferを受け取るAPIも現在はありません。
 操作と宣言した用途・範囲を対応させることで、解析した計画と実際の処理を結び付けます。
-利用側は`FrameSnapshot::connect_graph`、常駐入力では`VulkanEngine::begin_graph`／`connect_snapshot`から
+利用側は`MeshSnapshot::connect_graph`、常駐入力では`VulkanEngine::begin_graph`／`connect_snapshot`から
 描画を強制せず構築を始められます。`Graph::raster`のクロージャ内で`RasterPass::draw`に
 `SnapshotInputs::draws()`を渡し、出力を利用側で選びます。
 `renderer_pipeline::{passes, pbr_forward, unlit_forward}`で[標準部品を提供](rendergraph.md#公開標準パスと標準グラフ)します。
 発光や照明を扱うPBR Forward、頂点色を描くunlit Forward、公開パスの直接合成を選べます。
-`renderer_pipeline::unlit_forward::snapshot`の便利APIは、Engineへの入力接続と同じ公開レシピを組み合わせます。
+`renderer_pipeline::unlit_forward::snapshot`の便利APIは、メッシュの入力接続と同じ公開レシピを組み合わせます。
 
 ## 2. 小さなGraphを作ってみる
 

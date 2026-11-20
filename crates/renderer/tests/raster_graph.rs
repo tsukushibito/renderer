@@ -33,9 +33,14 @@ use renderer::graph::{
 };
 use renderer::program::{ManagedRasterProgram, SamplerDescriptor};
 use renderer::{
-    D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig, D3D12RuntimeErrorKind,
-    D3D12ValidationMode, FrameCapacity, ResourceClass, RuntimeConfig, RuntimeErrorKind,
-    ValidationMode, VulkanRuntime,
+    d3d12::{
+        D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
+        D3D12RuntimeErrorKind, D3D12ValidationMode,
+    },
+    vulkan::{
+        FrameCapacity, ResourceClass, RuntimeConfig, RuntimeErrorKind, ValidationMode,
+        VulkanRuntime,
+    },
 };
 use renderer_pipeline::{passes, unlit_forward};
 use serde_json::{Value, json};

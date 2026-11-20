@@ -17,14 +17,14 @@ pub(super) trait Backend: Sized {
 
 #[cfg(feature = "vulkan")]
 pub(super) struct Vulkan {
-    runtime: renderer::VulkanRuntime,
+    runtime: renderer::vulkan::VulkanRuntime,
 }
 #[cfg(feature = "vulkan")]
 impl Backend for Vulkan {
-    type Pending = renderer::Submission;
-    type Completed = renderer::SubmissionResult;
+    type Pending = renderer::vulkan::Submission;
+    type Completed = renderer::vulkan::SubmissionResult;
     fn create(options: &Options) -> Result<Self, Error> {
-        let mut runtime = renderer::VulkanRuntime::new(renderer::RuntimeConfig {
+        let mut runtime = renderer::vulkan::VulkanRuntime::new(renderer::vulkan::RuntimeConfig {
             execution_slots: 1,
             resource_capacity: options.resources,
             staging_bytes: 16 * 1024,
@@ -35,7 +35,7 @@ impl Backend for Vulkan {
             return Err("CPU Vulkan adapter is not accepted".into());
         }
         runtime.prepare_working_set(
-            renderer::FrameCapacity {
+            renderer::vulkan::FrameCapacity {
                 graph: super::capacity(options.resources)?,
                 work_slots: 1,
                 result_slots: 1,
@@ -45,7 +45,7 @@ impl Backend for Vulkan {
                 provenance_segments_per_resource: 0,
                 index_prefixes_per_resource: 0,
             },
-            &[renderer::ResourceClass::Buffer {
+            &[renderer::vulkan::ResourceClass::Buffer {
                 desc: renderer::graph::BufferDesc { size: BYTES as u64 },
                 count: options.resources,
             }],
@@ -100,15 +100,15 @@ impl Backend for Vulkan {
 
 #[cfg(feature = "d3d12")]
 pub(super) struct D3d12 {
-    runtime: renderer::D3D12Runtime,
+    runtime: renderer::d3d12::D3D12Runtime,
 }
 #[cfg(feature = "d3d12")]
 impl Backend for D3d12 {
-    type Pending = renderer::D3D12Submission;
-    type Completed = renderer::D3D12SubmissionResult;
+    type Pending = renderer::d3d12::D3D12Submission;
+    type Completed = renderer::d3d12::D3D12SubmissionResult;
     fn create(options: &Options) -> Result<Self, Error> {
-        let config = renderer::D3D12RuntimeConfig {
-            capacity: renderer::D3D12FrameCapacity {
+        let config = renderer::d3d12::D3D12RuntimeConfig {
+            capacity: renderer::d3d12::D3D12FrameCapacity {
                 executions: 1,
                 results: 1,
                 resources: options.resources,
@@ -130,7 +130,7 @@ impl Backend for D3d12 {
             ..Default::default()
         };
         Ok(Self {
-            runtime: renderer::D3D12Runtime::new(config)?,
+            runtime: renderer::d3d12::D3D12Runtime::new(config)?,
         })
     }
     fn info(&self) -> serde_json::Value {
