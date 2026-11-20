@@ -7,9 +7,8 @@ use renderer::{
     graph::{GraphCapacity, GraphPool, ImageDesc},
     runtime::{ExecutionErrorKind, Runtime, RuntimeConfig, RuntimeLimits},
 };
-use renderer_pipeline::pbr_forward::{
-    CASCADE_COUNT, ShadowHistory, ShadowHistoryError, ShadowKey, add_shadow_pass,
-};
+use renderer_pipeline::pbr::{CASCADE_COUNT, ShadowHistory, ShadowHistoryError, ShadowKey};
+use renderer_pipeline::pbr_forward::add_shadow_pass;
 
 fn recover_from_a_rejected_submission(config: RuntimeConfig) {
     const SIZE: u32 = 8;
