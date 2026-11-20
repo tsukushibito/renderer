@@ -5,6 +5,35 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 公開 Bloom とカスケードのシャドウ履歴
+
+`renderer-2l7`。`passes::bloom`の準備では、同寸の線形HDRを返す5 dispatch分のProgram・画像・Graph宣言をまとめて登録する。
+固定のシェーダー資産を使い、Graphが各dispatchの書き込みと後段の読み込みを同期する。
+CPUでは形式・所有元・初期化の拒否と不要パスの除去を確認した。Vulkan／D3D12の最適化製品・厳格構成では、
+9×5 RGBA16Fのアップロード・Raster入力をそれぞれ使い、無効／テント／ボックスの全画素とアルファを照合した。
+
+`pbr_forward::ShadowHistory`は同じGraphの受理済みexportから、カスケード画像の版と判定キーをまとめて更新する。
+用意した4枚の保持にはRuntimeの登録と既存の寿命管理を使う。CPUでは未投入の更新を放棄した後の再構築と、
+未初期化のexport拒否を確認した。両APIの製品・厳格構成で、別Graphの計画・受理結果と二重反映の拒否、
+投入枠不足後の再試行、再利用フレームのGPU完了を回収する前の登録解除を確認した。
+
+64×48のPBR例は、CPUでGPU完了を待たずに3フレームを投入する。初回・全再利用・1カスケードの入力世代変更で
+シャドウパスは4、0、1本となり、SDRとシーンD32は3フレームでバイト一致した。
+Vulkan／D3D12の製品・厳格構成で、独自HDRコピーとの合成、Bloomが背景へ加える光、検証警告・エラー0件を確認した。
+
+WindowsのRTX 3060（610.88）で、両API・両構成のBistroを移行前`92e6281`と照合した。
+129×97のfixtureと全量シーンの36フレーム巡回で、HDR、SDR、深度、シャドウマップと診断画像の364比較と、
+シャドウ再利用・強制再描画間の324比較がすべてバイト一致した。固定視点での各5ヒットと巡回での3、15、24、32ヒットも一致した。
+最適化済み通常588フレームのGraph構築・投入・退役・結果返却で、計測したRust／VMA hostの確保・再確保・解放、
+ネイティブ資源・メモリの作成・破棄、descriptorの確保・解放は0件だった。
+Vulkan Core／SyncValとD3D12 Debug Layer／GBVを有効にした構成で、警告・エラーは0件だった。
+
+両API・両構成で外部材質バンドル、常駐資源の入れ替え・mip診断、表示24フレームとresize・最小化・復帰・再生・未退役フレームを残した終了を確認した。
+Vulkanは128×96のfixture、D3D12厳格は801×601のfixture、D3D12製品は801×601の全量シーンでシャドウを毎フレーム描画する設定を使った。
+単体`renderer`のBistroも、4構成のfixtureで出力48枚が移行前と一致した。
+手順は[小さなPBRシーン](../guides/examples.md#pbr-forward-example)と[Bloomの受入](../guides/development.md#bistro-bloom-fixture)を参照する。
+画像照合と計測のログは`.tools/renderer-2l7/`に保存した。
+
 ## 標準 PBR Forward の公開レシピ
 
 `renderer-aqe`。容量集約は`renderer::capacity`で行い、`renderer-pipeline`の`pbr_forward`が
