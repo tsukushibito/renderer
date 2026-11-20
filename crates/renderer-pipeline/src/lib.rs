@@ -12,8 +12,9 @@ pub mod standard;
 mod yaml;
 #[cfg(feature = "yaml")]
 pub use yaml::{
-    DrawCandidate, FrameImageSource, FrameInputs, FrameMaterial, FrameOutput, FrameResource,
-    FrameSampledView, FrameView, ImageSource, MaterialBinding, PipelineError, PipelineRequirements,
+    DrawCandidate, FrameImageSource, FrameIndirectGroup, FrameIndirectList, FrameInputs,
+    FrameMaterial, FrameOutput, FrameResource, FrameSampledView, FrameView, ImageSource,
+    IndirectTable, MaterialBinding, PipelineError, PipelineRequirements, PrepareIndirectList,
     PrepareInputs, PrepareOptions, PrepareParameter, PrepareValue, PreparedPipeline, Program,
     ResourceDesc, ShaderRequest,
 };

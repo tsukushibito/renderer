@@ -1,10 +1,11 @@
 mod assembly;
 mod frame;
+mod indirect;
 mod prepare;
 mod schema;
 mod sources;
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, ops::Range};
 
 use renderer::capacity::{ResourceClass, WorkingSet};
 use renderer::graph::{
@@ -19,9 +20,11 @@ pub use frame::{
     DrawCandidate, FrameInputs, FrameMaterial, FrameOutput, FrameResource, FrameSampledView,
     FrameView, MaterialBinding,
 };
+pub use indirect::{FrameIndirectGroup, FrameIndirectList, IndirectTable, PrepareIndirectList};
 pub use sources::{FrameImageSource, ImageSource};
 
 use frame::FrameScratch;
+use indirect::PreparedIndirectEncoder;
 use sources::ImageSources;
 
 /// Logical asset keys resolved once when a YAML configuration is prepared.
@@ -247,13 +250,14 @@ enum PassKind {
         program: usize,
         grid: Option<[u32; 2]>,
     },
+    EncodeIndexedIndirect(PreparedIndirectEncoder),
 }
 
 impl PassKind {
     fn attachments(&self) -> Option<&PreparedAttachments> {
         match self {
             Self::Raster { attachments, .. } | Self::Attachment(attachments) => Some(attachments),
-            Self::Compute { .. } => None,
+            Self::Compute { .. } | Self::EncodeIndexedIndirect(_) => None,
         }
     }
 }
@@ -300,6 +304,10 @@ struct MaterialVariant {
 
 enum RasterDrawKind {
     Indexed(usize),
+    Indirect {
+        groups: Range<usize>,
+        constants: RasterConstants,
+    },
     Fullscreen(RasterConstants),
 }
 

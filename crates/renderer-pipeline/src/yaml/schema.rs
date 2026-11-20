@@ -146,6 +146,7 @@ pub(super) enum PassSpec {
         when: Option<DrawListConditionSpec>,
         batches: Option<RasterBatchesSpec>,
         draw_list: Option<String>,
+        indirect: Option<String>,
         #[serde(default)]
         constants: Vec<u32>,
         #[serde(default)]
@@ -165,6 +166,11 @@ pub(super) enum PassSpec {
         bindings: Vec<BindingSpec>,
         grid: Option<Parameter<[u32; 2]>>,
     },
+    EncodeIndexedIndirect {
+        id: String,
+        visibility: String,
+        table_list: String,
+    },
 }
 
 #[derive(Clone, Deserialize)]
@@ -175,6 +181,7 @@ pub(super) struct RasterBatchSpec {
     #[serde(default)]
     pub material_types: Vec<String>,
     pub draw_list: Option<String>,
+    pub indirect: Option<String>,
     #[serde(default)]
     pub constants: Vec<u32>,
     #[serde(default)]
