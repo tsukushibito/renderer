@@ -18,7 +18,7 @@ use crate::passes::pbr::{
     transformed_shadow_program,
 };
 use crate::pbr::{
-    Bounds, CASCADE_COUNT, Camera, CameraStorage, Draw, Environment, Frame, FrameImages,
+    AlphaMode, Bounds, CASCADE_COUNT, Camera, CameraStorage, Draw, Environment, Frame, FrameImages,
     MAX_TRANSFORMS, PreparedInstances, PreparedView, SceneImages, SceneLimits, ShadowSettings,
     ShadowSource, Sun,
     draw::{Batch, Bindings, image_binding, sampler_binding},
@@ -505,10 +505,15 @@ impl Prepared {
             transform_limit,
             Some(frame.transforms.len()),
         )?;
-        validate_draws(frame.opaque, self.mode, frame)?;
-        validate_draws(frame.transparent, DrawMode::Direct, frame)?;
+        validate_draws(frame.opaque, self.mode, frame, DrawPass::Opaque)?;
+        validate_draws(
+            frame.transparent,
+            DrawMode::Direct,
+            frame,
+            DrawPass::Transparent,
+        )?;
         if self.config.shadows.enabled {
-            for source in frame.shadows {
+            for (cascade, source) in frame.shadows.into_iter().enumerate() {
                 if let ShadowSource::Render { casters, .. } = source {
                     check_limit(
                         GraphCapacityKind::Draws,
@@ -520,7 +525,7 @@ impl Prepared {
                     } else {
                         DrawMode::Direct
                     };
-                    validate_draws(casters, mode, frame)?;
+                    validate_draws(casters, mode, frame, DrawPass::Shadow(cascade))?;
                 }
             }
         }
@@ -616,8 +621,31 @@ fn lighting_bindings(
     ]
 }
 
-fn validate_draws(draws: &[Draw], mode: DrawMode, frame: &Frame<'_>) -> Result<(), GraphError> {
-    for draw in draws {
+#[derive(Clone, Copy)]
+enum DrawPass {
+    Opaque,
+    Transparent,
+    Shadow(usize),
+}
+
+impl DrawPass {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Opaque => "scene_opaque",
+            Self::Transparent => "scene_transparent",
+            Self::Shadow(cascade) => ["shadow_0", "shadow_1", "shadow_2", "shadow_3"][cascade],
+        }
+    }
+}
+
+fn validate_draws(
+    draws: &[Draw],
+    mode: DrawMode,
+    frame: &Frame<'_>,
+    pass: DrawPass,
+) -> Result<(), GraphError> {
+    let wants_blend = matches!(pass, DrawPass::Transparent);
+    for (index, draw) in draws.iter().enumerate() {
         let material = match *draw {
             Draw::Indexed(draw) => draw.material,
             Draw::Indirect { material, .. } if mode == DrawMode::Indirect => material,
@@ -636,16 +664,31 @@ fn validate_draws(draws: &[Draw], mode: DrawMode, frame: &Frame<'_>) -> Result<(
                 }
                 geometry.material
             }
-            _ => {
-                return Err(GraphError::invalid_input(
-                    "PBR draw type is incompatible with this pass or recipe",
-                ));
+            Draw::Indirect { .. } | Draw::Instanced { .. } => {
+                let kind = match draw {
+                    Draw::Indirect { .. } => "indirect",
+                    _ => "instanced",
+                };
+                return Err(GraphError::invalid_input(format!(
+                    "PBR draw {index} uses {kind} geometry, which this recipe does not support in {}",
+                    pass.name(),
+                ))
+                .with_pass_name(pass.name()));
             }
         };
-        if material >= frame.materials.len() {
-            return Err(GraphError::invalid_input(
-                "PBR draw material index is out of bounds",
-            ));
+        let factors = frame.materials.get(material).ok_or_else(|| {
+            GraphError::invalid_input(format!(
+                "PBR draw {index} has out-of-bounds material index {material}"
+            ))
+            .with_pass_name(pass.name())
+        })?;
+        let alpha_mode = factors.alpha_mode();
+        if (alpha_mode == AlphaMode::Blend) != wants_blend {
+            return Err(GraphError::invalid_input(format!(
+                "{}: PBR draw {index} uses material {material} with incompatible alpha mode {alpha_mode:?}",
+                pass.name(),
+            ))
+            .with_pass_name(pass.name()));
         }
     }
     Ok(())

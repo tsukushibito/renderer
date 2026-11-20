@@ -5,6 +5,7 @@ mod defaults;
 pub(crate) mod draw;
 mod history;
 pub(crate) mod instances;
+mod material;
 pub(crate) mod raster;
 mod vertex;
 mod view;
@@ -18,6 +19,7 @@ pub use draw::{Draw, IndexedDraw, Material};
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::{MAX_TRANSFORMS, Transform};
+pub use material::{MaterialUniform, ResidentMaterial};
 pub use vertex::PbrVertex;
 pub use view::{AlphaMode, Bounds, Camera, MaterialFactors, ShadowSettings, Sun};
 
@@ -180,9 +182,9 @@ pub enum ShadowSource<'a> {
 pub struct Frame<'a> {
     pub view: &'a PreparedView,
     pub materials: &'a [Material],
-    /// Opaque and alpha-masked draws in submission order.
+    /// Draws with Opaque or Mask materials in submission order.
     pub opaque: &'a [Draw],
-    /// Indexed alpha-blended draws, already ordered back to front.
+    /// Indexed draws with Blend materials, already ordered back to front.
     pub transparent: &'a [Draw],
     pub shadows: [ShadowSource<'a>; CASCADE_COUNT],
     /// Supply a graph-local target for [`CameraStorage::External`] or

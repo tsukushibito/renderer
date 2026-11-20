@@ -200,8 +200,9 @@ pub enum AlphaMode {
     Blend,
 }
 
-/// Material constants. The caller uploads these bytes at asset creation or
-/// update, then supplies that buffer and its four sampled textures per frame.
+/// Material constants encoded at asset creation or update. Pass them to
+/// [`super::MaterialUniform::upload`] before using the material in a recipe.
+/// The default is a white dielectric with unit normal and AO strengths.
 #[derive(Clone, Copy, Debug)]
 pub struct MaterialFactors {
     pub base_color: [f32; 4],
@@ -220,10 +221,10 @@ impl Default for MaterialFactors {
         Self {
             base_color: [1.0; 4],
             emissive: [0.0; 3],
-            normal_scale: 0.0,
+            normal_scale: 1.0,
             metallic: 0.0,
             roughness: 1.0,
-            occlusion_strength: 0.0,
+            occlusion_strength: 1.0,
             alpha_cutoff: 0.5,
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
@@ -232,6 +233,7 @@ impl Default for MaterialFactors {
 }
 
 impl MaterialFactors {
+    /// Encode the standard shader ABI for a custom Graph or cooked asset.
     pub fn encode(self) -> Result<[u8; MATERIAL_BYTES], GraphError> {
         if self
             .base_color

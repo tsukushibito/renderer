@@ -8,9 +8,9 @@ use renderer::graph::{
 };
 use renderer_pipeline::passes::output::{SdrEncoding, SdrOutput};
 use renderer_pipeline::pbr::{
-    Bounds, CASCADE_COUNT, Camera, CameraStorage, Draw, Environment, Frame, IndexedDraw, Material,
-    MaterialFactors, PreparedView, SceneLimits, ShadowHistory, ShadowKey, ShadowSettings,
-    ShadowSource, Sun, Transform, VIEW_BYTES,
+    AlphaMode, Bounds, CASCADE_COUNT, Camera, CameraStorage, Draw, Environment, Frame, IndexedDraw,
+    Material, MaterialFactors, MaterialUniform, PreparedView, SceneLimits, ShadowHistory,
+    ShadowKey, ShadowSettings, ShadowSource, Sun, Transform, VIEW_BYTES,
 };
 use renderer_pipeline::pbr_forward::{
     Config, Prepared, Programs, add_shadow_pass, prepare, prepare_with_programs,
@@ -41,7 +41,7 @@ fn limits() -> SceneLimits {
     SceneLimits {
         frames_in_flight: NonZeroUsize::MIN,
         max_draws: 2,
-        max_materials: 1,
+        max_materials: 2,
         max_casters_per_cascade: 1,
     }
 }
@@ -56,9 +56,9 @@ fn graph_pool(recipe: &Prepared) -> GraphPool {
     all.add_requirements(recipe.graph_requirements(), recipe.working_set())
         .unwrap();
     all.add_graph_requirements(GraphRequirements {
-        resources: 9,
-        passes: 12,
-        accesses: 15,
+        resources: 10,
+        passes: 13,
+        accesses: 16,
         attachments: 1,
         name_bytes: 256,
         ..GraphRequirements::default()
@@ -104,15 +104,7 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, Material, Inde
     geometry
         .upload_indices(graph, "upload indices", indices)
         .unwrap();
-    let factors = graph.buffer("factors", BufferDesc { size: 64 }).unwrap();
-    graph
-        .upload_buffer(
-            "upload factors",
-            factors,
-            0,
-            &MaterialFactors::default().encode().unwrap(),
-        )
-        .unwrap();
+    let factors = MaterialUniform::upload(graph, "factors", MaterialFactors::default()).unwrap();
 
     let color = graph.image("color", ImageDesc::rgba8_srgb(1, 1)).unwrap();
     graph
@@ -152,11 +144,7 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, Material, Inde
             },
         )
         .unwrap();
-    let material = Material {
-        factors,
-        factor_offset: 0,
-        textures: [color, linear, linear, color],
-    };
+    let material = Material::new(factors, [color, linear, linear, color]);
     let draw = IndexedDraw {
         vertices,
         indices,
@@ -191,9 +179,22 @@ fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
         )
         .unwrap();
     let redraw = graph.image("redraw target", shadow_desc).unwrap();
-    let materials = [material];
+    let factors = MaterialUniform::upload(
+        &mut graph,
+        "blend factors",
+        MaterialFactors {
+            alpha_mode: AlphaMode::Blend,
+            ..MaterialFactors::default()
+        },
+    )
+    .unwrap();
+    let materials = [material, Material::new(factors, material.textures())];
     let draws = [Draw::Indexed(draw)];
-    let mut frame = Frame::new(&view, &materials, &draws, &draws, &draws);
+    let transparent = [Draw::Indexed(IndexedDraw {
+        material: 1,
+        ..draw
+    })];
+    let mut frame = Frame::new(&view, &materials, &draws, &transparent, &draws);
     frame.shadows[0] = ShadowSource::Render {
         target: Some(reused),
         casters: &draws,
@@ -201,7 +202,7 @@ fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
     frame.shadows[2] = ShadowSource::Reuse(reused);
     let error = recipe.add_scene(&mut graph, frame).unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
-    let mut frame = Frame::new(&view, &materials, &draws, &draws, &draws);
+    let mut frame = Frame::new(&view, &materials, &draws, &transparent, &draws);
     frame.shadows[1] = ShadowSource::Render {
         target: Some(redraw),
         casters: &draws,
@@ -305,6 +306,64 @@ fn rejected_workload_does_not_consume_graph_or_recipe_scratch() {
 }
 
 #[test]
+fn material_alpha_routes_to_the_matching_pass_before_graph_mutation() {
+    let mut recipe = recipe();
+    let mut pool = graph_pool(&recipe);
+    let mut graph = pool.begin().unwrap();
+    let (view, opaque, draw) = inputs(&recipe, &mut graph);
+    let encoded = MaterialFactors {
+        alpha_mode: AlphaMode::Blend,
+        ..MaterialFactors::default()
+    }
+    .encode()
+    .unwrap();
+    let factors = MaterialUniform::upload_encoded(&mut graph, "blend factors", &encoded).unwrap();
+    let materials = [opaque, Material::new(factors, opaque.textures())];
+    let opaque = [Draw::Indexed(draw)];
+    let blended = [Draw::Indexed(IndexedDraw {
+        material: 1,
+        ..draw
+    })];
+    for (frame, pass, material) in [
+        (
+            Frame::new(&view, &materials, &blended, &[], &[]),
+            "scene_opaque",
+            1,
+        ),
+        (
+            Frame::new(&view, &materials, &[], &opaque, &[]),
+            "scene_transparent",
+            0,
+        ),
+        (
+            Frame::new(&view, &materials, &[], &[], &blended),
+            "shadow_0",
+            1,
+        ),
+    ] {
+        let error = recipe.add_scene(&mut graph, frame).unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+        assert_eq!(error.pass_name(), Some(pass));
+        assert!(
+            error
+                .message
+                .contains(&format!("draw 0 uses material {material}"))
+        );
+    }
+    let frame = Frame::new(&view, &materials, &opaque, &blended, &opaque);
+    let result = recipe.add_passes(&mut graph, frame).unwrap();
+    graph.readback_image("capture", result.sdr).unwrap();
+    let compiled = graph.compile().unwrap();
+    assert_eq!(
+        compiled
+            .ordered_pass_names()
+            .filter(|&name| name == "pbr camera upload")
+            .count(),
+        1,
+    );
+}
+
+#[test]
 fn msaa_resolves_empty_opaque_batches_and_transparent_batches_without_depth_output() {
     let mut recipe = prepare(
         Config {
@@ -318,7 +377,16 @@ fn msaa_resolves_empty_opaque_batches_and_transparent_batches_without_depth_outp
     for transparent in [false, true] {
         let mut graph = pool.begin().unwrap();
         let (view, material, draw) = inputs(&recipe, &mut graph);
-        let materials = [material];
+        let factors = MaterialUniform::upload(
+            &mut graph,
+            "blend factors",
+            MaterialFactors {
+                alpha_mode: AlphaMode::Blend,
+                ..MaterialFactors::default()
+            },
+        )
+        .unwrap();
+        let materials = [Material::new(factors, material.textures())];
         let draws = [Draw::Indexed(draw)];
         let frame = Frame::new(
             &view,

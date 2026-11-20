@@ -21,7 +21,8 @@ const NAMES: [&str; 4] = [
 const NAME_BYTES: usize = NAMES[0].len() + NAMES[1].len() + NAMES[2].len() + NAMES[3].len();
 const PIXELS: [&[u8]; 4] = [
     &[255, 255, 255, 255],
-    &[128, 128, 255, 255],
+    // RGBA16F encodes a flat normal exactly: (0.5, 0.5, 1.0, 1.0).
+    &[0, 0x38, 0, 0x38, 0, 0x3c, 0, 0x3c],
     &[255, 255, 255, 255],
     &[0, 0, 0, 0, 0, 0, 0, 0x3c],
 ];
@@ -29,7 +30,7 @@ const PIXELS: [&[u8]; 4] = [
 fn image_descriptions() -> [ImageDesc; 4] {
     [
         ImageDesc::rgba8_srgb(1, 1),
-        ImageDesc::rgba8(1, 1),
+        ImageDesc::rgba16_float(1, 1),
         ImageDesc::rgba8(1, 1),
         ImageDesc::rgba16_float(1, 1),
     ]
@@ -117,7 +118,7 @@ impl DefaultResources {
     /// frame's Graph. The runtime limits must include the image registrations
     /// and the startup upload Graph described by [`DefaultViews::upload_requirements`].
     pub fn reserve(preparation: &mut Preparation) -> Result<(), GraphError> {
-        let [srgb, linear, _, hdr] = image_descriptions();
+        let [srgb, hdr, linear, _] = image_descriptions();
         let resources = [
             ResourceClass::Image {
                 desc: srgb,
@@ -125,11 +126,11 @@ impl DefaultResources {
             },
             ResourceClass::Image {
                 desc: linear,
-                count: 2,
+                count: 1,
             },
             ResourceClass::Image {
                 desc: hdr,
-                count: 1,
+                count: 2,
             },
         ];
         preparation.add_requirements(
@@ -337,7 +338,7 @@ mod tests {
             .wait_for_frame(sent.id(), Duration::from_secs(10))
             .unwrap()
             .unwrap();
-        let mut pixel = [0; 4];
+        let mut pixel = [0; 8];
         completion.readback_into(readback, &mut pixel).unwrap();
         assert_eq!(pixel.as_slice(), PIXELS[1]);
         drop(completion);
