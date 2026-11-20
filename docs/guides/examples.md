@@ -8,10 +8,12 @@
 
 **Graphの合成をCPUだけで確認する**
 
-`graph_composition`は利用側のRasterパスをつなぎ、GPUを初期化せずにGraphをcompileします。
+`graph_composition`は公開Graph APIで利用側のRasterパスをつなぎます。
+`rust_pipeline`は`renderer-pipeline`の標準レシピと独自パスを合成します。どちらもCPUでGraphをcompileします。
 
 ```sh
 cargo run --locked -p renderer --no-default-features --example graph_composition
+cargo run --locked -p renderer-pipeline --no-default-features --example rust_pipeline
 ```
 
 **Vulkanで画像に描画する**
@@ -38,15 +40,15 @@ cargo run --locked -p renderer --no-default-features --features d3d12,presentati
 **Bistroの小さなシーンを描画する**
 
 `renderer`の`bistro`は公開Graph APIを使い、Rustでパスを定義して描画パイプラインを組み立てます。
-`renderer-pipeline`の`bistro`は描画パイプライン全体をYAMLで定義します。どちらも`--fixture`で小さなシーンを描画し、
+`renderer-pipeline`の`bistro`は標準レシピとシーン固有のパスをRustで合成します。どちらも`--fixture`で小さなシーンを描画し、
 レポートとキャプチャを出力します。実行ごとに新しい出力先を指定し、ビルド成果物もパッケージごとに保存します。
 
 ```powershell
 cargo run --locked --release -p renderer --no-default-features --features vulkan --example bistro --target-dir target/bistro-rust -- --api vulkan --fixture --output .tools/bistro-rust-fixture
-cargo run --locked --release -p renderer-pipeline --no-default-features --features yaml,vulkan --example bistro --target-dir target/bistro-yaml -- --api vulkan --fixture --output .tools/bistro-yaml-fixture
+cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan --example bistro --target-dir target/bistro-pipeline -- --api vulkan --fixture --output .tools/bistro-pipeline-fixture
 ```
 
-YAML版で全シーンを描画するには[Bistroのcook・描画手順](development.md#bistro-pbr)を参照してください。
+`renderer-pipeline`のBistroで全シーンを描画するには[Bistroのcook・描画手順](development.md#bistro-pbr)を参照してください。
 
 ## Windows版に含めるバックエンドを選ぶ
 
@@ -72,11 +74,11 @@ cargo build --locked --release -p renderer --no-default-features --features vulk
 | ターゲット | 確認できること | 実行条件 |
 | --- | --- | --- |
 | `graph_composition` | 利用側のRasterパスの合成と不要分岐の除去 | CPU。追加feature不要 |
-| `yaml_pipeline` | [YAMLでのパス合成](tooling.md#yaml-pipeline)、描画リストの共有、外部Computeの差し替え、材質別Programとbindingの切り替え | Windows。`renderer-pipeline`の`yaml,vulkan,d3d12`。フレーム計測には`memory-profiling`を追加 |
+| `rust_pipeline` | [`renderer-pipeline`の準備APIとパス合成](tooling.md#rust-pipeline)、標準レシピへの独自パスの接続 | CPU。追加feature不要 |
 | `headless` | offscreen描画とPPMへの書き出し | `vulkan` |
 | `windowed` | Windowsの表示ループ、標準／独自Graph、カメラ操作 | Windows、`presentation` と `vulkan` または `d3d12` |
 | `renderer`の`bistro` | 公開Graph APIを使ったRustのパス定義と合成 | `vulkan` またはWindowsの`d3d12` |
-| `renderer-pipeline`の`bistro` | [YAMLでのシーン描画とシャドウ再利用](tooling.md#bistro-scene-pipeline)、Bloom、トーンマッピング、SDR出力、[材質Programの切り替え](tooling.md#material-shader-build) | `yaml`と`vulkan`、または`yaml`とWindowsの`d3d12`。表示はWindowsと`presentation`。全シーンはcook済み素材とIBLが必要 |
+| `renderer-pipeline`の`bistro` | [シーン描画とシャドウ再利用](tooling.md#bistro-scene-pipeline)、Bloom、トーンマッピング、SDR出力、[材質Programの切り替え](tooling.md#material-shader-build) | `vulkan`またはWindowsの`d3d12`。表示はWindowsと`presentation`。全シーンはcook済み素材とIBLが必要 |
 | `frame_loop` | [フレーム進行、履歴、アセット更新](development.md#frame-loop) | `vulkan`。計測モードはrelease |
 | `engine_workloads` | [大メッシュ、マルチView、アセット差し替え](development.md#engine-workloads) | `vulkan`。計測モードはrelease |
 | `profile_workload` | [CPUプロファイル用のヘッドレス転送負荷](development.md#cpu-profile-workload) | Windows、`vulkan` または `d3d12` |
@@ -91,10 +93,10 @@ Bistroの全シーン以外の実行には、リポジトリに含まれる小�
 二APIの受入条件と測定コマンドは[開発手順](development.md)に、
 実行済みの結果は[検証状況](../verification/current.md)に置いています。
 
-通常のCIでは、小さなCPU fixtureで型付きAPIとYAMLによるGraph構築を検証します。
-BistroのRust版とYAML版はLinuxのVulkan構成とWindowsの二API・表示構成でビルドを確認し、
+通常のCIでは、小さなCPU fixtureで準備APIとGraph構築を検証します。
+両方のBistroサンプルはLinuxのVulkan構成とWindowsの二API・表示構成でビルドを確認し、
 CLI、シェーダーとの接続、レシピなどのサンプル固有のCPUテストはWindowsで各版を一度ずつ明示実行します。
 実GPUテストは`cargo test -p <package> --example bistro`に対象のfeatureと`-- --ignored`を指定して実行します。
 
-`yaml_pipeline`とYAML版`bistro`の入口と設定は`crates/renderer-pipeline/examples/`にあります。
+`rust_pipeline`と標準レシピを使う`bistro`の入口は`crates/renderer-pipeline/examples/`にあります。
 ほかの入口は`crates/renderer/examples/`にあり、試験や計測と共用するfixtureのRustコードは`crates/renderer/fixtures/`にあります。

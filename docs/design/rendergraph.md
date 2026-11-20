@@ -955,7 +955,7 @@ depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、
 `renderer_pipeline::standard::passes`は公開Graph操作を使う構築関数、
 `renderer_pipeline::standard::graphs`はそれらを組み合わせるレシピである。これらのRust APIは既定の構成で利用できる。
 Engineやsnapshotを必須にせず、`RasterPass::draw`と同じowned／borrowed `RasterDraw`のiteratorを受け取る。
-標準グラフもGraphを借用してその場で構築し、`SceneColor { color, depth }`というGraph内のhandleを返す。
+レシピもGraphを借用してその場で構築する。標準Forwardは`SceneColor { color, depth }`というGraph内のhandleを返す。
 export、readback、compile、submit、presentと、その結果の所有は呼び出し側が選ぶ。
 
 | 部品 | 入出力と意味 |
@@ -963,8 +963,13 @@ export、readback、compile、submit、presentと、その結果の所有は呼�
 | `passes::opaque` | callerのcolor attachmentと任意depthへ頂点色×tintを描く。RGBA8／RGBA16Fから公開mesh Programを選び、Clear／Load／Storeを引き継ぐ |
 | `passes::depth_prepass` | callerのD32 attachmentへ同じ頂点変換の深度だけを描く。colorを確保しない |
 | `graphs::forward` | 指定したcolorと必要ならD32を作り、clearとopaqueを追加する。`ForwardConfig`はframeをまたいで再利用できる |
+| `graphs::PreparedForward` | `ForwardConfig`と最大draw数に応じた要求を`Preparation`へ登録し、フレームごとに`SceneColor`を構築する |
 | `passes::tone_map_neutral` | scene-linear RGBA16Fに露出倍率とKhronos Neutralを適用し、同寸のdisplay-linear RGBA16Fへ書く |
 | `passes::write_sdr` | 指定したcolor viewから同寸のRGBA8_UNORMへ書く。`SdrOutput`でFXAAの有無と出力encodingを選ぶ |
+| `graphs::PreparedOutput` | 寸法と`SdrOutput`に応じた要求を登録し、HDR入力にトーンマッピングとSDR変換を追加する。トーンマッピング後の線形画像とSDR画像を返す |
+
+準備済みレシピは一時資源とProgram、Graph宣言数を`Preparation`へ登録する。独自パスの要求も同じ準備に加えられる。
+[準備と使い方](../guides/tooling.md#rust-pipeline)を参照する。
 
 両出力パスは`RasterPass::draw_fullscreen`を使う。頂点入力のないtrusted Programが3頂点を生成し、Graphは頂点・インデックスbufferへの依存を追加しない。
 `tone_map_neutral_pipeline()`と`SdrOutput::pipeline()`を使って実行前に対応するProgramを準備する。

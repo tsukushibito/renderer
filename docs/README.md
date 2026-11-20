@@ -14,7 +14,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 |---|---|
 | Examplesを動かしたい | [Examplesの実行と選び方](guides/examples.md) |
 | Rustで標準パスやレシピを使いたい | [`renderer-pipeline`の標準部品](design/rendergraph.md#公開標準パスと標準グラフ) |
-| YAMLで描画パイプラインを組みたい | [YAMLの書式と組み込み手順](guides/tooling.md#yaml-pipeline) |
+| Rustで独自パスを組み合わせたい | [パイプラインの準備と合成](guides/tooling.md#rust-pipeline) |
 | 全体像をつかみたい | [図で読むRenderGraph](design/rendergraph-overview.md)：短いコード例、依存関係の図、処理と資源の寿命 |
 | 型や処理の関係を図で追いたい | [設計図集](design/rendergraph-diagrams.md)：型の関係、owned命令、compile、producer/hazard、範囲、投入・完了、import、容量 |
 | APIの正確な動作を確認したい | [RenderGraphの契約](design/rendergraph.md)：宣言、初期化、不要パス除去、owned Raster/Computeと画像copy、所有と容量 |
@@ -24,7 +24,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | GPU上の実行を知りたい | [Vulkanの設計](design/vulkan.md)と[D3D12の設計](design/implementation-policy.md#d3d12-runtime)：同期、実行枠、資源管理、投入・完了 |
 | 二APIのWindows表示を使いたい | [表示の共通契約](design/rendergraph.md#windows-presentation)と[操作・受入・計測](guides/development.md#windows-presentation)：自由camera、resize、VSync、pending終了 |
 | Bistroを二APIで描画・計測したい | [cookとForward PBR](guides/development.md#bistro-pbr)：MikkTSpace、DDS mip、材質・alpha、画像比較と通常releaseの計測 |
-| BistroのRust版とYAML版を試したい | [サンプルの起動](guides/examples.md#最初に動かす)、[YAMLの描画構成とシャドウ再利用](guides/tooling.md#bistro-scene-pipeline) |
+| 2つのBistroサンプルを試したい | [サンプルの起動](guides/examples.md#最初に動かす)、[描画構成とシャドウ再利用](guides/tooling.md#bistro-scene-pipeline) |
 | IBL・影・HDRを含むBistroを比較したい | [B3の再現手順](guides/development.md#bistro-b3)、[受入・Godot比較](verification/current.md#bistro-lighting)、[120 FPS目標の実測](verification/current.md#bistro-120-performance) |
 | 外部Bloomを含むBistroを表示・検証したい | [B5の操作・再現手順](guides/development.md#bistro-b5)、[統合受入の結果](verification/current.md#bistro-b5-acceptance)、[外部Bloomの実証](verification/current.md#bistro-bloom-fixture) |
 | 非管理者でCPU処理の内訳を調べたい | [Tracyの手動zone](guides/tooling.md#tracy-profiling)：既定offの計装、Bistroの測定窓、[実トレースと費用・hotspot](verification/current.md#bistro-tracy) |
@@ -40,7 +40,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 |---|---|---|
 | 利用手順 | [Examples](guides/examples.md) | 各ターゲットの前提、入門コマンド、比較・計測の導線 |
 | 利用手順 | [開発手順](guides/development.md) | 環境構築、Bistro素材と再現条件の準備、ビルド、試験、性能測定 |
-| 利用手順 | [開発ツール](guides/tooling.md) | 依存監査、D3D12 bindings生成、SPIR-V／DXIL検証、[外部シェーダー取込](guides/tooling.md#runtime-shader-import)、[YAMLパイプライン](guides/tooling.md#yaml-pipeline)、[Bistro cook・shader・比較](guides/tooling.md#bistro-tools)、[Tracy zone](guides/tooling.md#tracy-profiling)・[WPR CPUプロファイル](guides/tooling.md#cpu-profiling)、RenderDoc |
+| 利用手順 | [開発ツール](guides/tooling.md) | 依存監査、D3D12 bindings生成、SPIR-V／DXIL検証、[外部シェーダー取込](guides/tooling.md#runtime-shader-import)、[Rustのパイプライン構築](guides/tooling.md#rust-pipeline)、[Bistro cook・shader・比較](guides/tooling.md#bistro-tools)、[Tracy zone](guides/tooling.md#tracy-profiling)・[WPR CPUプロファイル](guides/tooling.md#cpu-profiling)、RenderDoc |
 | 利用手順 | [HTML文書](guides/html-docs.md) | フレームワーク比較とmdBook選定、ビルド、閲覧、配布・更新 |
 | 実装規約 | [製品版と開発用の検証方針](guides/validation-policy.md) | 保証を置く境界、製品から外す検証、実行状態・失敗処理、ビルド構成と受入 |
 | 実装指針 | [Vulkanベストプラクティス](guides/vulkan-best-practices.md) | 一次資料に基づく能力照会、同期・寿命、メモリ、描画・Compute、WSI、検証・性能 |
