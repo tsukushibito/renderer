@@ -659,7 +659,7 @@ snapshotを使う標準描画の入口は[現行契約](rendergraph.md#エンジ
 依存は`アプリ → renderer-pipeline → renderer`の向きとする。Graph、Program、snapshotの入力接続、GPU実行は`renderer`が担う。
 描画方式に応じたパスの選択・合成を`renderer-pipeline`に置くことで、独自構成は`renderer`だけに依存できる。
 共用する組み込みシェーダーとそのABIは、管理下Programとして`renderer`が提供する。
-Rustの標準パスとレシピは既定の構成で使え、YAMLでの合成は`yaml` featureで選ぶ。
+Rustの標準パス、レシピと準備APIは既定の構成で利用できる。
 標準グラフは標準パスを組み合わせ、各パスは通常の構築関数と型付き入出力で公開Graph APIを呼ぶ。
 Graphの共通解析・backendへ、opaqueやBloom等の効果選択を追加することを通常の拡張手順にしない。
 
@@ -890,7 +890,7 @@ pipeline、binding layout、sampler、ImageViewなどは、それぞれを導入
 実行ファイルを再ビルドせず、起動や明示的な構成変更でRasterとComputeのシェーダーを選べる。
 アプリがロードしたバイナリとABIは`ManagedRasterProgram::from_trusted_owned_descriptor`と
 `ManagedProgram::from_trusted_owned_descriptor`で取り込む。埋め込みアセットと同じ
-GraphとWorkingSetを使う。構成をYAMLで記述する場合は`renderer-pipeline`の`yaml` featureを有効にする。
+GraphとWorkingSetを使う。`renderer-pipeline`の利用側も、取り込んだProgramを公開Graph APIで使う。
 [外部取込の利用例](../guides/tooling.md#runtime-shader-import)と
 [Program契約](rendergraph.md#program由来bindingとshader-stageのowned計画)を参照する。
 
@@ -898,7 +898,7 @@ GraphとWorkingSetを使う。構成をYAMLで記述する場合は`renderer-pip
 |---|---|
 | シェーダーのアセットビルド | HLSLなどのソースを配布対象に応じてSPIR-V、DXIL、または両方へコンパイルする。entry point、stage、bindingとアクセス契約などのメタデータを対応するバイナリと組にして配布する。 |
 | アプリのアセット層 | 起動時にアプリが選んだバックエンドに対し、シェーダーの論理名を対応するアセットへ解決する。両形式を配布した場合も、選択したバックエンド用のバイナリと対応するメタデータを読む。 |
-| `renderer-pipeline`の`yaml` feature | YAMLのパス、描画リスト、リソース接続を解決する。準備時に`shader`の論理名または`shader_template`と材質型の組をアプリに渡し、型付きProgramを受け取る。毎フレームはアプリから渡された名前付きビューの候補を選び、公開Graph APIでパスを追加する。 |
+| アプリのレシピ | 取り込んだProgramを準備時に`WorkingSet`へ登録する。準備済みのProgramとフレーム入力を使い、公開Graph APIで資源とパスの依存を宣言する。 |
 | `renderer` | 読み込み済みのバイト列とメタデータを受け取り、不変のProgramとして扱う。実Deviceとの適合を確認し、`WorkingSet`の準備でネイティブのレイアウトとパイプラインを作る。 |
 
 取込時に、バイナリ形式・版・サイズ・ステージと、記述子の構造・宣言したABIの整合を確認する。
@@ -915,52 +915,25 @@ GPUが使うパイプラインと対応するProgramは既存の実行所有者�
 ロードやWorkingSetの置換は[準備・構成変更の境界](#steady-state-memory)で行う。
 描画を継続したままのホットリロードとアセットパックの格納形式は後続の検討とする。
 
-#### YAMLによるパス合成
+#### Rustのレシピと構成の準備
 
-依存は`アプリ → renderer-pipeline → renderer`の向きとする。アプリがYAMLとバックエンドを選び、
-シェーダーの取込時にコードとABIの一致を保証する。`renderer-pipeline`が扱うのは論理名と信頼済みProgramである。
-YAMLは順序付きのRaster／Computeパス、名前付き資源・描画リスト、出力画像を宣言する。
-複数のYAML文書を準備時に合成できる。宣言順は文書の指定順と各文書内の順序で決まる。
-そのフレームで有効なパスを宣言順でGraphへ追加し、producer・hazard・初期化の解析とGPU同期は[RenderGraph](rendergraph.md)に委ねる。
+レシピは公開Graphを借用し、パスを追加して後段で使うハンドルを返す。構成やフレーム入力に応じた分岐は
+Rustで行う。producer、hazard、初期化、GPU同期と寿命には[RenderGraph](rendergraph.md)の契約を適用する。
 
-構成の準備時にYAMLを解析し、参照・Programの種別・binding・attachmentを照合して、Graphへ渡す順序と引数を確定する。
-`PreparedPipeline`が同じProgram版を`WorkingSet`とGraph構築の両方に使い、transient資源の枠数と作業領域を予約する。
-毎フレームはアプリが提供したGraph上の外部資源と描画候補を使う。
-名前付きビュー内の候補をqueueで選び、複数パスで共有される描画リストも一度構築する。
-可変のハンドル・候補数は各フレームで確認し、上限内の入力には予約済み領域を使う。
-[供給元を選べる画像](../guides/tooling.md#yaml-image-sources)は、初期化済みの外部画像を選ぶと生成パスを省く。
-生成を選んだ場合は一時画像を使うか、既存の外部画像を描画先として渡せる。
-準備時に各選択式画像の生成パスと記述子を確定し、フレーム構築時に選択とハンドルを検査する。
-どの供給元を選んでも後続パスは同じ論理画像を参照する。
-`sampled_view`は同じGraphの名前付き画像ViewをProgramのsampled imageに接続する。複数mipを含むViewでは、
-GraphがView全体の読取り範囲とGPU寿命を扱う。準備済み構成は描画リスト上限を含むGraphの宣言数を利用側に渡す。
-Graphを消費する`build`が成功したら、利用側は`FrameOutput`から最終画像と同じGraphの名前付き中間画像を取得し、
-export、readback、後段パスなどを追加できる。
+`renderer-pipeline`の`Preparation`は、起動・構成変更時に標準レシピと独自パスの要求をまとめる。
+同一フレームで同時に宣言する数を合算し、同時フレーム数を考慮して一時画像とバッファの個数を予約する。
+実行用`WorkingSet`には使うProgramの版とRasterのsample数を含める。Graphの解析とアップロードに必要な上限を
+利用側から渡して`GraphCapacity`を確定する。通常フレームはこの容量を再利用し、上限を超えた場合は容量不足を返す。
+手順とコード例は[Rustのパイプライン構築](../guides/tooling.md#rust-pipeline)を参照する。
 
-indexed Rasterは`shader_template`と材質型を宣言できる。アセットビルドがパスのHLSLテンプレートと
-材質関数を組み合わせ、バイナリと反射情報を出力する。アプリが対応するABIを確認して管理下Programを提供する。
-テンプレートの各Programは準備時にパスのattachmentとbindingに照合し、WorkingSetに含める。
-フレーム入力は材質インスタンスの型と、共通スライス上のbinding範囲を渡す。パス共通のbindingと材質ごとのbindingを合わせ、
-使用された材質インスタンスごとにGraph内のbinding setを再利用する。Programを切り替える場合も入力の描画順を保持し、
-連続する同一Programの描画をまとめる。通常フレームでは予約済み領域で選択し、コード生成とGPUパイプライン作成は準備境界で行う。
+材質のProgramはパスのHLSLテンプレートと材質関数を組み合わせてビルドできる。アプリが対応するABIを確認して
+管理下Programへ取り込み、その版を使う。フレーム内は公開Graphでbindingを指定し、描画順に合わせてRaster batchへ渡す。
 [テンプレートのビルド手順](../guides/tooling.md#material-shader-build)を参照する。
 
-構成の差し替えは、新しい`PreparedPipeline`を作り、以前のフレームと結果の貸し出しを返却してから
-実RuntimeのWorkingSetを更新する。更新が成功した版で後続フレームを組み立てる。
-YAMLで宣言する資源はbufferと1×または4×・単一mip／layerの2D画像で、材質のbindingには複数mipを含むGraphのsampled Viewも渡せる。
-画像寸法は固定値の組か`extent: frame`で指定する。後者は呼出側が準備時に渡す描画寸法に解決する。
-`divisor`を指定した場合は各軸の除算結果を切り上げる。サイズ変更時は新しい寸法でWorkingSetを準備する。
-Rasterはindexed draw list、間接描画、または全画面三角形を使い、複数の描画定義を同じattachmentで順に実行できる。
-4×カラーのresolveは一致する形式・寸法の1×画像に書く。ComputeはProgramのdispatch契約に従う。
-間接描画は準備時に検証済みのテーブルを受け取り、引数の生成、読み取り、寿命をGraphに宣言する。
-
-`renderer-pipeline`の[Bistro](../guides/tooling.md#bistro-scene-pipeline)ではシャドウ、シーン描画、Bloom、トーンマッピング、
-SDR出力のパスと接続をYAMLで定義する。サンプル側はカメラ、描画候補、材質、照明のViewを供給し、出力をキャプチャ／Presenterに渡す。
-シャドウの有効性はアプリがカスケードごとに判定する。画像の版とキャッシュキーは投入が受理された後に公開し、
-次フレームでは既存のGraphのimport、依存とGPU寿命の契約に従って参照する。
-シーンHDRとポスト処理の各中間画像は同じGraphに接続する。Bistroは準備済みのパス数と描画数を使い、
-Vulkanのdescriptor予約にComputeのdispatch分を含める。公開Graph APIによるRust版のBistroは`renderer`に置く。
-操作、書式、入力例は[利用ガイド](../guides/tooling.md#yaml-pipeline)を参照する。
+`renderer-pipeline`の[Bistro](../guides/tooling.md#bistro-scene-pipeline)では専用のシャドウ、照明、Bloomを標準の
+トーンマッピングとSDR出力につなぐ。シャドウはカスケードごとに判定し、更新した画像の版とキャッシュキーは
+submit受理後に公開する。次フレームは既存のGraphのimportとGPU寿命の契約に従って画像を参照する。
+Vulkanのdescriptor予約はComputeのdispatch分を含める。`renderer`のBistroは公開Graph APIを直接使う例である。
 
 ## 12. エンジン統合とPresentation
 
