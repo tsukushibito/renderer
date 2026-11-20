@@ -1605,11 +1605,12 @@ pub(super) fn build(
             0,
         )
     });
-    let bloom = options.bloom.append(&mut graph, color)?;
-    let tone = graph.image(
-        "Neutral display linear",
-        ImageDesc::rgba16_float(options.width, options.height),
-    )?;
+    let hdr = ImageDesc::rgba16_float(options.width, options.height);
+    let bloom = match options.bloom.images(hdr) {
+        Some(images) => options.bloom.append(&mut graph, color, images)?,
+        None => color,
+    };
+    let tone = graph.image("Neutral display linear", hdr)?;
     let bloom_view = graph.image_view(bloom, 0, 0)?;
     tone_map_neutral(&mut graph, bloom_view, tone)?;
     let tone_view = graph.image_view(tone, 0, 0)?;

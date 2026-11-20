@@ -1,28 +1,25 @@
-//! Consumer Bloom on a small scene-linear HDR input shared by both APIs.
+//! Standard Bloom composed with uploaded HDR and scene rendering through Graph.
 
-#[path = "../examples/support/bloom.rs"]
-mod bloom;
-#[path = "../examples/support/shader_binaries.rs"]
-mod shader_binaries;
-
-use bloom::Bloom;
+use renderer::capacity::{GraphRequirements, Preparation};
 use renderer::graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, PassHandle};
+use renderer_pipeline::passes::bloom::{Bloom, PreparedBloom};
 use renderer_pipeline::unlit_forward::{ForwardConfig, forward};
+use std::num::NonZeroUsize;
 
 const WIDTH: u32 = 9;
 const HEIGHT: u32 = 5;
 const HDR_BYTES: usize = WIDTH as usize * HEIGHT as usize * 8;
 const CAPACITY: GraphCapacity = GraphCapacity {
-    resources: 8,
-    passes: 8,
-    accesses: 24,
+    resources: 0,
+    passes: 0,
+    accesses: 0,
     draws: 0,
     raster_constant_words: Some(0),
-    bindings: 16,
-    attachments: 1,
+    bindings: 0,
+    attachments: 0,
     dependencies: 16,
     initial_ranges: 16,
-    name_bytes: 512,
+    name_bytes: 0,
     upload_bytes: HDR_BYTES,
     edges: 64,
     segments: 64,
@@ -31,6 +28,22 @@ const CAPACITY: GraphCapacity = GraphCapacity {
 
 fn input_desc() -> ImageDesc {
     ImageDesc::rgba16_float(WIDTH, HEIGHT)
+}
+
+fn preparation() -> Preparation {
+    let mut preparation = Preparation::new(NonZeroUsize::MIN);
+    preparation.reserve_image(input_desc(), 1).unwrap();
+    preparation
+        .add_graph_requirements(GraphRequirements {
+            resources: 1,
+            passes: 2,
+            accesses: 2,
+            attachments: 1,
+            name_bytes: 64,
+            ..GraphRequirements::default()
+        })
+        .unwrap();
+    preparation
 }
 
 fn input_pixel(x: u32, y: u32, standard: bool) -> [u16; 4] {
@@ -46,7 +59,7 @@ fn input_pixel(x: u32, y: u32, standard: bool) -> [u16; 4] {
 
 fn fixture(
     pool: &mut GraphPool,
-    effect: Bloom,
+    effect: &PreparedBloom,
     standard: bool,
     keep_effect: bool,
 ) -> (CompiledGraph, PassHandle) {
@@ -63,8 +76,7 @@ fn fixture(
             },
         )
         .unwrap();
-        let output = effect.append(&mut graph, scene.color).unwrap();
-        assert_eq!(output == scene.color, effect == Bloom::Off);
+        let output = effect.add_passes(&mut graph, scene.color).unwrap();
         if keep_effect { output } else { scene.color }
     } else {
         let mut bytes = [0; HDR_BYTES];
@@ -82,8 +94,7 @@ fn fixture(
         }
         let input = graph.image("consumer HDR", input_desc()).unwrap();
         graph.upload_image("HDR pixels", input, &bytes).unwrap();
-        let output = effect.append(&mut graph, input).unwrap();
-        assert_eq!(output == input, effect == Bloom::Off);
+        let output = effect.add_passes(&mut graph, input).unwrap();
         if keep_effect { output } else { input }
     };
     let capture = graph.readback_image("HDR output", output).unwrap();
@@ -92,21 +103,18 @@ fn fixture(
 
 #[test]
 fn bloom_composes_through_public_graphs_and_unused_passes_are_culled() {
-    let mut pool = GraphPool::new(CAPACITY, 1).unwrap();
-    for standard in [false, true] {
-        for effect in [Bloom::Off, Bloom::Tent, Bloom::Box] {
-            assert!(!effect.name().is_empty());
-            assert_eq!(
-                effect.programs().len(),
-                if effect == Bloom::Off { 0 } else { 4 }
-            );
+    for mode in [Bloom::Off, Bloom::Tent, Bloom::Box] {
+        let mut preparation = preparation();
+        let effect = mode.prepare(&mut preparation, input_desc()).unwrap();
+        let mut pool = GraphPool::new(preparation.graph_capacity(CAPACITY).unwrap(), 1).unwrap();
+        for standard in [false, true] {
             for keep in [false, true] {
-                let (graph, _) = fixture(&mut pool, effect, standard, keep);
+                let (graph, _) = fixture(&mut pool, &effect, standard, keep);
                 let passes = graph
                     .ordered_pass_names()
                     .filter(|name| name.starts_with("Bloom "))
                     .collect::<Vec<_>>();
-                if keep && effect != Bloom::Off {
+                if keep && mode != Bloom::Off {
                     assert_eq!(
                         passes,
                         [
@@ -122,18 +130,30 @@ fn bloom_composes_through_public_graphs_and_unused_passes_are_culled() {
                 }
             }
         }
+        assert!(pool.is_idle());
     }
-    assert!(pool.is_idle());
 }
 
 #[test]
 fn bloom_rejects_incompatible_and_uninitialized_hdr() {
-    let mut pool = GraphPool::new(CAPACITY, 1).unwrap();
+    let mut preparation = preparation();
+    let ldr = ImageDesc::rgba8(WIDTH, HEIGHT);
+    assert!(Bloom::Tent.prepare(&mut preparation, ldr).is_err());
+    let bypass = Bloom::Off.prepare(&mut preparation, ldr).unwrap();
+    let effect = Bloom::Tent.prepare(&mut preparation, input_desc()).unwrap();
+    let capacity = preparation
+        .graph_capacity(GraphCapacity {
+            resources: 7,
+            ..CAPACITY
+        })
+        .unwrap();
+    let mut pool = GraphPool::new(capacity, 1).unwrap();
     let mut graph = pool.begin().unwrap();
-    let ldr = graph.image("LDR", ImageDesc::rgba8(WIDTH, HEIGHT)).unwrap();
-    assert!(Bloom::Tent.append(&mut graph, ldr).is_err());
+    let ldr = graph.image("LDR", ldr).unwrap();
+    assert_eq!(bypass.add_passes(&mut graph, ldr).unwrap(), ldr);
+    assert!(effect.add_passes(&mut graph, ldr).is_err());
     let hdr = graph.image("unwritten HDR", input_desc()).unwrap();
-    let output = Bloom::Tent.append(&mut graph, hdr).unwrap();
+    let output = effect.add_passes(&mut graph, hdr).unwrap();
     graph.readback_image("invalid output", output).unwrap();
     assert_eq!(
         graph.compile().unwrap_err().kind(),
@@ -267,36 +287,48 @@ mod native {
         assert_eq!(adapter.device_luid, Some(dx.device_info().luid));
         let vk_monitor = vk.validation_monitor();
         let dx_monitor = dx.validation_monitor();
-        let images = [
-            (input_desc(), 3),
-            (ImageDesc::rgba16_float(5, 3), 1),
-            (ImageDesc::rgba16_float(3, 2), 2),
-        ];
-        let vk_images = images.map(|(desc, count)| ResourceClass::Image { desc, count });
-        let dx_images = images.map(|(desc, count)| D3D12ImageClass { desc, count });
+        let mut preparation = preparation();
+        let off = Bloom::Off.prepare(&mut preparation, input_desc()).unwrap();
+        let tent = Bloom::Tent.prepare(&mut preparation, input_desc()).unwrap();
+        let mut alternative = Preparation::new(NonZeroUsize::MIN);
+        let boxed = Bloom::Box.prepare(&mut alternative, input_desc()).unwrap();
+        let capacity = preparation.graph_capacity(CAPACITY).unwrap();
+        let working_set = preparation.working_set();
+        let dx_images = working_set
+            .resources
+            .iter()
+            .map(|class| match *class {
+                ResourceClass::Image { desc, count } => D3D12ImageClass { desc, count },
+                ResourceClass::Buffer { .. } => unreachable!("Bloom reserves only images"),
+            })
+            .collect::<Vec<_>>();
         vk.prepare_working_set(
             FrameCapacity {
-                graph: CAPACITY,
+                graph: capacity,
                 work_slots: 1,
                 ..Default::default()
             },
-            &vk_images,
+            working_set.resources,
         )
         .unwrap();
-        let programs = Bloom::Tent
-            .programs()
+        let programs = working_set
+            .compute
             .iter()
-            .chain(Bloom::Box.programs())
+            .chain(alternative.working_set().compute)
             .cloned()
             .collect::<Vec<_>>();
         vk.prepare_compute_programs(&programs).unwrap();
         dx.prepare_graph_working_set(None, &dx_images, &[], &programs)
             .unwrap();
 
-        let mut pool = GraphPool::new(CAPACITY, 1).unwrap();
+        let mut pool = GraphPool::new(capacity, 1).unwrap();
         let mut patterned_tent = None;
         for standard in [false, true] {
-            for effect in [Bloom::Off, Bloom::Tent, Bloom::Box] {
+            for (mode, effect) in [
+                (Bloom::Off, &off),
+                (Bloom::Tent, &tent),
+                (Bloom::Box, &boxed),
+            ] {
                 let (graph, capture) = fixture(&mut pool, effect, standard, true);
                 let mut vk_bytes = [0; HDR_BYTES];
                 let mut dx_bytes = [0; HDR_BYTES];
@@ -309,13 +341,13 @@ mod native {
                 let mut result = pending.wait(WAIT).unwrap().expect("D3D12 completion");
                 result.readback_into(capture, &mut dx_bytes).unwrap();
                 drop((result, pending));
-                check_pixels(&vk_bytes, standard, effect);
-                check_pixels(&dx_bytes, standard, effect);
-                assert_eq!(vk_bytes, dx_bytes, "standard={standard} {effect:?}");
-                if !standard && effect == Bloom::Tent {
+                check_pixels(&vk_bytes, standard, mode);
+                check_pixels(&dx_bytes, standard, mode);
+                assert_eq!(vk_bytes, dx_bytes, "standard={standard} {mode:?}");
+                if !standard && mode == Bloom::Tent {
                     patterned_tent = Some(vk_bytes);
                 }
-                if !standard && effect == Bloom::Box {
+                if !standard && mode == Bloom::Box {
                     assert_ne!(patterned_tent, Some(vk_bytes));
                 }
             }
