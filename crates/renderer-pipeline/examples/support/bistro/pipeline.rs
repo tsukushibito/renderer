@@ -9,15 +9,13 @@ use super::{
     program::{self, forward_plus},
     recipes, shadow,
 };
-use renderer::capacity::{GraphRequirements, Preparation};
 use renderer::{
     ImageFormat,
-    capacity::{ResourceClass, WorkingSet},
+    capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},
     graph::{
-        Attachment, Binding, BindingResource, BufferHandle, Graph, GraphCapacity, GraphError,
-        GraphPool, ImageDesc, ImageHandle, ImageView, ImportBuffer, ImportImage,
-        IndexedIndirectArgs, LoadOp, PassHandle, RasterAttachments, RasterBindings,
-        RasterConstants, RasterDraw, SampleCount, StoreOp,
+        Binding, BindingResource, BufferHandle, Graph, GraphCapacity, GraphError, GraphPool,
+        ImageDesc, ImageHandle, ImageView, ImportBuffer, ImportImage, IndexedIndirectArgs,
+        PassHandle, RasterBindings, RasterConstants, RasterDraw, SampleCount,
     },
     program::{MAX_RASTER_BINDINGS, ManagedRasterProgram, SamplerDescriptor},
 };
@@ -26,16 +24,17 @@ use renderer::{
     graph::BufferDesc,
     runtime::{FrameSubmission, Runtime},
 };
+use renderer_pipeline::pbr_forward;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 #[path = "pipeline/indirect.rs"]
 pub(super) mod indirect;
+#[path = "pipeline/standard_forward.rs"]
+mod standard_forward;
 
 const CASCADES: [&str; shadow::CASCADE_COUNT] =
     ["cascade_0", "cascade_1", "cascade_2", "cascade_3"];
-const SHADOW_PASSES: [&str; shadow::CASCADE_COUNT] =
-    ["shadow_0", "shadow_1", "shadow_2", "shadow_3"];
 
 pub(super) struct PreparedSet {
     main: recipes::Prepared,
@@ -93,18 +92,18 @@ impl PreparedSet {
         self.variants().map(recipes::Prepared::working_set)
     }
 
-    fn select(&self, options: &Options) -> &recipes::Prepared {
+    fn select(&mut self, options: &Options) -> &mut recipes::Prepared {
         if options.bloom == Bloom::Off
-            && let Some(prepared) = &self.bloom_bypass
+            && let Some(prepared) = &mut self.bloom_bypass
         {
             return prepared;
         }
         if !options.aa
-            && let Some(prepared) = &self.aa_off
+            && let Some(prepared) = &mut self.aa_off
         {
             return prepared;
         }
-        &self.main
+        &mut self.main
     }
 }
 
@@ -568,6 +567,7 @@ pub(super) struct Resident {
     pub environment_mips: [u32; 3],
     pub environment_parameters: [f32; 3],
     scene_bounds: shadow::Bounds,
+    standard_bounds: pbr_forward::Bounds,
     primitive_bounds: Vec<shadow::Bounds>,
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
@@ -891,6 +891,7 @@ impl Resident {
                 environment.max_prefilter_lod as f32,
             ],
             scene_bounds,
+            standard_bounds: pbr_forward::Bounds::new(scene_bounds.min, scene_bounds.max)?,
             primitive_bounds,
             shadow_parameters: shadow::Parameters::default(),
             camera,
@@ -916,6 +917,7 @@ pub(super) struct Workspace {
     blended: Vec<usize>,
     casters: Vec<RasterDraw>,
     indirect: Vec<Option<IndexedIndirectArgs>>,
+    standard_inputs: Option<standard_forward::Inputs>,
 }
 
 /// The shadow shader uses the selected packed matrix from the camera constants.
@@ -959,6 +961,10 @@ struct ShadowCache {
 impl Workspace {
     pub fn new(scene: &Scene, prepared: PreparedSet) -> Self {
         let primitives = scene.primitives.len();
+        let standard_inputs = prepared
+            .main
+            .uses_standard_forward()
+            .then(|| standard_forward::Inputs::new(scene));
         Self {
             vertices: Vec::with_capacity(primitives),
             indices: Vec::with_capacity(primitives),
@@ -973,6 +979,7 @@ impl Workspace {
             blended: Vec::with_capacity(primitives),
             casters: Vec::with_capacity(primitives),
             indirect: Vec::with_capacity(scene.materials.len()),
+            standard_inputs,
         }
     }
 
@@ -1214,7 +1221,7 @@ fn append_shadows(
     let mut views = [None; shadow::CASCADE_COUNT];
     let mut updates = shadow_cache.map(|_| [None; shadow::CASCADE_COUNT]);
     shadow_bindings.fill(None);
-    for (cascade, (name, pass)) in CASCADES.into_iter().zip(SHADOW_PASSES).enumerate() {
+    for (cascade, name) in CASCADES.into_iter().enumerate() {
         let matrix = data.matrices[cascade];
         let key = ShadowKey::new(matrix, options.alpha_only, options.shadows);
         let previous = shadow_cache.and_then(|cache| cache.entries[cascade].as_ref());
@@ -1252,19 +1259,9 @@ fn append_shadows(
             };
             casters.push(geometry.draw(scene, index, bindings, parameters));
         }
-        graph.raster(
-            pass,
-            RasterAttachments {
-                color_resolves: &[],
-                colors: &[],
-                depth: Some(Attachment {
-                    view,
-                    load: LoadOp::Clear(1.0),
-                    store: StoreOp::Store,
-                }),
-            },
-            |raster| raster.draw(program, casters.iter()),
-        )?;
+        pbr_forward::add_shadow_pass(graph, cascade, view, |raster| {
+            raster.draw(program, casters.iter())
+        })?;
         if let Some(updates) = &mut updates {
             graph.export_image(image)?;
             updates[cascade] = Some(ShadowUpdate { key, handle: image });
@@ -1301,18 +1298,25 @@ fn frame_lights(
     Ok(Some(FrameLights { lights, tiles }))
 }
 
-fn lighting_bindings(
+fn import_environment(
     graph: &mut Graph,
     resident: &Resident,
-    shadows: [ImageView; shadow::CASCADE_COUNT],
-) -> Result<[Binding; 9], GraphError> {
+) -> Result<[ImageView; 3], GraphError> {
     let mut environment = [None; 3];
     for (index, name) in ["irradiance", "reflection", "brdf"].into_iter().enumerate() {
         let image = graph.import_image(name, &resident.environment[index])?;
         environment[index] =
             Some(graph.sampled_image_view(image, 0, resident.environment_mips[index])?);
     }
-    let [irradiance, reflection, brdf] = environment.map(Option::unwrap);
+    Ok(environment.map(Option::unwrap))
+}
+
+fn lighting_bindings(
+    graph: &mut Graph,
+    resident: &Resident,
+    shadows: [ImageView; shadow::CASCADE_COUNT],
+) -> Result<[Binding; 9], GraphError> {
+    let [irradiance, reflection, brdf] = import_environment(graph, resident)?;
     Ok([
         image_binding(2, 0, irradiance),
         image_binding(2, 1, reflection),
@@ -1404,6 +1408,18 @@ pub(super) fn build(
     camera_bytes: &[u8; 128],
     capture: bool,
 ) -> Result<Built, Error> {
+    if workspace.prepared.select(options).uses_standard_forward() {
+        return standard_forward::build(
+            pool,
+            workspace,
+            resident,
+            scene,
+            options,
+            camera,
+            camera_bytes,
+            capture,
+        );
+    }
     let read_word =
         |word: usize| f32::from_le_bytes(camera_bytes[word * 4..word * 4 + 4].try_into().unwrap());
     let shadow_data = shadow::calculate(
@@ -1436,7 +1452,9 @@ pub(super) fn build(
     frame_uniform[128..].copy_from_slice(&shadow_data.uniform_bytes());
 
     let mut graph = pool.begin()?;
-    let uniform = import_frame(&mut graph, workspace, resident, &frame_uniform)?;
+    let uniform = import_frame(&mut graph, workspace, resident)?;
+    graph.upload_buffer("camera update boundary", uniform, 0, &frame_uniform)?;
+    graph.export_buffer(uniform)?;
     let prepared = workspace.prepared.select(options);
     let lighting = frame_lights(&mut graph, resident, options, uniform)?;
     let materials = MaterialBindings {
@@ -1479,13 +1497,7 @@ pub(super) fn build(
     let camera_matrix =
         std::array::from_fn(|column| std::array::from_fn(|row| read_word(column * 4 + row)));
     let frustum = Frustum::new(camera_matrix, resident.scene_bounds);
-    let include_material = |index: usize| {
-        #[cfg(feature = "development-validation")]
-        if options.omit_material == Some(index) {
-            return false;
-        }
-        !options.alpha_only || scene.materials[index].alpha_zero
-    };
+    let include_material = |index| material_visible(options, scene, index);
     let packed = resident
         .packed
         .as_ref()
@@ -1499,22 +1511,14 @@ pub(super) fn build(
         })
         .transpose()?;
 
-    workspace.opaque.clear();
-    workspace.blended.clear();
-    for (index, primitive) in scene.primitives.iter().enumerate() {
-        let material = &scene.materials[primitive.material];
-        if (packed.is_some() && !material.blend) || !include_material(primitive.material) {
-            continue;
-        }
-        if frustum.overlaps(resident.primitive_bounds[index]) {
-            if material.blend {
-                workspace.blended.push(index);
-            } else {
-                workspace.opaque.push(index);
-            }
-        }
-    }
-    sort_blended(&mut workspace.blended, scene, camera);
+    select_draws(
+        [&mut workspace.opaque, &mut workspace.blended],
+        scene,
+        resident,
+        options,
+        camera,
+        &frustum,
+    );
 
     let geometry = Geometry {
         vertices: &workspace.vertices,
@@ -1609,7 +1613,6 @@ fn import_frame(
     graph: &mut Graph,
     workspace: &mut Workspace,
     resident: &Resident,
-    uniform_bytes: &[u8; program::CAMERA_BYTES],
 ) -> Result<BufferHandle, Error> {
     #[cfg(feature = "tracy")]
     let _imports = tracy_client::Client::running()
@@ -1638,10 +1641,42 @@ fn import_frame(
             .images
             .push(graph.import_image("material image", value)?);
     }
-    let uniform = graph.import_buffer("camera", &resident.camera)?;
-    graph.upload_buffer("camera update boundary", uniform, 0, uniform_bytes)?;
-    graph.export_buffer(uniform)?;
-    Ok(uniform)
+    Ok(graph.import_buffer("camera", &resident.camera)?)
+}
+
+fn material_visible(options: &Options, scene: &Scene, index: usize) -> bool {
+    #[cfg(feature = "development-validation")]
+    if options.omit_material == Some(index) {
+        return false;
+    }
+    !options.alpha_only || scene.materials[index].alpha_zero
+}
+
+fn select_draws(
+    [opaque, blended]: [&mut Vec<usize>; 2],
+    scene: &Scene,
+    resident: &Resident,
+    options: &Options,
+    camera: Camera,
+    frustum: &Frustum,
+) {
+    opaque.clear();
+    blended.clear();
+    for (index, primitive) in scene.primitives.iter().enumerate() {
+        let material = &scene.materials[primitive.material];
+        if (resident.packed.is_some() && !material.blend)
+            || !material_visible(options, scene, primitive.material)
+            || !frustum.overlaps(resident.primitive_bounds[index])
+        {
+            continue;
+        }
+        if material.blend {
+            blended.push(index);
+        } else {
+            opaque.push(index);
+        }
+    }
+    sort_blended(blended, scene, camera);
 }
 
 fn sort_blended(blended: &mut [usize], scene: &Scene, camera: Camera) {
