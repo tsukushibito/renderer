@@ -223,10 +223,8 @@ impl State {
         backend.set_profiling(options.gpu_timing)?;
         surface.set_profiling(options.gpu_timing)?;
         let pool = GraphPool::new(budget.graph, options.inflight + 1)?;
-        let mut workspace = Workspace::new(
-            scene,
-            budget.prepared.take().expect("prepared YAML pipeline"),
-        );
+        let mut workspace =
+            Workspace::new(scene, budget.prepared.take().expect("prepared pipeline"));
         workspace.placements = placements;
         if options.reuse_shadows && options.shadows {
             workspace.enable_shadow_reuse();
@@ -627,9 +625,7 @@ impl State {
             "initial_width": self.seed_dimensions.0, "initial_height": self.seed_dimensions.1,
             "bloom": options.bloom.name(), "vsync": options.vsync, "aa": options.aa,
             "samples":options.sample_count.as_u32(), "pipeline":options.pipeline.name(),
-            "shader_pipeline":options.shader_assets.as_ref().map(|selection| &selection.pipeline),
             "shader_manifest":options.shader_assets.as_ref().map(|selection| &selection.manifest),
-            "pipeline_sha256":self.workspace.prepared.sha256(options),
             "local_lights":options.pipeline.uses_local_lights()
                 .then(|| super::forward_lighting::identity(options.fixture)),
             "instances": options.instances.name(), "instance_draws": options.instances.draws(),
