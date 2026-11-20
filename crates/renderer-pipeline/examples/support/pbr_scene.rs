@@ -8,7 +8,7 @@ use renderer::{
     },
 };
 #[cfg(test)]
-use renderer_pipeline::pbr::Transform;
+use renderer_pipeline::pbr::{AlphaMode, Transform};
 use renderer_pipeline::{
     passes::{
         bloom::{Bloom, PreparedBloom},
@@ -58,7 +58,7 @@ impl Triangle {
         };
         let normal = view.orient(normal);
         let [tx, ty, tz] = view.orient([tangent[0], tangent[1], tangent[2]]);
-        let tangent = [tx, ty, tz, tangent[3]];
+        let tangent = [tx, ty, tz, tangent[3] * view.z_axis()];
         let positions = [
             ([-0.8_f32, -0.7, 0.0], [0.0, 1.0]),
             ([0.8, -0.7, 0.0], [1.0, 1.0]),
@@ -74,6 +74,17 @@ impl Triangle {
             material: MaterialFactors {
                 base_color: [0.75, 0.015, 0.009, 1.0],
                 emissive: [if glowing { 2.0 } else { 0.0 }, 0.0, 0.0],
+                #[cfg(test)]
+                alpha_mode: if matches!(view, ViewFixture::LeftHandedPerspective { .. }) {
+                    AlphaMode::Mask
+                } else {
+                    AlphaMode::Opaque
+                },
+                #[cfg(test)]
+                double_sided: matches!(
+                    view,
+                    ViewFixture::LeftHandedPerspective { double_sided: true }
+                ),
                 ..MaterialFactors::default()
             },
             view,
@@ -264,14 +275,26 @@ pub enum ViewFixture {
     OverheadOrthographic,
     #[cfg(test)]
     OffsetPerspective,
+    #[cfg(test)]
+    LeftHandedPerspective {
+        double_sided: bool,
+    },
 }
 
 impl ViewFixture {
+    fn z_axis(self) -> f32 {
+        match self {
+            #[cfg(test)]
+            Self::LeftHandedPerspective { .. } => -1.0,
+            _ => 1.0,
+        }
+    }
+
     fn orient(self, value: [f32; 3]) -> [f32; 3] {
         match self {
             #[cfg(test)]
             Self::OverheadOrthographic => [value[0], value[2], -value[1]],
-            _ => value,
+            _ => [value[0], value[1], self.z_axis() * value[2]],
         }
     }
 
@@ -303,7 +326,9 @@ impl ViewFixture {
         let depth = far / (near - far);
         let (shift, projection) = match self {
             #[cfg(test)]
-            Self::OffsetPerspective => (0.45, Projection::Perspective),
+            Self::OffsetPerspective | Self::LeftHandedPerspective { .. } => {
+                (0.45, Projection::Perspective)
+            }
             _ => (
                 0.0,
                 Projection::SymmetricPerspective {
@@ -312,15 +337,16 @@ impl ViewFixture {
                 },
             ),
         };
+        let z_axis = self.z_axis();
         ViewInput::new(
             [
                 [scale / aspect, 0.0, 0.0, 0.0],
                 [0.0, -scale, 0.0, 0.0],
-                [-shift, 0.0, depth, -1.0],
+                [-shift * z_axis, 0.0, depth * z_axis, -z_axis],
                 [shift * eye[2], 0.0, near * depth - depth * eye[2], eye[2]],
             ],
-            eye,
-            [0.0, 0.0, -1.0],
+            self.orient(eye),
+            [0.0, 0.0, -f64::from(z_axis)],
             [near, far],
             projection,
         )

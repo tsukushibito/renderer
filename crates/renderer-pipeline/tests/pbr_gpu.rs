@@ -78,6 +78,13 @@ mod cpu {
                 SampleCount::X1,
                 ViewFixture::OffsetPerspective,
             ),
+            (
+                Technique::Deferred,
+                SampleCount::X1,
+                ViewFixture::LeftHandedPerspective {
+                    double_sided: false,
+                },
+            ),
         ] {
             let settings = Settings {
                 technique,
@@ -198,6 +205,14 @@ mod gpu {
                 32,
                 (2.9_f32 / 9.9) * (10.0 / 3.0),
             ),
+            (
+                ViewFixture::LeftHandedPerspective {
+                    double_sided: false,
+                },
+                46,
+                32,
+                (2.9_f32 / 9.9) * (10.0 / 3.0),
+            ),
         ] {
             for technique in [Technique::Forward, Technique::Deferred] {
                 let settings = Settings {
@@ -225,6 +240,35 @@ mod gpu {
                 );
                 assert_eq!(sample(outside), ([0, 0, 0, 255], 1.0));
             }
+        }
+    }
+
+    fn left_handed_projection_preserves_independent_shadow_winding(api: Api) {
+        for double_sided in [false, true] {
+            let settings = Settings {
+                view: ViewFixture::LeftHandedPerspective { double_sided },
+                placement: Placement::Tilted(None),
+                ..Settings::new(SampleCount::X1)
+            };
+            let frames = render(api, settings, false, Bloom::Off, &[]).unwrap();
+            let output = &frames[0].output;
+            let offset = ((EXTENT[1] / 2 * EXTENT[0] + 46) * 4) as usize;
+            let rgba: [u8; 4] = output.sdr[offset..offset + 4].try_into().unwrap();
+            let depth = output.depth.as_ref().unwrap();
+            let depth = f32::from_le_bytes(depth[offset..offset + 4].try_into().unwrap());
+            assert!(matches!(rgba, [r, g, b, 255] if r > 32 && r > g && r > b));
+            assert!((depth - (2.9 / 9.9) * (10.0 / 3.0)).abs() < 2e-6);
+
+            // The same triangle is front-facing to the view, but back-facing
+            // to this sun projection. Only the two-sided mask casts depth.
+            let shadow_written = output.shadow_maps.iter().any(|image| {
+                image
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| *pixel != 1.0_f32.to_le_bytes())
+            });
+            assert_eq!(shadow_written, double_sided);
         }
     }
 
@@ -344,6 +388,20 @@ mod gpu {
     #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
     fn d3d12_application_projection_matches_analytic_samples() {
         application_projection_matches_analytic_samples(Api::D3D12);
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    #[ignore = "requires a hardware Vulkan adapter and requested native validation"]
+    fn vulkan_left_handed_projection_preserves_independent_shadow_winding() {
+        left_handed_projection_preserves_independent_shadow_winding(Api::Vulkan);
+    }
+
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
+    fn d3d12_left_handed_projection_preserves_independent_shadow_winding() {
+        left_handed_projection_preserves_independent_shadow_winding(Api::D3D12);
     }
 
     #[cfg(feature = "vulkan")]
