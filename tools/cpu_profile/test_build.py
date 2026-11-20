@@ -12,12 +12,15 @@ from build import (BuildError, RELEASE_DEFAULTS, check_artifact, check_configura
 
 
 class BuildTests(unittest.TestCase):
-    def test_bistro_embedded_conditions_are_bound_to_the_build_source(self):
-        name = "tools/bistro/conditions.json"
+    def test_renderer_bistro_embedded_inputs_are_bound_to_the_build_source(self):
         snapshot = source_snapshot()
         self.assertIn("tools/bistro/ibl.py", snapshot)
-        self.assertEqual(snapshot[name]["raw_sha256"],
-                         hashlib.sha256((ROOT / name).read_bytes()).hexdigest())
+        for name in ("tools/bistro/conditions.json",
+                     "crates/renderer-pipeline/shaders/pbr.frag.spv",
+                     "crates/renderer-pipeline/shaders/pbr_programs.rs"):
+            with self.subTest(name=name):
+                self.assertEqual(snapshot[name]["raw_sha256"],
+                                 hashlib.sha256((ROOT / name).read_bytes()).hexdigest())
 
     def test_pipeline_archive_binds_the_workload_and_renderer_dependency(self):
         snapshot = source_snapshot("renderer-pipeline")

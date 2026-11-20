@@ -126,11 +126,14 @@ def profile_settings(root, name):
 
 
 def source_snapshot(package="renderer"):
-    crates = ["crates/renderer"]
+    sources = ["crates/renderer"]
     if package == "renderer-pipeline":
-        crates.append("crates/renderer-pipeline")
+        sources.append("crates/renderer-pipeline")
+    else:
+        # The standalone renderer Bistro embeds the shared shader assets.
+        sources.append("crates/renderer-pipeline/shaders")
     names = git("ls-files", "--cached", "--others", "--exclude-standard", "-z", "--",
-                "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", *crates,
+                "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", *sources,
                 "tools/cpu_profile", "tools/tracy", "tools/bistro/conditions.json",
                 "tools/bistro/ibl.py").split("\0")
     result = {}
