@@ -924,19 +924,24 @@ Rustで行う。producer、hazard、初期化、GPU同期と寿命には[RenderG
 `renderer::capacity::Preparation`は、起動・構成変更時に標準レシピと独自パスの要求をまとめる。
 同一フレームで同時に宣言する数を合算し、同時フレーム数を考慮して一時画像とバッファの個数を予約する。
 Graphの宣言上限と`WorkingSet`を一括で加える場合は、すべての上限・資源の検査が通った時点で要求を更新する。
-実行用`WorkingSet`には使うProgramの版とRasterのsample数を含める。Graphの解析とアップロードに必要な上限を
-利用側から渡して`GraphCapacity`を確定する。通常フレームはこの容量を再利用し、上限を超えた場合は容量不足を返す。
+同時に使う構成の容量は合算する。GPU処理や結果保持が重ならない構成は`Preparation::add_alternatives`で、
+同じ同時フレーム数を前提に資源クラスとGraph上限の最大値、および使用されるProgramを集約する。
+実行用`WorkingSet`には使うProgramの版とRasterのsample数を含める。各レシピが自分で宣言するアップロード量を計上し、
+利用側から解析と追加のアップロードに必要な上限を渡して`GraphCapacity`を確定する。
+通常フレームはこの容量を再利用し、上限を超えた場合は容量不足を返す。
 手順とコード例は[Rustのパイプライン構築](../guides/tooling.md#rust-pipeline)を参照する。
 
 材質のProgramはパスのHLSLテンプレートと材質関数を組み合わせてビルドできる。アプリが対応するABIを確認して
 管理下Programへ取り込み、その版を使う。フレーム内は公開Graphでbindingを指定し、描画順に合わせてRaster batchへ渡す。
 [テンプレートのビルド手順](../guides/tooling.md#material-shader-build)を参照する。
 
-`renderer_pipeline::pbr_forward`は1× PBR Forward、4カスケードの影、HDRとSDR出力のレシピを提供する。
+`renderer-pipeline`のPBRレシピは、Forward／Forward+の1×／4×とDeferredの1×を提供する。
+Forward系の4×はカラーを単一サンプルHDRへリゾルブする。後段が使うシーン深度は1×のD32で提供する。
+共通の`pbr`で材質・ビュー・描画入力・4カスケードの影を扱う。
 同じ公開パスを個別に呼べるため、アプリは標準の`passes::bloom`と独自のHDR加工を合成できる。
 Bloomは同寸のシーンリニアRGBA16Fを返し、Compute Programと中間画像・Graph宣言の容量を準備時に登録する。
 `renderer-pipeline`の[Bistro](../guides/tooling.md#bistro-scene-pipeline)は標準レシピと比較用の描画構成を使う。
-`pbr_forward::ShadowHistory`はカスケードの行列とアプリが供給するキャスター入力の世代で再利用を判定する。
+`pbr::ShadowHistory`はカスケードの行列とアプリが供給するキャスター入力の世代で再利用を判定する。
 更新した画像の版とキーはsubmit受理後にまとめて反映する。次フレームは既存のGraphのimportとGPU寿命の契約に従って画像を参照する。
 履歴が持つ画像の登録は、解像度の変更や使用終了時にアプリが明示的に解除する。
 Vulkanのdescriptor予約はComputeのdispatch分を含める。`renderer`のBistroは公開Graph APIを直接使う例である。

@@ -337,8 +337,8 @@ shaderの再生成は[`crates/renderer-pipeline/shaders/regenerate.ps1`](../../c
 
 ### 同じ描画例を二APIで実行する
 
-`renderer-pipeline`の`bistro`は公開の[標準 PBR Forward](tooling.md#pbr-forward-recipe)を使う構成と、
-MSAAやDeferredなどの比較構成を持つ。シーン固有のBloomも同じGraphに接続する。
+`renderer-pipeline`の`bistro`は公開の[標準 PBRレシピ](tooling.md#pbr-forward-recipe)で
+Forward／Forward+の1×／4×とDeferredの1×を描く。Bloomも同じGraphに接続する。
 以下のBistro実行・計測・受入はこの例を使う。公開Graph APIを直接使うRust版は[Examplesガイド](examples.md#最初に動かす)を参照する。
 小fixtureはLFS素材やcook生成物を要求しない。Vulkan実行にはVulkan 1.3 runtime、D3D12にはWindowsの実GPUを使う。
 native検証を要求する受入では`development-validation`を付け、対応するLayer／Graphics Toolsを用意する。
