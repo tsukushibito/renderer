@@ -938,13 +938,17 @@ Graphの宣言上限と`WorkingSet`を一括で加える場合は、すべての
 `renderer-pipeline`のPBRレシピは、Forward／Forward+の1×／4×とDeferredの1×を提供する。
 Forward系の4×はカラーを単一サンプルHDRへリゾルブする。後段が使うシーン深度は1×のD32で提供する。
 共通の`pbr`で材質・ビュー・描画入力・4カスケードの影を扱う。
+アプリはカメラの姿勢・投影を決め、通常Zのビュー投影行列と視点情報を`ViewInput`で渡す。
+レシピはその行列を描画、可視性、カスケード計算、Deferredの位置再構成で使う。
+型付き材質のアルファ分類は係数のアップロード・更新と同じ境界で確定し、フレームでは描画パスとの適合だけを確認する。
 同じ公開パスを個別に呼べるため、アプリは標準の`passes::bloom`と独自のHDR加工を合成できる。
+HDRだけを使う構成は標準SDR出力の画像・Programを予約せず、必要な出力をアプリが組み立てる。
 Bloomは同寸のシーンリニアRGBA16Fを返し、Compute Programと中間画像・Graph宣言の容量を準備時に登録する。
 `renderer-bistro`の[Bistro](../guides/tooling.md#bistro-scene-pipeline)は標準レシピと比較用の描画構成を使う。
 `pbr::ShadowHistory`はカスケードの行列とアプリが供給するキャスター入力の世代で再利用を判定する。
 更新した画像の版とキーはsubmit受理後にまとめて反映する。次フレームは既存のGraphのimportとGPU寿命の契約に従って画像を参照する。
 履歴が持つ画像の登録は、解像度の変更や使用終了時にアプリが明示的に解除する。
-Vulkanのdescriptor予約はComputeのdispatch分を含める。`renderer`のBistroは公開Graph APIを直接使う例である。
+Vulkanのdescriptor予約はComputeのdispatch分を含める。`renderer-bistro`の`bistro-graph`は公開Graph APIを直接使う例である。
 
 ## 12. エンジン統合とPresentation
 
