@@ -53,8 +53,16 @@ macro_rules! bloom_program {
                     bytes: $bytes,
                 },
                 shaders: packaged_shaders!(
-                    include_bytes!(concat!("bistro/shaders/", $shader, ".spv")),
-                    include_bytes!(concat!("bistro/shaders/dxil/", $shader, ".dxil")),
+                    include_bytes!(concat!(
+                        "../../../renderer-pipeline/shaders/",
+                        $shader,
+                        ".spv"
+                    )),
+                    include_bytes!(concat!(
+                        "../../../renderer-pipeline/shaders/dxil/",
+                        $shader,
+                        ".dxil"
+                    )),
                 ),
             };
             // SAFETY: The paired artifacts implement the declared ABI. Each invocation

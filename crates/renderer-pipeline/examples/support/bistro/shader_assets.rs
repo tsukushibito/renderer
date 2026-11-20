@@ -154,34 +154,26 @@ fn reviewed_binary(
         #[cfg(feature = "vulkan")]
         ("vulkan", "bistro/forward") => Ok((
             "spv",
-            include_bytes!("../../../../renderer/examples/support/bistro/shaders/pbr.vert.spv"),
-            include_bytes!("../../../../renderer/examples/support/bistro/shaders/pbr.frag.spv"),
+            include_bytes!("../../../shaders/pbr.vert.spv"),
+            include_bytes!("../../../shaders/pbr.frag.spv"),
         )),
         #[cfg(feature = "vulkan")]
         ("vulkan", "bistro/shadow") => Ok((
             "spv",
-            include_bytes!("../../../../renderer/examples/support/bistro/shaders/shadow.vert.spv"),
-            include_bytes!("../../../../renderer/examples/support/bistro/shaders/shadow.frag.spv"),
+            include_bytes!("../../../shaders/shadow.vert.spv"),
+            include_bytes!("../../../shaders/shadow.frag.spv"),
         )),
         #[cfg(all(windows, feature = "d3d12"))]
         ("d3d12", "bistro/forward") => Ok((
             "dxil",
-            include_bytes!(
-                "../../../../renderer/examples/support/bistro/shaders/dxil/pbr.vert.dxil"
-            ),
-            include_bytes!(
-                "../../../../renderer/examples/support/bistro/shaders/dxil/pbr.frag.dxil"
-            ),
+            include_bytes!("../../../shaders/dxil/pbr.vert.dxil"),
+            include_bytes!("../../../shaders/dxil/pbr.frag.dxil"),
         )),
         #[cfg(all(windows, feature = "d3d12"))]
         ("d3d12", "bistro/shadow") => Ok((
             "dxil",
-            include_bytes!(
-                "../../../../renderer/examples/support/bistro/shaders/dxil/shadow.vert.dxil"
-            ),
-            include_bytes!(
-                "../../../../renderer/examples/support/bistro/shaders/dxil/shadow.frag.dxil"
-            ),
+            include_bytes!("../../../shaders/dxil/shadow.vert.dxil"),
+            include_bytes!("../../../shaders/dxil/shadow.frag.dxil"),
         )),
         _ => Err(invalid(format!(
             "Bistro shader template {template} is unavailable for {api}"

@@ -884,7 +884,7 @@ pub(super) fn execute(mut options: Options) -> Result<(), Error> {
         "cook_manifest_sha256": super::run::loaded_cook_hash(&scene, options.fixture)?,
         "ibl_manifest_sha256": environment.identity["manifest_sha256"],
         "conditions_sha256": super::digest(condition_bytes),
-        "shaders_sha256": super::digest(include_bytes!("shaders/manifest.json")),
+        "shaders_sha256": super::digest(include_bytes!("../../../../renderer-pipeline/shaders/manifest.json")),
     });
     let deadline = options
         .frame_limit

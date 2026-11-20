@@ -1,4 +1,4 @@
-# Compile Bistro-owned HLSL to SPIR-V and DXIL with the repository's pinned SDK.
+# Compile the shared PBR shader assets to SPIR-V and DXIL with the repository's pinned SDK.
 # -Verify regenerates and compares every artifact without rewriting the checkout.
 [CmdletBinding()]
 param([string]$SdkRoot = $env:VULKAN_SDK, [switch]$Verify)
@@ -65,7 +65,7 @@ function Run([string]$Executable, [string[]]$Arguments, [switch]$Revision) {
 
 if ([string]::IsNullOrWhiteSpace($SdkRoot)) { throw 'Vulkan SDK 1.4.341.1 Windows x64 is required.' }
 $SdkRoot = (Resolve-Path -LiteralPath $SdkRoot).Path
-$lockPath = Join-Path $PSScriptRoot '../../../../shaders/dxil-toolchain.json'
+$lockPath = Join-Path $PSScriptRoot '../../renderer/shaders/dxil-toolchain.json'
 $lock = Get-Content -LiteralPath $lockPath -Raw -Encoding utf8 | ConvertFrom-Json
 foreach ($file in @('spirv-val.exe', 'spirv-cross.exe', 'dxc.exe', 'dxcompiler.dll')) {
     $path = Join-Path $SdkRoot ('Bin/' + $file)
@@ -167,7 +167,7 @@ try {
     }
     # The runner reports the hash of this manifest for both display routes.
     # Include the common vertex and standard output shader artifacts it runs.
-    $rendererShaders = Join-Path $PSScriptRoot '../../../../shaders/dxil/manifest.json'
+    $rendererShaders = Join-Path $PSScriptRoot '../../renderer/shaders/dxil/manifest.json'
     $manifest = [ordered]@{
         schema = 2
         toolchain_sha256 = Hash $lockPath

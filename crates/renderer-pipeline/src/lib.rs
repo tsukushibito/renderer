@@ -5,7 +5,7 @@
 //! application-specific passes to the same Graph. Renderer owns native
 //! preparation, scheduling and execution.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 mod preparation;
 pub mod standard;
