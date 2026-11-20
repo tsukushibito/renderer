@@ -1,10 +1,7 @@
 use renderer::graph::{GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, SampleCount};
-use renderer_pipeline::passes::output::{SdrEncoding, SdrOutput, tone_map_neutral, write_sdr};
+use renderer_pipeline::passes::output::{SdrOutput, tone_map_neutral, write_sdr};
 
-const SDR: SdrOutput = SdrOutput {
-    encoding: SdrEncoding::Srgb,
-    fxaa: false,
-};
+const SDR: SdrOutput = SdrOutput::capture(false);
 
 #[test]
 fn invalid_output_inputs_preserve_capacity_for_a_retry() {
@@ -51,8 +48,13 @@ fn invalid_output_inputs_preserve_capacity_for_a_retry() {
     graph.upload_image("HDR input", hdr, &[0; 32]).unwrap();
     tone_map_neutral(&mut graph, "tone", source, display, f32::MAX / 65536.0).unwrap();
     let display_view = graph.image_view(display, 0, 0).unwrap();
-    write_sdr(&mut graph, "output", display_view, sdr, SDR).unwrap();
-    graph.readback_image("read SDR", sdr).unwrap();
+    let output = write_sdr(&mut graph, "output", display_view, sdr, SDR).unwrap();
+    assert!(output.display().is_none());
+    output
+        .capture()
+        .unwrap()
+        .readback(&mut graph, "read SDR")
+        .unwrap();
     let plan = graph.compile().unwrap();
     assert_eq!(
         plan.ordered_pass_names().collect::<Vec<_>>(),

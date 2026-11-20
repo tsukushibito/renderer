@@ -7,6 +7,20 @@ use renderer::graph::{
     LoadOp, PassHandle, RasterAttachments, RasterConstants, SampleCount, StoreOp,
 };
 use renderer::program::{ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor};
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use renderer::{
+    graph::{ImportImage, ResourceKey},
+    runtime::{ExecutionError, FrameSubmission},
+};
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+use renderer::{
+    presentation::PresentOutcome,
+    runtime::{Runtime, WindowPresenter},
+};
 
 const DISPLAY_LINEAR: &str = "display linear";
 const SDR_COLOR: &str = "sdr";
@@ -30,6 +44,22 @@ pub struct SdrOutput {
 }
 
 impl SdrOutput {
+    /// Store display-linear bytes for the window Presenter.
+    pub const fn display(fxaa: bool) -> Self {
+        Self {
+            encoding: SdrEncoding::Linear,
+            fxaa,
+        }
+    }
+
+    /// Store sRGB-encoded bytes for readback.
+    pub const fn capture(fxaa: bool) -> Self {
+        Self {
+            encoding: SdrEncoding::Srgb,
+            fxaa,
+        }
+    }
+
     /// The 1× pipeline request used by [`write_sdr`] for this selection.
     pub const fn pipeline(self) -> RasterPipelineRequest {
         let program = match self.encoding {
@@ -51,6 +81,21 @@ pub const fn tone_map_neutral_pipeline() -> RasterPipelineRequest {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct Exposure(f32);
+
+impl Exposure {
+    fn new(value: f32, pass: &str) -> Result<Self, GraphError> {
+        if !value.is_normal() || value <= 0.0 || value > f32::MAX / 65536.0 {
+            return Err(GraphError::invalid_input(
+                "Neutral exposure must be a positive normal multiplier at most f32::MAX / 65536",
+            )
+            .with_pass_name(pass));
+        }
+        Ok(Self(value))
+    }
+}
+
 /// Apply exposure and Khronos PBR Neutral to scene-linear Rec.709 RGB.
 ///
 /// The source is one 1× RGBA16F mip. The destination is a distinct 1× RGBA16F
@@ -65,12 +110,17 @@ pub fn tone_map_neutral(
     destination: ImageHandle,
     exposure: f32,
 ) -> Result<PassHandle, GraphError> {
-    if !exposure.is_normal() || exposure <= 0.0 || exposure > f32::MAX / 65536.0 {
-        return Err(GraphError::invalid_input(
-            "Neutral exposure must be a positive normal multiplier at most f32::MAX / 65536",
-        )
-        .with_pass_name(name));
-    }
+    let exposure = Exposure::new(exposure, name)?;
+    tone_map(graph, name, source, destination, exposure)
+}
+
+fn tone_map(
+    graph: &mut Graph,
+    name: &str,
+    source: ImageView,
+    destination: ImageHandle,
+    exposure: Exposure,
+) -> Result<PassHandle, GraphError> {
     let color = output_view(graph, name, source, destination, ImageFormat::Rgba16Float)?;
     append(
         graph,
@@ -79,7 +129,7 @@ pub fn tone_map_neutral(
         color,
         tone_map_neutral_pipeline().program,
         SamplerDescriptor::NearestClamp,
-        RasterConstants::new(&[exposure.to_bits()])?,
+        RasterConstants::new(&[exposure.0.to_bits()])?,
     )
 }
 
@@ -95,7 +145,7 @@ pub fn write_sdr(
     source: ImageView,
     destination: ImageHandle,
     output: SdrOutput,
-) -> Result<PassHandle, GraphError> {
+) -> Result<SdrImage, GraphError> {
     let color = output_view(graph, name, source, destination, ImageFormat::Rgba8Unorm)?;
     let sampler = if output.fxaa {
         SamplerDescriptor::LinearClamp
@@ -110,7 +160,11 @@ pub fn write_sdr(
         output.pipeline().program,
         sampler,
         RasterConstants::default(),
-    )
+    )?;
+    Ok(match output.encoding {
+        SdrEncoding::Linear => SdrImage::Display(DisplaySdr(destination)),
+        SdrEncoding::Srgb => SdrImage::Capture(CaptureSdr(destination)),
+    })
 }
 
 fn output_view(
@@ -169,7 +223,9 @@ fn append(
             color_resolves: &[],
             colors: &[Attachment {
                 view: output,
-                load: LoadOp::Clear([0.0; 4]),
+                // Fullscreen output always writes alpha one. This clear can
+                // also use the existing D3D12 native attachment clear.
+                load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
                 store: StoreOp::Store,
             }],
             depth: None,
@@ -178,14 +234,111 @@ fn append(
     )
 }
 
+/// Graph-local SDR output with its transfer function preserved in the type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SdrImage {
+    /// Display-linear RGB for a Presenter with an sRGB target.
+    Display(DisplaySdr),
+    /// sRGB-encoded bytes for capture.
+    Capture(CaptureSdr),
+}
+
+impl SdrImage {
+    pub const fn display(self) -> Option<DisplaySdr> {
+        match self {
+            Self::Display(image) => Some(image),
+            Self::Capture(_) => None,
+        }
+    }
+
+    pub const fn capture(self) -> Option<CaptureSdr> {
+        match self {
+            Self::Capture(image) => Some(image),
+            Self::Display(_) => None,
+        }
+    }
+
+    /// Access the image for custom Graph operations. Both variants use
+    /// RGBA8 UNORM, so the caller must preserve its encoding.
+    pub const fn raw_image(self) -> ImageHandle {
+        match self {
+            Self::Display(image) => image.raw_image(),
+            Self::Capture(image) => image.raw_image(),
+        }
+    }
+}
+
+/// Graph-local display-linear SDR. Export it and accept the submission before
+/// passing it to a Presenter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DisplaySdr(ImageHandle);
+
+impl DisplaySdr {
+    /// Access the linear image for custom Graph operations.
+    pub const fn raw_image(self) -> ImageHandle {
+        self.0
+    }
+
+    pub fn export(self, graph: &mut Graph) -> Result<(), GraphError> {
+        graph.export_image(self.0)
+    }
+
+    /// Obtain the snapshot of the display image from its accepted Graph.
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub fn accept(
+        self,
+        submission: &FrameSubmission,
+    ) -> Result<AcceptedDisplaySdr, ExecutionError> {
+        Ok(AcceptedDisplaySdr(submission.export_image(self.0)?))
+    }
+}
+
+/// Accepted display-linear SDR whose registered key can be released through
+/// the Runtime when the caller finishes using it.
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+pub struct AcceptedDisplaySdr(ImportImage);
+
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+impl AcceptedDisplaySdr {
+    pub fn key(&self) -> ResourceKey {
+        self.0.key()
+    }
+
+    /// Queue presentation without a CPU wait for the producing Graph.
+    #[cfg(all(windows, feature = "presentation"))]
+    pub fn present(
+        &self,
+        runtime: &mut Runtime,
+        presenter: &mut WindowPresenter,
+    ) -> Result<PresentOutcome, ExecutionError> {
+        runtime.present(presenter, &self.0)
+    }
+}
+
+/// Graph-local sRGB-encoded SDR for readback.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CaptureSdr(ImageHandle);
+
+impl CaptureSdr {
+    /// Access the encoded image for custom Graph operations.
+    pub const fn raw_image(self) -> ImageHandle {
+        self.0
+    }
+
+    pub fn readback(self, graph: &mut Graph, name: &str) -> Result<PassHandle, GraphError> {
+        graph.readback_image(name, self.0)
+    }
+}
+
 /// Output images belonging to the Graph that produced them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OutputImages {
     pub display_linear: ImageHandle,
-    pub sdr: ImageHandle,
+    pub sdr: SdrImage,
 }
 
 /// Tone mapping and SDR output with fixed extent, encoding and FXAA choice.
+#[derive(Clone, Copy)]
 pub struct PreparedOutput {
     display_linear: ImageDesc,
     sdr: ImageDesc,
@@ -244,11 +397,24 @@ impl PreparedOutput {
         source: ImageView,
         exposure: f32,
     ) -> Result<OutputImages, GraphError> {
+        self.append_validated(graph, source, Self::validate_exposure(exposure)?)
+    }
+
+    pub(crate) fn validate_exposure(exposure: f32) -> Result<Exposure, GraphError> {
+        Exposure::new(exposure, TONE_MAP)
+    }
+
+    pub(crate) fn append_validated(
+        &self,
+        graph: &mut Graph,
+        source: ImageView,
+        exposure: Exposure,
+    ) -> Result<OutputImages, GraphError> {
         let display_linear = graph.image(DISPLAY_LINEAR, self.display_linear)?;
-        tone_map_neutral(graph, TONE_MAP, source, display_linear, exposure)?;
+        tone_map(graph, TONE_MAP, source, display_linear, exposure)?;
         let sdr = graph.image(SDR_COLOR, self.sdr)?;
         let linear_view = graph.image_view(display_linear, 0, 0)?;
-        write_sdr(graph, WRITE_SDR, linear_view, sdr, self.output)?;
+        let sdr = write_sdr(graph, WRITE_SDR, linear_view, sdr, self.output)?;
         Ok(OutputImages {
             display_linear,
             sdr,

@@ -13,10 +13,11 @@ use super::{
 use renderer::{
     PresentationMetrics, SubmissionMetrics,
     capacity::{CapacityRecovery, RuntimeCapacityKind},
-    graph::{GraphPool, ImportImage, PassHandle},
+    graph::{GraphPool, PassHandle},
     presentation::{PresentOutcome, PresentationConfig},
     runtime::{ExecutionError, FrameId, Runtime, WindowPresenter, WindowReadiness},
 };
+use renderer_pipeline::passes::output::AcceptedDisplaySdr;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -164,7 +165,7 @@ struct State {
     workspace: Workspace,
     budget: Budget,
     frames: VecDeque<Frame>,
-    awaiting_present: Option<ImportImage>,
+    awaiting_present: Option<AcceptedDisplaySdr>,
     frame_phases: [u64; 3],
     pixels: Vec<u8>,
     accepted: usize,
@@ -520,7 +521,11 @@ impl State {
             self.workspace
                 .accept_shadow_updates(&pending, built.shadow_updates)?;
             resident.accept_camera(&pending, built.camera_update)?;
-            let image = pending.export_image(built.output)?;
+            let image = built
+                .output
+                .display()
+                .ok_or("windowed Bistro requires display-linear output")?
+                .accept(&pending)?;
             let id = pending.id();
             drop(pending);
             self.frames.push_back(Frame {
@@ -535,8 +540,10 @@ impl State {
         }
         let start = Instant::now();
         let outcome = match self
-            .backend
-            .present(&mut self.surface, self.awaiting_present.as_ref().unwrap())
+            .awaiting_present
+            .as_ref()
+            .unwrap()
+            .present(&mut self.backend, &mut self.surface)
         {
             Ok(outcome) => outcome,
             Err(error) if backpressure(&error) => PresentOutcome::NotReady,

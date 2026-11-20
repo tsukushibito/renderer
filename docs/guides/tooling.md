@@ -150,7 +150,11 @@ Computeは`WorkingSet::compute`へ渡す。起動時の`Runtime::new`または�
    基準値の大きい方を宣言容量に使う。依存・範囲解析やアップロードの上限は基準となる`GraphCapacity`で指定する。
 3. `GraphPool::begin`から毎フレームGraphを受け取り、入力のimportやuploadを追加する。
    `PreparedForward::add_passes`の`SceneColor`から色や深度を取り出し、独自パスや`PreparedOutput::add_passes`へつなぐ。
-   `OutputImages`の`display_linear`や`sdr`を使って後段、export、readbackを指定し、Graphをcompileする。
+   `OutputImages`の`display_linear`は独自の後段処理へ接続できる。保存は`SdrOutput::capture(fxaa)`で準備し、
+   `sdr.capture()`から得た画像に`readback`を宣言する。表示は`SdrOutput::display(fxaa)`で準備し、
+   `sdr.display()`から得た画像をexportする。Graphの投入受理後に`accept`し、返された画像から`present`を呼ぶ。
+   表示で使い終えた登録は、その画像のキーを`Runtime::delete`へ渡して解放する。
+   `raw_image`で独自Graphに接続する場合は、同じRGBA8形式の線形値とsRGB値を区別して扱う。
    GPUへの投入と表示はアプリが選ぶ。寸法、設定、アセット版が変わるときは変更境界で再準備する。
 
 [`rust_pipeline`のソース](../../crates/renderer-pipeline/examples/rust_pipeline.rs)では、unlit Forwardと標準出力の間に
@@ -186,6 +190,7 @@ Graph内の材質と描画スライスを渡す。カメラバッファは準備
 深度は1×で単一サンプルD32、4×では`None`となる。4カスケードのシャドウマップは双方で単一サンプルD32を使う。
 HDRを加工したい場合は`add_scene`で照明済みのHDRを受け取り、同じGraphに独自パスを追加して、
 その出力を`add_output`へ渡す。`output: None`で準備すればHDR専用になり、標準の出力画像とProgramを予約しない。
+出力未準備や不正な露出は`add_passes`がGraphへの追記前に拒否する。
 表示用の線形SDRはexportして受理済みフレームから表示し、保存用のsRGBはreadbackする。
 Graphへのレシピ追加が途中で失敗した場合は、そのフレームのGraphを破棄して作り直す。
 

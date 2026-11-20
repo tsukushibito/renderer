@@ -8,7 +8,7 @@ use renderer::graph::{
     CompiledGraph, Graph, GraphCapacity, GraphError, GraphPool, ImageDesc, ImageHandle,
 };
 use renderer_pipeline::{
-    passes::output::{PreparedOutput, SdrEncoding, SdrOutput},
+    passes::output::{PreparedOutput, SdrOutput},
     unlit_forward::{ForwardConfig, PreparedForward},
 };
 
@@ -49,14 +49,8 @@ fn build(use_effect: bool) -> Result<CompiledGraph, GraphError> {
         name_bytes: COPY_TARGET.len() + COPY_PASS.len() + READBACK.len(),
         ..GraphRequirements::default()
     })?;
-    let output = PreparedOutput::prepare(
-        &mut preparation,
-        [width, height],
-        SdrOutput {
-            encoding: SdrEncoding::Srgb,
-            fxaa: false,
-        },
-    )?;
+    let output =
+        PreparedOutput::prepare(&mut preparation, [width, height], SdrOutput::capture(false))?;
 
     // An application with a GPU also passes preparation.working_set() into
     // Runtime at this point. The CPU example only compiles the frame.
@@ -70,7 +64,11 @@ fn build(use_effect: bool) -> Result<CompiledGraph, GraphError> {
     };
     let hdr_view = graph.image_view(hdr, 0, 0)?;
     let outputs = output.add_passes(&mut graph, hdr_view, 1.0)?;
-    graph.readback_image(READBACK, outputs.sdr)?;
+    outputs
+        .sdr
+        .capture()
+        .expect("capture output")
+        .readback(&mut graph, READBACK)?;
     graph.compile()
 }
 

@@ -235,7 +235,7 @@ pub struct FrameImages {
     pub hdr: ImageHandle,
     /// Single-sample D32 at 1×. The 4× path resolves only color.
     pub depth: Option<ImageHandle>,
-    pub sdr: ImageHandle,
+    pub sdr: crate::passes::output::SdrImage,
     pub shadows: [ImageHandle; CASCADE_COUNT],
     pub camera: BufferHandle,
 }

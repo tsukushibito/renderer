@@ -13,7 +13,7 @@ use renderer::{
 use renderer_pipeline::{
     passes::{
         bloom::PreparedBloom,
-        output::{OutputImages, PreparedOutput},
+        output::{OutputImages, PreparedOutput, SdrImage},
     },
     pbr, pbr_deferred, pbr_forward, pbr_forward_plus,
 };
@@ -121,7 +121,7 @@ impl Prepared {
                     enabled: options.shadows,
                     ..pbr::ShadowSettings::default()
                 },
-                output: options.sdr_output(),
+                output: Some(options.sdr_output()),
             };
             let primitives = scene.primitives.len();
             let instance_draws = options.instances.draws();
@@ -443,11 +443,7 @@ impl Reference {
         Ok((hdr, Some(depth)))
     }
 
-    pub fn add_output(
-        &self,
-        graph: &mut Graph,
-        hdr: ImageHandle,
-    ) -> Result<ImageHandle, GraphError> {
+    pub fn add_output(&self, graph: &mut Graph, hdr: ImageHandle) -> Result<SdrImage, GraphError> {
         let source: ImageView = graph.image_view(hdr, 0, 0)?;
         Ok(self.output.add_passes(graph, source, 2.0)?.sdr)
     }

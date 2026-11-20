@@ -179,7 +179,7 @@ fn frames(
             });
             workspace.accept_shadow_updates(&work, built.shadow_updates)?;
             resident.accept_camera(&work, built.camera_update)?;
-            let output = work.export_image(built.output)?;
+            let output = work.export_image(built.output.raw_image())?;
             // Keep the Graph live without a mandatory readback. Deleting a registry
             // name is not early GPU release: pending work owns its prepared lease.
             backend.delete(output.key())?;
@@ -304,7 +304,7 @@ fn capture_planes(
     let pending = backend.submit(&plan)?;
     workspace.accept_shadow_updates(&pending, built.shadow_updates)?;
     resident.accept_camera(&pending, built.camera_update)?;
-    let output = pending.export_image(built.output)?;
+    let output = pending.export_image(built.output.raw_image())?;
     backend.delete(output.key())?;
     let mut completed = backend::wait_for(backend, pending.id())?;
     let passes = built.captures.unwrap();

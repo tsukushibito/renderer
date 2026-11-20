@@ -6,7 +6,7 @@ use renderer::graph::{
     Attachment, BufferDesc, Graph, GraphCapacity, GraphCapacityKind, GraphErrorKind, GraphPool,
     ImageDesc, LoadOp, RasterAttachments, SampleCount, StoreOp,
 };
-use renderer_pipeline::passes::output::{SdrEncoding, SdrOutput};
+use renderer_pipeline::passes::output::SdrOutput;
 use renderer_pipeline::pbr::{
     Bounds, CASCADE_COUNT, Camera, CameraStorage, Draw, Environment, Frame, IndexedDraw, Material,
     MaterialFactors, PreparedView, SceneLimits, ShadowHistory, ShadowKey, ShadowSettings,
@@ -28,10 +28,7 @@ fn config() -> Config {
             resolution: SHADOW_SIZE,
             ..Default::default()
         },
-        output: SdrOutput {
-            encoding: SdrEncoding::Srgb,
-            fxaa: false,
-        },
+        output: Some(SdrOutput::capture(false)),
         samples: SampleCount::X1,
         camera_storage: CameraStorage::Transient,
     }
@@ -221,7 +218,12 @@ fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
         .copy_image("custom HDR pass", scene.hdr, custom)
         .unwrap();
     let output = recipe.add_output(&mut graph, custom, 1.0).unwrap();
-    graph.readback_image("capture", output.sdr).unwrap();
+    output
+        .sdr
+        .capture()
+        .unwrap()
+        .readback(&mut graph, "capture")
+        .unwrap();
     let graph = graph.compile().unwrap();
     let names: Vec<_> = graph.ordered_pass_names().collect();
     for name in [
@@ -299,9 +301,77 @@ fn rejected_workload_does_not_consume_graph_or_recipe_scratch() {
         assert_eq!(bounds.required, Some(if casters { 2 } else { 3 }));
         let valid = Frame::new(&view, &materials, &draws[..1], &[], &draws[..1]);
         let output = recipe.add_passes(&mut graph, valid).unwrap();
-        graph.readback_image("capture", output.sdr).unwrap();
+        output
+            .sdr
+            .capture()
+            .unwrap()
+            .readback(&mut graph, "capture")
+            .unwrap();
         assert!(graph.compile().is_ok());
     }
+}
+
+#[test]
+fn hdr_only_preparation_does_not_reserve_output_images_or_programs() {
+    let standard = recipe();
+    let mut hdr_only = prepare(
+        Config {
+            output: None,
+            ..config()
+        },
+        limits(),
+    )
+    .unwrap();
+    let full_requirements = standard.preparation().graph_requirements();
+    let hdr_requirements = hdr_only.preparation().graph_requirements();
+    assert_eq!(full_requirements.resources, hdr_requirements.resources + 2);
+    assert_eq!(full_requirements.passes, hdr_requirements.passes + 2);
+    let full_programs = standard.preparation().working_set().raster;
+    let hdr_programs = hdr_only.preparation().working_set().raster;
+    assert_eq!(full_programs.len(), hdr_programs.len() + 2);
+
+    let mut pool = graph_pool(&hdr_only);
+    let mut graph = pool.begin().unwrap();
+    let (view, _, _) = inputs(&hdr_only, &mut graph);
+    let frame = Frame::new(&view, &[], &[], &[], &[]);
+    let error = hdr_only.add_passes(&mut graph, frame).unwrap_err();
+    assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+    let scene = hdr_only
+        .add_scene(&mut graph, Frame::new(&view, &[], &[], &[], &[]))
+        .unwrap();
+    graph.readback_image("HDR", scene.hdr).unwrap();
+    graph.readback_image("depth", scene.depth.unwrap()).unwrap();
+    let plan = graph.compile().unwrap();
+    assert_eq!(
+        plan.ordered_pass_names().collect::<Vec<_>>(),
+        ["scene_opaque", "HDR", "depth"]
+    );
+}
+
+#[test]
+fn invalid_exposure_is_rejected_before_scene_declarations() {
+    let mut recipe = recipe();
+    let mut pool = graph_pool(&recipe);
+    let mut graph = pool.begin().unwrap();
+    let (view, material, draw) = inputs(&recipe, &mut graph);
+    let materials = [material];
+    let draws = [Draw::Indexed(draw)];
+    let mut frame = Frame::new(&view, &materials, &draws, &[], &[]);
+    frame.exposure = f32::NAN;
+    let error = recipe.add_passes(&mut graph, frame).unwrap_err();
+    assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+    assert_eq!(error.pass_name(), Some("tone_map"));
+    let output = recipe
+        .add_passes(&mut graph, Frame::new(&view, &materials, &draws, &[], &[]))
+        .unwrap();
+    output
+        .sdr
+        .capture()
+        .unwrap()
+        .readback(&mut graph, "read SDR")
+        .unwrap();
+    let plan = graph.compile().unwrap();
+    assert!(plan.ordered_pass_names().any(|name| name == "write_sdr"));
 }
 
 #[test]
@@ -333,7 +403,12 @@ fn msaa_resolves_empty_opaque_batches_and_transparent_batches_without_depth_outp
             graph.image_desc(output.hdr).unwrap().sample_count,
             SampleCount::X1
         );
-        graph.readback_image("capture", output.sdr).unwrap();
+        output
+            .sdr
+            .capture()
+            .unwrap()
+            .readback(&mut graph, "capture")
+            .unwrap();
         let graph = graph.compile().unwrap();
         let expected = if transparent {
             "scene_transparent_resolve"
@@ -378,7 +453,12 @@ fn external_camera_can_be_uploaded_once_before_the_recipe() {
     frame.camera_target = Some(camera);
     let output = recipe.add_passes(&mut graph, frame).unwrap();
     assert_eq!(output.camera, camera);
-    graph.readback_image("capture", output.sdr).unwrap();
+    output
+        .sdr
+        .capture()
+        .unwrap()
+        .readback(&mut graph, "capture")
+        .unwrap();
     let graph = graph.compile().unwrap();
     assert!(
         graph
@@ -438,6 +518,11 @@ fn transformed_draws_check_ranges_before_appending_to_the_graph() {
     let mut frame = Frame::new(&view, &materials, &opaque, &[], &casters);
     frame.transforms = &transforms;
     let output = recipe.add_passes(&mut graph, frame).unwrap();
-    graph.readback_image("capture", output.sdr).unwrap();
+    output
+        .sdr
+        .capture()
+        .unwrap()
+        .readback(&mut graph, "capture")
+        .unwrap();
     assert!(graph.compile().is_ok());
 }

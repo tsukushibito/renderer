@@ -155,7 +155,7 @@ fn accept_frame(
     let plan = built.graph.compile()?;
     let pending = backend.submit(&plan)?;
     resident.accept_camera(&pending, built.camera_update)?;
-    let output = pending.export_image(built.output)?;
+    let output = pending.export_image(built.output.raw_image())?;
     backend.delete(output.key())?;
     Ok(Frame {
         id: pending.id(),
@@ -388,7 +388,7 @@ pub(super) fn execute(
         backend, resident, scene, options, conditions, cameras[0], &mut pool, workspace,
     )?;
     let retry_camera = built.camera_update;
-    let retry_output = built.output;
+    let retry_output = built.output.raw_image();
     let retry_passes = built.captures.unwrap();
     let retry_plan = built.graph.compile()?;
     let error = match backend.submit(&retry_plan) {
