@@ -29,6 +29,10 @@ void sample_shadow_material(float2 texcoord, bool front_facing) {
 #include "raster_abi.hlsli"
 #include "surface.hlsli"
 
+#ifdef BISTRO_TRANSFORMED_DIRECTIONS
+#include "direction_scale.hlsli"
+#endif
+
 ConstantBuffer<MaterialData> material : register(b1, space0);
 Texture2D<float4> base_image : register(t0, space1);
 Texture2D<float4> normal_image : register(t1, space1);
@@ -62,6 +66,13 @@ MaterialSample sample_material(
     result.surface.metallic = clamp(material.metallic_roughness_occlusion_cutoff.x * orm.b, 0.0, 1.0);
     result.surface.roughness = clamp(material.metallic_roughness_occlusion_cutoff.y * orm.g, 0.0, 1.0);
     result.surface.occlusion = lerp(1.0, orm.r, clamp(material.metallic_roughness_occlusion_cutoff.z, 0.0, 1.0));
+#ifdef BISTRO_TRANSFORMED_DIRECTIONS
+    // Even with bounded vertex coefficients, anisotropic transforms can
+    // produce a tiny interpolated direction. Scale before normalization
+    // and tangent projection, leaving the interpolated directions intact.
+    world_normal = scale_extreme_direction(world_normal);
+    world_tangent.xyz = scale_extreme_direction(world_tangent.xyz);
+#endif
     float3 n = unit_or(world_normal, float3(0.0, 0.0, 1.0));
     result.surface.geometric_normal = front_facing ? n : -n;
     float3 t = unit_or(world_tangent.xyz - n * dot(n, world_tangent.xyz),

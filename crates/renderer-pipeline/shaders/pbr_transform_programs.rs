@@ -13,11 +13,6 @@ use crate::pbr::instances::TRANSFORM_TABLE_BYTES;
 use super::packaged_shaders;
 use super::pbr_programs::{OPAQUE, SHADOW};
 
-#[cfg(all(windows, feature = "d3d12"))]
-use super::pbr_programs::PBR_FRAGMENT_DXIL;
-#[cfg(feature = "vulkan")]
-use super::pbr_programs::PBR_FRAGMENT_SPIRV;
-
 const TRANSFORMS: BindingLayout = BindingLayout {
     group: 0,
     binding: 2,
@@ -45,8 +40,14 @@ static TRANSFORMED_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     bindings: &appended::<_, 17>(OPAQUE.bindings, TRANSFORMS),
     binding_bytes: &appended::<_, 17>(OPAQUE.binding_bytes, TRANSFORMS.min_size),
     shaders: packaged_shaders!(
-        vulkan: (include_bytes!("pbr_transformed.vert.spv"), Some(PBR_FRAGMENT_SPIRV)),
-        d3d12: (include_bytes!("dxil/pbr_transformed.vert.dxil"), Some(PBR_FRAGMENT_DXIL)),
+        vulkan: (
+            include_bytes!("pbr_transformed.vert.spv"),
+            Some(include_bytes!("pbr_transformed.frag.spv")),
+        ),
+        d3d12: (
+            include_bytes!("dxil/pbr_transformed.vert.dxil"),
+            Some(include_bytes!("dxil/pbr_transformed.frag.dxil")),
+        ),
         inline_constants: Some(D3D12InlineConstantBinding { register: 7, space: 0 }),
     ),
     ..OPAQUE
@@ -69,7 +70,7 @@ static TRANSFORMED_SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
 
 /// Forward PBR Program using a model transform for each instance.
 pub const fn transformed_opaque_program() -> ManagedRasterProgram {
-    // SAFETY: The pinned vertex modules keep the audited PBR vertex/fragment
+    // SAFETY: The pinned modules keep the audited PBR vertex/fragment
     // interfaces and read only the additional fixed raw transform prefix.
     // Both index terms are clamped before addition, so even arbitrary
     // allowed inline words and SV_InstanceID select a record below 1024.
