@@ -121,6 +121,7 @@ fn uniform(camera: Camera, options: &Options, conditions: &Conditions) -> Result
 )]
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn build_frame(
+    backend: &Runtime,
     resident: &Resident,
     scene: &Scene,
     options: &Options,
@@ -130,6 +131,7 @@ fn build_frame(
     workspace: &mut Workspace,
 ) -> Result<pipeline::Built, Error> {
     pipeline::build(
+        backend,
         pool,
         workspace,
         resident,
@@ -152,7 +154,7 @@ fn accept_frame(
         .ok_or("resource check frame needs readback")?;
     let plan = built.graph.compile()?;
     let pending = backend.submit(&plan)?;
-    resident.accept_buffer_updates(&pending, built.updates)?;
+    resident.accept_camera(&pending, built.camera_update)?;
     let output = pending.export_image(built.output)?;
     backend.delete(output.key())?;
     Ok(Frame {
@@ -349,6 +351,7 @@ pub(super) fn execute(
     let mut reference_reports = Vec::new();
     for index in 0..2 {
         let built = build_frame(
+            backend,
             resident,
             scene,
             options,
@@ -369,6 +372,7 @@ pub(super) fn execute(
     let mut queued = Vec::new();
     for index in 0..options.inflight {
         let built = build_frame(
+            backend,
             resident,
             scene,
             options,
@@ -381,9 +385,9 @@ pub(super) fn execute(
     }
     // No poll/wait has run since the first queued submission was accepted.
     let built = build_frame(
-        resident, scene, options, conditions, cameras[0], &mut pool, workspace,
+        backend, resident, scene, options, conditions, cameras[0], &mut pool, workspace,
     )?;
-    let retry_updates = built.updates;
+    let retry_camera = built.camera_update;
     let retry_output = built.output;
     let retry_passes = built.captures.unwrap();
     let retry_plan = built.graph.compile()?;
@@ -409,7 +413,7 @@ pub(super) fn execute(
         return Err("overlapping View changed the first camera capture".into());
     }
     let retry = backend.submit(&retry_plan)?;
-    resident.accept_buffer_updates(&retry, retry_updates)?;
+    resident.accept_camera(&retry, retry_camera)?;
     let output = retry.export_image(retry_output)?;
     backend.delete(output.key())?;
     let id = retry.id();
@@ -450,7 +454,7 @@ pub(super) fn execute(
     for cycle in 0..4 {
         // Target the material-detail View, with all source assets still resident.
         let built = build_frame(
-            resident, scene, options, conditions, cameras[1], &mut pool, workspace,
+            backend, resident, scene, options, conditions, cameras[1], &mut pool, workspace,
         )?;
         let old_frame = accept_frame(backend, resident, built)?;
         let old_image = resident.images[image_index].clone();
@@ -465,7 +469,7 @@ pub(super) fn execute(
         // and the earlier frame owner has not observed completion. A simultaneous
         // material-factor change must not mask a missing texture-reference update.
         let built = build_frame(
-            resident, scene, options, conditions, cameras[1], &mut pool, workspace,
+            backend, resident, scene, options, conditions, cameras[1], &mut pool, workspace,
         )?;
         let frame = accept_frame(backend, resident, built)?;
         let texture_only = finish_frame(backend, frame, options)?;
@@ -508,7 +512,7 @@ pub(super) fn execute(
         }
         drop((stale_image, stale_buffer, stale_pool, old_image, old_buffer));
         let built = build_frame(
-            resident, scene, options, conditions, cameras[1], &mut pool, workspace,
+            backend, resident, scene, options, conditions, cameras[1], &mut pool, workspace,
         )?;
         let frame = accept_frame(backend, resident, built)?;
         let changed = finish_frame(backend, frame, options)?;
@@ -547,7 +551,7 @@ pub(super) fn execute(
         resident.upload_owners[material_index] = restored_owners.remove(0);
         drop(new_owners);
         let built = build_frame(
-            resident, scene, options, conditions, cameras[1], &mut pool, workspace,
+            backend, resident, scene, options, conditions, cameras[1], &mut pool, workspace,
         )?;
         let frame = accept_frame(backend, resident, built)?;
         let restored = finish_frame(backend, frame, options)?;

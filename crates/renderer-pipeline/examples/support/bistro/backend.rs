@@ -75,13 +75,12 @@ fn with_working_set<T>(
         resources: &resources,
         ..WorkingSet::default()
     })?;
-    for set in prepared.working_sets() {
-        preparation.add_working_set(WorkingSet {
-            resources: &[],
-            raster: set.raster,
-            compute: set.compute,
-        })?;
-    }
+    let programs = prepared.working_set();
+    preparation.add_working_set(WorkingSet {
+        resources: &[],
+        raster: programs.raster,
+        compute: programs.compute,
+    })?;
     if resource_checks {
         preparation.add_working_set(WorkingSet {
             raster: &[lifecycle::MIP_PROBE_SDR.pipeline()],
@@ -144,7 +143,7 @@ pub(super) fn resize(
 ) -> Result<(), Error> {
     with_working_set(
         options.resource_checks,
-        &budget.resized_buffers(options, prepared),
+        &budget.resized_buffers(prepared),
         &Budget::frame_images(options, prepared),
         prepared,
         |set| runtime.prepare_working_set(set),

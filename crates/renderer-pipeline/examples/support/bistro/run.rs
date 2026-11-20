@@ -153,7 +153,7 @@ fn frames(
             let _build = tracy_client::Client::running()
                 .map(|client| client.span(tracy_client::span_location!("bistro.build"), 0));
             pipeline::build(
-                pool, workspace, resident, scene, options, camera, &bytes, false,
+                backend, pool, workspace, resident, scene, options, camera, &bytes, false,
             )?
         };
         let build = stage.elapsed().as_nanos() as u64;
@@ -178,7 +178,7 @@ fn frames(
                 client.span(tracy_client::span_location!("bistro.export_and_delete"), 0)
             });
             workspace.accept_shadow_updates(&work, built.shadow_updates)?;
-            resident.accept_buffer_updates(&work, built.updates)?;
+            resident.accept_camera(&work, built.camera_update)?;
             let output = work.export_image(built.output)?;
             // Keep the Graph live without a mandatory readback. Deleting a registry
             // name is not early GPU release: pending work owns its prepared lease.
@@ -238,7 +238,7 @@ fn identity(
         "samples":options.sample_count.as_u32(),"pipeline":options.pipeline.name(),
         "shader_manifest":options.shader_assets.as_ref().map(|selection| &selection.manifest),
         "local_lights":options.pipeline.uses_local_lights()
-            .then(|| super::forward_lighting::identity(options.fixture)),
+            .then(|| super::lighting::identity(options.fixture)),
         "instances":options.instances.name(),"instance_draws":options.instances.draws(),
         "submission":options.submission.name(),
         "shadow_profile":{"cascades":4,"resolution":shadow.resolution,"distance_m":shadow.distance,
@@ -294,7 +294,7 @@ fn capture_planes(
     std::fs::create_dir_all(&options.output)?;
     let (camera, bytes) = uniform(conditions, options, frame)?;
     let built = pipeline::build(
-        pool, workspace, resident, scene, options, camera, &bytes, true,
+        backend, pool, workspace, resident, scene, options, camera, &bytes, true,
     )?;
     let shadow_reuse_hits = built
         .shadow_updates
@@ -303,7 +303,7 @@ fn capture_planes(
     let plan = built.graph.compile()?;
     let pending = backend.submit(&plan)?;
     workspace.accept_shadow_updates(&pending, built.shadow_updates)?;
-    resident.accept_buffer_updates(&pending, built.updates)?;
+    resident.accept_camera(&pending, built.camera_update)?;
     let output = pending.export_image(built.output)?;
     backend.delete(output.key())?;
     let mut completed = backend::wait_for(backend, pending.id())?;
