@@ -12,6 +12,13 @@ use renderer::program::{
 use super::{BLEND, OPAQUE};
 use culling::{LIGHTS, TILES, buffer_binding, buffer_slot};
 
+#[cfg_attr(
+    not(any(feature = "vulkan", all(windows, feature = "d3d12"))),
+    allow(
+        unused_imports,
+        reason = "the standalone Bistro prepares this program only with a native backend"
+    )
+)]
 pub use culling::compute_program;
 pub use culling::{
     LIGHT_BUFFER_BYTES, MAX_LIGHTS, MAX_TILES, PointLight, TILE_SIZE, active_tile_count,
@@ -28,8 +35,14 @@ pub fn raster_bindings(
     lights: BufferHandle,
     tiles: Option<BufferHandle>,
 ) -> impl Iterator<Item = Binding> {
-    std::iter::once(buffer_binding(LIGHTS, lights, LIGHT_BUFFER_BYTES))
-        .chain(tiles.map(|buffer| buffer_binding(TILES, buffer, TILE_BUFFER_BYTES)))
+    let bindings = match tiles {
+        Some(tiles) => tiled_raster_bindings(lights, tiles).map(Some),
+        None => [
+            Some(buffer_binding(LIGHTS, lights, LIGHT_BUFFER_BYTES)),
+            None,
+        ],
+    };
+    bindings.into_iter().flatten()
 }
 
 pub fn tiled_raster_bindings(lights: BufferHandle, tiles: BufferHandle) -> [Binding; 2] {
