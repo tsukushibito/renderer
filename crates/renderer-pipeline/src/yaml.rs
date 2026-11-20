@@ -2,6 +2,7 @@ mod assembly;
 mod frame;
 mod prepare;
 mod schema;
+mod sources;
 
 use std::{error::Error, fmt};
 
@@ -18,8 +19,10 @@ pub use frame::{
     DrawCandidate, FrameInputs, FrameMaterial, FrameOutput, FrameResource, FrameSampledView,
     FrameView, MaterialBinding,
 };
+pub use sources::{FrameImageSource, ImageSource};
 
 use frame::FrameScratch;
+use sources::ImageSources;
 
 /// Logical asset keys resolved once when a YAML configuration is prepared.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -70,8 +73,8 @@ pub struct PipelineRequirements {
     pub raster_constant_words: usize,
     /// UTF-8 bytes of pass names and transient resource names.
     pub name_bytes: usize,
-    /// An external resource is declared as a Raster attachment or Compute
-    /// storage write. Includes passes that the Graph may cull.
+    /// A pass can write an external resource, including a selectable image
+    /// when the caller supplies a rendering target. Includes culled passes.
     pub writes_external_resources: bool,
 }
 
@@ -124,6 +127,7 @@ impl From<GraphError> for PipelineError {
 /// Resolved passes, resources, Program versions and reusable construction storage.
 pub struct PreparedPipeline {
     resources: Vec<Resource>,
+    image_sources: ImageSources,
     sampled_views: Vec<String>,
     passes: Vec<Pass>,
     draw_lists: Vec<schema::DrawListSpec>,
@@ -142,6 +146,17 @@ impl PreparedPipeline {
             .iter()
             .filter(|resource| resource.external)
             .map(|resource| (resource.id.as_str(), resource.desc))
+    }
+
+    /// Images that require a frame source selection and their descriptors.
+    pub fn selectable_images(&self) -> impl Iterator<Item = (&str, ImageDesc)> {
+        self.image_sources.producers().map(|index| {
+            let resource = &self.resources[index];
+            let ResourceDesc::Image(desc) = resource.desc else {
+                unreachable!("source selection is limited to images")
+            };
+            (resource.id.as_str(), desc)
+        })
     }
 
     /// Unique names required in [`FrameInputs::sampled_views`].

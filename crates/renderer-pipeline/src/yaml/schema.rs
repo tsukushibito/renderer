@@ -58,12 +58,38 @@ pub(super) enum ResourceSource {
 }
 
 #[derive(Deserialize)]
+#[serde(untagged)]
+pub(super) enum ImageSourceSpec {
+    Fixed(ResourceSource),
+    Selectable(SelectableImageSource),
+}
+
+impl Default for ImageSourceSpec {
+    fn default() -> Self {
+        Self::Fixed(ResourceSource::Transient)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SelectableImageSource {
+    pub render: String,
+    pub reuse: ReuseSource,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ReuseSource {
+    FrameInput,
+}
+
+#[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum ResourceSpec {
     Image {
         id: String,
         #[serde(default)]
-        source: ResourceSource,
+        source: ImageSourceSpec,
         width: Option<u32>,
         height: Option<u32>,
         extent: Option<ImageExtent>,
