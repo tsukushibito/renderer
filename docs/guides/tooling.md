@@ -248,14 +248,14 @@ python -B tools/shaders/build_material_programs.py --manifest crates/renderer-pi
 テンプレートや材質の変更時は該当する組をビルドし直す。実行時のresolverはその組のバイナリと、レビュー済みの
 頂点・定数・リソースのABIおよびアクセス契約を[既存の取込境界](#runtime-shader-import)で照合してProgramを返す。
 
-`renderer-pipeline`のBistroでは、`--shader-manifest`でForward不透明描画とシャドウのレビュー済みProgramを選ぶ。
+`renderer-bistro`の`bistro`では、`--shader-manifest`でForward不透明描画とシャドウのレビュー済みProgramを選ぶ。
 半透明には組み込みのProgramを使う。外部バンドルを使う構成はForward 1×、直接描画、インスタンシングなしで、
 取込時にビルドしたバイト列をレビュー済みのBistroバイナリと照合する。
 準備済みのProgram三種を`pbr_forward::prepare_with_programs`に渡すと、レシピが頂点・定数・binding・出力と
 ブレンド・深度の互換性を照合する。シェーダーのアクセス範囲と安全性は、取込時のレビュー済み契約に従う。
 
 ```powershell
-cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12,development-validation --example bistro -- --api vulkan --fixture --capture-shadow-maps --shader-manifest .tools/bistro-material-programs/manifest.json --output .tools/bistro-fixture-material-vulkan
+cargo run --locked --release -p renderer-bistro --no-default-features --features vulkan,d3d12,development-validation --bin bistro -- --api vulkan --fixture --capture-shadow-maps --shader-manifest .tools/bistro-material-programs/manifest.json --output .tools/bistro-fixture-material-vulkan
 ```
 
 D3D12では`--api d3d12`を指定する。全シーンの素材準備と追加の表示手順は[開発ガイド](development.md#bistro-b5)を参照する。
@@ -264,7 +264,7 @@ D3D12では`--api d3d12`を指定する。全シーンの素材準備と追加�
 
 ### Bistroの描画パイプラインを組み立てる
 
-`renderer-pipeline`の`bistro`は、Forward、Forward+、Deferredに公開PBRレシピを使う。
+`renderer-bistro`の`bistro`は、Forward、Forward+、Deferredに公開PBRレシピを使う。
 `--pipeline`でForward、Forward+、Forward-reference、Deferredを選び、対応するMSAAや描画形式を指定できる。
 Forward-referenceは全点光源を評価する比較用の経路で、サンプルが共通パスから構成する。
 各経路はシャドウからシーンのHDR、[BloomとSDR](#bistro-post-pipeline)までを同じGraphへ追加する。
@@ -272,7 +272,7 @@ Bistroはカメラ、IBL、材質、描画候補とその順序を供給し、
 最終画像をキャプチャまたは表示する。描画寸法が変わるとレシピと一時画像を新しい寸法で準備する。
 
 ```powershell
-cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12,development-validation --example bistro -- --api vulkan --fixture --frames 8 --warmup 2 --capture-shadow-maps --output .tools/bistro-scene-vulkan
+cargo run --locked --release -p renderer-bistro --no-default-features --features vulkan,d3d12,development-validation --bin bistro -- --api vulkan --fixture --frames 8 --warmup 2 --capture-shadow-maps --output .tools/bistro-scene-vulkan
 ```
 
 D3D12では`--api d3d12`を指定する。
@@ -490,8 +490,8 @@ portable版を`.tools/tracy-0.14.1/bin/`へ展開し、通常権限のPowerShell
 OSのUAC・ETW・kernel設定やsampling intervalは変更しない。
 
 ```powershell
-python -B tools/cpu_profile/build.py --package renderer-pipeline --example bistro --features vulkan,d3d12 --profile release --output .tools/tracy/builds/normal
-python -B tools/cpu_profile/build.py --package renderer-pipeline --example bistro --features vulkan,d3d12 --profile release --instrumentation tracy --output .tools/tracy/builds/instrumented
+python -B tools/cpu_profile/build.py --package renderer-bistro --bin bistro --features vulkan,d3d12 --profile release --output .tools/tracy/builds/normal
+python -B tools/cpu_profile/build.py --package renderer-bistro --bin bistro --features vulkan,d3d12 --profile release --instrumentation tracy --output .tools/tracy/builds/instrumented
 ```
 
 `--instrumentation tracy`がfeatureを追加し、manifestの`artifact_class`を`tracy-instrumented`として、
@@ -630,7 +630,7 @@ PDBが存在しても行情報を得られるとは限らない。両構成を�
 helperは専用のCargo出力領域を作り、実行ファイル、対応するPDB、`manifest.json`を保存する。
 manifestにはCargoパッケージとexample、source/lock/toolchain、要求・実効feature、観測したCargo profile、EXE/PDBのhashとGUID/ageを含める。
 `--package renderer-pipeline`を選ぶと両crateのソースを記録する。
-Bistroが共用する`crates/renderer-pipeline/shaders/`とBloom・Deferredの実装ソースは両パッケージの記録に含まれる。
+Bistroの両バイナリは、`renderer-bistro`と依存パッケージ（Renderer、Pipeline、サンプル補助）のソースをビルド記録に含める。
 BistroのRustレシピと固定条件`tools/bistro/conditions.json`もsource hashの対象になる。
 capture/export/行解決は保存したbytesを再検証し、後のCargo buildで置換される`target/`のEXEを直接使わない。
 

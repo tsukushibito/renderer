@@ -11,12 +11,14 @@ use renderer::{
     program::{ManagedRasterProgram, SamplerDescriptor},
 };
 
+/// Names of the transient G-buffer material planes.
 pub const PLANES: [&str; 3] = [
     "G-buffer base color and metallic",
     "G-buffer normals and roughness",
     "G-buffer emissive and AO",
 ];
 
+/// Targets and shader inputs for G-buffer raster and full-screen lighting.
 pub struct Inputs {
     pub hdr: ImageView,
     pub depth: ImageView,
@@ -38,6 +40,10 @@ pub struct GBuffer {
     pub depth: ImageHandle,
 }
 
+/// Declare G-buffer raster and deferred lighting for an application-built Graph.
+///
+/// Reserve the two audited Deferred Programs and matching G-buffer image classes
+/// at preparation time. If a declaration fails, discard this frame's Graph.
 pub fn append(
     graph: &mut Graph,
     scene: Inputs,

@@ -1,6 +1,6 @@
 //! Single-sample Deferred PBR with a typed G-buffer and Forward transparency.
 
-mod passes;
+pub mod passes;
 
 use renderer::{
     capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},

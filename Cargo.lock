@@ -1141,6 +1141,7 @@ dependencies = [
  "ash",
  "criterion",
  "raw-window-handle",
+ "renderer-example-support",
  "renderer-pipeline",
  "serde_json",
  "sha2",
@@ -1150,6 +1151,26 @@ dependencies = [
  "vk-mem",
  "windows-core",
  "winit",
+]
+
+[[package]]
+name = "renderer-bistro"
+version = "0.1.0"
+dependencies = [
+ "renderer",
+ "renderer-example-support",
+ "renderer-pipeline",
+ "serde_json",
+ "sha2",
+ "tracy-client",
+ "winit",
+]
+
+[[package]]
+name = "renderer-example-support"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

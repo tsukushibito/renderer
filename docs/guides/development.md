@@ -337,7 +337,7 @@ shaderの再生成は[`crates/renderer-pipeline/shaders/regenerate.ps1`](../../c
 
 ### 同じ描画例を二APIで実行する
 
-`renderer-pipeline`の`bistro`は公開の[標準 PBRレシピ](tooling.md#pbr-forward-recipe)で
+`renderer-bistro`の`bistro`は公開の[標準 PBRレシピ](tooling.md#pbr-forward-recipe)で
 Forward／Forward+の1×／4×とDeferredの1×を描く。Bloomも同じGraphに接続する。
 以下のBistro実行・計測・受入はこの例を使う。公開Graph APIを直接使うRust版は[Examplesガイド](examples.md#最初に動かす)を参照する。
 小fixtureはLFS素材やcook生成物を要求しない。Vulkan実行にはVulkan 1.3 runtime、D3D12にはWindowsの実GPUを使う。
@@ -345,10 +345,10 @@ native検証を要求する受入では`development-validation`を付け、対�
 通常releaseの測定では追加検証・専用診断を含めず、別runで内容を照合する。
 
 ```powershell
-cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12,development-validation --example bistro -- --api vulkan --fixture --frames 8 --warmup 2 --output .tools/bistro-pbr/fixture-vulkan-strict
-cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12,development-validation --example bistro -- --api d3d12 --fixture --frames 8 --warmup 2 --output .tools/bistro-pbr/fixture-d3d12-strict
-cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12 --example bistro -- --api vulkan --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --view street --width 1920 --height 1080 --frames 120 --warmup 24 --inflight 2 --output .tools/bistro-pbr/street-vulkan
-cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12 --example bistro -- --api d3d12 --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --view street --width 1920 --height 1080 --frames 120 --warmup 24 --inflight 2 --output .tools/bistro-pbr/street-d3d12
+cargo run --locked --release -p renderer-bistro --no-default-features --features vulkan,d3d12,development-validation --bin bistro -- --api vulkan --fixture --frames 8 --warmup 2 --output .tools/bistro-pbr/fixture-vulkan-strict
+cargo run --locked --release -p renderer-bistro --no-default-features --features vulkan,d3d12,development-validation --bin bistro -- --api d3d12 --fixture --frames 8 --warmup 2 --output .tools/bistro-pbr/fixture-d3d12-strict
+cargo run --locked --release -p renderer-bistro --no-default-features --features vulkan,d3d12 --bin bistro -- --api vulkan --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --view street --width 1920 --height 1080 --frames 120 --warmup 24 --inflight 2 --output .tools/bistro-pbr/street-vulkan
+cargo run --locked --release -p renderer-bistro --no-default-features --features vulkan,d3d12 --bin bistro -- --api d3d12 --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --view street --width 1920 --height 1080 --frames 120 --warmup 24 --inflight 2 --output .tools/bistro-pbr/street-d3d12
 ```
 
 `--manifest`と`--fixture`は入力の選択である。`--view`には`conditions.json`の固定視点名、または`route`を使う。
@@ -407,7 +407,7 @@ WindowsのPresenterには、swapchainと同寸法のlinear RGBA8画像をexport�
 オフスクリーンでは`SdrEncoding::Srgb`を選ぶ。ウィンドウでは`SdrEncoding::Linear`を選び、PresenterのsRGB targetで変換する。
 
 ```powershell
-cargo run --locked --release -p renderer-pipeline --example bistro --no-default-features --features vulkan,d3d12,presentation -- --api vulkan --manifest $manifest --ibl-manifest $iblManifest --bloom tent --windowed --output .tools/bistro-window
+cargo run --locked --release -p renderer-bistro --bin bistro --no-default-features --features vulkan,d3d12,presentation -- --api vulkan --manifest $manifest --ibl-manifest $iblManifest --bloom tent --windowed --output .tools/bistro-window
 ```
 
 `--api d3d12`でも同じ入力とGraphを使う。WASDで移動、Q/Eで上下、Shiftで加速、右ボタンを押してマウスで視点を動かす。
@@ -441,7 +441,7 @@ python -B tools/bistro/compare_runtime.py $tiledReport $allLightReport --profile
 
 `--instances individual` と `--instances instanced` は、Forwardの同じBistro小物を24か所に同じ条件で配置して、
 24回の直接描画と1回のインスタンス描画を比較する。既定値は `off` で、比較時も `--msaa 1|4` を使える。
-`renderer-pipeline`のBistroでは、同じモデル変換をシーンの描画と4カスケードのシャドウに使う。
+`renderer-bistro`の`bistro`では、同じモデル変換をシーンの描画と4カスケードのシャドウに使う。
 `--submission packed` と `--submission indirect` は、同じ共有頂点・インデックスと同じ不透明／MASKの材質グループを使う。
 `packed` ではCPU、`indirect` ではGPUが可視性を判定する。間接経路でも半透明はCPUが奥から手前に並べる。
 オフスクリーンの `prepared.packed_opaque` とWindowの `packed_opaque` は、準備したグループ数とプリミティブ候補数を示す。
@@ -560,7 +560,7 @@ Windowsでは既存の[build archive](tooling.md#cpu-profiling)でcleanなreleas
 BistroのRustレシピと`tools/bistro/conditions.json`もsource hashへ含め、cook入力のidentityはrunner reportで別に記録する。
 
 ```powershell
-python -B tools/cpu_profile/build.py --package renderer-pipeline --example bistro --features vulkan,d3d12 --profile release --output .tools/bistro-pbr/release-build
+python -B tools/cpu_profile/build.py --package renderer-bistro --bin bistro --features vulkan,d3d12 --profile release --output .tools/bistro-pbr/release-build
 python -B tools/bistro/measure_runtime.py plan --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --frames 1800 --warmup 3600 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
 python -B tools/bistro/measure_runtime.py run --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --frames 1800 --warmup 3600 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
 ```
@@ -584,10 +584,10 @@ native必要量、論理byte、staging容量、プロセス使用量・budgetを
 [設計上の境界](../design/implementation-policy.md#bistro-residency)も参照する。
 
 ```powershell
-cargo build --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12,memory-profiling,development-validation --example bistro --target-dir .tools/bistro-residency/strict-build
-cargo build --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12,memory-profiling --example bistro --target-dir .tools/bistro-residency/shipping-build
-python -B tools/bistro/resource_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/examples/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/examples/bistro.exe --source-commit (git rev-parse HEAD) --output .tools/bistro-residency/fixture
-python -B tools/bistro/resource_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/examples/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/examples/bistro.exe --source-commit (git rev-parse HEAD) --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --output .tools/bistro-residency/full
+cargo build --locked --release -p renderer-bistro --no-default-features --features vulkan,d3d12,memory-profiling,development-validation --bin bistro --target-dir .tools/bistro-residency/strict-build
+cargo build --locked --release -p renderer-bistro --no-default-features --features vulkan,d3d12,memory-profiling --bin bistro --target-dir .tools/bistro-residency/shipping-build
+python -B tools/bistro/resource_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/bistro.exe --source-commit (git rev-parse HEAD) --output .tools/bistro-residency/fixture
+python -B tools/bistro/resource_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/bistro.exe --source-commit (git rev-parse HEAD) --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --output .tools/bistro-residency/full
 ```
 
 各batchは二API×strict／Disabled×独立2 processを直列で実行する。
@@ -697,7 +697,7 @@ IBL・影・表示変換を完成させてから、画像受入と通常版の�
 各条件3 processで全7視点・影4枚・AAなし・差し替え・同時View・容量不足からの回復を確認する。
 
 ```powershell
-python -B tools/bistro/b3_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/examples/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/examples/bistro.exe --source-commit (git rev-parse HEAD) --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --output .tools/bistro-pbr/b3-acceptance --repeats 3
+python -B tools/bistro/b3_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/bistro.exe --source-commit (git rev-parse HEAD) --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --output .tools/bistro-pbr/b3-acceptance --repeats 3
 ```
 
 正式比較のRenderer EXEは検証・memory計装・Tracyを含めない。同じclean commitからRendererとGodotを準備する。
@@ -715,7 +715,7 @@ CPU clockや外部負荷は別途確認し、過去の変動原因をコア選�
 QoSは[Windowsの契約](https://learn.microsoft.com/en-us/windows/win32/procthread/quality-of-service)に従う。
 
 ```powershell
-python -B tools/cpu_profile/build.py --package renderer-pipeline --profile release --example bistro --features vulkan,d3d12 --output .tools/bistro-pbr/b3-normal-build
+python -B tools/cpu_profile/build.py --package renderer-bistro --profile release --bin bistro --features vulkan,d3d12 --output .tools/bistro-pbr/b3-normal-build
 python -B tools/godot_bistro/benchmark.py prepare --profile b3 --cpu-clock-manifest .tools/b3-cpu-clock/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --editor .tools/godot-baseline/editor/Godot_v4.7.2-stable_win64_console.exe --template .tools/godot-baseline/templates/windows_release_x86_64.exe --asset-root . --output .tools/godot-baseline/prepared-b3
 python -B tools/bistro/b3_benchmark.py plan --build-manifest .tools/bistro-pbr/b3-normal-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --godot-prepared .tools/godot-baseline/prepared-b3 --output .tools/bistro-pbr/b3-comparison --timeout 1200 --cpu-policy performance-cores
 python -B tools/bistro/b3_benchmark.py run --build-manifest .tools/bistro-pbr/b3-normal-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --godot-prepared .tools/godot-baseline/prepared-b3 --output .tools/bistro-pbr/b3-comparison --timeout 1200 --cpu-policy performance-cores

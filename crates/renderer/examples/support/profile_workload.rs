@@ -14,8 +14,7 @@ use std::time::Duration;
 #[path = "profile_workload/backend.rs"]
 mod backend;
 #[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
-#[path = "profile_workload/clock.rs"]
-mod clock;
+use renderer_example_support::clock;
 #[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
 #[path = "profile_workload/native.rs"]
 mod native;

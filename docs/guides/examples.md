@@ -58,16 +58,16 @@ cargo run --locked -p renderer --no-default-features --features d3d12,presentati
 
 **Bistroの小さなシーンを描画する**
 
-`renderer`の`bistro`は公開Graph APIを使い、Rustでパスを定義して描画パイプラインを組み立てます。
-`renderer-pipeline`の`bistro`は公開のPBR Forward、Forward+、Deferredと比較用の描画構成を組み立てます。どちらも`--fixture`で小さなシーンを描画し、
-レポートとキャプチャを出力します。実行ごとに新しい出力先を指定し、ビルド成果物もパッケージごとに保存します。
+`renderer-bistro`の`bistro-graph`は公開Graph APIを使い、Rustでパスを定義して描画パイプラインを組み立てます。
+同じパッケージの`bistro`は公開のPBR Forward、Forward+、Deferredと比較用の描画構成を組み立てます。どちらも`--fixture`で小さなシーンを描画し、
+レポートとキャプチャを出力します。実行ごとに新しい出力先を指定します。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan --example bistro --target-dir target/bistro-rust -- --api vulkan --fixture --output .tools/bistro-rust-fixture
-cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan --example bistro --target-dir target/bistro-pipeline -- --api vulkan --fixture --output .tools/bistro-pipeline-fixture
+cargo run --locked --release -p renderer-bistro --no-default-features --features vulkan --bin bistro-graph -- --api vulkan --fixture --output .tools/bistro-rust-fixture
+cargo run --locked --release -p renderer-bistro --no-default-features --features vulkan --bin bistro -- --api vulkan --fixture --output .tools/bistro-pipeline-fixture
 ```
 
-`renderer-pipeline`のBistroで全シーンを描画するには[Bistroのcook・描画手順](development.md#bistro-pbr)を参照してください。
+Bistroで全シーンを描画するには[Bistroのcook・描画手順](development.md#bistro-pbr)を参照してください。
 
 ## Windows版に含めるバックエンドを選ぶ
 
@@ -97,8 +97,8 @@ cargo build --locked --release -p renderer --no-default-features --features vulk
 | `pbr_forward` | [標準 PBR Forward](tooling.md#pbr-forward-recipe)で型付き頂点・既定の材質テクスチャ・1×／4×・Bloom・シャドウ再利用・独自HDRパスの接続を確認 | `vulkan`またはWindowsの`d3d12` |
 | `headless` | offscreen描画とPPMへの書き出し | `vulkan` |
 | `windowed` | Windowsの表示ループ、標準／独自Graph、カメラ操作 | Windows、`presentation` と `vulkan` または `d3d12` |
-| `renderer`の`bistro` | 公開Graph APIを使ったRustのパス定義と合成 | `vulkan` またはWindowsの`d3d12` |
-| `renderer-pipeline`の`bistro` | [シーン描画とシャドウ再利用](tooling.md#bistro-scene-pipeline)、Bloom、トーンマッピング、SDR出力、[材質Programの切り替え](tooling.md#material-shader-build) | `vulkan`またはWindowsの`d3d12`。表示はWindowsと`presentation`。全シーンはcook済み素材とIBLが必要 |
+| `bistro-graph` | 公開Graph APIを使ったRustのパス定義と合成 | `vulkan` またはWindowsの`d3d12` |
+| `bistro` | [シーン描画とシャドウ再利用](tooling.md#bistro-scene-pipeline)、Bloom、トーンマッピング、SDR出力、[材質Programの切り替え](tooling.md#material-shader-build) | `vulkan`またはWindowsの`d3d12`。表示はWindowsと`presentation`。全シーンはcook済み素材とIBLが必要 |
 | `frame_loop` | [フレーム進行、履歴、アセット更新](development.md#frame-loop) | `vulkan`。計測モードはrelease |
 | `engine_workloads` | [大メッシュ、マルチView、アセット差し替え](development.md#engine-workloads) | `vulkan`。計測モードはrelease |
 | `profile_workload` | [CPUプロファイル用のヘッドレス転送負荷](development.md#cpu-profile-workload) | Windows、`vulkan` または `d3d12` |
@@ -116,7 +116,7 @@ Bistroの全シーン以外の実行には、リポジトリに含まれる小�
 通常のCIでは、小さなCPU fixtureで準備APIとGraph構築を検証します。
 `pbr_forward`のCPUテストと両方のBistroサンプルのビルドは、LinuxのVulkan構成とWindowsの二API・表示構成で確認します。
 BistroのCLI、シェーダーとの接続、レシピのCPUテストはWindowsで各版を一度ずつ実行します。
-実GPUテストは`cargo test -p <package> --example <target>`に`pbr_forward`または`bistro`、対象featureと`-- --ignored`を指定して実行します。
+Bistroの実GPUテストは`cargo test -p renderer-bistro --lib`に対象featureと`-- --ignored`を指定して実行します。
 
-`rust_pipeline`、`pbr_forward`、標準レシピを使う`bistro`の入口は`crates/renderer-pipeline/examples/`にあります。
+`rust_pipeline`と`pbr_forward`の入口は`crates/renderer-pipeline/examples/`、Bistroの2つの入口は`crates/renderer-bistro/src/bin/`にあります。
 ほかの入口は`crates/renderer/examples/`にあり、試験や計測と共用するfixtureのRustコードは`crates/renderer/fixtures/`にあります。

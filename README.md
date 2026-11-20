@@ -13,8 +13,9 @@ indexed meshと深度、利用側shaderによるRaster/Compute、import/export�
 `renderer::capacity`でレシピと独自パスの要求を集約し、同じ`renderer::graph`に[Rustで合成](docs/guides/tooling.md#rust-pipeline)できます。
 同期、資源の寿命、不要パスの除去はGraphが扱います。
 PBR ForwardはIBL、4カスケードの影、HDRとSDR出力を構築します。
-`renderer-pipeline`の`bistro`はこのレシピを使う描画に加え、
+`renderer-bistro`の`bistro`はこのレシピを使う描画に加え、
 Forward+、Deferred、MSAA、Bloomなどの比較構成をVulkanとD3D12で実行します。
+同じパッケージの`bistro-graph`は公開Graph APIでパスを組み立てます。
 native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md#対応範囲と処理の境界)、
 実行済みの確認と未確認範囲は[検証状況](docs/verification/current.md)を参照してください。
 

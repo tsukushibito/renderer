@@ -8,11 +8,9 @@
 #[path = "support/window_backend.rs"]
 mod window_backend;
 #[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
-#[path = "support/window_camera.rs"]
-mod window_camera;
+use renderer_example_support::window_camera;
 #[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
-#[path = "support/window_input.rs"]
-mod window_input;
+use renderer_example_support::window_input;
 #[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
 #[path = "support/window_scene.rs"]
 mod window_scene;

@@ -37,7 +37,8 @@ impl Bloom {
         }
     }
 
-    pub(super) fn programs(self) -> &'static [ManagedProgram] {
+    /// Audited Programs needed by the selected Bloom kernel.
+    pub fn programs(self) -> &'static [ManagedProgram] {
         static TENT: [ManagedProgram; 4] = [EXTRACT, DOWNSAMPLE, BLUR_TENT, COMBINE];
         static BOX: [ManagedProgram; 4] = [EXTRACT, DOWNSAMPLE, BLUR_BOX, COMBINE];
         match self {
@@ -49,7 +50,7 @@ impl Bloom {
 
     /// Extra scratch images per execution, in declaration order. Equal descriptions
     /// can occur at small sizes and still consume separate slots.
-    pub(super) fn images(self, input: ImageDesc) -> Option<[ImageDesc; 5]> {
+    pub fn images(self, input: ImageDesc) -> Option<[ImageDesc; 5]> {
         if self == Self::Off {
             return None;
         }
@@ -58,17 +59,31 @@ impl Bloom {
         Some([input, half, quarter, quarter, input])
     }
 
+    /// Declare Bloom for a caller-prepared Graph. Use [\`Self::prepare\`] to
+    /// combine this pass's reservations with other components when possible.
+    pub fn add_passes(
+        self,
+        graph: &mut Graph,
+        input: ImageHandle,
+    ) -> Result<ImageHandle, GraphError> {
+        let desc = graph.image_desc(input)?;
+        match self.images(desc) {
+            Some(images) if desc == ImageDesc::rgba16_float(desc.width, desc.height) => {
+                self.append(graph, input, images)
+            }
+            Some(_) => Err(GraphError::invalid_input(
+                "Bloom input must be single-subresource 1× RGBA16F scene color",
+            )),
+            None => Ok(input),
+        }
+    }
+
     pub(super) fn append(
         self,
         graph: &mut Graph,
         input: ImageHandle,
         [full, half, quarter, blur, output]: [ImageDesc; 5],
     ) -> Result<ImageHandle, GraphError> {
-        if graph.image_desc(input)? != full {
-            return Err(GraphError::invalid_input(
-                "Bloom input must match the prepared 1× RGBA16F image",
-            ));
-        }
         let [extract_name, half_name, quarter_name, blur_name] = FILTER_PASSES;
         let extract = filter(graph, extract_name, EXTRACT, full, input)?;
         let down_half = filter(graph, half_name, DOWNSAMPLE, half, extract)?;

@@ -940,7 +940,7 @@ Forward系の4×はカラーを単一サンプルHDRへリゾルブする。後�
 共通の`pbr`で材質・ビュー・描画入力・4カスケードの影を扱う。
 同じ公開パスを個別に呼べるため、アプリは標準の`passes::bloom`と独自のHDR加工を合成できる。
 Bloomは同寸のシーンリニアRGBA16Fを返し、Compute Programと中間画像・Graph宣言の容量を準備時に登録する。
-`renderer-pipeline`の[Bistro](../guides/tooling.md#bistro-scene-pipeline)は標準レシピと比較用の描画構成を使う。
+`renderer-bistro`の[Bistro](../guides/tooling.md#bistro-scene-pipeline)は標準レシピと比較用の描画構成を使う。
 `pbr::ShadowHistory`はカスケードの行列とアプリが供給するキャスター入力の世代で再利用を判定する。
 更新した画像の版とキーはsubmit受理後にまとめて反映する。次フレームは既存のGraphのimportとGPU寿命の契約に従って画像を参照する。
 履歴が持つ画像の登録は、解像度の変更や使用終了時にアプリが明示的に解除する。
@@ -1401,7 +1401,7 @@ ModelをRendererへ持ち込まず、取込/作成/更新境界の保証を保�
 
 #### 実行用cookとForward PBRの境界
 
-実行用cookと`renderer-pipeline`の`examples/bistro`はRenderer外の利用側処理とする。
+実行用cookと`renderer-bistro`の`bistro`はRenderer外の利用側処理とする。
 全1,296 mesh・132材質・405画像をmanifestへ対応付け、glTFのnode transformをgeometryへ反映する。
 頂点はposition、normal、tangentとhandedness、UVを持つ48-byte stream、indexはlittle-endian u32とする。
 normalを正規化してMikkTSpaceを実行し、退化UV/geometry、またはfloat32の角度重みの

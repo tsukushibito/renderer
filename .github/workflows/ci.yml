@@ -169,7 +169,6 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cargo clippy --locked --workspace --all-targets @featureArgs -- -D warnings
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            # Select test targets so Cargo does not link the two examples named bistro together.
             cargo test --locked --workspace --tests @featureArgs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cargo test --locked --workspace --doc @featureArgs
@@ -231,9 +230,7 @@ jobs:
         env:
           BACKEND: ${{ matrix.backend }}
         run: |
-          cargo clippy --locked -p renderer --example bistro --no-default-features --features $env:BACKEND -- -D warnings
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo clippy --locked -p renderer-pipeline --example bistro --no-default-features --features $env:BACKEND -- -D warnings
+          cargo clippy --locked -p renderer-bistro --all-targets --no-default-features --features $env:BACKEND -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build and test the PBR Forward example without GPU access
         if: (runner.os == 'Linux' && matrix.backend == 'vulkan') || matrix.backend == 'vulkan,d3d12,presentation'
@@ -248,9 +245,7 @@ jobs:
           BACKEND: ${{ matrix.backend }}
         run: |
           $features = "$env:BACKEND,tracy,development-validation,graph-diagnostics"
-          cargo test --locked -p renderer --example bistro --no-default-features --features $features
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p renderer-pipeline --example bistro --no-default-features --features $features
+          cargo test --locked -p renderer-bistro --no-default-features --features $features --lib --bins
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise the CPU frame-memory workload
         if: matrix.backend == 'cpu'

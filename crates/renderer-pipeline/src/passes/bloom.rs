@@ -77,6 +77,11 @@ impl PreparedBloom {
         input: ImageHandle,
     ) -> Result<ImageHandle, GraphError> {
         if let Some(images) = self.images {
+            if graph.image_desc(input)? != images[0] {
+                return Err(GraphError::invalid_input(
+                    "Bloom input must match the prepared 1× RGBA16F image",
+                ));
+            }
             self.mode.append(graph, input, images)
         } else {
             graph.image_desc(input)?;

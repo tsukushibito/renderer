@@ -254,6 +254,35 @@ pub const fn shadow_program() -> ManagedRasterProgram {
     // rejects BLEND, one-sided back faces and authored MASK holes before depth.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&SHADOW) }
 }
+/// Inline placement data size in bytes for the placement Program.
+pub const INSTANCE_INLINE_BYTES: u32 = 68;
+
+static INSTANCING: RasterProgramDescriptor = RasterProgramDescriptor {
+    parameters: RasterParameterLayout {
+        size: INSTANCE_INLINE_BYTES,
+        stages: ShaderStages::VERTEX,
+    },
+    shaders: packaged_shaders!(
+        vulkan: (
+            include_bytes!("pbr_instancing.vert.spv"),
+            Some(PBR_FRAGMENT_SPIRV),
+        ),
+        d3d12: (
+            include_bytes!("dxil/pbr_instancing.vert.dxil"),
+            Some(PBR_FRAGMENT_DXIL),
+        ),
+        inline_constants: Some(renderer::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
+    ),
+    ..OPAQUE
+};
+/// Forward PBR Program for procedurally placed copies of world-space geometry.
+pub const fn instancing_program() -> ManagedRasterProgram {
+    // SAFETY: This variant preserves the vertex inputs, fragment interface and
+    // bindings of OPAQUE. It only reads the declared 68 inline bytes, then
+    // uses a bounded instance index in arithmetic to transform the positions.
+    unsafe { ManagedRasterProgram::from_trusted_descriptor(&INSTANCING) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

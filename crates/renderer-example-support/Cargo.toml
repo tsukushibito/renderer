@@ -1,0 +1,13 @@
+[package]
+name = "renderer-example-support"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Input and measurement helpers for Renderer applications"
+
+[target.'cfg(windows)'.dependencies]
+serde_json = "1.0"
+
+[lints]
+workspace = true

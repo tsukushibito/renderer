@@ -11,9 +11,11 @@ use renderer::graph::{
 };
 use renderer::program::ManagedProgram;
 
-use program::{
-    VISIBILITY_AABB_BYTES, VISIBILITY_CAMERA_BYTES, VISIBILITY_MASK_BYTES,
-    VISIBILITY_MAX_WORKGROUPS, VISIBILITY_THREADS, visibility_program,
+use program::VISIBILITY_MAX_WORKGROUPS;
+
+pub use program::{
+    VISIBILITY_AABB_BYTES, VISIBILITY_CAMERA_BYTES, VISIBILITY_MASK_BYTES, VISIBILITY_THREADS,
+    visibility_program,
 };
 
 const MASK: &str = "visibility mask";
