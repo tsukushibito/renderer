@@ -10,7 +10,7 @@ mod asset;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 #[path = "bistro/backend.rs"]
 mod backend;
-#[path = "bloom.rs"]
+#[path = "../../../renderer-pipeline/src/passes/bloom/effect.rs"]
 mod bloom;
 #[path = "bistro/camera.rs"]
 mod camera;

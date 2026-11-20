@@ -10,4 +10,6 @@
 
 pub mod passes;
 pub mod pbr_forward;
+#[path = "../shaders/packaged.rs"]
+mod shader_binaries;
 pub mod unlit_forward;
