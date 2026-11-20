@@ -164,13 +164,22 @@ cargo run --locked -p renderer-pipeline --no-default-features --example rust_pip
 
 ### PBR Forwardの標準レシピを使う
 
-`renderer_pipeline::pbr_forward::prepare(config, scene_limits)`は、1× PBR Forward、4カスケードの影、
+`renderer_pipeline::pbr_forward::prepare(config, scene_limits)`は、1×／4× PBR Forward、4カスケードの影、
 HDRとSDR出力に必要なProgramと一時資源を集める。描画寸法・出力条件と、同時フレーム・材質・描画・各カスケードの
 キャスターの上限を渡す。返された準備済みレシピの`preparation()`を使い、`Runtime`と`GraphPool`を準備する。
 追加パスの宣言、アップロード、表示やGPUの完了待ちまで保持する資源の容量も、アプリの構成に沿って指定する。
 
-毎フレーム、`prepare_view`でカメラ・太陽光・シーンの範囲・IBLを組み合わせ、`Frame::new`にGraph内の材質と描画スライスを渡す。
-`add_passes`はシャドウ、シーン描画、出力を追加し、HDR・D32深度・SDRを返す。
+共通モジュールの`renderer_pipeline::pbr`で`PbrVertex`と`MaterialFactors`をエンコードできる。
+`DefaultResources::reserve`を既存の準備に加え、Runtime作成後に`initialize`を一度呼ぶ。
+フレーム枠を使い切る構成では、返された初期化IDを最初の描画前に回収する。
+各Graphへ`import`したビューから、`material_textures`でチャンネルごとの省略を補い、
+`environment`でIBLを省いた太陽光のみの構成を作れる。
+毎フレーム、`prepare_view`でカメラ・太陽光・シーンの範囲・環境照明を組み合わせ、`pbr::Frame::new`に
+Graph内の材質と描画スライスを渡す。カメラバッファは準備時に`CameraStorage`で選ぶ。
+`External`では呼び出し側が渡したバッファへレシピが更新を書き込み、`PreUploaded`では可視判定などの前に
+呼び出し側がビューのバイト列をアップロードする。
+`add_passes`はシャドウ、シーン描画、出力を追加し、HDR・SDRと任意のシーン深度を返す。
+深度は1×で単一サンプルD32、4×では`None`となる。4カスケードのシャドウマップは双方で単一サンプルD32を使う。
 HDRを加工したい場合は`add_scene`で照明済みのHDRを受け取り、同じGraphに独自パスを追加して、
 その出力を`add_output`へ渡す。画像のexportやreadback、GPUへの投入は必要に応じてアプリが行う。
 
@@ -187,7 +196,7 @@ HDRを加工したい場合は`add_scene`で照明済みのHDRを受け取り、
 
 #### カスケードのシャドウを再利用する
 
-ビューごとに`pbr_forward::ShadowHistory`を準備する。標準レシピには`begin_view`でビューとキャスター入力の世代を渡す。
+ビューごとに`pbr::ShadowHistory`を準備する。標準レシピには`begin_view`でビューとキャスター入力の世代を渡す。
 独自の影パスを組み立てる場合は`begin_frame`にカスケード行列と世代から作った`ShadowKey`を渡す。
 キャスターの集合・形状・変換、アルファマスク、影の描画設定など、深度画像に効く入力が変わるときに世代を変える。
 履歴は前の画像を取り込み、カスケードごとに再利用できるかを返す。`ShadowFrame::source`から
@@ -201,6 +210,23 @@ Runtimeが投入を受理した時点で履歴が反映される。アプリが�
 
 準備、入力アップロード、Bloom、シャドウ再利用は[`pbr_forward`のソース](../../crates/renderer-pipeline/examples/pbr_forward.rs)で確認できる。
 実行方法は[小さなPBRシーン](examples.md#pbr-forward-example)を参照する。
+
+#### 照明方式と描画リストを選ぶ
+
+- `pbr_forward_plus`へビューごとに最大64件の点光源を渡す。16×16画素のタイルは最大65,536個。
+  最初に`append_tile_initialization`で初期化を宣言し、Runtimeが投入を受理してから登録する。
+  描画時は最新の受理済みタイルバッファを取り込み、描画寸法に必要な範囲を更新する。
+- `pbr_deferred`は1×のG-bufferにベースカラー／メタリック、法線／粗さ、発光／AOとD32深度を保持する。
+  照明後に、アプリが並べた半透明描画をHDRに合成する。
+- `pbr_forward::prepare_with_transforms`で組み込みForwardの変換付き直接描画を準備し、
+  `pbr::Transform`とその範囲を参照する`Draw::Instanced`を渡す。
+  1ビューにつき最大1,024件で、各アフィン変換は有限、可逆、行列式が正であることを要求する。
+  不透明・アルファマスクのシーン描画とカスケードの影は同じ変換を使う。
+- CPU側で描画リストを絞る場合は、`PreparedView::visible`と`cascade_overlaps`でワールド空間のAABBを判定する。
+  `passes::visibility`でGPU可視判定する場合は、アプリがパックしたジオメトリと材質グループから可視マスクと間接引数を作り、
+  不透明・アルファマスク描画へ渡す。
+
+ライブラリに渡すレシピの組み合わせと実シーンでの使い方は[Bistroの描画パイプライン](#bistro-scene-pipeline)を参照する。
 
 <a id="material-shader-build"></a>
 
@@ -225,6 +251,8 @@ python -B tools/shaders/build_material_programs.py --manifest crates/renderer-pi
 `renderer-pipeline`のBistroでは、`--shader-manifest`でForward不透明描画とシャドウのレビュー済みProgramを選ぶ。
 半透明には組み込みのProgramを使う。外部バンドルを使う構成はForward 1×、直接描画、インスタンシングなしで、
 取込時にビルドしたバイト列をレビュー済みのBistroバイナリと照合する。
+準備済みのProgram三種を`pbr_forward::prepare_with_programs`に渡すと、レシピが頂点・定数・binding・出力と
+ブレンド・深度の互換性を照合する。シェーダーのアクセス範囲と安全性は、取込時のレビュー済み契約に従う。
 
 ```powershell
 cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12,development-validation --example bistro -- --api vulkan --fixture --capture-shadow-maps --shader-manifest .tools/bistro-material-programs/manifest.json --output .tools/bistro-fixture-material-vulkan
@@ -236,10 +264,11 @@ D3D12では`--api d3d12`を指定する。全シーンの素材準備と追加�
 
 ### Bistroの描画パイプラインを組み立てる
 
-`renderer-pipeline`の`bistro`は、Forward 1×の直接描画で標準 PBR レシピを使う。
+`renderer-pipeline`の`bistro`は、Forward、Forward+、Deferredに公開PBRレシピを使う。
 `--pipeline`でForward、Forward+、Forward-reference、Deferredを選び、対応するMSAAや描画形式を指定できる。
-比較用の経路はサンプルが共通パスから構成し、シャドウからシーンのHDR、[BloomとSDR](#bistro-post-pipeline)までを
-同じGraphへ追加する。Bistroはカメラ、IBL、材質、可視判定と並び替えを行った描画候補を供給し、
+Forward-referenceは全点光源を評価する比較用の経路で、サンプルが共通パスから構成する。
+各経路はシャドウからシーンのHDR、[BloomとSDR](#bistro-post-pipeline)までを同じGraphへ追加する。
+Bistroはカメラ、IBL、材質、描画候補とその順序を供給し、
 最終画像をキャプチャまたは表示する。描画寸法が変わるとレシピと一時画像を新しい寸法で準備する。
 
 ```powershell
@@ -247,6 +276,8 @@ cargo run --locked --release -p renderer-pipeline --no-default-features --featur
 ```
 
 D3D12では`--api d3d12`を指定する。
+点光源を含む構成は`--pipeline forward-plus --msaa 4`、G-bufferを使う構成は`--pipeline deferred`を指定する。
+`--submission indirect`でGPU可視判定と不透明の間接描画、Forwardの`--instances instanced`で直接インスタンシングを確認できる。
 
 Bistroは公開の`ShadowHistory`に遮蔽物の描画条件と光源行列を渡す。再利用できるカスケードの画像は
 前のフレームから取り込み、更新が必要なカスケードだけ深度パスを追加する。後続の照明パスは

@@ -323,7 +323,7 @@ RGBA16Fのpacked転送は1 texel8 byteであり、共有stagingのoffset alignme
 D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyは同extent/formatのRGBA8/RGBA16Fを扱い、
 各実format/usage能力の作成時照会とnative失敗処理を行う。
 
-`renderer_pipeline::{passes, pbr_forward, unlit_forward}`は通常のGraph／Program／copy APIを使って構築する。
+`renderer_pipeline`の各レシピと`passes`は通常のGraph／Program／copy APIを使って構築する。
 利用側の多段Computeも同じ公開`dispatch`で接続し、標準専用のloweringやnative実行分岐を追加しない。
 三経路の混合構成ではRaster／Compute双方のProgram、画像class、vertex/indexとprovenanceを明示準備し、
 Graph由来のattachment→sampled／storage→copy依存、実Fence完了とCPU結果返却までの所有を維持する。
@@ -335,8 +335,12 @@ prepassedのshader深度writeを止めてもGraphのattachment accessは保守�
 RGBA8／RGBA16Fの値を同descriptionの別画像へ保存する場合は、同じ公開Graphの画像copyを使う。
 部品やpost境界がexport/readback/submitを暗黙に追加することはない。
 `passes::bloom`は準備済みの一時画像とCompute Programを使い、各dispatchの書き込みから後続のsampleへの依存を通常のGraph宣言で導く。
-`pbr_forward::ShadowHistory`は明示したexportと受理済みFrameSubmissionから画像の版を保持する。
+`pbr::ShadowHistory`は明示したexportと受理済みFrameSubmissionから画像の版を保持する。
 次フレームでのimport、再描画とsample間の依存、登録解除後のGPU完了までの保持には、同じGraphとRuntimeの契約を使う。
+Forward系の4×では既存のカラーresolveを使い、最終描画区間で4×の色と深度を破棄する。
+後段の画像処理は単一サンプルHDRを受け取り、シーン深度を使う構成は1×を選ぶ。
+Forward+は全域を初期化したタイルバッファの先頭範囲を更新し、次のGraphは受理済みの版を取り込む。
+GPU可視判定と間接描画の依存は、Computeのマスク書き込みから引数生成、Rasterの間接読み込みとしてGraphに宣言する。
 
 最終depth storeの省略は帯域削減の候補だが、今回はcolor/depth両方をStoreする既存の宣言契約を保ち、
 scalarと同じ内容有効性のままbatch化の効果を比較した。代案の自動discardには最終consumer/exportの解析と
