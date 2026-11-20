@@ -26,6 +26,7 @@ use renderer_pipeline::{
 };
 use std::sync::Arc;
 
+#[path = "pipeline/indirect.rs"]
 pub(super) mod indirect;
 
 const CASCADES: [&str; shadow::CASCADE_COUNT] =
