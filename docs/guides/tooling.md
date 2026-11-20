@@ -176,8 +176,30 @@ HDRを加工したい場合は`add_scene`で照明済みのHDRを受け取り、
 
 シャドウの既定経路では共通のキャスターリストから4枚のD32画像を描く。
 アプリはカスケードごとにキャスターを変えたり、取り込んだ画像を`ShadowSource::Reuse`で渡したりできる。
-有効な履歴を選び、更新を投入受理後に公開するのはアプリの責務である。
-準備と入力アップロード、通常の描画、HDR加工の両経路は[`pbr_forward`のソース](../../crates/renderer-pipeline/examples/pbr_forward.rs)で確認できる。
+
+#### 標準 Bloom を追加する
+
+`passes::bloom::Bloom::Tent`または`Bloom::Box`の`prepare`に、容量を集約する`Preparation`とシーンHDRの`ImageDesc`を渡す。
+シェーダー、一時画像、Graph宣言の容量がこの準備で登録される。フレーム内では`add_scene`で得たHDRを
+`PreparedBloom::add_passes`に渡し、同寸の結果を`add_output`へつなぐ。入出力は露出・トーンマッピング前の
+単一サンプル・単一サブリソースのシーンリニアRec.709 RGBA16Fとする。`Bloom::Off`では入力画像をそのまま返す。
+同じ部品を独自のシーン描画にも接続できる。
+
+#### カスケードのシャドウを再利用する
+
+ビューごとに`pbr_forward::ShadowHistory`を準備する。標準レシピには`begin_view`でビューとキャスター入力の世代を渡す。
+独自の影パスを組み立てる場合は`begin_frame`にカスケード行列と世代から作った`ShadowKey`を渡す。
+キャスターの集合・形状・変換、アルファマスク、影の描画設定など、深度画像に効く入力が変わるときに世代を変える。
+履歴は前の画像を取り込み、カスケードごとに再利用できるかを返す。`ShadowFrame::source`から
+`Frame::shadows`を作り、再描画するカスケードのキャスターを渡す。
+
+描画を宣言した後、`ShadowFrame::export`で更新画像をexportする。Graphをcompileして`ShadowHistory::submit`に渡すと、
+Runtimeが投入を受理した時点で履歴が反映される。アプリが複数ビューのGraphを直接投入する場合は、受理済みの
+`FrameSubmission`と各ビューの更新をそれぞれ`ShadowHistory::accept`へ渡す。
+先行フレームのGPU完了はRuntimeが管理する。影の解像度変更や終了時には`clear`で画像の登録を解除する。
+キャッシュで保持する4枚の登録をRuntimeの容量に含める。
+
+準備、入力アップロード、Bloom、シャドウ再利用は[`pbr_forward`のソース](../../crates/renderer-pipeline/examples/pbr_forward.rs)で確認できる。
 実行方法は[小さなPBRシーン](examples.md#pbr-forward-example)を参照する。
 
 <a id="material-shader-build"></a>
@@ -226,16 +248,16 @@ cargo run --locked --release -p renderer-pipeline --no-default-features --featur
 
 D3D12では`--api d3d12`を指定する。
 
-Bistroは遮蔽物の描画条件と光源行列を4枚のD32画像ごとに比較する。キャッシュが有効なカスケードの画像は
-前のフレームから取り込み、更新が必要なカスケードだけ深度パスを追加する。どちらの場合も、後続の照明パスは
-同じカスケードの画像を読む。更新した画像と判定キーはsubmit受理後に次フレームで使えるようにする。
+Bistroは公開の`ShadowHistory`に遮蔽物の描画条件と光源行列を渡す。再利用できるカスケードの画像は
+前のフレームから取り込み、更新が必要なカスケードだけ深度パスを追加する。後続の照明パスは
+選択されたカスケードの画像を読む。更新した画像と判定キーはsubmit受理後に次フレームで使えるようにする。
 リサイズ時はキャッシュを破棄する。`--redraw-shadows`は各カスケードを毎フレーム更新する。
 
 <a id="bistro-post-pipeline"></a>
 
 #### BistroのHDRからSDRをつなぐ
 
-`--bloom tent`または`--bloom box`では、露出前のシーンHDRをComputeで抽出、縮小、ぼかし、合成する。
+`--bloom tent`または`--bloom box`では、公開のBloomレシピが露出前のシーンHDRをComputeで抽出、縮小、ぼかし、合成する。
 `--bloom off`が既定である。標準の出力レシピはPBR Neutralと露出倍率2.0を適用し、
 `--aa-off`を指定するとFXAAを省く。最終画像はオフスクリーンではsRGB、ウィンドウではPresenterがsRGBへ変換するための
 線形出力になる。`--capture-bloom-bypass`はBloomを通さない参照画像も保存する。

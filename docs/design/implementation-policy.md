@@ -933,10 +933,12 @@ Graphの宣言上限と`WorkingSet`を一括で加える場合は、すべての
 [テンプレートのビルド手順](../guides/tooling.md#material-shader-build)を参照する。
 
 `renderer_pipeline::pbr_forward`は1× PBR Forward、4カスケードの影、HDRとSDR出力のレシピを提供する。
-同じ公開パスを個別に呼べるため、アプリはHDRの加工を合成できる。
+同じ公開パスを個別に呼べるため、アプリは標準の`passes::bloom`と独自のHDR加工を合成できる。
+Bloomは同寸のシーンリニアRGBA16Fを返し、Compute Programと中間画像・Graph宣言の容量を準備時に登録する。
 `renderer-pipeline`の[Bistro](../guides/tooling.md#bistro-scene-pipeline)は標準レシピと比較用の描画構成を使う。
-シャドウはカスケードごとに判定し、更新した画像の版とキャッシュキーは
-submit受理後に公開する。次フレームは既存のGraphのimportとGPU寿命の契約に従って画像を参照する。
+`pbr_forward::ShadowHistory`はカスケードの行列とアプリが供給するキャスター入力の世代で再利用を判定する。
+更新した画像の版とキーはsubmit受理後にまとめて反映する。次フレームは既存のGraphのimportとGPU寿命の契約に従って画像を参照する。
+履歴が持つ画像の登録は、解像度の変更や使用終了時にアプリが明示的に解除する。
 Vulkanのdescriptor予約はComputeのdispatch分を含める。`renderer`のBistroは公開Graph APIを直接使う例である。
 
 ## 12. エンジン統合とPresentation

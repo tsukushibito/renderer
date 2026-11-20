@@ -334,6 +334,9 @@ prepassedのshader深度writeを止めてもGraphのattachment accessは保守�
 通常のEARLY/LATE_FRAGMENT_TESTS依存とrendering scope外のbarrierを維持する。
 RGBA8／RGBA16Fの値を同descriptionの別画像へ保存する場合は、同じ公開Graphの画像copyを使う。
 部品やpost境界がexport/readback/submitを暗黙に追加することはない。
+`passes::bloom`は準備済みの一時画像とCompute Programを使い、各dispatchの書き込みから後続のsampleへの依存を通常のGraph宣言で導く。
+`pbr_forward::ShadowHistory`は明示したexportと受理済みFrameSubmissionから画像の版を保持する。
+次フレームでのimport、再描画とsample間の依存、登録解除後のGPU完了までの保持には、同じGraphとRuntimeの契約を使う。
 
 最終depth storeの省略は帯域削減の候補だが、今回はcolor/depth両方をStoreする既存の宣言契約を保ち、
 scalarと同じ内容有効性のままbatch化の効果を比較した。代案の自動discardには最終consumer/exportの解析と

@@ -22,11 +22,13 @@ cargo run --locked -p renderer-pipeline --no-default-features --example rust_pip
 
 `pbr_forward`はサンプル内で用意した小さなシーンを、公開レシピでオフスクリーン描画します。
 色と深度の読み戻しを確認し、`--output`を指定するとSDRをPPMに保存します。
+`--bloom`は明るい三角形に標準のBloomを適用します。`--reuse-shadows`は連続する2フレームを投入して、
+初回の描画と次フレームの全カスケード再利用を表示します。
 `--copy-hdr`はシーン描画と出力の間にアプリ独自のコピーパスを追加します。
 
 ```sh
 cargo run --locked -p renderer-pipeline --no-default-features --features vulkan --example pbr_forward -- --api vulkan
-cargo run --locked -p renderer-pipeline --no-default-features --features d3d12 --example pbr_forward -- --api d3d12 --copy-hdr --output pbr-forward.ppm
+cargo run --locked -p renderer-pipeline --no-default-features --features d3d12 --example pbr_forward -- --api d3d12 --bloom --reuse-shadows --output pbr-forward.ppm
 ```
 
 D3D12はWindowsで実行できます。準備とパスの接続は[PBR Forwardの使い方](tooling.md#pbr-forward-recipe)を参照してください。
@@ -90,7 +92,7 @@ cargo build --locked --release -p renderer --no-default-features --features vulk
 | --- | --- | --- |
 | `graph_composition` | 利用側のRasterパスの合成と不要分岐の除去 | CPU。追加feature不要 |
 | `rust_pipeline` | [準備APIとパス合成](tooling.md#rust-pipeline)、標準レシピへの独自パスの接続 | CPU。追加feature不要 |
-| `pbr_forward` | [標準 PBR Forward](tooling.md#pbr-forward-recipe)で小さなシーンを描画し、HDRへ独自パスを接続 | `vulkan`またはWindowsの`d3d12` |
+| `pbr_forward` | [標準 PBR Forward](tooling.md#pbr-forward-recipe)で小さなシーンを描画し、Bloom・シャドウ再利用・独自HDRパスの接続を確認 | `vulkan`またはWindowsの`d3d12` |
 | `headless` | offscreen描画とPPMへの書き出し | `vulkan` |
 | `windowed` | Windowsの表示ループ、標準／独自Graph、カメラ操作 | Windows、`presentation` と `vulkan` または `d3d12` |
 | `renderer`の`bistro` | 公開Graph APIを使ったRustのパス定義と合成 | `vulkan` またはWindowsの`d3d12` |
