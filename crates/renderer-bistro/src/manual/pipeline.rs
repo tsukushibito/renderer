@@ -140,6 +140,11 @@ impl Budget {
         };
         let hdr = ImageDesc::rgba16_float(options.width, options.height);
         add(hdr, options.inflight * 2);
+        if options.pipeline == PipelineMode::ForwardPlus {
+            let desc = forward_plus::tile_mask_desc(options.width, options.height)
+                .expect("Forward+ extent validated at preparation");
+            add(desc, options.inflight);
+        }
         if options.pipeline == PipelineMode::Deferred {
             add(hdr, options.inflight * deferred::PLANES.len());
         }
@@ -236,11 +241,6 @@ impl Budget {
             // referenced by a submission while its new version is uploaded.
             add(program::MATERIAL_BYTES as u64);
         }
-        if tiled_lights != 0 {
-            // The one shared list is fully initialized by an explicit
-            // preparation dispatch. In-flight frames share one ordered queue.
-            add(forward_plus::TILE_BUFFER_BYTES);
-        }
         let max_buffer_bytes = buffers
             .iter()
             .map(|(size, _)| *size)
@@ -320,7 +320,6 @@ impl Budget {
             + 3
             + frame_instances
             + frame_buffers
-            + tiled_lights
             + check_images
             + usize::from(options.resource_checks);
         let bloom_bindings = bloom_passes * 2 + usize::from(bloom_passes != 0);
@@ -494,7 +493,6 @@ pub(super) struct Resident {
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
     local_lights: Option<forward_lighting::LightBytes>,
-    tiles: Option<ImportBuffer>,
     packed: Option<indirect::Resident>,
     // Only small general Uniform uploads retain byte provenance. Geometry uses
     // typed immutable bounds and releases all upload CPU streams before frames.
@@ -628,7 +626,6 @@ impl Resident {
         let indices = take_keys(&mut self.indices);
         let materials = take_keys(&mut self.materials);
         let camera = self.camera.key();
-        let tiles = self.tiles.take().map(|tiles| tiles.key());
         let packed = self.packed.take().map(indirect::Resident::release);
         drop(self.camera);
         prepare(backend)?;
@@ -641,7 +638,6 @@ impl Resident {
         self.indices = refresh(indices)?;
         self.materials = refresh(materials)?;
         self.camera = backend.refresh_buffer(camera)?;
-        self.tiles = tiles.map(|key| backend.refresh_buffer(key)).transpose()?;
         self.packed = packed.map(|packed| packed.refresh(backend)).transpose()?;
         Ok(self)
     }
@@ -749,9 +745,6 @@ impl Resident {
             .uses_local_lights()
             .then(|| forward_lighting::preset(budget.fixture))
             .transpose()?;
-        let tiles = (budget.pipeline == PipelineMode::ForwardPlus)
-            .then(|| forward_lighting::initialize_tiles(backend, &camera))
-            .transpose()?;
         let mut images = Vec::with_capacity(scene.images.len());
         for (index, image) in scene.images.iter().enumerate() {
             // This is the immutable publication boundary. Read/hash one chain,
@@ -817,7 +810,6 @@ impl Resident {
             shadow_parameters: shadow::Parameters::default(),
             camera,
             local_lights,
-            tiles,
             packed,
             upload_owners,
         })
@@ -974,7 +966,6 @@ pub(super) struct Built {
 #[derive(Clone, Copy)]
 pub(super) struct BufferUpdates {
     camera: BufferHandle,
-    tiles: Option<BufferHandle>,
 }
 
 impl Resident {
@@ -985,12 +976,7 @@ impl Resident {
         updates: BufferUpdates,
     ) -> Result<(), Error> {
         let camera = pending.export_buffer(updates.camera)?;
-        let tiles = updates
-            .tiles
-            .map(|handle| pending.export_buffer(handle))
-            .transpose()?;
         self.camera = camera;
-        self.tiles = tiles;
         Ok(())
     }
 }
@@ -1085,16 +1071,14 @@ pub(super) fn build(
         uniform
     };
     let mut local_light_bindings = [None; 2];
-    let mut tile_update = None;
     if let Some(preset) = &resident.local_lights {
         let (lights, tiles) = forward_lighting::append(
             &mut graph,
             [options.width, options.height],
             uniform,
             preset,
-            resident.tiles.as_ref(),
+            options.pipeline == PipelineMode::ForwardPlus,
         )?;
-        tile_update = tiles;
         for (slot, binding) in local_light_bindings
             .iter_mut()
             .zip(forward_plus::raster_bindings(lights, tiles))
@@ -1669,10 +1653,7 @@ pub(super) fn build(
     Ok(Built {
         graph,
         output,
-        updates: BufferUpdates {
-            camera: uniform,
-            tiles: tile_update,
-        },
+        updates: BufferUpdates { camera: uniform },
         captures,
         bloom_capture,
         #[cfg(all(windows, feature = "presentation"))]

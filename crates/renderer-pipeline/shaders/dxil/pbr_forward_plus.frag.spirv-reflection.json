@@ -136,23 +136,6 @@
                     "array_stride" : 32
                 }
             ]
-        },
-        "_33" : {
-            "name" : "type.ByteAddressBuffer",
-            "members" : [
-                {
-                    "name" : "_m0",
-                    "type" : "uint",
-                    "array" : [
-                        0
-                    ],
-                    "array_size_is_literal" : [
-                        true
-                    ],
-                    "offset" : 0,
-                    "array_stride" : 4
-                }
-            ]
         }
     },
     "inputs" : [
@@ -250,6 +233,12 @@
             "name" : "shadow_image3",
             "set" : 3,
             "binding" : 3
+        },
+        {
+            "type" : "texture2D",
+            "name" : "tile_masks",
+            "set" : 0,
+            "binding" : 3
         }
     ],
     "separate_samplers" : [
@@ -280,14 +269,6 @@
             "block_size" : 2064,
             "set" : 0,
             "binding" : 2
-        },
-        {
-            "type" : "_33",
-            "name" : "tile_lists",
-            "readonly" : true,
-            "block_size" : 0,
-            "set" : 0,
-            "binding" : 3
         }
     ],
     "ubos" : [

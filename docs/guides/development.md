@@ -404,7 +404,8 @@ python -B tools/bistro/bloom_acceptance.py $cohortDirectory
 
 シーンのHDRにアプリ側のBloomをつなぎ、`renderer_pipeline::passes::output`のNeutralとSDR変換を適用する。
 WindowsのPresenterには、swapchainと同寸法のlinear RGBA8画像をexportして渡す。
-オフスクリーンでは`SdrEncoding::Srgb`を選ぶ。ウィンドウでは`SdrEncoding::Linear`を選び、PresenterのsRGB targetで変換する。
+オフスクリーンでは`SdrOutput::capture`を選んでsRGBのバイト列を読み戻す。ウィンドウでは`SdrOutput::display`で線形出力を準備し、
+投入受理済みの表示画像をPresenterへ渡す。sRGBへの変換はPresenterの描画先が行う。
 
 ```powershell
 cargo run --locked --release -p renderer-bistro --bin bistro --no-default-features --features vulkan,d3d12,presentation -- --api vulkan --manifest $manifest --ibl-manifest $iblManifest --bloom tent --windowed --output .tools/bistro-window
@@ -428,11 +429,11 @@ FXAAは独立に`--aa-off`で無効化できる。4×のoffscreen captureはreso
 `--pipeline forward-plus`と`--pipeline forward-reference`は同じ64灯と材質・カメラを使う。
 Forward+は16×16ピクセルのタイルごとに交差候補をComputeで求め、不透明・半透明の両方が一覧を読む。
 全灯参照は同じ局所光の計算を各フラグメントで全灯に対して実行する。両経路は`--msaa 1`と`--msaa 4`で比較できる。
-Forward+は準備時に一覧全体を初期化し、各フレームは使用する先頭範囲を更新する。
-Windowのresizeは最新の一覧をGPU資源として保持し、画像とフレーム用bufferを新しいextentで準備する。
+Forward+はフレーム内の一時タイルマスクを全域書き込み、Windowのresizeでは他のフレーム用画像と同様に新しいextentで準備する。
+標準レシピは点光源が0件のとき通常Forwardを選ぶ。
 
 ```powershell
-cargo test --locked --release -p renderer --test forward_plus_graph --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture
+cargo test --locked --release -p renderer-pipeline --test pbr_tile_masks --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture
 python -B tools/bistro/compare_runtime.py $tiledReport $allLightReport --profile repeat --planes hdr sdr --forward-plus-reference --output $comparison
 ```
 

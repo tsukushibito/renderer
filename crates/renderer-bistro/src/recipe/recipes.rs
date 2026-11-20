@@ -6,14 +6,14 @@ use renderer::{
     capacity::{GraphRequirements, Preparation, WorkingSet},
     graph::{
         Attachment, Binding, BufferDesc, BufferHandle, Graph, GraphError, ImageDesc, ImageHandle,
-        ImageView, ImportBuffer, LoadOp, RasterAttachments, RasterPass, SampleCount, StoreOp,
+        ImageView, LoadOp, RasterAttachments, RasterPass, SampleCount, StoreOp,
     },
     program::{MAX_RASTER_BINDINGS, ManagedRasterProgram, RasterPipelineRequest},
 };
 use renderer_pipeline::{
     passes::{
         bloom::PreparedBloom,
-        output::{OutputImages, PreparedOutput},
+        output::{OutputImages, PreparedOutput, SdrImage},
     },
     pbr, pbr_deferred, pbr_forward, pbr_forward_plus,
 };
@@ -51,15 +51,15 @@ impl Standard {
 
     pub fn prepare_view(
         &self,
-        camera: pbr::Camera,
+        view: pbr::ViewInput,
         sun: pbr::Sun,
         bounds: pbr::Bounds,
         environment: pbr::Environment,
     ) -> Result<pbr::PreparedView, GraphError> {
         match self {
-            Self::Forward(recipe) => recipe.prepare_view(camera, sun, bounds, environment),
-            Self::ForwardPlus(recipe) => recipe.prepare_view(camera, sun, bounds, environment),
-            Self::Deferred(recipe) => recipe.prepare_view(camera, sun, bounds, environment),
+            Self::Forward(recipe) => recipe.prepare_view(view, sun, bounds, environment),
+            Self::ForwardPlus(recipe) => recipe.prepare_view(view, sun, bounds, environment),
+            Self::Deferred(recipe) => recipe.prepare_view(view, sun, bounds, environment),
         }
     }
 
@@ -68,16 +68,10 @@ impl Standard {
         graph: &mut Graph,
         frame: pbr::Frame<'_>,
         lights: &[pbr_forward_plus::PointLight],
-        tiles: Option<&ImportBuffer>,
     ) -> Result<pbr::SceneImages, Error> {
         Ok(match self {
             Self::Forward(recipe) => recipe.add_scene(graph, frame)?,
-            Self::ForwardPlus(recipe) => recipe.add_scene(
-                graph,
-                frame,
-                lights,
-                tiles.ok_or("Forward+ needs initialized tile storage")?,
-            )?,
+            Self::ForwardPlus(recipe) => recipe.add_scene(graph, frame, lights)?,
             Self::Deferred(recipe) => recipe.add_scene(graph, frame)?.scene,
         })
     }
@@ -117,11 +111,8 @@ impl Prepared {
                 clear_color,
                 samples: options.sample_count,
                 camera_storage,
-                shadows: pbr::ShadowSettings {
-                    enabled: options.shadows,
-                    ..pbr::ShadowSettings::default()
-                },
-                output: options.sdr_output(),
+                shadows: options.shadows.then(pbr::ShadowSettings::default),
+                output: Some(options.sdr_output()),
             };
             let primitives = scene.primitives.len();
             let instance_draws = options.instances.draws();
@@ -169,6 +160,24 @@ impl Prepared {
                 standard.preparation().graph_requirements(),
                 standard.preparation().working_set(),
             )?;
+            if !options.shadows {
+                pbr::Unshadowed::reserve(&mut preparation)?;
+                if options.capture_shadows && !options.windowed {
+                    let resolution = shadow::Parameters::default().resolution;
+                    preparation.reserve_image(
+                        ImageDesc::depth32(resolution, resolution),
+                        pbr::CASCADE_COUNT,
+                    )?;
+                    preparation.add_graph_requirements(GraphRequirements {
+                        resources: pbr::CASCADE_COUNT,
+                        passes: pbr::CASCADE_COUNT,
+                        accesses: pbr::CASCADE_COUNT,
+                        attachments: pbr::CASCADE_COUNT,
+                        name_bytes: 128,
+                        ..GraphRequirements::default()
+                    })?;
+                }
+            }
             if camera_storage == pbr::CameraStorage::PreUploaded {
                 preparation.add_graph_requirements(GraphRequirements {
                     passes: 1,
@@ -306,15 +315,10 @@ impl Reference {
             .into_iter()
             .collect::<Vec<_>>();
         if tiled {
-            preparation.add_working_set(WorkingSet {
-                resources: &[renderer::capacity::ResourceClass::Buffer {
-                    desc: BufferDesc {
-                        size: pbr_forward_plus::TILE_BUFFER_BYTES,
-                    },
-                    count: 1,
-                }],
-                ..Default::default()
-            })?;
+            preparation.reserve_image(
+                pbr_forward_plus::tile_mask_desc(options.width, options.height)?,
+                1,
+            )?;
             targets += 1;
         }
         let local_lights = options.pipeline.uses_local_lights();
@@ -443,11 +447,7 @@ impl Reference {
         Ok((hdr, Some(depth)))
     }
 
-    pub fn add_output(
-        &self,
-        graph: &mut Graph,
-        hdr: ImageHandle,
-    ) -> Result<ImageHandle, GraphError> {
+    pub fn add_output(&self, graph: &mut Graph, hdr: ImageHandle) -> Result<SdrImage, GraphError> {
         let source: ImageView = graph.image_view(hdr, 0, 0)?;
         Ok(self.output.add_passes(graph, source, 2.0)?.sdr)
     }

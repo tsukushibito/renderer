@@ -584,7 +584,6 @@ mod tests {
             budget.prepared.take().expect("prepared fixture pipeline"),
         );
         let built = pipeline::build(
-            &backend,
             &mut pool,
             &mut workspace,
             &resident,

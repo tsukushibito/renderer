@@ -4,18 +4,32 @@ use renderer::graph::{
 };
 use renderer::program::{MAX_RASTER_BINDINGS, ManagedRasterProgram, SamplerDescriptor};
 
-use crate::passes::pbr::{CAMERA_BYTES, MATERIAL_BYTES};
+use crate::passes::pbr::CAMERA_BYTES;
 
 use super::instances::TRANSFORM_TABLE_BYTES;
+use super::{AlphaMode, MaterialUniform};
 
 /// Graph-local factors and texture views in base color, normal, ORM and
-/// emissive order. Base and emissive color use sRGB views. Use
-/// [`super::MaterialFactors`] to encode factors at the asset boundary.
+/// emissive order. Base and emissive color use sRGB views. The alpha mode
+/// comes from the same upload that supplies the shader factors.
 #[derive(Clone, Copy, Debug)]
 pub struct Material {
-    pub factors: BufferHandle,
-    pub factor_offset: u64,
-    pub textures: [ImageView; 4],
+    factors: MaterialUniform,
+    textures: [ImageView; 4],
+}
+
+impl Material {
+    pub const fn new(factors: MaterialUniform, textures: [ImageView; 4]) -> Self {
+        Self { factors, textures }
+    }
+
+    pub const fn alpha_mode(self) -> AlphaMode {
+        self.factors.alpha_mode()
+    }
+
+    pub const fn textures(self) -> [ImageView; 4] {
+        self.textures
+    }
 }
 
 /// An indexed triangle list in the standard 48-byte vertex format.
@@ -282,12 +296,8 @@ impl Bindings<'_> {
             Self::Scene { camera, .. } | Self::Shadow { camera, .. } => camera,
         };
         let camera = buffer_binding(0, camera, 0, CAMERA_BYTES as u64);
-        let factors = buffer_binding(
-            1,
-            material.factors,
-            material.factor_offset,
-            MATERIAL_BYTES as u64,
-        );
+        material.factors.check_graph(graph)?;
+        let factors = material.factors.binding();
         let [base, normal, orm, emissive] = material.textures;
         let base = image_binding(1, 0, base);
         let sampler = sampler_binding(1, 4, SamplerDescriptor::LinearRepeat);

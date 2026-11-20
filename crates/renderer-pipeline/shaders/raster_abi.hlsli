@@ -13,7 +13,7 @@ struct CameraData {
     row_major float4x4 view_projection;
     float4 eye;
     float4 light_direction;
-    float4 light_color;
+    float4 light_color; // linear sun RGB, orthographic view flag
     float4 environment; // strength, inverse-yaw input radians, specular max LOD, shadows enabled
     row_major float4x4 shadow_view_projection[4];
     float4 shadow_splits;

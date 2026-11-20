@@ -1,16 +1,17 @@
 use std::num::NonZeroUsize;
 
-use renderer::capacity::{GraphRequirements, Preparation};
+use renderer::capacity::{GraphRequirements, Preparation, ResourceClass};
 use renderer::geometry::GeometryData;
 use renderer::graph::{
     Attachment, BufferDesc, Graph, GraphCapacity, GraphCapacityKind, GraphErrorKind, GraphPool,
     ImageDesc, LoadOp, RasterAttachments, SampleCount, StoreOp,
 };
-use renderer_pipeline::passes::output::{SdrEncoding, SdrOutput};
+use renderer_pipeline::passes::output::SdrOutput;
 use renderer_pipeline::pbr::{
-    Bounds, CASCADE_COUNT, Camera, CameraStorage, Draw, Environment, Frame, IndexedDraw, Material,
-    MaterialFactors, PreparedView, SceneLimits, ShadowHistory, ShadowKey, ShadowSettings,
-    ShadowSource, Sun, Transform, VIEW_BYTES,
+    AlphaMode, Bounds, CASCADE_COUNT, CameraStorage, Draw, Environment, Frame, FrameShadows,
+    IndexedDraw, Material, MaterialFactors, MaterialUniform, PreparedView, Projection, SceneLimits,
+    ShadowHistory, ShadowKey, ShadowSettings, ShadowSource, Sun, Transform, Unshadowed,
+    UnshadowedView, VIEW_BYTES, ViewInput,
 };
 use renderer_pipeline::pbr_forward::{
     Config, Prepared, Programs, add_shadow_pass, prepare, prepare_with_programs,
@@ -24,14 +25,11 @@ fn config() -> Config {
     Config {
         extent: EXTENT,
         clear_color: [0.1, 0.2, 0.3, 1.0],
-        shadows: ShadowSettings {
+        shadows: Some(ShadowSettings {
             resolution: SHADOW_SIZE,
             ..Default::default()
-        },
-        output: SdrOutput {
-            encoding: SdrEncoding::Srgb,
-            fxaa: false,
-        },
+        }),
+        output: Some(SdrOutput::capture(false)),
         samples: SampleCount::X1,
         camera_storage: CameraStorage::Transient,
     }
@@ -41,7 +39,7 @@ fn limits() -> SceneLimits {
     SceneLimits {
         frames_in_flight: NonZeroUsize::MIN,
         max_draws: 2,
-        max_materials: 1,
+        max_materials: 2,
         max_casters_per_cascade: 1,
     }
 }
@@ -56,9 +54,9 @@ fn graph_pool(recipe: &Prepared) -> GraphPool {
     all.add_requirements(recipe.graph_requirements(), recipe.working_set())
         .unwrap();
     all.add_graph_requirements(GraphRequirements {
-        resources: 9,
-        passes: 12,
-        accesses: 15,
+        resources: 10,
+        passes: 13,
+        accesses: 16,
         attachments: 1,
         name_bytes: 256,
         ..GraphRequirements::default()
@@ -104,15 +102,7 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, Material, Inde
     geometry
         .upload_indices(graph, "upload indices", indices)
         .unwrap();
-    let factors = graph.buffer("factors", BufferDesc { size: 64 }).unwrap();
-    graph
-        .upload_buffer(
-            "upload factors",
-            factors,
-            0,
-            &MaterialFactors::default().encode().unwrap(),
-        )
-        .unwrap();
+    let factors = MaterialUniform::upload(graph, "factors", MaterialFactors::default()).unwrap();
 
     let color = graph.image("color", ImageDesc::rgba8_srgb(1, 1)).unwrap();
     graph
@@ -131,15 +121,27 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, Material, Inde
         .upload_image("upload environment", environment, &[0; 8])
         .unwrap();
     let environment = graph.image_view(environment, 0, 0).unwrap();
+    let near = 0.1;
+    let far = 40.0;
+    let z_scale = far / (near - far);
+    let scale = 1.0 / (55.0_f32.to_radians() * 0.5).tan();
+    let aspect = EXTENT[0] as f32 / EXTENT[1] as f32;
+    let input = ViewInput::new(
+        [
+            [scale / aspect, 0.0, 0.0, 0.0],
+            [0.0, -scale, 0.0, 0.0],
+            [0.0, 0.0, z_scale, -1.0],
+            [0.0, 0.0, -4.0 * z_scale + near * far / (near - far), 4.0],
+        ],
+        [0.0, 0.0, 4.0],
+        [0.0, 0.0, -1.0],
+        [near, far],
+        Projection::Perspective,
+    )
+    .unwrap();
     let view = recipe
         .prepare_view(
-            Camera {
-                position: [0.0, 0.0, 4.0],
-                target: [0.0; 3],
-                fov_y_degrees: 55.0,
-                near: 0.1,
-                far: 40.0,
-            },
+            input,
             Sun::new([0.4, 1.0, 0.3], [1.0; 3]).unwrap(),
             Bounds::new([-1.0; 3], [1.0; 3]).unwrap(),
             Environment {
@@ -152,11 +154,7 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, Material, Inde
             },
         )
         .unwrap();
-    let material = Material {
-        factors,
-        factor_offset: 0,
-        textures: [color, linear, linear, color],
-    };
+    let material = Material::new(factors, [color, linear, linear, color]);
     let draw = IndexedDraw {
         vertices,
         indices,
@@ -165,6 +163,85 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, Material, Inde
         material: 0,
     };
     (view, material, draw)
+}
+
+#[test]
+fn disabled_shadows_omit_maps_and_reject_cascade_inputs() {
+    let mut recipe = prepare(
+        Config {
+            shadows: None,
+            ..config()
+        },
+        limits(),
+    )
+    .unwrap();
+    let mut preparation = Preparation::new(NonZeroUsize::MIN);
+    preparation
+        .add_requirements(
+            recipe.preparation().graph_requirements(),
+            recipe.preparation().working_set(),
+        )
+        .unwrap();
+    Unshadowed::reserve(&mut preparation).unwrap();
+    let depth_classes: Vec<_> = preparation
+        .working_set()
+        .resources
+        .iter()
+        .filter_map(|class| match class {
+            ResourceClass::Image { desc, count }
+                if desc.format == renderer::ImageFormat::Depth32Float =>
+            {
+                Some((*desc, *count))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(depth_classes.len(), 2);
+    assert!(depth_classes.contains(&(ImageDesc::depth32(1, 1), 1)));
+    assert!(depth_classes.contains(&(ImageDesc::depth32(7, 5), 1)));
+
+    let mut pool = graph_pool(&recipe);
+    let mut graph = pool.begin().unwrap();
+    let (view, material, draw) = inputs(&recipe, &mut graph);
+    let history = ShadowHistory::default();
+    assert_eq!(
+        history
+            .begin_view(&mut graph, &view, [0; CASCADE_COUNT])
+            .err()
+            .unwrap()
+            .kind(),
+        GraphErrorKind::InvalidInput
+    );
+    assert!(view.shadow_matrices().is_none());
+    assert!(
+        view.cascade_overlaps(0, Bounds::new([0.0; 3], [0.0; 3]).unwrap())
+            .is_none()
+    );
+    let materials = [material];
+    let draws = [Draw::Indexed(draw)];
+    let error = recipe
+        .add_scene(
+            &mut graph,
+            Frame::new(&view, &materials, &draws, &[], &draws),
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+
+    let placeholder = UnshadowedView::append(&mut graph).unwrap();
+    let scene = recipe
+        .add_scene(
+            &mut graph,
+            Frame::unshadowed(&view, &materials, &draws, &[], placeholder),
+        )
+        .unwrap();
+    assert!(scene.shadows.is_none());
+    graph
+        .readback_image("capture unshadowed HDR", scene.hdr)
+        .unwrap();
+    let graph = graph.compile().unwrap();
+    let names: Vec<_> = graph.ordered_pass_names().collect();
+    assert!(names.contains(&"initialize disabled shadows"));
+    assert!(names.iter().all(|name| !name.starts_with("shadow_")));
 }
 
 #[test]
@@ -191,25 +268,45 @@ fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
         )
         .unwrap();
     let redraw = graph.image("redraw target", shadow_desc).unwrap();
-    let materials = [material];
+    let factors = MaterialUniform::upload(
+        &mut graph,
+        "blend factors",
+        MaterialFactors {
+            alpha_mode: AlphaMode::Blend,
+            ..MaterialFactors::default()
+        },
+    )
+    .unwrap();
+    let materials = [material, Material::new(factors, material.textures())];
     let draws = [Draw::Indexed(draw)];
-    let mut frame = Frame::new(&view, &materials, &draws, &draws, &draws);
-    frame.shadows[0] = ShadowSource::Render {
+    let transparent = [Draw::Indexed(IndexedDraw {
+        material: 1,
+        ..draw
+    })];
+    let mut frame = Frame::new(&view, &materials, &draws, &transparent, &draws);
+    let FrameShadows::Cascades(cascades) = &mut frame.shadows else {
+        unreachable!()
+    };
+    cascades[0] = ShadowSource::Render {
         target: Some(reused),
         casters: &draws,
     };
-    frame.shadows[2] = ShadowSource::Reuse(reused);
+    cascades[2] = ShadowSource::Reuse(reused);
     let error = recipe.add_scene(&mut graph, frame).unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
-    let mut frame = Frame::new(&view, &materials, &draws, &draws, &draws);
-    frame.shadows[1] = ShadowSource::Render {
+    let mut frame = Frame::new(&view, &materials, &draws, &transparent, &draws);
+    let FrameShadows::Cascades(cascades) = &mut frame.shadows else {
+        unreachable!()
+    };
+    cascades[1] = ShadowSource::Render {
         target: Some(redraw),
         casters: &draws,
     };
-    frame.shadows[2] = ShadowSource::Reuse(reused);
+    cascades[2] = ShadowSource::Reuse(reused);
     let scene = recipe.add_scene(&mut graph, frame).unwrap();
-    assert_eq!(scene.shadows[1], redraw);
-    assert_eq!(scene.shadows[2], reused);
+    let shadows = scene.shadows.unwrap();
+    assert_eq!(shadows[1], redraw);
+    assert_eq!(shadows[2], reused);
     assert_eq!(
         graph.image_desc(scene.depth.unwrap()).unwrap(),
         ImageDesc::depth32(7, 5)
@@ -221,7 +318,12 @@ fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
         .copy_image("custom HDR pass", scene.hdr, custom)
         .unwrap();
     let output = recipe.add_output(&mut graph, custom, 1.0).unwrap();
-    graph.readback_image("capture", output.sdr).unwrap();
+    output
+        .sdr
+        .capture()
+        .unwrap()
+        .readback(&mut graph, "capture")
+        .unwrap();
     let graph = graph.compile().unwrap();
     let names: Vec<_> = graph.ordered_pass_names().collect();
     for name in [
@@ -299,9 +401,140 @@ fn rejected_workload_does_not_consume_graph_or_recipe_scratch() {
         assert_eq!(bounds.required, Some(if casters { 2 } else { 3 }));
         let valid = Frame::new(&view, &materials, &draws[..1], &[], &draws[..1]);
         let output = recipe.add_passes(&mut graph, valid).unwrap();
-        graph.readback_image("capture", output.sdr).unwrap();
+        output
+            .sdr
+            .capture()
+            .unwrap()
+            .readback(&mut graph, "capture")
+            .unwrap();
         assert!(graph.compile().is_ok());
     }
+}
+
+#[test]
+fn hdr_only_preparation_does_not_reserve_output_images_or_programs() {
+    let standard = recipe();
+    let mut hdr_only = prepare(
+        Config {
+            output: None,
+            ..config()
+        },
+        limits(),
+    )
+    .unwrap();
+    let full_requirements = standard.preparation().graph_requirements();
+    let hdr_requirements = hdr_only.preparation().graph_requirements();
+    assert_eq!(full_requirements.resources, hdr_requirements.resources + 2);
+    assert_eq!(full_requirements.passes, hdr_requirements.passes + 2);
+    let full_programs = standard.preparation().working_set().raster;
+    let hdr_programs = hdr_only.preparation().working_set().raster;
+    assert_eq!(full_programs.len(), hdr_programs.len() + 2);
+
+    let mut pool = graph_pool(&hdr_only);
+    let mut graph = pool.begin().unwrap();
+    let (view, _, _) = inputs(&hdr_only, &mut graph);
+    let frame = Frame::new(&view, &[], &[], &[], &[]);
+    let error = hdr_only.add_passes(&mut graph, frame).unwrap_err();
+    assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+    let scene = hdr_only
+        .add_scene(&mut graph, Frame::new(&view, &[], &[], &[], &[]))
+        .unwrap();
+    graph.readback_image("HDR", scene.hdr).unwrap();
+    graph.readback_image("depth", scene.depth.unwrap()).unwrap();
+    let plan = graph.compile().unwrap();
+    assert_eq!(
+        plan.ordered_pass_names().collect::<Vec<_>>(),
+        ["scene_opaque", "HDR", "depth"]
+    );
+}
+
+#[test]
+fn material_alpha_routes_to_the_matching_pass_before_graph_mutation() {
+    let mut recipe = recipe();
+    let mut pool = graph_pool(&recipe);
+    let mut graph = pool.begin().unwrap();
+    let (view, opaque, draw) = inputs(&recipe, &mut graph);
+    let encoded = MaterialFactors {
+        alpha_mode: AlphaMode::Blend,
+        ..MaterialFactors::default()
+    }
+    .encode()
+    .unwrap();
+    let factors = MaterialUniform::upload_encoded(&mut graph, "blend factors", &encoded).unwrap();
+    let materials = [opaque, Material::new(factors, opaque.textures())];
+    let opaque = [Draw::Indexed(draw)];
+    let blended = [Draw::Indexed(IndexedDraw {
+        material: 1,
+        ..draw
+    })];
+    for (frame, pass, material) in [
+        (
+            Frame::new(&view, &materials, &blended, &[], &[]),
+            "scene_opaque",
+            1,
+        ),
+        (
+            Frame::new(&view, &materials, &[], &opaque, &[]),
+            "scene_transparent",
+            0,
+        ),
+        (
+            Frame::new(&view, &materials, &[], &[], &blended),
+            "shadow_0",
+            1,
+        ),
+    ] {
+        let error = recipe.add_scene(&mut graph, frame).unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+        assert_eq!(error.pass_name(), Some(pass));
+        assert!(
+            error
+                .message
+                .contains(&format!("draw 0 uses material {material}"))
+        );
+    }
+    let frame = Frame::new(&view, &materials, &opaque, &blended, &opaque);
+    let result = recipe.add_passes(&mut graph, frame).unwrap();
+    result
+        .sdr
+        .capture()
+        .unwrap()
+        .readback(&mut graph, "capture")
+        .unwrap();
+    let compiled = graph.compile().unwrap();
+    assert_eq!(
+        compiled
+            .ordered_pass_names()
+            .filter(|&name| name == "pbr camera upload")
+            .count(),
+        1,
+    );
+}
+
+#[test]
+fn invalid_exposure_is_rejected_before_scene_declarations() {
+    let mut recipe = recipe();
+    let mut pool = graph_pool(&recipe);
+    let mut graph = pool.begin().unwrap();
+    let (view, material, draw) = inputs(&recipe, &mut graph);
+    let materials = [material];
+    let draws = [Draw::Indexed(draw)];
+    let mut frame = Frame::new(&view, &materials, &draws, &[], &[]);
+    frame.exposure = f32::NAN;
+    let error = recipe.add_passes(&mut graph, frame).unwrap_err();
+    assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+    assert_eq!(error.pass_name(), Some("tone_map"));
+    let output = recipe
+        .add_passes(&mut graph, Frame::new(&view, &materials, &draws, &[], &[]))
+        .unwrap();
+    output
+        .sdr
+        .capture()
+        .unwrap()
+        .readback(&mut graph, "read SDR")
+        .unwrap();
+    let plan = graph.compile().unwrap();
+    assert!(plan.ordered_pass_names().any(|name| name == "write_sdr"));
 }
 
 #[test]
@@ -318,7 +551,16 @@ fn msaa_resolves_empty_opaque_batches_and_transparent_batches_without_depth_outp
     for transparent in [false, true] {
         let mut graph = pool.begin().unwrap();
         let (view, material, draw) = inputs(&recipe, &mut graph);
-        let materials = [material];
+        let factors = MaterialUniform::upload(
+            &mut graph,
+            "blend factors",
+            MaterialFactors {
+                alpha_mode: AlphaMode::Blend,
+                ..MaterialFactors::default()
+            },
+        )
+        .unwrap();
+        let materials = [Material::new(factors, material.textures())];
         let draws = [Draw::Indexed(draw)];
         let frame = Frame::new(
             &view,
@@ -333,7 +575,12 @@ fn msaa_resolves_empty_opaque_batches_and_transparent_batches_without_depth_outp
             graph.image_desc(output.hdr).unwrap().sample_count,
             SampleCount::X1
         );
-        graph.readback_image("capture", output.sdr).unwrap();
+        output
+            .sdr
+            .capture()
+            .unwrap()
+            .readback(&mut graph, "capture")
+            .unwrap();
         let graph = graph.compile().unwrap();
         let expected = if transparent {
             "scene_transparent_resolve"
@@ -378,7 +625,12 @@ fn external_camera_can_be_uploaded_once_before_the_recipe() {
     frame.camera_target = Some(camera);
     let output = recipe.add_passes(&mut graph, frame).unwrap();
     assert_eq!(output.camera, camera);
-    graph.readback_image("capture", output.sdr).unwrap();
+    output
+        .sdr
+        .capture()
+        .unwrap()
+        .readback(&mut graph, "capture")
+        .unwrap();
     let graph = graph.compile().unwrap();
     assert!(
         graph
@@ -438,6 +690,11 @@ fn transformed_draws_check_ranges_before_appending_to_the_graph() {
     let mut frame = Frame::new(&view, &materials, &opaque, &[], &casters);
     frame.transforms = &transforms;
     let output = recipe.add_passes(&mut graph, frame).unwrap();
-    graph.readback_image("capture", output.sdr).unwrap();
+    output
+        .sdr
+        .capture()
+        .unwrap()
+        .readback(&mut graph, "capture")
+        .unwrap();
     assert!(graph.compile().is_ok());
 }

@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use renderer::capacity::{GraphRequirements, Preparation};
 use renderer::graph::{GraphCapacity, GraphCapacityKind, GraphErrorKind, GraphPool, ImageDesc};
 use renderer_pipeline::{
-    passes::output::{PreparedOutput, SdrEncoding, SdrOutput},
+    passes::output::{PreparedOutput, SdrOutput},
     unlit_forward::{ForwardConfig, PreparedForward},
 };
 
@@ -21,15 +21,8 @@ fn prepared_recipes_fit_their_declaration_budget_in_a_shared_graph() {
         0,
     )
     .unwrap();
-    let output = PreparedOutput::prepare(
-        &mut preparation,
-        [4, 3],
-        SdrOutput {
-            encoding: SdrEncoding::Linear,
-            fxaa: true,
-        },
-    )
-    .unwrap();
+    let output =
+        PreparedOutput::prepare(&mut preparation, [4, 3], SdrOutput::display(true)).unwrap();
     preparation
         .add_graph_requirements(GraphRequirements {
             passes: 1,
@@ -60,7 +53,11 @@ fn prepared_recipes_fit_their_declaration_budget_in_a_shared_graph() {
         graph.image_desc(images.display_linear).unwrap(),
         ImageDesc::rgba16_float(4, 3)
     );
-    graph.readback_image("capture", images.sdr).unwrap();
+    let display = images.sdr.display().unwrap();
+    assert!(images.sdr.capture().is_none());
+    graph
+        .readback_image("capture", display.raw_image())
+        .unwrap();
     assert_eq!(
         graph
             .compile()

@@ -19,10 +19,13 @@ use renderer::{
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::{
     graph::BufferDesc,
-    runtime::{FrameSubmission, Runtime},
+    runtime::{ExecutionError, FrameSubmission, Runtime},
 };
 use renderer_pipeline::{
-    pbr::{self, ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates},
+    pbr::{
+        self, MaterialUniform, ResidentMaterial, ShadowFrame, ShadowHistory, ShadowKey,
+        ShadowUpdates,
+    },
     pbr_forward, pbr_forward_plus,
 };
 use std::num::NonZeroUsize;
@@ -126,6 +129,7 @@ pub(super) struct Budget {
     pub readback_bytes: u64,
     pub ranges: usize,
     pipeline: PipelineMode,
+    unshadowed: bool,
     fixture: bool,
     packed: Option<Arc<indirect::Layout>>,
     indirect: bool,
@@ -172,16 +176,7 @@ impl Budget {
 
     #[cfg(all(windows, feature = "presentation"))]
     pub fn resized_buffers(&self, prepared: &PreparedSet) -> Vec<(u64, usize)> {
-        Self::frame_buffers(prepared)
-            .filter_map(|(size, count)| {
-                // The startup tile range remains registered across a resize.
-                // Working-set replacement describes only unregistered slots.
-                let retained = self.pipeline == PipelineMode::ForwardPlus
-                    && size == pbr_forward_plus::TILE_BUFFER_BYTES;
-                let count = count - usize::from(retained);
-                (count != 0).then_some((size, count))
-            })
-            .collect()
+        Self::frame_buffers(prepared).collect()
     }
 
     #[cfg(all(windows, feature = "presentation"))]
@@ -266,6 +261,7 @@ impl Budget {
         };
         let indirect = options.submission == SubmissionMode::Indirect;
         let prepared = PreparedSet::new(options, scene, packed.as_deref(), background)?;
+        let unshadowed = !options.shadows && prepared.main.uses_standard();
         let packed_buffers = packed.as_ref().map_or(0, |_| 2 + usize::from(indirect));
         let buffer_count = scene
             .primitives
@@ -504,6 +500,7 @@ impl Budget {
             readback_bytes,
             ranges: resources * (options.inflight + 3) + 32,
             pipeline: options.pipeline,
+            unshadowed,
             fixture: options.fixture,
             packed,
             indirect,
@@ -535,7 +532,7 @@ impl Budget {
 pub(super) struct Resident {
     pub vertices: Vec<ImportBuffer>,
     pub indices: Vec<ImportBuffer>,
-    pub materials: Vec<ImportBuffer>,
+    pub materials: Vec<ResidentMaterial>,
     pub images: Vec<ImportImage>,
     pub environment: [ImportImage; 3],
     pub environment_mips: [u32; 3],
@@ -547,7 +544,7 @@ pub(super) struct Resident {
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
     local_lights: Option<lighting::Preset>,
-    tiles: Option<pbr_forward_plus::Tiles>,
+    unshadowed: Option<pbr::Unshadowed>,
     packed: Option<indirect::Resident>,
     // Only small general Uniform uploads retain byte provenance. Geometry uses
     // typed immutable bounds and releases all upload CPU streams before frames.
@@ -600,6 +597,52 @@ pub(super) fn upload_buffer(
     owners: &mut Vec<GraphPool>,
     bytes: &[u8],
 ) -> Result<ImportBuffer, Error> {
+    upload_asset(
+        backend,
+        owners,
+        bytes.len(),
+        |graph| {
+            let buffer = graph.buffer(
+                "immutable asset buffer",
+                BufferDesc {
+                    size: bytes.len() as u64,
+                },
+            )?;
+            graph.upload_buffer("asset import boundary", buffer, 0, bytes)?;
+            graph.export_buffer(buffer)?;
+            Ok(buffer)
+        },
+        |buffer, submission| submission.export_buffer(buffer),
+    )
+}
+
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+pub(super) fn upload_material(
+    backend: &mut Runtime,
+    owners: &mut Vec<GraphPool>,
+    bytes: &[u8; program::MATERIAL_BYTES],
+) -> Result<ResidentMaterial, Error> {
+    upload_asset(
+        backend,
+        owners,
+        bytes.len(),
+        |graph| {
+            let material = MaterialUniform::upload_encoded(graph, "material factors", bytes)?;
+            material.export(graph)?;
+            Ok(material)
+        },
+        MaterialUniform::accept,
+    )
+}
+
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn upload_asset<D, T>(
+    backend: &mut Runtime,
+    owners: &mut Vec<GraphPool>,
+    byte_count: usize,
+    declare: impl FnOnce(&mut Graph) -> Result<D, GraphError>,
+    accept: impl FnOnce(D, &FrameSubmission) -> Result<T, ExecutionError>,
+) -> Result<T, Error> {
     let mut pool = GraphPool::new(
         GraphCapacity {
             resources: 1,
@@ -612,7 +655,7 @@ pub(super) fn upload_buffer(
             dependencies: 0,
             initial_ranges: 1,
             name_bytes: 64,
-            upload_bytes: bytes.len(),
+            upload_bytes: byte_count,
             edges: 2,
             segments: 2,
             readers: 2,
@@ -620,17 +663,10 @@ pub(super) fn upload_buffer(
         1,
     )?;
     let mut graph = pool.begin()?;
-    let buffer = graph.buffer(
-        "immutable asset buffer",
-        BufferDesc {
-            size: bytes.len() as u64,
-        },
-    )?;
-    graph.upload_buffer("asset import boundary", buffer, 0, bytes)?;
-    graph.export_buffer(buffer)?;
+    let resource = declare(&mut graph)?;
     let plan = graph.compile()?;
     let pending = backend.submit(&plan)?;
-    let imported = pending.export_buffer(buffer)?;
+    let imported = accept(resource, &pending)?;
     drop(super::backend::wait_for(backend, pending.id())?);
     drop((pending, plan));
     owners.push(pool);
@@ -699,7 +735,9 @@ impl Resident {
         };
         let vertices = take_keys(&mut self.vertices);
         let indices = take_keys(&mut self.indices);
-        let materials = take_keys(&mut self.materials);
+        for material in &mut self.materials {
+            material.release_snapshot();
+        }
         let camera = self.camera.key();
         let packed = self.packed.take().map(indirect::Resident::release);
         drop(self.camera);
@@ -711,7 +749,9 @@ impl Resident {
         };
         self.vertices = refresh(vertices)?;
         self.indices = refresh(indices)?;
-        self.materials = refresh(materials)?;
+        for material in &mut self.materials {
+            material.refresh_snapshot(backend)?;
+        }
         self.camera = backend.refresh_buffer(camera)?;
         self.packed = packed.map(|packed| packed.refresh(backend)).transpose()?;
         Ok(self)
@@ -806,7 +846,7 @@ impl Resident {
             })
             .transpose()?;
         for material in &scene.materials {
-            materials.push(upload_buffer(
+            materials.push(upload_material(
                 backend,
                 &mut upload_owners,
                 &material.uniform,
@@ -819,9 +859,13 @@ impl Resident {
             .pipeline
             .uses_local_lights()
             .then(|| lighting::preset(budget.fixture));
-        let tiles = (budget.pipeline == PipelineMode::ForwardPlus)
-            .then(|| lighting::initialize_tiles(backend, &camera))
-            .transpose()?;
+        let unshadowed = if budget.unshadowed {
+            let (placeholder, startup) = pbr::Unshadowed::initialize(backend)?;
+            drop(super::backend::wait_for(backend, startup)?);
+            Some(placeholder)
+        } else {
+            None
+        };
         let mut images = Vec::with_capacity(scene.images.len());
         for (index, image) in scene.images.iter().enumerate() {
             // This is the immutable publication boundary. Read/hash one chain,
@@ -893,7 +937,7 @@ impl Resident {
             shadow_parameters: shadow::Parameters::default(),
             camera,
             local_lights,
-            tiles,
+            unshadowed,
             packed,
             upload_owners,
         })
@@ -931,7 +975,7 @@ impl InstancePlacements {
 pub(super) struct Workspace {
     vertices: Vec<BufferHandle>,
     indices: Vec<BufferHandle>,
-    materials: Vec<BufferHandle>,
+    materials: Vec<MaterialUniform>,
     images: Vec<ImageHandle>,
     bindings: Vec<RasterBindings>,
     shadow_bindings: Vec<Option<RasterBindings>>,
@@ -1051,7 +1095,7 @@ impl Workspace {
 }
 pub(super) struct Built {
     pub graph: Graph,
-    pub output: ImageHandle,
+    pub output: renderer_pipeline::passes::output::SdrImage,
     pub camera_update: BufferHandle,
     pub captures: Option<Captures>,
     pub bloom_capture: Option<PassHandle>,
@@ -1123,7 +1167,7 @@ impl Geometry<'_> {
 #[derive(Clone, Copy)]
 struct MaterialBindings<'a> {
     uniform: BufferHandle,
-    factors: &'a [BufferHandle],
+    factors: &'a [MaterialUniform],
     images: &'a [ImageHandle],
 }
 
@@ -1132,8 +1176,8 @@ impl MaterialBindings<'_> {
         buffer_binding(0, self.uniform, program::CAMERA_BYTES as u64)
     }
 
-    fn factors(self, material: usize) -> Binding {
-        buffer_binding(1, self.factors[material], program::MATERIAL_BYTES as u64)
+    fn factors(self, material: usize) -> MaterialUniform {
+        self.factors[material]
     }
 
     fn texture(
@@ -1233,11 +1277,11 @@ fn append_shadows(
                 Some(bindings) => bindings,
                 None => {
                     let base_color = scene.materials[material].textures[0];
-                    let bindings = graph.raster_bindings(
+                    let bindings = materials.factors(material).raster_bindings(
+                        graph,
                         program,
                         &[
                             materials.camera(),
-                            materials.factors(material),
                             materials.texture(graph, scene, base_color, 0)?,
                             sampler_binding(1, 4, SamplerDescriptor::LinearRepeat),
                         ],
@@ -1261,13 +1305,12 @@ fn append_shadows(
 #[derive(Clone, Copy)]
 struct FrameLights {
     lights: BufferHandle,
-    tiles: Option<BufferHandle>,
+    tiles: Option<ImageView>,
 }
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn frame_lights(
     graph: &mut Graph,
-    runtime: &Runtime,
     resident: &Resident,
     options: &Options,
     camera: BufferHandle,
@@ -1277,11 +1320,10 @@ fn frame_lights(
     };
     let (lights, tiles) = lighting::append_reference(
         graph,
-        runtime,
         [options.width, options.height],
         camera,
         preset,
-        resident.tiles.as_ref(),
+        options.pipeline == PipelineMode::ForwardPlus,
     )?;
     Ok(Some(FrameLights { lights, tiles }))
 }
@@ -1355,7 +1397,6 @@ fn scene_bindings(
         let [base, normal, orm, emissive] = material.textures;
         let material_bindings = [
             materials.camera(),
-            materials.factors(index),
             materials.texture(graph, scene, base, 0)?,
             materials.texture(graph, scene, normal, 1)?,
             materials.texture(graph, scene, orm, 2)?,
@@ -1375,9 +1416,17 @@ fn scene_bindings(
         if instance_material == Some(index)
             && let Some(instances) = &prepared.instances
         {
-            instance_bindings = Some(graph.raster_bindings(instances, &all[..shared])?);
+            instance_bindings = Some(materials.factors(index).raster_bindings(
+                graph,
+                instances,
+                &all[..shared],
+            )?);
         }
-        bindings.push(graph.raster_bindings(program, &all[..program.bindings().len()])?);
+        bindings.push(materials.factors(index).raster_bindings(
+            graph,
+            program,
+            &all[..program.bindings().len() - 1],
+        )?);
     }
     Ok(instance_bindings)
 }
@@ -1388,7 +1437,6 @@ fn scene_bindings(
 )]
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(super) fn build(
-    runtime: &Runtime,
     pool: &mut GraphPool,
     workspace: &mut Workspace,
     resident: &Resident,
@@ -1400,7 +1448,6 @@ pub(super) fn build(
 ) -> Result<Built, Error> {
     if workspace.prepared.select(options).uses_standard() {
         return standard_forward::build(
-            runtime,
             pool,
             workspace,
             resident,
@@ -1447,7 +1494,7 @@ pub(super) fn build(
     graph.upload_buffer("camera update boundary", uniform, 0, &frame_uniform)?;
     graph.export_buffer(uniform)?;
     let (prepared, bloom) = workspace.prepared.select(options).reference();
-    let lighting = frame_lights(&mut graph, runtime, resident, options, uniform)?;
+    let lighting = frame_lights(&mut graph, resident, options, uniform)?;
     let materials = MaterialBindings {
         uniform,
         factors: &workspace.materials,
@@ -1591,7 +1638,7 @@ pub(super) fn build(
             depth,
             output,
             bloom: (processed != hdr).then_some(processed),
-            shadows: shadow.views.map(ImageView::image),
+            shadows: Some(shadow.views.map(ImageView::image)),
         },
         uniform,
         shadow.updates,
@@ -1626,7 +1673,7 @@ fn import_frame(
     for value in &resident.materials {
         workspace
             .materials
-            .push(graph.import_buffer("material factors", value)?);
+            .push(value.import(graph, "material factors")?);
     }
     for value in &resident.images {
         workspace
@@ -1688,9 +1735,9 @@ fn sort_blended(blended: &mut [usize], scene: &Scene, camera: Camera) {
 struct SceneImages {
     hdr: ImageHandle,
     depth: Option<ImageHandle>,
-    output: ImageHandle,
+    output: renderer_pipeline::passes::output::SdrImage,
     bloom: Option<ImageHandle>,
-    shadows: [ImageHandle; shadow::CASCADE_COUNT],
+    shadows: Option<[ImageHandle; shadow::CASCADE_COUNT]>,
 }
 
 fn finish_frame(
@@ -1716,10 +1763,15 @@ fn finish_frame(
             0,
         )
     });
-    graph.export_image(output)?;
+    if let Some(display) = output.display() {
+        display.export(&mut graph)?;
+    } else {
+        // The headless benchmark also tracks when this registration retires.
+        graph.export_image(output.raw_image())?;
+    }
     #[cfg(all(windows, feature = "presentation"))]
     let present_capture = if capture && options.windowed {
-        Some(graph.readback_image("capture linear presentation source", output)?)
+        Some(graph.readback_image("capture linear presentation source", output.raw_image())?)
     } else {
         None
     };
@@ -1727,7 +1779,10 @@ fn finish_frame(
     let captures = if capture {
         Some(Captures {
             hdr: graph.readback_image("capture linear HDR", hdr)?,
-            sdr: graph.readback_image("capture sRGB", output)?,
+            sdr: output
+                .capture()
+                .ok_or("headless Bistro requires sRGB capture output")?
+                .readback(&mut graph, "capture sRGB")?,
             depth: depth
                 .map(|depth| graph.readback_image("capture depth", depth))
                 .transpose()?,
@@ -1743,12 +1798,29 @@ fn finish_frame(
         None
     };
     let shadow_captures = if capture && options.capture_shadows {
-        Some([
-            graph.readback_image("capture cascade 0", shadows[0])?,
-            graph.readback_image("capture cascade 1", shadows[1])?,
-            graph.readback_image("capture cascade 2", shadows[2])?,
-            graph.readback_image("capture cascade 3", shadows[3])?,
-        ])
+        let mut captures = [None; shadow::CASCADE_COUNT];
+        let names = [
+            "capture cascade 0",
+            "capture cascade 1",
+            "capture cascade 2",
+            "capture cascade 3",
+        ];
+        let resolution = shadow::Parameters::default().resolution;
+        for (cascade, capture) in captures.iter_mut().enumerate() {
+            let image = if let Some(shadows) = shadows {
+                shadows[cascade]
+            } else {
+                let image = graph.image(
+                    "diagnostic disabled cascade",
+                    ImageDesc::depth32(resolution, resolution),
+                )?;
+                let view = graph.image_view(image, 0, 0)?;
+                pbr_forward::add_shadow_pass(&mut graph, cascade, view, |_| Ok(()))?;
+                image
+            };
+            *capture = Some(graph.readback_image(names[cascade], image)?);
+        }
+        Some(captures.map(Option::unwrap))
     } else {
         None
     };

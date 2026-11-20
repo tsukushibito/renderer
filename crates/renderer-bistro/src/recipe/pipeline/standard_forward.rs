@@ -6,13 +6,11 @@ use renderer_pipeline::pbr::{Draw, Material};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::{
     Built, Camera, Error, GraphPool, Options, Resident, SceneImages, SubmissionMode, Workspace,
-    caster_revision, finish_frame, import_environment, import_frame, lighting, material_visible,
+    caster_revision, finish_frame, import_environment, import_frame, material_visible,
     select_draws, shadow_casters,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::runtime::Runtime;
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer_pipeline::pbr::{self, Frame, IndexedDraw, ShadowSource};
+use renderer_pipeline::pbr::{self, Frame, FrameShadows, IndexedDraw, ShadowSource};
 
 pub(super) struct Inputs {
     materials: Vec<Material>,
@@ -39,7 +37,6 @@ impl Inputs {
 )]
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(super) fn build(
-    runtime: &Runtime,
     pool: &mut GraphPool,
     workspace: &mut Workspace,
     resident: &Resident,
@@ -58,13 +55,18 @@ pub(super) fn build(
         f32::from_le_bytes(camera_bytes[index * 4..index * 4 + 4].try_into().unwrap())
     };
     let view = recipe.prepare_view(
-        pbr::Camera {
-            position: camera.position,
-            target: camera.target,
-            fov_y_degrees: camera.fov,
-            near: word(19),
-            far: word(23),
-        },
+        pbr::ViewInput::new(
+            std::array::from_fn(|column| std::array::from_fn(|row| word(column * 4 + row))),
+            camera.position,
+            std::array::from_fn(|axis| {
+                f64::from(camera.target[axis]) - f64::from(camera.position[axis])
+            }),
+            [word(19), word(23)],
+            pbr::Projection::SymmetricPerspective {
+                vertical_fov_degrees: camera.fov,
+                aspect: options.width as f32 / options.height as f32,
+            },
+        )?,
         pbr::Sun::from_normalized(
             [word(20), word(21), word(22)],
             [word(24), word(25), word(26)],
@@ -130,16 +132,15 @@ pub(super) fn build(
                 scene.images[index].mips.len() as u32,
             )
         };
-        inputs.materials.push(Material {
+        inputs.materials.push(Material::new(
             factors,
-            factor_offset: 0,
-            textures: [
+            [
                 texture(base)?,
                 texture(normal)?,
                 texture(orm)?,
                 texture(emissive)?,
             ],
-        });
+        ));
     }
     let geometry = |index: usize| IndexedDraw {
         vertices: workspace.vertices[index],
@@ -172,56 +173,69 @@ pub(super) fn build(
         .transparent
         .extend(workspace.blended.iter().copied().map(draw));
 
-    let history_frame = workspace
-        .shadow_reuse
-        .as_ref()
-        .map(|reuse| {
-            // This workspace retains the same immutable scene and instance grid.
-            reuse.history.begin_view(
-                &mut graph,
-                &view,
-                [caster_revision(options); pbr::CASCADE_COUNT],
-            )
-        })
-        .transpose()?;
-    for (cascade, casters) in inputs.casters.iter_mut().enumerate() {
-        casters.clear();
-        if !history_frame
+    let history_frame = if options.shadows {
+        let history_frame = workspace
+            .shadow_reuse
             .as_ref()
-            .is_some_and(|frame| frame.is_reused(cascade))
-        {
-            casters.extend(
-                shadow_casters(scene, options, |index| {
-                    view.cascade_overlaps(cascade, resident.standard_primitive_bounds[index])
-                        .unwrap_or(true)
-                })
-                .map(draw),
-            );
-            // Both fixture modes submit the same caster geometry. The grid is
-            // small enough to submit to each cascade without filtering batches.
-            if options.shadows
-                && let Some(placements) = &workspace.placements
+            .map(|reuse| {
+                // The workspace retains the same scene and instance grid.
+                reuse.history.begin_view(
+                    &mut graph,
+                    &view,
+                    [caster_revision(options); pbr::CASCADE_COUNT],
+                )
+            })
+            .transpose()?;
+        for (cascade, casters) in inputs.casters.iter_mut().enumerate() {
+            casters.clear();
+            if !history_frame
+                .as_ref()
+                .is_some_and(|frame| frame.is_reused(cascade))
             {
-                placements.append_draws(
-                    options.instances,
-                    geometry(placements.fixture.primitive),
-                    casters,
+                casters.extend(
+                    shadow_casters(scene, options, |index| {
+                        view.cascade_overlaps(cascade, resident.standard_primitive_bounds[index])
+                            .unwrap_or(true)
+                    })
+                    .map(draw),
                 );
+                // Both fixture modes submit the same caster geometry.
+                if let Some(placements) = &workspace.placements {
+                    placements.append_draws(
+                        options.instances,
+                        geometry(placements.fixture.primitive),
+                        casters,
+                    );
+                }
             }
         }
-    }
-    let frame = Frame {
-        view: &view,
-        materials: &inputs.materials,
-        opaque: &inputs.opaque,
-        transparent: &inputs.transparent,
-        shadows: std::array::from_fn(|cascade| match &history_frame {
+        history_frame
+    } else {
+        None
+    };
+    let shadows = if options.shadows {
+        FrameShadows::Cascades(std::array::from_fn(|cascade| match &history_frame {
             Some(frame) => frame.source(cascade, &inputs.casters[cascade]),
             None => ShadowSource::Render {
                 target: None,
                 casters: &inputs.casters[cascade],
             },
-        }),
+        }))
+    } else {
+        FrameShadows::Disabled(
+            resident
+                .unshadowed
+                .as_ref()
+                .ok_or("unshadowed Bistro needs its prepared placeholder")?
+                .import(&mut graph)?,
+        )
+    };
+    let frame = Frame {
+        view: &view,
+        materials: &inputs.materials,
+        opaque: &inputs.opaque,
+        transparent: &inputs.transparent,
+        shadows,
         camera_target: Some(camera_target),
         transforms: workspace
             .placements
@@ -229,12 +243,11 @@ pub(super) fn build(
             .map_or(&[], |placements| &placements.transforms[..]),
         exposure: 2.0,
     };
-    let tiles = lighting::snapshot(runtime, resident.tiles.as_ref())?;
     let lights = resident
         .local_lights
         .as_ref()
         .map_or(&[][..], |preset| &preset[..]);
-    let images = recipe.add_scene(&mut graph, frame, lights, tiles.as_ref())?;
+    let images = recipe.add_scene(&mut graph, frame, lights)?;
     let processed = bloom.add_passes(&mut graph, images.hdr)?;
     let output = recipe.add_output(&mut graph, processed, 2.0)?;
     let updates = history_frame

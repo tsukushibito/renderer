@@ -4,8 +4,8 @@
             "name" : "main",
             "mode" : "comp",
             "workgroup_size" : [
-                32,
-                1,
+                8,
+                4,
                 1
             ],
             "workgroup_size_is_spec_constant_id" : [
@@ -63,25 +63,18 @@
                     "matrix_stride" : 16
                 }
             ]
-        },
-        "_9" : {
-            "name" : "type.RWByteAddressBuffer",
-            "members" : [
-                {
-                    "name" : "_m0",
-                    "type" : "uint",
-                    "array" : [
-                        0
-                    ],
-                    "array_size_is_literal" : [
-                        true
-                    ],
-                    "offset" : 0,
-                    "array_stride" : 4
-                }
-            ]
         }
     },
+    "images" : [
+        {
+            "type" : "image2D",
+            "name" : "tile_masks",
+            "writeonly" : true,
+            "set" : 0,
+            "binding" : 3,
+            "format" : "rgba16f"
+        }
+    ],
     "ssbos" : [
         {
             "type" : "_4",
@@ -90,14 +83,6 @@
             "block_size" : 2064,
             "set" : 0,
             "binding" : 2
-        },
-        {
-            "type" : "_9",
-            "name" : "tile_lists",
-            "writeonly" : true,
-            "block_size" : 0,
-            "set" : 0,
-            "binding" : 3
         }
     ],
     "ubos" : [

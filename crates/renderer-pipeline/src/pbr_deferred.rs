@@ -19,7 +19,7 @@ use crate::{
             shadow_program,
         },
     },
-    pbr::{Bounds, Camera, Environment, Frame, PreparedView, SceneLimits, Sun},
+    pbr::{Bounds, Environment, Frame, PreparedView, SceneLimits, Sun, ViewInput},
     pbr_forward::{self, Programs, prepare_recipe},
 };
 
@@ -110,12 +110,12 @@ impl Prepared {
 
     pub fn prepare_view(
         &self,
-        camera: Camera,
+        view: ViewInput,
         sun: Sun,
         bounds: Bounds,
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
-        self.common.prepare_view(camera, sun, bounds, environment)
+        self.common.prepare_view(view, sun, bounds, environment)
     }
 
     /// Declare the shadows, G-buffer, full-screen lighting and transparent
@@ -188,14 +188,17 @@ impl Prepared {
         self.common.add_output(graph, hdr, exposure)
     }
 
+    /// Append the scene and SDR output. Missing output or invalid exposure is
+    /// rejected before declaring any work. Discard the Graph on later errors.
     pub fn add_passes(
         &mut self,
         graph: &mut Graph,
         frame: Frame<'_>,
     ) -> Result<FrameImages, GraphError> {
-        let exposure = frame.exposure;
+        let (output, exposure) = self.common.checked_output(frame.exposure)?;
         let SceneImages { scene, gbuffer } = self.add_scene(graph, frame)?;
-        let output = self.add_output(graph, scene.hdr, exposure)?;
+        let output =
+            output.append_validated(graph, graph.image_view(scene.hdr, 0, 0)?, exposure)?;
         Ok(FrameImages {
             scene: crate::pbr::FrameImages {
                 hdr: scene.hdr,

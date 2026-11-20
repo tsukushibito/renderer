@@ -6,9 +6,10 @@ cbuffer CullCamera : register(b0, space0) {
 };
 
 #ifdef __spirv__
+[[vk::image_format("rgba16f")]]
 [[vk::ext_decorate(25)]] // SPIR-V NonReadable, matching the Graph's write-only use.
 #endif
-RWByteAddressBuffer tile_lists : register(u3, space0);
+RWTexture2D<float4> tile_masks : register(u3, space0);
 
 float4 matrix_row(float4x4 matrix, uint row) {
     return float4(matrix[0][row], matrix[1][row], matrix[2][row], matrix[3][row]);
@@ -22,17 +23,19 @@ bool sphere_touches(float4 plane, float3 center, float radius) {
     return !(dot(terms, 1.0) < -reach - tolerance);
 }
 
-[numthreads(32, 1, 1)]
+[numthreads(8, 4, 1)]
 void main(uint3 dispatch_id : SV_DispatchThreadID) {
-    // The reviewed 1D dispatch determines the write address. Untrusted frame
-    // dimensions can change membership only, not where or how much we write.
-    uint tile = dispatch_id.x;
-    uint start = tile * LOCAL_LIGHT_TILE_WORDS;
+    // The storage image and Image2d dispatch define the complete write
+    // footprint. The light header can only change which bits are set.
+    uint2 dimensions;
+    tile_masks.GetDimensions(dimensions.x, dimensions.y);
+    if (any(dispatch_id.xy >= dimensions)) { return; }
+
     uint2 extent = local_light_extent();
-    uint columns = local_light_columns(extent);
-    uint2 tile_xy = uint2(tile % columns, tile / columns);
+    uint2 tile_xy = uint2(dispatch_id.x / 2u, dispatch_id.y);
     uint2 first = tile_xy * LOCAL_LIGHT_TILE_SIZE;
-    uint count = 0u;
+    uint first_light = (dispatch_id.x % 2u) * 32u;
+    uint mask = 0u;
     if (all(first < extent)) {
         uint2 end = min(first + LOCAL_LIGHT_TILE_SIZE, extent);
         float2 lower = 2.0 * float2(first) / float2(extent) - 1.0;
@@ -46,8 +49,8 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
         float4 top = y - lower.y * w;
         float4 bottom = upper.y * w - y;
         float4 far_plane = w - z;
-        uint lights = local_light_count();
-        for (uint index = 0u; index < lights; ++index) {
+        uint end_light = min(first_light + 32u, local_light_count());
+        for (uint index = first_light; index < end_light; ++index) {
             float4 sphere = load_point_light(index).position_radius;
             if (sphere.w > 0.0
                 && sphere_touches(left, sphere.xyz, sphere.w)
@@ -56,13 +59,11 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
                 && sphere_touches(bottom, sphere.xyz, sphere.w)
                 && sphere_touches(z, sphere.xyz, sphere.w)
                 && sphere_touches(far_plane, sphere.xyz, sphere.w)) {
-                tile_lists.Store((start + 1u + count) * 4u, index);
-                ++count;
+                mask |= 1u << (index - first_light);
             }
         }
     }
-    for (uint index = count; index < MAX_LOCAL_LIGHTS; ++index) {
-        tile_lists.Store((start + 1u + index) * 4u, 0u);
-    }
-    tile_lists.Store(start * 4u, count);
+    // Binary16 represents every integer in [0, 255] exactly.
+    tile_masks[dispatch_id.xy] = float4(
+        mask & 255u, (mask >> 8u) & 255u, (mask >> 16u) & 255u, mask >> 24u);
 }
