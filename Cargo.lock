@@ -1221,6 +1221,10 @@ dependencies = [
  "renderer",
  "serde",
  "serde-saphyr",
+ "serde_json",
+ "sha2",
+ "tracy-client",
+ "winit",
 ]
 
 [[package]]
