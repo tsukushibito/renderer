@@ -26,6 +26,16 @@ impl FrameSubmission {
         }
     }
 
+    /// Identity of the Graph whose work was accepted.
+    pub fn graph_id(&self) -> u64 {
+        match &self.0 {
+            #[cfg(feature = "vulkan")]
+            SubmissionInner::Vulkan(submission) => submission.graph_id(),
+            #[cfg(all(feature = "d3d12", windows))]
+            SubmissionInner::D3D12(submission) => submission.graph_id(),
+        }
+    }
+
     /// Snapshot of accepted scheduled contents. Use the registered key and
     /// Runtime::delete to release the registration when no longer needed.
     pub fn export_buffer(&self, handle: BufferHandle) -> Result<ImportBuffer, ExecutionError> {

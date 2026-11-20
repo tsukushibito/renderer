@@ -7,10 +7,14 @@
 //! separately to insert additional HDR passes.
 
 mod draw;
+mod history;
 mod raster;
 mod view;
 
 pub use draw::{Draw, Material};
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+pub use history::ShadowHistoryError;
+pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use raster::{add_scene_passes, add_shadow_pass};
 pub use view::{AlphaMode, Bounds, Camera, MaterialFactors, ShadowSettings, Sun};
 
@@ -83,6 +87,21 @@ impl PreparedView {
         self.data.shadow_matrices()
     }
 
+    /// Key each cascade by its exact projection, whether shadows are enabled,
+    /// and the caller's revision for its shadow caster inputs.
+    pub fn shadow_keys(
+        &self,
+        caster_revisions: [u64; CASCADE_COUNT],
+    ) -> [ShadowKey; CASCADE_COUNT] {
+        std::array::from_fn(|cascade| {
+            ShadowKey::for_view(
+                self.shadow_matrices()[cascade],
+                caster_revisions[cascade],
+                self.shadows.enabled,
+            )
+        })
+    }
+
     pub fn uniform_bytes(&self) -> &[u8; CAMERA_BYTES] {
         &self.uniform
     }
@@ -90,6 +109,7 @@ impl PreparedView {
 
 /// Choose which image a cascade supplies to the scene. Handles belong to the
 /// current Graph. Import a prior frame's valid snapshot before selecting reuse.
+/// [`ShadowHistory`] can manage these images across submissions.
 #[derive(Clone, Copy, Debug)]
 pub enum ShadowSource<'a> {
     Render {
