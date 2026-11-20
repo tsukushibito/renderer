@@ -16,6 +16,21 @@ cargo run --locked -p renderer --no-default-features --example graph_composition
 cargo run --locked -p renderer-pipeline --no-default-features --example rust_pipeline
 ```
 
+<a id="pbr-forward-example"></a>
+
+**標準 PBR Forward を小さなシーンで確認する**
+
+`pbr_forward`はサンプル内で用意した小さなシーンを、公開レシピでオフスクリーン描画します。
+色と深度の読み戻しを確認し、`--output`を指定するとSDRをPPMに保存します。
+`--copy-hdr`はシーン描画と出力の間にアプリ独自のコピーパスを追加します。
+
+```sh
+cargo run --locked -p renderer-pipeline --no-default-features --features vulkan --example pbr_forward -- --api vulkan
+cargo run --locked -p renderer-pipeline --no-default-features --features d3d12 --example pbr_forward -- --api d3d12 --copy-hdr --output pbr-forward.ppm
+```
+
+D3D12はWindowsで実行できます。準備とパスの接続は[PBR Forwardの使い方](tooling.md#pbr-forward-recipe)を参照してください。
+
 **Vulkanで画像に描画する**
 
 `headless`はウィンドウを作らず、indexed mesh、深度、Compute、readbackを通してPPMを保存します。
@@ -40,7 +55,7 @@ cargo run --locked -p renderer --no-default-features --features d3d12,presentati
 **Bistroの小さなシーンを描画する**
 
 `renderer`の`bistro`は公開Graph APIを使い、Rustでパスを定義して描画パイプラインを組み立てます。
-`renderer-pipeline`の`bistro`は標準レシピとシーン固有のパスをRustで合成します。どちらも`--fixture`で小さなシーンを描画し、
+`renderer-pipeline`の`bistro`は標準 PBR Forward と比較用の描画構成をRustで組み立てます。どちらも`--fixture`で小さなシーンを描画し、
 レポートとキャプチャを出力します。実行ごとに新しい出力先を指定し、ビルド成果物もパッケージごとに保存します。
 
 ```powershell
@@ -74,7 +89,8 @@ cargo build --locked --release -p renderer --no-default-features --features vulk
 | ターゲット | 確認できること | 実行条件 |
 | --- | --- | --- |
 | `graph_composition` | 利用側のRasterパスの合成と不要分岐の除去 | CPU。追加feature不要 |
-| `rust_pipeline` | [`renderer-pipeline`の準備APIとパス合成](tooling.md#rust-pipeline)、標準レシピへの独自パスの接続 | CPU。追加feature不要 |
+| `rust_pipeline` | [準備APIとパス合成](tooling.md#rust-pipeline)、標準レシピへの独自パスの接続 | CPU。追加feature不要 |
+| `pbr_forward` | [標準 PBR Forward](tooling.md#pbr-forward-recipe)で小さなシーンを描画し、HDRへ独自パスを接続 | `vulkan`またはWindowsの`d3d12` |
 | `headless` | offscreen描画とPPMへの書き出し | `vulkan` |
 | `windowed` | Windowsの表示ループ、標準／独自Graph、カメラ操作 | Windows、`presentation` と `vulkan` または `d3d12` |
 | `renderer`の`bistro` | 公開Graph APIを使ったRustのパス定義と合成 | `vulkan` またはWindowsの`d3d12` |
@@ -94,9 +110,9 @@ Bistroの全シーン以外の実行には、リポジトリに含まれる小�
 実行済みの結果は[検証状況](../verification/current.md)に置いています。
 
 通常のCIでは、小さなCPU fixtureで準備APIとGraph構築を検証します。
-両方のBistroサンプルはLinuxのVulkan構成とWindowsの二API・表示構成でビルドを確認し、
-CLI、シェーダーとの接続、レシピなどのサンプル固有のCPUテストはWindowsで各版を一度ずつ明示実行します。
-実GPUテストは`cargo test -p <package> --example bistro`に対象のfeatureと`-- --ignored`を指定して実行します。
+`pbr_forward`のCPUテストと両方のBistroサンプルのビルドは、LinuxのVulkan構成とWindowsの二API・表示構成で確認します。
+BistroのCLI、シェーダーとの接続、レシピのCPUテストはWindowsで各版を一度ずつ実行します。
+実GPUテストは`cargo test -p <package> --example <target>`に`pbr_forward`または`bistro`、対象featureと`-- --ignored`を指定して実行します。
 
-`rust_pipeline`と標準レシピを使う`bistro`の入口は`crates/renderer-pipeline/examples/`にあります。
+`rust_pipeline`、`pbr_forward`、標準レシピを使う`bistro`の入口は`crates/renderer-pipeline/examples/`にあります。
 ほかの入口は`crates/renderer/examples/`にあり、試験や計測と共用するfixtureのRustコードは`crates/renderer/fixtures/`にあります。

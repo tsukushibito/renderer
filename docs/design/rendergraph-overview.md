@@ -33,9 +33,9 @@ Graphのprivateな保証境界を通します。任意の生CommandBufferを受�
 利用側は`FrameSnapshot::connect_graph`、常駐入力では`VulkanEngine::begin_graph`／`connect_snapshot`から
 描画を強制せず構築を始められます。`Graph::raster`のクロージャ内で`RasterPass::draw`に
 `SnapshotInputs::draws()`を渡し、出力を利用側で選びます。
-`renderer_pipeline::standard::{passes, graphs}`で[標準部品を提供](rendergraph.md#公開標準パスと標準グラフ)します。
-標準forwardの利用、opaque後のlinear colorを使う後処理、公開パスの直接合成を選べます。
-`renderer_pipeline::standard::snapshot`の便利APIは、Engineへの入力接続と同じ公開レシピを組み合わせます。
+`renderer_pipeline::{passes, pbr_forward, unlit_forward}`で[標準部品を提供](rendergraph.md#公開標準パスと標準グラフ)します。
+発光や照明を扱うPBR Forward、頂点色を描くunlit Forward、公開パスの直接合成を選べます。
+`renderer_pipeline::unlit_forward::snapshot`の便利APIは、Engineへの入力接続と同じ公開レシピを組み合わせます。
 
 ## 2. 小さなGraphを作ってみる
 

@@ -323,12 +323,12 @@ RGBA16Fのpacked転送は1 texel8 byteであり、共有stagingのoffset alignme
 D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyは同extent/formatのRGBA8/RGBA16Fを扱い、
 各実format/usage能力の作成時照会とnative失敗処理を行う。
 
-`renderer_pipeline::standard::{passes, graphs}`は通常のGraph／Program／copy APIを使って構築する。
+`renderer_pipeline::{passes, pbr_forward, unlit_forward}`は通常のGraph／Program／copy APIを使って構築する。
 利用側の多段Computeも同じ公開`dispatch`で接続し、標準専用のloweringやnative実行分岐を追加しない。
 三経路の混合構成ではRaster／Compute双方のProgram、画像class、vertex/indexとprovenanceを明示準備し、
 Graph由来のattachment→sampled／storage→copy依存、実Fence完了とCPU結果返却までの所有を維持する。
 実GPUのstrict／shippingと全frameメモリの実行範囲は[検証記録](../verification/current.md#公開三経路のconsumer移行と混合compute受入)に記す。
-`renderer_pipeline::standard::snapshot`の便利経路はVulkanEngineの公開入力接続・出力選択と標準forwardを組み合わせる。
+`renderer_pipeline::unlit_forward::snapshot`の便利経路はVulkanEngineの公開入力接続・出力選択とunlit Forwardを組み合わせる。
 両crateで同じGraphの同期と実行資源の寿命管理を使う。
 prepassedのshader深度writeを止めてもGraphのattachment accessは保守的read/writeのままとし、
 通常のEARLY/LATE_FRAGMENT_TESTS依存とrendering scope外のbarrierを維持する。
