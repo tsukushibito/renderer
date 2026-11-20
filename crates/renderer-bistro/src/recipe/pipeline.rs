@@ -456,6 +456,8 @@ impl Budget {
                 // compute. Geometry streams above still size cold CPU uploads.
                 pbr_forward_plus::LIGHT_BUFFER_BYTES as usize
             })
+            // Direct frames also share the staging capacity across uploads.
+            .max(graph.upload_bytes)
             .max(packed.as_ref().filter(|_| indirect).map_or(0, |layout| {
                 let frame_bytes = layout.template_upload_bytes() + graph.upload_bytes;
                 layout.aabb_bytes().max(frame_bytes)
@@ -1950,6 +1952,25 @@ mod tests {
             .upload_bytes
                 >= pair_bytes
         );
+    }
+
+    #[test]
+    fn upload_budget_covers_direct_forward_plus_with_model_transforms() {
+        let mut options = tiny_output_options();
+        options.width = 129;
+        options.height = 97;
+        options.pipeline = PipelineMode::ForwardPlus;
+        options.sample_count = SampleCount::X4;
+        options.instances = instancing::Mode::Individual;
+        let budget = Budget::new(
+            &Scene::fixture(false),
+            &ibl::Environment::fixture(),
+            &options,
+            [0.0; 3],
+        )
+        .unwrap();
+
+        assert!(budget.upload_bytes >= budget.graph.upload_bytes);
     }
 
     #[cfg(all(windows, feature = "d3d12"))]
