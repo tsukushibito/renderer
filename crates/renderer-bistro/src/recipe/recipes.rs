@@ -8,7 +8,7 @@ use renderer::{
         Attachment, Binding, BufferDesc, BufferHandle, Graph, GraphError, ImageDesc, ImageHandle,
         ImageView, LoadOp, RasterAttachments, RasterPass, SampleCount, StoreOp,
     },
-    program::{MAX_RASTER_BINDINGS, ManagedRasterProgram, RasterPipelineRequest},
+    program::{ManagedRasterProgram, RasterPipelineRequest},
 };
 use renderer_pipeline::{
     passes::{
@@ -124,6 +124,11 @@ impl Prepared {
                 max_draws,
                 max_materials: scene.materials.len(),
                 max_casters_per_cascade: max_draws,
+                max_transforms: if options.instances.enabled() {
+                    crate::shared::instancing::COUNT
+                } else {
+                    0
+                },
             };
             let standard = match options.pipeline {
                 PipelineMode::Forward => {
@@ -141,8 +146,6 @@ impl Prepared {
                                 shadow: programs.shadow.clone(),
                             },
                         )?
-                    } else if options.instances.enabled() {
-                        pbr_forward::prepare_with_transforms(config, limits)?
                     } else {
                         pbr_forward::prepare(config, limits)?
                     };
@@ -352,16 +355,21 @@ impl Reference {
             .ok_or("Bistro instance constant capacity overflow")?;
         let draws = primitives + shadow_draws + groups + instance_draws + usize::from(is_deferred);
         let passes = shadow::CASCADE_COUNT + 8;
+        let max_bindings = raster
+            .iter()
+            .map(|request| request.program.bindings().len())
+            .max()
+            .expect("the reference opaque Program is always prepared");
         preparation.add_requirements(
             GraphRequirements {
                 resources: targets,
                 passes,
                 compute_dispatches: usize::from(tiled),
                 draws,
-                bindings: scene.materials.len() * (MAX_RASTER_BINDINGS + 4)
-                    + usize::from(instance_draws != 0) * MAX_RASTER_BINDINGS
+                bindings: scene.materials.len() * (max_bindings + 4)
+                    + usize::from(instance_draws != 0) * max_bindings
                     + 20,
-                accesses: draws * (MAX_RASTER_BINDINGS + 2) + 36,
+                accesses: draws * (max_bindings + 2) + 36,
                 attachments: shadow::CASCADE_COUNT + 8,
                 raster_constant_words: shadow_draws + instance_words,
                 name_bytes: (targets + passes) * 48,

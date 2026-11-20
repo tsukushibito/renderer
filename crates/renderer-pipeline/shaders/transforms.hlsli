@@ -1,15 +1,23 @@
 #ifndef PBR_TRANSFORMS_HLSLI
 #define PBR_TRANSFORMS_HLSLI
 
-// One initialized, raw read-only table of 1024 six-row records. The
-// descriptor declares the entire 98,304-byte prefix on both backends.
-ByteAddressBuffer transform_table : register(t2, space0);
+// Read-only six-row records. The descriptor declares the full initialized
+// prefix matching the compiled table length, independently of draw operands.
+#ifndef RENDERER_TRANSFORM_RECORDS
+#define RENDERER_TRANSFORM_RECORDS 1024
+#endif
+static const uint LAST_TRANSFORM = RENDERER_TRANSFORM_RECORDS - 1u;
+ByteAddressBuffer transform_table : register(t4, space0);
 
 uint transform_address(uint first, uint instance_id) {
     // Guard both terms before adding: inline words and instance counts are
     // also available to callers using the low-level Graph API.
-    uint start = min(first, 1023u);
-    return (start + min(instance_id, 1023u - start)) * 96u;
+    uint start = min(first, LAST_TRANSFORM);
+    return (start + min(instance_id, LAST_TRANSFORM - start)) * 96u;
+}
+
+uint transform_is_mirrored(float parity) {
+    return parity < 0.0 ? 1u : 0u;
 }
 
 struct TransformRows {

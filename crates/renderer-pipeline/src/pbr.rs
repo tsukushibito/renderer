@@ -73,6 +73,10 @@ pub struct SceneLimits {
     pub max_draws: usize,
     pub max_materials: usize,
     pub max_casters_per_cascade: usize,
+    /// Maximum model transforms in this view, up to [`MAX_TRANSFORMS`].
+    /// Zero reserves no transform resources. Positive limits select the
+    /// smallest prepared GPU table that fits (64 or 1,024 records).
+    pub max_transforms: usize,
 }
 
 /// Graph-local linear HDR environment inputs. Irradiance and reflection are

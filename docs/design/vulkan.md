@@ -239,6 +239,16 @@ Vulkanの準備では、要求した各ProgramがSPIR-Vを持つことをネイ�
 Rasterのfragmentなしは深度専用パスの一形態であり、Vulkan用バイナリ一式の有無と独立に扱う。
 通常フレームでは、対応形式を確認した準備済みpipelineを使う。
 
+標準PBRのモデル空間描画は、`SceneLimits::max_transforms`に合わせて64件または1,024件の
+固定StorageReadテーブルを準備する。Forward+のライトとタイルを含むモデル空間Programは
+19 bindingを使う。デバイスのdescriptor上限は従来どおりProgram準備で照合する。
+ホストは有効な描画と再描画するカスケードから変換の範囲を確定し、変換を参照しないフレームでは
+転送を省く。参照があるときは選んだテーブル全体を初期化して転送し、shaderは同じ上限で
+インデックスを制限する。固定64件の転送は6 KiB、1,024件は96 KiBである。
+間接描画のモデル変換番号はグループのinline定数として渡す。間接引数の`firstInstance`は
+常にゼロで、`drawIndirectFirstInstance`を有効にする必要はない。
+鏡映の向きは変換作成時に決め、接線の向きと単面材質の表裏判定へ反映する。
+
 Examplesの画像変換は、各8×8のlocal sizeと型付きRGBA8 storage imageを持つ利用側Programを明示準備し、
 `Graph::dispatch`で実行する。端数のinvocationはshader内で除外し、実Deviceのdispatch・descriptor上限を確認する。
 等価な画像転送は`copy_image`を使う。表示のためのfullscreen描画は[Windows Presentation](#windows-presentation)を参照する。

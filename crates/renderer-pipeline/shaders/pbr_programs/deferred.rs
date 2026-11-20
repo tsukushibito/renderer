@@ -8,7 +8,7 @@ use renderer::program::BindingType;
 
 pub const DEFERRED_RECONSTRUCTION_BYTES: usize = 64;
 
-static GBUFFER: RasterProgramDescriptor = RasterProgramDescriptor {
+pub(in crate::passes::pbr) static GBUFFER: RasterProgramDescriptor = RasterProgramDescriptor {
     color_outputs: &[ImageFormat::Rgba16Float; 3],
     bindings: &[
         BindingLayout {

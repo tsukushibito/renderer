@@ -14,10 +14,13 @@ struct Parameters {
 ConstantBuffer<Parameters> parameters : register(b7, space0);
 
 struct PbrVertex {
+#ifndef RENDERER_GBUFFER_VERTEX
     BISTRO_LOCATION(0) float3 world_position : TEXCOORD0;
+#endif
     BISTRO_LOCATION(1) float3 world_normal : TEXCOORD1;
     BISTRO_LOCATION(2) float4 world_tangent : TEXCOORD2;
     BISTRO_LOCATION(3) float2 texcoord : TEXCOORD3;
+    BISTRO_LOCATION(4) nointerpolation uint mirrored : TEXCOORD4;
     float4 clip_position : SV_Position;
 };
 
@@ -43,11 +46,15 @@ PbrVertex main(MeshVertex vertex, uint instance_id : SV_InstanceID) {
 
     PbrVertex output;
     output.clip_position = project_vertex(camera.view_projection, world);
+#ifndef RENDERER_GBUFFER_VERTEX
     output.world_position = world;
+#endif
     output.world_normal = transform_direction(normal, vertex.normal);
-    // The shared fragment material pass orthogonalizes the interpolated
-    // tangent against the normal and uses the original handedness.
-    output.world_tangent = float4(transform_direction(model, vertex.tangent.xyz), vertex.tangent.w);
+    output.mirrored = transform_is_mirrored(normal.x.w);
+    // A reflected basis flips the tangent frame even when the physical
+    // front-face classification is restored in the fragment shader.
+    float handedness = output.mirrored != 0u ? -vertex.tangent.w : vertex.tangent.w;
+    output.world_tangent = float4(transform_direction(model, vertex.tangent.xyz), handedness);
     output.texcoord = vertex.uv;
     return output;
 }

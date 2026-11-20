@@ -6,7 +6,7 @@
         }
     ],
     "types" : {
-        "_8" : {
+        "_9" : {
             "name" : "type.ByteAddressBuffer",
             "members" : [
                 {
@@ -23,7 +23,7 @@
                 }
             ]
         },
-        "_10" : {
+        "_11" : {
             "name" : "type.ConstantBuffer.CameraData",
             "members" : [
                 {
@@ -92,7 +92,7 @@
                 }
             ]
         },
-        "_12" : {
+        "_13" : {
             "name" : "type.ConstantBuffer.Parameters",
             "members" : [
                 {
@@ -125,21 +125,26 @@
             "type" : "vec2",
             "name" : "out.var.TEXCOORD0",
             "location" : 0
+        },
+        {
+            "type" : "uint",
+            "name" : "out.var.TEXCOORD1",
+            "location" : 1
         }
     ],
     "ssbos" : [
         {
-            "type" : "_8",
+            "type" : "_9",
             "name" : "transform_table",
             "readonly" : true,
             "block_size" : 0,
             "set" : 0,
-            "binding" : 2
+            "binding" : 4
         }
     ],
     "ubos" : [
         {
-            "type" : "_10",
+            "type" : "_11",
             "name" : "type.ConstantBuffer.CameraData",
             "block_size" : 464,
             "set" : 0,
@@ -148,7 +153,7 @@
     ],
     "push_constants" : [
         {
-            "type" : "_12",
+            "type" : "_13",
             "name" : "parameters",
             "push_constant" : true
         }

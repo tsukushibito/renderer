@@ -4,7 +4,8 @@ use renderer::capacity::{GraphRequirements, Preparation, ResourceClass};
 use renderer::geometry::GeometryData;
 use renderer::graph::{
     Attachment, BufferDesc, Graph, GraphCapacity, GraphCapacityKind, GraphErrorKind, GraphPool,
-    ImageDesc, LoadOp, RasterAttachments, SampleCount, StoreOp,
+    ImageDesc, IndexedIndirectTable, IndexedIndirectTemplate, LoadOp, RasterAttachments,
+    SampleCount, StoreOp,
 };
 use renderer_pipeline::passes::output::SdrOutput;
 use renderer_pipeline::pbr::{
@@ -15,7 +16,6 @@ use renderer_pipeline::pbr::{
 };
 use renderer_pipeline::pbr_forward::{
     Config, Prepared, Programs, add_shadow_pass, prepare, prepare_with_programs,
-    prepare_with_transforms,
 };
 
 const EXTENT: [u32; 2] = [7, 5];
@@ -41,6 +41,7 @@ fn limits() -> SceneLimits {
         max_draws: 2,
         max_materials: 2,
         max_casters_per_cascade: 1,
+        max_transforms: 0,
     }
 }
 
@@ -662,7 +663,14 @@ fn custom_programs_validate_their_role_during_preparation() {
 
 #[test]
 fn transformed_draws_check_ranges_before_appending_to_the_graph() {
-    let mut recipe = prepare_with_transforms(config(), limits()).unwrap();
+    let mut recipe = prepare(
+        config(),
+        SceneLimits {
+            max_transforms: 1,
+            ..limits()
+        },
+    )
+    .unwrap();
     let mut pool = graph_pool(&recipe);
     let mut graph = pool.begin().unwrap();
     let (view, material, draw) = inputs(&recipe, &mut graph);
@@ -697,4 +705,63 @@ fn transformed_draws_check_ranges_before_appending_to_the_graph() {
         .readback(&mut graph, "capture")
         .unwrap();
     assert!(graph.compile().is_ok());
+}
+
+#[test]
+fn opaque_indirect_group_uses_one_prepared_model_transform() {
+    let mut recipe = prepare(
+        config(),
+        SceneLimits {
+            max_transforms: 1,
+            ..limits()
+        },
+    )
+    .unwrap();
+    let mut pool = graph_pool(&recipe);
+    let mut graph = pool.begin().unwrap();
+    let (view, material, draw) = inputs(&recipe, &mut graph);
+    let table = IndexedIndirectTable::new(&[IndexedIndirectTemplate {
+        first_index: 0,
+        index_count: draw.index_count,
+    }])
+    .unwrap();
+    let visibility = [1_u8; 64 * 4];
+    let visibility_buffer = graph
+        .buffer(
+            "selected geometry",
+            BufferDesc {
+                size: visibility.len() as u64,
+            },
+        )
+        .unwrap();
+    graph
+        .upload_buffer("select geometry", visibility_buffer, 0, &visibility)
+        .unwrap();
+    let args = graph
+        .encode_indexed_indirect(
+            "encode selected geometry",
+            &table,
+            draw.vertices,
+            draw.indices,
+            visibility_buffer,
+            0,
+        )
+        .unwrap();
+    let opaque = [Draw::TransformedIndirect {
+        args,
+        material: 0,
+        transform: 0,
+    }];
+    let materials = [material];
+    let transforms = [Transform::IDENTITY];
+    let mut frame = Frame::new(&view, &materials, &opaque, &[], &[]);
+    frame.transforms = &transforms;
+    let scene = recipe.add_scene(&mut graph, frame).unwrap();
+    graph
+        .readback_image("capture model-space color", scene.hdr)
+        .unwrap();
+    let graph = graph.compile().unwrap();
+    let ordered = graph.ordered_pass_names().collect::<Vec<_>>();
+    assert!(ordered.contains(&"encode selected geometry"));
+    assert!(ordered.contains(&"pbr transforms upload"));
 }

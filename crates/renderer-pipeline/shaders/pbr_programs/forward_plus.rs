@@ -105,7 +105,7 @@ static REFERENCE_BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
     depth: BLEND.depth,
     ..REFERENCE_OPAQUE
 };
-static TILED_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
+pub(in crate::passes::pbr) static TILED_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     bindings: &pbr_bindings::<18>(),
     binding_bytes: &pbr_bytes::<18>(),
     shaders: packaged_shaders!(

@@ -14,7 +14,7 @@ use crate::{
     passes::{
         output::OutputImages,
         pbr::{
-            CAMERA_BYTES, blend_program,
+            CAMERA_BYTES, TransformTechnique, blend_program,
             deferred::{DEFERRED_RECONSTRUCTION_BYTES, deferred_lighting_program, gbuffer_program},
             shadow_program,
         },
@@ -60,7 +60,14 @@ pub fn prepare(config: Config, limits: SceneLimits) -> Result<Prepared, GraphErr
         blend: blend_program(),
         shadow: shadow_program(),
     };
-    let mut common = PreparedScene::new(config, limits, programs, false, DrawMode::Indirect)?;
+    let mut common = PreparedScene::new(
+        config,
+        limits,
+        programs,
+        false,
+        DrawMode::Indirect,
+        Some(TransformTechnique::Deferred),
+    )?;
     let preparation = common.preparation_mut();
     let [width, height] = config.extent;
     let frames = preparation.frames_in_flight().get();

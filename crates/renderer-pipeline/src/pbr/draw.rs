@@ -6,7 +6,7 @@ use renderer::program::{MAX_RASTER_BINDINGS, ManagedRasterProgram, SamplerDescri
 
 use crate::passes::pbr::CAMERA_BYTES;
 
-use super::instances::TRANSFORM_TABLE_BYTES;
+use super::instances::{InstanceBuffer, TRANSFORM_BINDING};
 use super::{AlphaMode, MaterialUniform};
 
 /// Graph-local factors and texture views in base color, normal, ORM and
@@ -43,8 +43,9 @@ pub struct IndexedDraw {
     pub material: usize,
 }
 
-/// A draw using graph-local handles. Plain indexed and indirect meshes use
-/// world-space vertices. Instanced meshes use model-space vertices.
+/// A draw using graph-local handles. Indexed and untransformed indirect
+/// draws use world-space vertices. Draws with transforms use model-space
+/// vertices.
 #[derive(Clone, Copy, Debug)]
 pub enum Draw {
     Indexed(IndexedDraw),
@@ -52,6 +53,14 @@ pub enum Draw {
     Indirect {
         args: IndexedIndirectArgs,
         material: usize,
+    },
+    /// Opaque or alpha-masked model-space geometry. Every active command in
+    /// the argument group shares one transform. Supply world-space bounds
+    /// when building GPU visibility for these commands.
+    TransformedIndirect {
+        args: IndexedIndirectArgs,
+        material: usize,
+        transform: u32,
     },
     /// An ordered nonempty range in [`super::Frame::transforms`]. Use the same
     /// range in every renderable cascade that contains these instances.
@@ -68,6 +77,7 @@ enum Command {
     Indirect {
         args: IndexedIndirectArgs,
         bindings: RasterBindings,
+        first_transform: Option<u32>,
     },
     Instanced(RasterDraw),
 }
@@ -119,14 +129,14 @@ impl Batch {
         }
     }
 
-    pub(crate) fn record(
+    pub(super) fn record(
         &mut self,
         graph: &mut Graph,
         program: &ManagedRasterProgram,
         stage: Bindings<'_>,
         materials: &[Material],
         draws: &[Draw],
-        instances: Option<(&ManagedRasterProgram, BufferHandle)>,
+        instances: Option<(&ManagedRasterProgram, InstanceBuffer)>,
     ) -> Result<(), GraphError> {
         self.commands.clear();
         let parameters = stage.parameters(None)?;
@@ -155,15 +165,41 @@ impl Batch {
                         material,
                         None,
                     )?;
-                    Command::Indirect { args, bindings }
+                    Command::Indirect {
+                        args,
+                        bindings,
+                        first_transform: None,
+                    }
+                }
+                Draw::TransformedIndirect {
+                    args,
+                    material,
+                    transform,
+                } => {
+                    let (program, table) =
+                        instances.expect("frame preflight guarantees the indirect transform table");
+                    let bindings = Self::material_binding(
+                        &mut self.instanced_bindings,
+                        graph,
+                        program,
+                        stage,
+                        materials,
+                        material,
+                        Some(table),
+                    )?;
+                    Command::Indirect {
+                        args,
+                        bindings,
+                        first_transform: Some(transform),
+                    }
                 }
                 Draw::Instanced {
                     geometry,
                     first_transform,
                     instance_count,
                 } => {
-                    let (program, table) = instances
-                        .expect("frame preflight limits instances to the transformed Forward path");
+                    let (program, table) =
+                        instances.expect("frame preflight guarantees the instance transform table");
                     let bindings = Self::material_binding(
                         &mut self.instanced_bindings,
                         graph,
@@ -193,7 +229,7 @@ impl Batch {
         stage: Bindings<'_>,
         materials: &[Material],
         material: usize,
-        transforms: Option<BufferHandle>,
+        transforms: Option<InstanceBuffer>,
     ) -> Result<RasterBindings, GraphError> {
         let slot = &mut cache[material];
         if let Some(bindings) = *slot {
@@ -227,15 +263,23 @@ impl Batch {
                 }
                 Command::Indirect { .. } => {
                     for &command in batch {
-                        let Command::Indirect { args, bindings } = command else {
+                        let Command::Indirect {
+                            args,
+                            bindings,
+                            first_transform,
+                        } = command
+                        else {
                             unreachable!("the ordered run contains only indirect draws");
                         };
-                        pass.draw_indirect(
-                            program,
-                            args,
-                            Some(bindings),
-                            RasterConstants::default(),
-                        )?;
+                        let (program, parameters) = match first_transform {
+                            Some(first) => (
+                                instances
+                                    .expect("transformed indirect draws have a prepared program"),
+                                RasterConstants::new(&[first])?,
+                            ),
+                            None => (program, RasterConstants::default()),
+                        };
+                        pass.draw_indirect(program, args, Some(bindings), parameters)?;
                     }
                 }
             }
@@ -290,7 +334,7 @@ impl Bindings<'_> {
         graph: &mut Graph,
         program: &ManagedRasterProgram,
         material: Material,
-        transforms: Option<BufferHandle>,
+        transforms: Option<InstanceBuffer>,
     ) -> Result<RasterBindings, GraphError> {
         let camera = match self {
             Self::Scene { camera, .. } | Self::Shadow { camera, .. } => camera,
@@ -323,7 +367,8 @@ impl Bindings<'_> {
             }
         };
         if let Some(transforms) = transforms {
-            bindings[count] = buffer_binding(2, transforms, 0, TRANSFORM_TABLE_BYTES as u64);
+            bindings[count] =
+                buffer_binding(TRANSFORM_BINDING, transforms.handle, 0, transforms.size);
             count += 1;
         }
         graph.raster_bindings(program, &bindings[..count])

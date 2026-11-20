@@ -18,9 +18,10 @@
 ; TEXCOORD                 1   xyz         1     NONE   float   xyz
 ; TEXCOORD                 2   xyzw        2     NONE   float   xyzw
 ; TEXCOORD                 3   xy          3     NONE   float   xy
-; SV_Position              0   xyzw        4      POS   float   xyzw
+; TEXCOORD                 4   x           4     NONE    uint   x
+; SV_Position              0   xyzw        5      POS   float   xyzw
 ;
-; shader hash: 36313d84a61d8963b85e6af5a9adba38
+; shader hash: 7079a357cb63c59444dcc37f0f312d99
 ;
 ; Pipeline Runtime Information:
 ;
@@ -31,10 +32,10 @@
 ; MaximumExpectedWaveLaneCount: 4294967295
 ; UsesViewID: false
 ; SigInputElements: 5
-; SigOutputElements: 5
+; SigOutputElements: 6
 ; SigPatchConstOrPrimElements: 0
 ; SigInputVectors: 5
-; SigOutputVectors[0]: 5
+; SigOutputVectors[0]: 6
 ; SigOutputVectors[1]: 0
 ; SigOutputVectors[2]: 0
 ; SigOutputVectors[3]: 0
@@ -59,6 +60,7 @@
 ; TEXCOORD                 1                 linear
 ; TEXCOORD                 2                 linear
 ; TEXCOORD                 3                 linear
+; TEXCOORD                 4        nointerpolation
 ; SV_Position              0          noperspective
 ;
 ; Buffer Definitions:
@@ -116,12 +118,12 @@
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
 ; camera                            cbuffer      NA          NA     CB0            cb0     1
 ; parameters                        cbuffer      NA          NA     CB1            cb7     1
-; transform_table                   texture    byte         r/o      T0             t2     1
+; transform_table                   texture    byte         r/o      T0             t4     1
 ;
 ;
 ; ViewId state:
 ;
-; Number of inputs: 17, outputs: 20
+; Number of inputs: 17, outputs: 24
 ; Outputs dependent on ViewId: {  }
 ; Inputs contributing to computation of Outputs:
 ;   output 0 depends on inputs: { 0, 1, 2, 16 }
@@ -133,11 +135,12 @@
 ;   output 8 depends on inputs: { 8, 9, 10, 16 }
 ;   output 9 depends on inputs: { 8, 9, 10, 16 }
 ;   output 10 depends on inputs: { 8, 9, 10, 16 }
-;   output 11 depends on inputs: { 11 }
+;   output 11 depends on inputs: { 11, 16 }
 ;   output 12 depends on inputs: { 12 }
 ;   output 13 depends on inputs: { 13 }
-;   output 16 depends on inputs: { 0, 1, 2, 16 }
-;   output 17 depends on inputs: { 0, 1, 2, 16 }
-;   output 18 depends on inputs: { 0, 1, 2, 16 }
-;   output 19 depends on inputs: { 0, 1, 2, 16 }
+;   output 16 depends on inputs: { 16 }
+;   output 20 depends on inputs: { 0, 1, 2, 16 }
+;   output 21 depends on inputs: { 0, 1, 2, 16 }
+;   output 22 depends on inputs: { 0, 1, 2, 16 }
+;   output 23 depends on inputs: { 0, 1, 2, 16 }
 ;

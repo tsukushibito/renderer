@@ -13,12 +13,14 @@
 //!
 //! | Recipe | Samples | Opaque and masked | Shadow casters | Transparent | Programs |
 //! | --- | --- | --- | --- | --- | --- |
-//! | [`pbr_forward::prepare`] | 1×, 4× | Indexed, indirect | Indexed | Indexed | Built in |
-//! | [`pbr_forward::prepare_with_transforms`] | 1×, 4× | Indexed, instanced | Indexed, instanced | Indexed | Built in |
+//! | [`pbr_forward::prepare`] | 1×, 4× | Indexed, indirect, instanced | Indexed, instanced | Indexed, instanced | Built in |
 //! | [`pbr_forward::prepare_with_programs`] | 1× | Indexed | Indexed | Indexed | Custom Forward ABI |
-//! | [`pbr_forward_plus::prepare`] | 1×, 4× | Indexed, indirect | Indexed | Indexed | Built in |
-//! | [`pbr_deferred::prepare`] | 1× | Indexed, indirect | Indexed | Indexed | Built in |
+//! | [`pbr_forward_plus::prepare`] | 1×, 4× | Indexed, indirect, instanced | Indexed, instanced | Indexed, instanced | Built in |
+//! | [`pbr_deferred::prepare`] | 1× | Indexed, indirect, instanced | Indexed, instanced | Indexed, instanced | Built in |
 //!
+//! A positive [`pbr::SceneLimits::max_transforms`] enables instanced draws
+//! and one shared transform per opaque indirect group. Indexed draws
+//! without transform operands keep their world-space vertex contract.
 //! Transparent draws are supplied in back-to-front order. A 4× scene resolves
 //! its color to a single-sample HDR image and has no scene depth output.
 //! Forward+ accepts point lights for the view. Deferred shades its G-buffer

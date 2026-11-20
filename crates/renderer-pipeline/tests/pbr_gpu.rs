@@ -108,7 +108,14 @@ mod cpu {
 
     #[test]
     fn transformed_scene_declares_all_cascades() {
-        for placement in [Placement::Individual, Placement::Tilted(Some(-40))] {
+        for placement in [
+            Placement::Individual,
+            Placement::Tilted(Some(-40)),
+            Placement::Mirrored {
+                baked: false,
+                blend: false,
+            },
+        ] {
             let settings = Settings {
                 placement,
                 ..Settings::new(SampleCount::X1)
@@ -330,6 +337,60 @@ mod gpu {
                 "scale 2^{exponent}: expected {expected:?}, got {actual:?}",
             );
         }
+    }
+
+    fn mirrored_model_draws_match_baked_geometry(api: Api) {
+        for technique in [
+            Technique::Forward,
+            Technique::ForwardPlus,
+            Technique::Deferred,
+        ] {
+            for blend in [false, true] {
+                let capture = |baked| {
+                    let settings = Settings {
+                        technique,
+                        placement: Placement::Mirrored { baked, blend },
+                        ..Settings::new(SampleCount::X1)
+                    };
+                    render(api, settings, false, Bloom::Off, &[])
+                        .unwrap()
+                        .pop()
+                        .unwrap()
+                        .output
+                };
+                let expected = capture(true);
+                let actual = capture(false);
+                let center = ((EXTENT[1] / 2) * EXTENT[0] + EXTENT[0] / 2) as usize * 4;
+                assert!(expected.sdr[center] > 30, "{technique:?} blend={blend}");
+                assert_eq!(expected.depth, actual.depth, "{technique:?} blend={blend}");
+                assert_eq!(
+                    expected.shadow_maps, actual.shadow_maps,
+                    "{technique:?} blend={blend}"
+                );
+                assert!(
+                    expected
+                        .sdr
+                        .iter()
+                        .zip(&actual.sdr)
+                        .all(|(&a, &b)| a.abs_diff(b) <= 1),
+                    "mirrored material differs for {technique:?} blend={blend}",
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    #[ignore = "requires a hardware Vulkan adapter and requested native validation"]
+    fn vulkan_mirrored_model_draws_match_baked_geometry() {
+        mirrored_model_draws_match_baked_geometry(Api::Vulkan);
+    }
+
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
+    fn d3d12_mirrored_model_draws_match_baked_geometry() {
+        mirrored_model_draws_match_baked_geometry(Api::D3D12);
     }
 
     #[cfg(feature = "vulkan")]
