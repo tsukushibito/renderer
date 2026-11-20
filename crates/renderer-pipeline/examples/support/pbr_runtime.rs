@@ -67,7 +67,7 @@ pub fn render(
 ) -> Result<Vec<CapturedFrame>, Box<dyn Error>> {
     let frames = caster_revisions.len().max(1);
     // Give enabled Bloom an emitter above its scene-linear threshold.
-    let triangle = Triangle::new(bloom != Bloom::Off, settings.placement)?;
+    let triangle = Triangle::for_view(bloom != Bloom::Off, settings.placement, settings.view)?;
     let mut prepared = scene::prepare(NonZeroUsize::new(frames).unwrap(), settings)?;
     let (preparation, post) = scene::reserve(&prepared, &triangle, copy_hdr, bloom)?;
     // Graph declarations include initialization uploads and readbacks in

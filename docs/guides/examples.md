@@ -18,10 +18,12 @@ cargo run --locked -p renderer-pipeline --no-default-features --example rust_pip
 
 <a id="pbr-forward-example"></a>
 
-**標準 PBR Forward を小さなシーンで確認する**
+**標準 PBR を小さなシーンで確認する**
 
 `pbr_forward`はサンプル内で用意した小さなシーンを、公開レシピでオフスクリーン描画します。
 型付きPBR頂点を使い、テクスチャを省略した材質を太陽光で照らします。
+同じシーンを `--technique forward`（既定）、`forward-plus`、`deferred` で描き分けられます。
+Forward+ では点光源を1灯追加します。Deferred は1×のみ選べます。
 色と1×の深度を読み戻し、`--output`を指定するとSDRをPPMに保存します。
 `--msaa 4`はカラーをリゾルブしてから出力し、`--msaa 1`は既定の1×を選びます。
 `--bloom`は明るい三角形に標準のBloomを適用します。`--reuse-shadows`は連続する2フレームを投入して、
@@ -30,10 +32,11 @@ cargo run --locked -p renderer-pipeline --no-default-features --example rust_pip
 
 ```sh
 cargo run --locked -p renderer-pipeline --no-default-features --features vulkan --example pbr_forward -- --api vulkan
-cargo run --locked -p renderer-pipeline --no-default-features --features d3d12 --example pbr_forward -- --api d3d12 --msaa 4 --bloom --reuse-shadows --output pbr-forward.ppm
+cargo run --locked -p renderer-pipeline --no-default-features --features vulkan --example pbr_forward -- --api vulkan --technique deferred
+cargo run --locked -p renderer-pipeline --no-default-features --features d3d12 --example pbr_forward -- --api d3d12 --technique forward-plus --msaa 4 --bloom --reuse-shadows --output pbr-forward-plus.ppm
 ```
 
-D3D12はWindowsで実行できます。準備とパスの接続は[PBR Forwardの使い方](tooling.md#pbr-forward-recipe)を参照してください。
+D3D12はWindowsで実行できます。準備とパスの接続は[PBRレシピの使い方](tooling.md#pbr-forward-recipe)を参照してください。
 
 **Vulkanで画像に描画する**
 

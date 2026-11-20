@@ -60,34 +60,58 @@ mod cpu {
     }
 
     #[test]
-    fn four_samples_resolve_color_without_a_depth_readback() {
-        let triangle = Triangle::new(false, Placement::Single).unwrap();
-        let mut prepared = prepare(NonZeroUsize::MIN, Settings::new(SampleCount::X4)).unwrap();
-        let (preparation, post) = reserve(&prepared, &triangle, false, Bloom::Off).unwrap();
-        let capacity = preparation
-            .graph_capacity(GraphCapacity::default())
+    fn color_resolve_and_depth_readback_follow_the_technique() {
+        for (technique, samples, view) in [
+            (Technique::Forward, SampleCount::X4, ViewFixture::Centered),
+            (
+                Technique::ForwardPlus,
+                SampleCount::X4,
+                ViewFixture::Centered,
+            ),
+            (
+                Technique::Deferred,
+                SampleCount::X1,
+                ViewFixture::OverheadOrthographic,
+            ),
+            (
+                Technique::Deferred,
+                SampleCount::X1,
+                ViewFixture::OffsetPerspective,
+            ),
+        ] {
+            let settings = Settings {
+                technique,
+                view,
+                ..Settings::new(samples)
+            };
+            let triangle = Triangle::for_view(false, settings.placement, settings.view).unwrap();
+            let mut prepared = prepare(NonZeroUsize::MIN, settings).unwrap();
+            let (preparation, post) = reserve(&prepared, &triangle, false, Bloom::Off).unwrap();
+            let capacity = preparation
+                .graph_capacity(GraphCapacity::default())
+                .unwrap();
+            let mut pool = GraphPool::new(capacity, 1).unwrap();
+            let (compiled, readbacks, _) = build_graph(
+                &mut pool,
+                &mut prepared,
+                &triangle,
+                None,
+                &post,
+                Placement::Single,
+                None,
+            )
             .unwrap();
-        let mut pool = GraphPool::new(capacity, 1).unwrap();
-        let (compiled, readbacks, _) = build_graph(
-            &mut pool,
-            &mut prepared,
-            &triangle,
-            None,
-            &post,
-            Placement::Single,
-            None,
-        )
-        .unwrap();
-        assert!(compiled.ordered_pass_names().any(|name| name == "read SDR"));
-        assert!(readbacks.depth.is_none());
+            assert!(compiled.ordered_pass_names().any(|name| name == "read SDR"));
+            assert_eq!(readbacks.depth.is_some(), samples == SampleCount::X1);
+        }
     }
 
     #[test]
     fn transformed_scene_declares_all_cascades() {
         for placement in [Placement::Individual, Placement::Tilted(Some(-40))] {
             let settings = Settings {
-                samples: SampleCount::X1,
                 placement,
+                ..Settings::new(SampleCount::X1)
             };
             let triangle = Triangle::new(false, placement).unwrap();
             let mut prepared = prepare(NonZeroUsize::MIN, settings).unwrap();
@@ -125,17 +149,82 @@ mod gpu {
 
     use super::{
         runtime::{Api, probe, render},
-        scene::{EXTENT, Placement, Settings},
+        scene::{EXTENT, Placement, Settings, Technique, ViewFixture},
     };
 
     fn compare(api: Api) {
-        for samples in [SampleCount::X1, SampleCount::X4] {
-            let settings = Settings::new(samples);
-            let full = render(api, settings, false, Bloom::Off, &[]).unwrap();
-            let split = render(api, settings, true, Bloom::Off, &[]).unwrap();
-            let (_, depth) = probe(&full[0].output).unwrap();
-            assert_eq!(depth.is_some(), samples == SampleCount::X1);
-            assert_eq!(full[0].output, split[0].output);
+        let mut forward_red = 0;
+        for technique in [
+            Technique::Forward,
+            Technique::ForwardPlus,
+            Technique::Deferred,
+        ] {
+            for samples in [SampleCount::X1, SampleCount::X4] {
+                if matches!(technique, Technique::Deferred) && samples == SampleCount::X4 {
+                    continue;
+                }
+                let settings = Settings {
+                    technique,
+                    ..Settings::new(samples)
+                };
+                let full = render(api, settings, false, Bloom::Off, &[]).unwrap();
+                let split = render(api, settings, true, Bloom::Off, &[]).unwrap();
+                let ([red, ..], depth) = probe(&full[0].output).unwrap();
+                assert_eq!(depth.is_some(), samples == SampleCount::X1);
+                assert_eq!(
+                    full[0].output, split[0].output,
+                    "{technique:?}, {samples:?}"
+                );
+                if samples == SampleCount::X1 {
+                    match technique {
+                        Technique::Forward => forward_red = red,
+                        Technique::ForwardPlus => assert!(red > forward_red),
+                        Technique::Deferred => {}
+                    }
+                }
+            }
+        }
+    }
+
+    fn application_projection_matches_analytic_samples(api: Api) {
+        // For the overhead camera the triangle lies in the horizontal plane,
+        // three units from the camera. Perspective shifts its center by 0.45
+        // NDC in X while keeping its distance at three units.
+        for (view, covered, outside, depth) in [
+            (ViewFixture::OverheadOrthographic, 32, 46, 2.9_f32 / 9.9),
+            (
+                ViewFixture::OffsetPerspective,
+                46,
+                32,
+                (2.9_f32 / 9.9) * (10.0 / 3.0),
+            ),
+        ] {
+            for technique in [Technique::Forward, Technique::Deferred] {
+                let settings = Settings {
+                    technique,
+                    view,
+                    ..Settings::new(SampleCount::X1)
+                };
+                let rendered = render(api, settings, false, Bloom::Off, &[]).unwrap();
+                let output = &rendered[0].output;
+                let depths = output.depth.as_ref().unwrap();
+                let sample = |x| {
+                    let offset = ((EXTENT[1] / 2 * EXTENT[0] + x) * 4) as usize;
+                    let color: [u8; 4] = output.sdr[offset..offset + 4].try_into().unwrap();
+                    let depth = f32::from_le_bytes(depths[offset..offset + 4].try_into().unwrap());
+                    (color, depth)
+                };
+                let (color, actual_depth) = sample(covered);
+                assert!(
+                    matches!(color, [r, g, b, 255] if r > 80 && r > g && r > b),
+                    "{technique:?} covered color {color:?}"
+                );
+                assert!(
+                    (actual_depth - depth).abs() < 2e-6,
+                    "{technique:?} expected depth {depth}, got {actual_depth}"
+                );
+                assert_eq!(sample(outside), ([0, 0, 0, 255], 1.0));
+            }
         }
     }
 
@@ -176,8 +265,8 @@ mod gpu {
     fn transformed_instances_match_individual_draws(api: Api) {
         let render = |placement| {
             let settings = Settings {
-                samples: SampleCount::X1,
                 placement,
+                ..Settings::new(SampleCount::X1)
             };
             render(api, settings, false, Bloom::Off, &[]).unwrap()
         };
@@ -207,8 +296,8 @@ mod gpu {
     fn extreme_scales_preserve_normal_direction(api: Api) {
         let capture = |placement| {
             let settings = Settings {
-                samples: SampleCount::X1,
                 placement,
+                ..Settings::new(SampleCount::X1)
             };
             render(api, settings, false, Bloom::Off, &[])
                 .unwrap()
@@ -241,6 +330,20 @@ mod gpu {
                 "scale 2^{exponent}: expected {expected:?}, got {actual:?}",
             );
         }
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    #[ignore = "requires a hardware Vulkan adapter and requested native validation"]
+    fn vulkan_application_projection_matches_analytic_samples() {
+        application_projection_matches_analytic_samples(Api::Vulkan);
+    }
+
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
+    fn d3d12_application_projection_matches_analytic_samples() {
+        application_projection_matches_analytic_samples(Api::D3D12);
     }
 
     #[cfg(feature = "vulkan")]
