@@ -19,6 +19,8 @@ const MAX_EXTENT: u32 = 65_535;
 pub(super) const LIGHTS: u32 = 2;
 pub(super) const TILES: u32 = 3;
 
+/// A local light in world space. Radius must be positive. RGB and intensity
+/// are linear, finite and nonnegative.
 #[derive(Clone, Copy, Debug)]
 pub struct PointLight {
     pub position: [f32; 3],
@@ -168,7 +170,7 @@ pub(super) fn buffer_binding(binding: u32, buffer: BufferHandle, size: u64) -> B
     }
 }
 
-/// Append tile culling from Bistro's camera matrix prefix and local lights.
+/// Append tile culling from the PBR camera matrix prefix and local lights.
 ///
 /// The inactive tile records are preserved. A later Raster binding of the
 /// full buffer requires all records to have been initialized once beforehand.

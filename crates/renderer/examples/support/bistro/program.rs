@@ -14,13 +14,13 @@ use renderer::program::{
 };
 
 use pbr_programs::OPAQUE;
+#[cfg(all(windows, feature = "d3d12"))]
+use pbr_programs::PBR_FRAGMENT_DXIL;
+#[cfg(feature = "vulkan")]
+use pbr_programs::PBR_FRAGMENT_SPIRV;
 pub use pbr_programs::{
     CAMERA_BYTES, MATERIAL_BYTES, VERTEX_BYTES, blend_program, opaque_program, shadow_program,
 };
-#[cfg(all(windows, feature = "d3d12"))]
-use pbr_programs::{PBR_FRAGMENT_DXIL, PBR_VERTEX_DXIL};
-#[cfg(feature = "vulkan")]
-use pbr_programs::{PBR_FRAGMENT_SPIRV, PBR_VERTEX_SPIRV};
 
 pub(super) const INSTANCE_INLINE_BYTES: u32 = 68;
 

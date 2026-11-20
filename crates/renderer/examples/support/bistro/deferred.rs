@@ -6,6 +6,10 @@ use super::program::{
 };
 
 #[path = "../../../../renderer-pipeline/src/pbr_deferred/passes.rs"]
+#[allow(
+    dead_code,
+    reason = "the pass recipe returns planes for application composition; Bistro consumes HDR"
+)]
 mod passes;
 
 pub(super) use passes::{Inputs, PLANES, append};
