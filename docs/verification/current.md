@@ -7,61 +7,47 @@
 
 <a id="bistro-scene-pipeline-verification"></a>
 
-## BistroのForwardとシャドウを組み立てるYAML
-
-`renderer-a95`。Forward 1×の不透明・透過パスをYAMLで組み立て、カメラと複数mipのIBL View、既存の4カスケードを入力した。
-シーンHDRを同じGraphのBloomからSDRまでにつないだ。共有Viewのmip全域が読み取り範囲となることと、別GraphのView、
-不正な材質binding範囲、初期化されない出力を拒否することをCPU試験で確認した。
-
-Windows RTX 3060（610.88）のVulkan／D3D12で、最適化した製品・厳格構成を`d19a02a`と比較した。
-131×97 fixtureのシャドウ再利用／再描画、640×480全量Bistro（street、可視1,092 draw）の再描画、801×601のウィンドウを対象にした。
-シーンHDR、Bloom後HDR、SDR、D32深度、4枚のカスケード、追加AA-off画像、初回の線形表示元を合わせた132画像比較が一致した。
-両APIの厳格fixtureで材質シェーダーマニフェストも併用し、追加の24画像比較が一致した。
-全量BistroでYAMLの`irradiance`と`reflection`の接続を入れ替えると、両APIでシーンHDR、Bloom後HDR、SDRが変化し、深度と4枚のカスケードは一致した。
-これらのオフスクリーン72通常フレームは観測対象となる確保・解放とネイティブ資源の作成・破棄が0件だった。
-厳格検証の警告・エラーは0件だった。
-
-`renderer-y41`。4つのD32画像と各カスケードの深度パスを別のYAMLで準備した。Bistroは既存のカスケード行列とカリングを使い、
-同じGraphのForwardが生成された画像を読む。候補が0件でも4画像を初期化することを準備時に確認した。
-最終版を両APIの製品・厳格構成で同じ`d19a02a`と比較し、fixture／全量、AA-off、初回の線形表示元を含む100画像が一致した。
-シャドウだけをYAMLで組む構成は24画像、従来の影キャッシュを使うForward YAMLは32画像、`--shadows-off`は24画像が一致した。
-影を無効にした構成の4画像は全画素クリア値だった。追加のオフスクリーン72通常フレームも観測対象とした確保・解放、
-ネイティブ作成・破棄が0件で、厳格検証の警告・エラーも0件だった。
-全量Bistroの厳格構成でYAMLだけを編集し、カスケード0の描画リストを空にした。両APIでカスケード0が全画素クリア値になり、
-ほかの3カスケードとカメラ深度は一致し、シーンHDRの66,316画素、Bloom後HDR、SDRが変化した。
-
-両段階ともウィンドウで各構成24フレームの表示とリサイズ・最小化・復帰が成功した。画素比較は初回の表示元で、
-比較元の製品D3D12だけが終了時の既存未完了フレーム条件で再試行を要した。
-
-ログとキャプチャは`.tools/bistro-yaml-forward-validation/`、[YAMLと実行手順](../guides/tooling.md#bistro-scene-pipeline)を参照する。
-
 <a id="bistro-post-pipeline-verification"></a>
 
-## BistroのHDRからSDRをつなぐYAML
+## BistroのYAMLパイプラインとRustサンプル
 
-`renderer-15t`。BistroのシーンHDRを外部画像として渡し、Bloom 5パス、トーンマッピング、SDR出力を同じGraphに追加した。
-BloomのSPIR-V／DXILとABIは従来と同じ版を使用した。準備時のCPU試験では、奇数寸法と1×1で縮小画像の寸法と資源予約、
-入力HDRを書き換えるCompute／Raster定義の拒否、VulkanのComputeを含むdescriptor予約を確認した。
+`renderer-12t`の`renderer-pipeline`サンプルは、4カスケード、シーン描画、Bloom、トーンマッピング、SDR出力を
+一つの準備済みYAMLパイプラインで構築する。キャッシュが有効なカスケードでは、Graphに取り込んだ既存のD32画像を読み、
+生成パスとその描画リストを省く。更新時は永続画像をclearして描画し、投入受理後にその版を次フレームへ渡す。
+この選択はGraph構築時に確定し、既存のGraphによる同期と寿命管理を使用する。
 
-WindowsのRTX 3060（610.88）で、Vulkan／D3D12それぞれの最適化済み製品・厳格構成を変更前の`dd4ab1e`と比較した。
+CPU試験で供給元の欠落・重複、別Graphのハンドル、異なる画像記述子、準備されていない初期内容を拒否した。
+画像の生成パスは単一attachmentを無条件にclearして保存するRasterパスとする。別パスの書き込み、追加のresolve出力、
+生成前の読み取りも構成エラーになる。型付きの間接描画、MSAAカラーresolve、可変Computeグリッドは同じGraphの既存契約に従う。
+CPU試験で、モード、MSAA、描画送信、Bloom、FXAAの126構成と、Forwardのインスタンス比較を準備した。
 
-| 条件 | 各API・構成での比較結果 |
-|---|---|
-| 全量Bistro `full-a3`／`ibl-final`、street、640×480、Tent／Box、FXAA、シャドウ再描画 | シーンHDR、Bloom後HDR、sRGB SDR、D32深度がバイト一致。追加のAA-offとTentのBloomバイパスの参照画像も一致。 |
-| 131×97 fixture、Tent／Box／Bloom無効、1×1 fixture、Box | 取得した全画像がバイト一致。 |
-| ウィンドウの801×601 fixture、Tent | 初回の線形RGBA8画像がバイト一致。各24フレームを表示し、リサイズ・最小化・復帰後も描画。 |
+Windows RTX 3060（610.88）のVulkan／D3D12で、最適化した製品・厳格構成のYAML版を
+変更前の`3b3462b`と同一API内で比較した。129×97 fixtureではForward系3モード、Deferred、1×／4× MSAA、
+直接／packed／indirect、個別／インスタンス描画、Bloom Off／Tent／Box、FXAAとAA-off、Bloomバイパスを検証した。
+各試行は3 warm-upフレーム、同時投入3枠とし、全量Bistro（`full-a3`／`ibl-final`）では
+36通常フレームの巡回カメラを動かした。
+取得したHDR、SDR、D32、4カスケードと診断画像は変更前との364比較、再利用と強制再描画の324比較でバイト一致した。
 
-補助画像を含む152画像の比較が一致した。321×241の全量Bistroでは、YAMLの合成入力をぼかし後から未ぼかしの1/4画像へ変更した。
-シーンHDRと深度は同じで、VulkanではBloom後HDRの10,491画素とSDRの2,611画素、D3D12では10,499画素と2,625画素が変化した。
+固定カメラの計測5フレームは4カスケードがすべてヒットした。巡回カメラのヒット数はカスケード順に3、15、24、32回、
+更新数は33、21、12、4回だった。`--shadows-off`では4枚のD32画像の全画素がクリア値だった。
+warm-upを省いた初回実行では両APIで4カスケードが生成され、次の診断フレームは4枚を再利用した。
+厳格D3D12の初回は変更前と同じRust確保11件（753 byte）があり、資源の新規作成・破棄は0件だった。
+通常のGraph構築から投入と退役・結果返却まで、合計588フレームを計測した。観測したRust／VMA hostの確保・再確保・解放、
+Renderer発行のネイティブ資源・メモリの作成・破棄、descriptor確保・解放は0件だった。
+厳格構成ではVulkan Core／SyncValとD3D12 Debug Layer／GBVが有効で、終了まで警告・エラー0件だった。
 
-オフスクリーンは各条件4 warm-up＋4通常フレームを同時2枠で実行した。付属YAMLと接続変更を合わせた128通常フレームで、
-観測したRust／VMA hostの確保・再確保・解放、Renderer発行のnative作成・破棄、descriptorの確保・解放は0件だった。
-1×1のBox構成に96パスのぼかしを追加した101 Computeパスの容量試験でも、両API・構成の16画像比較が一致し、
-追加16通常フレームの該当イベントは0件だった。
-厳格構成のVulkan Core／SyncVal、D3D12 Debug Layer／GBVの警告とエラーは0件だった。
-ウィンドウの比較画像は初回の表示元で、サイズ変更後は描画の継続を確認した。変更前の製品D3D12で終了時の未完了フレームが
-0件となる既存スモーク条件を再現し、同条件の再実行は成功した。YAML経路は各構成で初回に通過した。
-ログとキャプチャは`.tools/bistro-yaml-bloom-validation/`、[YAMLと実行手順](../guides/tooling.md#bistro-post-pipeline)を参照する。
+各APIの製品・厳格構成で、資源診断の同時投入、容量不足と解放後の再試行、画像・材質差し替えと復元、全mipの照合が通った。
+各APIの厳格構成では、事前に生成した材質シェーダーをYAMLから選択した画像と、組み込みProgramで生成した画像も一致した。
+ウィンドウではVulkanの128×96、D3D12の801×601から、両構成が24フレームを表示し、リサイズ、最小化、復帰、カメラ操作、
+未完了フレームを残した終了を確認した。D3D12の128×96製品構成は両版で24フレームを表示し、初回の線形表示元が一致した。
+両試行とも終了時の未完了数は0件だった。未完了フレームの終了試験は801×601で行った。
+
+`renderer`のBistroは公開Rust APIでパスとGraphを構築する。同じGPUのVulkan／D3D12で、
+最適化した製品・厳格構成のfixtureと640×480の全量Bistro（street）を実行した。各APIの製品と厳格、
+および構成ごとの両APIの画像比較が受入基準内に収まり、厳格検証は警告・エラー0件だった。
+
+実行手順は[2つのBistroサンプル](../guides/examples.md)と[YAMLの記述](../guides/tooling.md#bistro-scene-pipeline)を参照する。
+ログとキャプチャは`.tools/renderer-12t/`に保存した。
 
 <a id="material-shader-verification"></a>
 
