@@ -1,6 +1,7 @@
 //! Reusable mesh drawing and scene output declarations.
 
 pub mod output;
+pub mod pbr;
 
 use std::borrow::Borrow;
 
