@@ -417,6 +417,7 @@ impl Budget {
             bindings: requirements(|graph| graph.bindings) + 16,
             attachments: requirements(|graph| graph.attachments) + 4,
             name_bytes: resources * 32 + 2048 + requirements(|graph| graph.name_bytes),
+            upload_bytes: requirements(|graph| graph.upload_bytes),
         })?;
         let graph = preparation.graph_capacity(GraphCapacity {
             resources: 0,

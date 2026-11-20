@@ -230,6 +230,7 @@ impl Prepared {
                 attachments: shadow::CASCADE_COUNT + 8,
                 raster_constant_words: shadow_draws + instance_words,
                 name_bytes: (targets + extra_buffers + passes) * 48,
+                upload_bytes: 0,
             })?;
             Recipe::Comparison(PreparedOutput::prepare(
                 &mut preparation,

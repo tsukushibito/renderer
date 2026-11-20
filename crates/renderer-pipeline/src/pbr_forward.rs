@@ -249,6 +249,7 @@ pub fn prepare(config: Config, scene_limits: SceneLimits) -> Result<Prepared, Gr
             bindings,
             attachments: 10,
             name_bytes: 256,
+            upload_bytes: CAMERA_BYTES,
             ..Default::default()
         },
         WorkingSet {

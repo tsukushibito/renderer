@@ -21,6 +21,8 @@ pub struct GraphRequirements {
     pub bindings: usize,
     pub attachments: usize,
     pub name_bytes: usize,
+    /// Bytes copied into the Graph-owned upload arena in one frame.
+    pub upload_bytes: usize,
 }
 
 impl GraphRequirements {
@@ -38,7 +40,23 @@ impl GraphRequirements {
             bindings: checked_add(self.bindings, rhs.bindings)?,
             attachments: checked_add(self.attachments, rhs.attachments)?,
             name_bytes: checked_add(self.name_bytes, rhs.name_bytes)?,
+            upload_bytes: checked_add(self.upload_bytes, rhs.upload_bytes)?,
         })
+    }
+
+    fn component_max(self, rhs: Self) -> Self {
+        Self {
+            resources: self.resources.max(rhs.resources),
+            passes: self.passes.max(rhs.passes),
+            compute_dispatches: self.compute_dispatches.max(rhs.compute_dispatches),
+            accesses: self.accesses.max(rhs.accesses),
+            draws: self.draws.max(rhs.draws),
+            raster_constant_words: self.raster_constant_words.max(rhs.raster_constant_words),
+            bindings: self.bindings.max(rhs.bindings),
+            attachments: self.attachments.max(rhs.attachments),
+            name_bytes: self.name_bytes.max(rhs.name_bytes),
+            upload_bytes: self.upload_bytes.max(rhs.upload_bytes),
+        }
     }
 }
 
@@ -80,7 +98,11 @@ impl Preparation {
         count_per_frame: usize,
     ) -> Result<(), GraphError> {
         let count = self.concurrent_count(count_per_frame)?;
-        add_class(&mut self.resources, ResourceClass::Buffer { desc, count })
+        merge_class(
+            &mut self.resources,
+            ResourceClass::Buffer { desc, count },
+            checked_add,
+        )
     }
 
     /// Reserve this many images per in-flight frame.
@@ -90,18 +112,22 @@ impl Preparation {
         count_per_frame: usize,
     ) -> Result<(), GraphError> {
         let count = self.concurrent_count(count_per_frame)?;
-        add_class(&mut self.resources, ResourceClass::Image { desc, count })
+        merge_class(
+            &mut self.resources,
+            ResourceClass::Image { desc, count },
+            checked_add,
+        )
     }
 
     /// Sum resource reservations that already include concurrency. This also
     /// accepts Program-only sets and reservations for diagnostic work in flight
     /// with normal frames. Raster variants with the same asset and sample count
-    /// share a request. The runtime handles Compute Program identities.
+    /// share a request. Compute requests share their exact Program identity.
     pub fn add_working_set(&mut self, working_set: WorkingSet<'_>) -> Result<(), GraphError> {
         if !working_set.resources.is_empty() {
             let mut resources = self.resources.clone();
             for &class in working_set.resources {
-                add_class(&mut resources, class)?;
+                merge_class(&mut resources, class, checked_add)?;
             }
             self.resources = resources;
         }
@@ -113,7 +139,15 @@ impl Preparation {
                 self.raster.push(requested.clone());
             }
         }
-        self.compute.extend_from_slice(working_set.compute);
+        for requested in working_set.compute {
+            if !self
+                .compute
+                .iter()
+                .any(|current| current.identity() == requested.identity())
+            {
+                self.compute.push(requested.clone());
+            }
+        }
         Ok(())
     }
 
@@ -130,8 +164,8 @@ impl Preparation {
     }
 
     /// Raise the caller's minimum declaration limits to cover all registered
-    /// parts. Set import, dependency, read/write analysis and upload limits in
-    /// `base` for the assembled Graph.
+    /// parts. Set import, dependency and read/write analysis limits in `base`
+    /// for the assembled Graph.
     pub fn graph_capacity(&self, mut base: GraphCapacity) -> Result<GraphCapacity, GraphError> {
         let requirements = self.requirements;
         base.resources = base.resources.max(requirements.resources);
@@ -150,6 +184,7 @@ impl Preparation {
         base.bindings = base.bindings.max(requirements.bindings);
         base.attachments = base.attachments.max(requirements.attachments);
         base.name_bytes = base.name_bytes.max(requirements.name_bytes);
+        base.upload_bytes = base.upload_bytes.max(requirements.upload_bytes);
         Ok(base)
     }
 
@@ -175,6 +210,34 @@ impl Preparation {
         Ok(())
     }
 
+    /// Add the shared reservation for phases whose resource lifetimes do not
+    /// overlap. Each alternative must have the same frame concurrency as this
+    /// preparation. Take each resource and Graph limit's maximum and prepare
+    /// all Programs in use. Register any overlapping retained resources or
+    /// concurrent phases separately. An error preserves the previous budget.
+    pub fn add_alternatives(&mut self, alternatives: &[&Self]) -> Result<(), GraphError> {
+        let mut shared = Self::new(self.frames_in_flight);
+        for alternative in alternatives {
+            if alternative.frames_in_flight != self.frames_in_flight {
+                return Err(GraphError::invalid_input(
+                    "alternative preparations require matching frame concurrency",
+                ));
+            }
+            shared.requirements = shared.requirements.component_max(alternative.requirements);
+            for &class in &alternative.resources {
+                merge_class(&mut shared.resources, class, |left, right| {
+                    Ok(left.max(right))
+                })?;
+            }
+            shared.add_working_set(WorkingSet {
+                resources: &[],
+                raster: &alternative.raster,
+                compute: &alternative.compute,
+            })?;
+        }
+        self.add_requirements(shared.requirements, shared.working_set())
+    }
+
     fn concurrent_count(&self, count_per_frame: usize) -> Result<usize, GraphError> {
         checked_mul(self.frames_in_flight.get(), count_per_frame)
     }
@@ -192,7 +255,11 @@ fn overflow() -> GraphError {
     GraphError::invalid_input("pipeline preparation capacity overflow")
 }
 
-fn add_class(classes: &mut Vec<ResourceClass>, class: ResourceClass) -> Result<(), GraphError> {
+fn merge_class(
+    classes: &mut Vec<ResourceClass>,
+    class: ResourceClass,
+    combine: impl FnOnce(usize, usize) -> Result<usize, GraphError>,
+) -> Result<(), GraphError> {
     let existing = match class {
         ResourceClass::Buffer { desc, count } => {
             if count == 0 {
@@ -230,7 +297,7 @@ fn add_class(classes: &mut Vec<ResourceClass>, class: ResourceClass) -> Result<(
         }
     };
     if let Some((existing_count, count)) = existing {
-        *existing_count = checked_add(*existing_count, count)?;
+        *existing_count = combine(*existing_count, count)?;
     } else {
         classes.push(class);
     }
@@ -287,6 +354,73 @@ mod tests {
         assert_eq!(set.raster.len(), 2);
         assert_eq!(set.raster[0].sample_count, SampleCount::X1);
         assert_eq!(set.raster[1].sample_count, SampleCount::X4);
+    }
+
+    #[test]
+    fn nonoverlapping_phases_share_capacity_and_keep_all_programs() {
+        let frames = NonZeroUsize::new(2).unwrap();
+        let color = ImageDesc::rgba16_float(4, 3);
+        let other = BufferDesc { size: 32 };
+        let mut aggregate = Preparation::new(frames);
+        aggregate.reserve_image(color, 1).unwrap();
+        let mut first = Preparation::new(frames);
+        let mut second = Preparation::new(frames);
+        let encoder = [ManagedProgram::indexed_indirect_encoder()];
+        let raster = ManagedRasterProgram::mesh_hdr();
+        for (variant, count, samples, passes, upload_bytes) in [
+            (&mut first, 2, SampleCount::X1, 4, 48),
+            (&mut second, 3, SampleCount::X4, 2, 128),
+        ] {
+            variant.reserve_image(color, count).unwrap();
+            variant
+                .add_requirements(
+                    GraphRequirements {
+                        passes,
+                        upload_bytes,
+                        ..Default::default()
+                    },
+                    WorkingSet {
+                        resources: &[],
+                        raster: &[RasterPipelineRequest {
+                            program: raster.clone(),
+                            sample_count: samples,
+                        }],
+                        compute: &encoder,
+                    },
+                )
+                .unwrap();
+        }
+        second.reserve_buffer(other, 1).unwrap();
+        aggregate.add_alternatives(&[&first, &second]).unwrap();
+
+        let set = aggregate.working_set();
+        assert!(matches!(set.resources, [
+            ResourceClass::Image { desc, count: 8 },
+            ResourceClass::Buffer { desc: buffer, count: 2 },
+        ] if *desc == color && *buffer == other));
+        assert_eq!(set.raster.len(), 2);
+        assert_eq!(set.compute.len(), 1);
+        let expected = aggregate.graph_requirements();
+        assert_eq!(expected.passes, 4);
+        let graph = aggregate
+            .graph_capacity(GraphCapacity {
+                upload_bytes: 0,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(graph.upload_bytes, 128);
+
+        let incompatible = Preparation::new(NonZeroUsize::MIN);
+        assert!(
+            aggregate
+                .add_alternatives(&[&first, &incompatible])
+                .is_err()
+        );
+        assert_eq!(aggregate.graph_requirements(), expected);
+        assert!(matches!(
+            aggregate.working_set().resources[0],
+            ResourceClass::Image { count: 8, .. }
+        ));
     }
 
     #[test]
