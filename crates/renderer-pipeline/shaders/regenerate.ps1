@@ -103,7 +103,7 @@ try {
         'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag',
         'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag',
         'frustum_visibility.comp', 'pbr_instancing.vert',
-        'pbr_transformed.vert', 'shadow_transformed.vert'
+        'pbr_transformed.vert', 'pbr_transformed.frag', 'shadow_transformed.vert'
     )
     foreach ($name in $shaders) {
         $stage = $name.Split('.')[-1]
@@ -113,6 +113,7 @@ try {
             'pbr_all_lights.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=1') }
             'pbr_forward_plus.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=2') }
             'pbr_instancing.vert' { $shaderSource = 'pbr.vert'; $defines = @('BISTRO_INSTANCING=1') }
+            'pbr_transformed.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_TRANSFORMED_DIRECTIONS=1') }
         }
         $shaderSource += '.hlsl'
         $source = Join-Path $sourceDir $shaderSource
