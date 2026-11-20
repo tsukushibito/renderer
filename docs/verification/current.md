@@ -5,11 +5,39 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## Rustレシピの合成とBistroの移行
+
+`renderer-32c`。`Preparation`がパスの宣言上限、同時frameを含む一時資源、Programを準備時に集計する。
+標準Forwardと出力レシピの間に自作copyを挟むCPUサンプルで、同じGraphへの合成と入力切替を確認した。
+CPUテストでは予約の重複・容量不足からの再試行、Bistroの126構成と、透明描画の有無による4× MSAAのresolveを確認した。
+シャドウ画像のimport、書き込み、投入受理後の版の公開は既存のGraphとRuntimeの同期・寿命契約を使う。
+全量描画は`renderer-pipeline`のBistro、Graphの直接利用は`renderer`のBistroで確認できる。
+
+WindowsのRTX 3060（610.88）で、Vulkan／D3D12それぞれの最適化製品・厳格構成を実行した。
+129×97 fixtureはForward系3モード、Deferred、対応する1×／4× MSAA、直接／packed／間接描画、個別／インスタンス描画、
+Bloomの各モード、FXAA、AA-off、Bloomバイパスを含む。全量`full-a3`／`ibl-final`は36フレームの巡回を実行した。
+移行前の完全YAML版と同一API・構成内でHDR、SDR、D32、4カスケードと診断画像の364比較がバイト一致し、
+キャッシュありと強制再描画の324比較も一致した。固定視点では各カスケードが5回、巡回では順に3、15、24、32回ヒットした。
+`--shadows-off`の4枚は全画素がクリア値だった。
+
+3 warm-upフレーム・同時投入3枠の通常588フレームで、Graph構築から投入・退役・結果返却までを計測した。
+Rust／VMA hostの確保・再確保・解放、Rendererによるネイティブ資源・メモリの作成・破棄とdescriptorの確保・解放は0件だった。
+Vulkan Core／SyncValとD3D12 Debug Layer／GBVを有効にした厳格実行に警告・エラーはなかった。
+
+全4構成で資源の同時投入、容量不足からの再試行、画像・材質差し替えと復元、mip診断の画像は移行前と一致した。
+JSONの外部シェーダーバンドルと組み込みProgramの出力も一致した。表示は各構成で24フレームとリサイズ、最小化、復帰、
+カメラ操作、未退役フレームを残した終了を確認した。Vulkanは128×96のfixture、D3D12厳格は801×601のfixtureを使った。
+D3D12製品版のfixtureは801×601と1601×901で24フレームを表示し、終了時までに全フレームが退役した。
+未退役時の終了は801×601の全量シーンで、シャドウを毎frame再描画して確認した。
+
+画像のSHA再計算、計測と実行ログは`.tools/renderer-32c/`に保存した。
+[Rustレシピの利用手順](../guides/tooling.md#rust-pipeline)と[サンプルの起動方法](../guides/examples.md)を参照する。
+
 <a id="bistro-scene-pipeline-verification"></a>
 
 <a id="bistro-post-pipeline-verification"></a>
 
-## BistroのYAMLパイプラインとRustサンプル
+## 移行前のBistroパイプラインの比較基準
 
 `renderer-12t`の`renderer-pipeline`サンプルは、4カスケード、シーン描画、Bloom、トーンマッピング、SDR出力を
 一つの準備済みYAMLパイプラインで構築する。キャッシュが有効なカスケードでは、Graphに取り込んだ既存のD32画像を読み、
@@ -46,7 +74,7 @@ Renderer発行のネイティブ資源・メモリの作成・破棄、descripto
 最適化した製品・厳格構成のfixtureと640×480の全量Bistro（street）を実行した。各APIの製品と厳格、
 および構成ごとの両APIの画像比較が受入基準内に収まり、厳格検証は警告・エラー0件だった。
 
-実行手順は[2つのBistroサンプル](../guides/examples.md)と[YAMLの記述](../guides/tooling.md#bistro-scene-pipeline)を参照する。
+移行前の実行手順と構成は[検証時点のガイド](https://github.com/tsukushibito/renderer/blob/56178090ad441dd03cfac009453e772f13ea0fa9/docs/guides/tooling.md#bistro-scene-pipeline)を参照する。
 ログとキャプチャは`.tools/renderer-12t/`に保存した。
 
 `renderer-d72`ではYAMLの回帰テストを小さなCPU fixtureで行い、releaseのフレーム構築テスト11件を追加のCIゲートにした。
@@ -92,7 +120,7 @@ Graph構築・compile、GPU投入と退役、readbackの受取と返却を含む
 VMA host callbackの確保・再確保・解放、Renderer発行のnative資源・メモリ作成／破棄とdescriptorの確保／解放は0件だった。
 既存領域のpool resetは各計測で48回観測した。厳格構成ではVulkan Core／SyncValとD3D12 Debug Layer／GBVが有効で、
 終了処理までwarningとerrorは0件だった。表示・複数同時frame・再構成時間はこの計測の対象外。
-[利用手順と実行コマンド](../guides/tooling.md#yaml-pipeline)を参照する。
+[検証時点の利用手順と実行コマンド](https://github.com/tsukushibito/renderer/blob/56178090ad441dd03cfac009453e772f13ea0fa9/docs/guides/tooling.md#yaml-pipeline)を参照する。
 
 <a id="runtime-shader-verification"></a>
 

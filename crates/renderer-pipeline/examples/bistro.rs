@@ -1,4 +1,4 @@
-//! Bistro cook import, YAML render-graph composition, and bounded measurement.
+//! Bistro cook import, Rust render-graph composition, and bounded measurement.
 
 #[path = "support/bistro.rs"]
 mod bistro;

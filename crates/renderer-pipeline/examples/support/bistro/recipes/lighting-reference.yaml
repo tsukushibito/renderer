@@ -1,4 +1,0 @@
-# All-light Forward lighting reads a frame-provided point-light buffer.
-version: 1
-resources:
-  - { id: lights, kind: buffer, source: external, bytes: 2064 }

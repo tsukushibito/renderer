@@ -8,7 +8,6 @@ description = "Reusable RenderGraph composition for renderer"
 
 [features]
 default = []
-yaml = ["dep:serde", "dep:serde-saphyr"]
 vulkan = ["renderer/vulkan"]
 d3d12 = ["renderer/d3d12"]
 development-validation = ["renderer/development-validation"]
@@ -21,8 +20,6 @@ memory-profiling = ["renderer/memory-profiling"]
 
 [dependencies]
 renderer = { version = "0.1.0", path = "../renderer", default-features = false }
-serde = { version = "1", features = ["derive"], optional = true }
-serde-saphyr = { version = "2.2", default-features = false, features = ["deserialize"], optional = true }
 tracy-client = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
@@ -36,14 +33,5 @@ sha2 = "0.10.9"
 workspace = true
 
 [[example]]
-name = "yaml_pipeline"
-required-features = ["yaml", "vulkan", "d3d12"]
-
-[[example]]
 name = "bistro"
-required-features = ["yaml"]
 test = false
-
-[[test]]
-name = "frame_inputs"
-required-features = ["yaml"]
