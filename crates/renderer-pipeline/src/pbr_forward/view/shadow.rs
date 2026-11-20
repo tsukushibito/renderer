@@ -42,7 +42,7 @@ impl Bounds {
 
 /// Four-cascade directional shadow settings. Bias and receiver normal offset
 /// are measured in world-space texels at the current cascade.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowSettings {
     pub enabled: bool,
     pub resolution: u32,
