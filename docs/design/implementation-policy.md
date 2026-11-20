@@ -936,7 +936,7 @@ Graphの宣言上限と`WorkingSet`を一括で加える場合は、すべての
 [テンプレートのビルド手順](../guides/tooling.md#material-shader-build)を参照する。
 
 `renderer-pipeline`のPBRレシピは、Forward／Forward+の1×／4×とDeferredの1×を提供する。
-Forward系の4×はカラーを単一サンプルHDRへリゾルブする。後段が使うシーン深度は1×のD32で提供する。
+Forward系の4×はカラーを単一サンプルHDRへリゾルブする。シーン深度は1×でD32を返し、4×では`None`になる。
 共通の`pbr`で材質・ビュー・描画入力・4カスケードの影を扱う。
 アプリはカメラの姿勢・投影を決め、通常Zのビュー投影行列と視点情報を`ViewInput`で渡す。
 レシピはその行列を描画、可視性、カスケード計算、Deferredの位置再構成で使う。

@@ -14,6 +14,7 @@ pub const TILE_SIZE: u32 = 16;
 pub const MAX_LIGHTS: usize = 64;
 pub const MAX_TILES: u32 = 65_536;
 pub const LIGHT_BUFFER_BYTES: u64 = 16 + MAX_LIGHTS as u64 * 32;
+pub(crate) const CULL_PASS: &str = "Forward+ tile light masks";
 const WORKGROUP: [u32; 3] = [8, 4, 1];
 const CULL_CAMERA_BYTES: u64 = 64;
 const MAX_EXTENT: u32 = 65_535;
@@ -183,7 +184,7 @@ pub fn append_culling(
     tiles: ImageView,
 ) -> Result<PassHandle, GraphError> {
     graph.dispatch(
-        "Forward+ tile light masks",
+        CULL_PASS,
         &compute_program(),
         &[
             buffer_binding(0, camera, CULL_CAMERA_BYTES),

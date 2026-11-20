@@ -18,7 +18,7 @@ pub use raster::{
     MAX_RASTER_ATTRIBUTES, MAX_RASTER_BIND_GROUPS, MAX_RASTER_BINDINGS,
     MAX_RASTER_COLOR_ATTACHMENTS, MAX_RASTER_PROGRAMS, ManagedRasterProgram, RasterParameterLayout,
     RasterPipelineRequest, RasterProgramDescriptor, RasterShaderStages, SampledImageSamplerPair,
-    VertexAttribute, VertexFormat,
+    VertexAttribute, VertexFormat, fullscreen_triangle_shaders,
 };
 
 /// Backend-specific binaries for one immutable Program contract.

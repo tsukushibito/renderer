@@ -58,7 +58,7 @@ impl Bloom {
         Some([half, quarter, quarter, input])
     }
 
-    /// Declare Bloom for a caller-prepared Graph. Use [\`Self::prepare\`] to
+    /// Declare Bloom for a caller-prepared Graph. Use [`Self::prepare`] to
     /// combine this pass's reservations with other components when possible.
     pub fn add_passes(
         self,

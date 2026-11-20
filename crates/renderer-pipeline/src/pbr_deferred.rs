@@ -3,10 +3,10 @@
 pub mod passes;
 
 use renderer::{
-    capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},
+    capacity::Preparation,
     graph::{
-        Attachment, BufferDesc, Graph, GraphError, ImageDesc, ImageHandle, LoadOp,
-        RasterAttachments, SampleCount, StoreOp,
+        Attachment, Graph, GraphError, ImageDesc, ImageHandle, LoadOp, RasterAttachments,
+        SampleCount, StoreOp,
     },
 };
 
@@ -61,46 +61,7 @@ pub fn prepare(config: Config, limits: SceneLimits) -> Result<Prepared, GraphErr
         shadow: shadow_program(),
     };
     let mut common = PreparedScene::new(config, limits, programs, false, DrawMode::Indirect)?;
-    let preparation = common.preparation_mut();
-    let [width, height] = config.extent;
-    let frames = preparation.frames_in_flight().get();
-    let planes = passes::PLANES.len();
-    let plane_count = frames
-        .checked_mul(planes)
-        .ok_or_else(|| GraphError::invalid_input("Deferred G-buffer reservation overflow"))?;
-    preparation.add_requirements(
-        GraphRequirements {
-            resources: planes + 1,
-            passes: 2,
-            accesses: 20,
-            draws: 1,
-            bindings: 16,
-            attachments: planes + 1,
-            name_bytes: passes::PLANES.iter().map(|name| name.len()).sum::<usize>()
-                + "G-buffer opaque and mask".len()
-                + "deferred inverse view projection".len()
-                + "deferred reconstruction update".len()
-                + "deferred PBR lighting".len(),
-            upload_bytes: DEFERRED_RECONSTRUCTION_BYTES,
-            ..GraphRequirements::default()
-        },
-        WorkingSet {
-            resources: &[
-                ResourceClass::Image {
-                    desc: ImageDesc::rgba16_float(width, height),
-                    count: plane_count,
-                },
-                ResourceClass::Buffer {
-                    desc: BufferDesc {
-                        size: DEFERRED_RECONSTRUCTION_BYTES as u64,
-                    },
-                    count: frames,
-                },
-            ],
-            raster: &[deferred_lighting_program().into()],
-            ..WorkingSet::default()
-        },
-    )?;
+    passes::reserve_passes(common.preparation_mut(), config.extent, true)?;
     Ok(Prepared { common })
 }
 

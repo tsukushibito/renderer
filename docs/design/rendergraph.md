@@ -953,7 +953,7 @@ depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、
 ## 公開標準パスと標準グラフ
 
 `renderer_pipeline::passes`は公開Graph操作を使う構築関数を提供する。
-`renderer_pipeline::pbr_forward`と`renderer_pipeline::unlit_forward`は公開パスを組み合わせるレシピである。
+Unlit Forward、PBR Forward、Forward+、Deferredは公開パスを組み合わせるレシピである。
 レシピはGraphを借用してパスを追加する。unlit Forwardの入口は`RasterPass::draw`と同じowned／borrowed `RasterDraw`のiteratorを受け取り、
 `SceneColor { color, depth }`というGraph内のhandleを返す。
 export、readback、compile、submit、presentと、その結果の所有は呼び出し側が選ぶ。
@@ -964,7 +964,9 @@ export、readback、compile、submit、presentと、その結果の所有は呼�
 | `passes::depth_prepass` | callerのD32 attachmentへ同じ頂点変換の深度だけを描く。colorを確保しない |
 | `unlit_forward::forward` | 指定したcolorと必要ならD32を作り、clearとopaqueを追加する。`ForwardConfig`はframeをまたいで再利用できる |
 | `unlit_forward::PreparedForward` | `ForwardConfig`と最大draw数に応じた要求を`Preparation`へ登録し、フレームごとに`SceneColor`を構築する |
-| `pbr_forward::prepare` | 材質、太陽光、IBLを使う1×レシピを準備する。4カスケードの影、RGBA16FのHDR、D32深度、SDR出力を構築する |
+| `pbr_forward`／`pbr_forward_plus` | 材質、太陽光、IBLを使う1×／4×レシピを準備する。RGBA16FのHDR、任意の4カスケードの影とSDR出力を構築する。Forward+は点光源をタイルごとに選別する |
+| `pbr_deferred` | 1×のG-bufferと照明パス、後段のForward半透明描画を構築する |
+| `pbr_deferred::passes` | `reserve`でG-bufferと照明パスの要求を追加し、`append`で利用側のGraphへ宣言する。出力先は同寸で1×、各1 mip・1 layerのRGBA16FとD32を渡す |
 | `passes::output::tone_map_neutral` | scene-linear RGBA16Fに露出倍率とKhronos Neutralを適用し、同寸のdisplay-linear RGBA16Fへ書く |
 | `passes::output::write_sdr` | 指定したcolor viewから同寸のRGBA8_UNORMへ書く。`SdrOutput`でFXAAの有無と出力encodingを選ぶ |
 | `passes::output::PreparedOutput` | 寸法と`SdrOutput`に応じた要求を登録し、HDR入力にトーンマッピングとSDR変換を追加する。トーンマッピング後の線形画像とSDR画像を返す |
@@ -974,13 +976,16 @@ export、readback、compile、submit、presentと、その結果の所有は呼�
 [準備と使い方](../guides/tooling.md#rust-pipeline)を参照する。
 
 両出力パスは`RasterPass::draw_fullscreen`を使う。頂点入力のないtrusted Programが3頂点を生成し、Graphは頂点・インデックスbufferへの依存を追加しない。
+標準出力とDeferredの照明パスは、`renderer::program::fullscreen_triangle_shaders`を通じて同じ管理下の頂点shaderを使う。
+fragment shaderのABIとアクセス範囲の保証は、それぞれのProgramのtrusted取込で成立する。
 `tone_map_neutral_pipeline()`と`SdrOutput::pipeline()`を使って実行前に対応するProgramを準備する。
 ウィンドウには`SdrEncoding::Linear`で書いた画像を渡し、PresenterがsRGB変換を行う。オフスクリーンのSDRデータには`SdrEncoding::Srgb`を選ぶ。
 Bloomなど露出前の効果はscene-linear画像に接続し、トーンマッピングとSDR変換の間にも任意のGraph処理を組み込める。
 
 unlit Forwardは頂点色とtintから出力色を求める。入力のlinear色をRGBA8_UNORMへ書く場合は0〜1へ量子化し、
 RGBA16Fでは1超や負値も保持する。HDR形式を選ぶだけでPBR、露出、tone mappingやHDR表示を実装したことにはならない。
-両Forwardレシピは2D・mip/layer各1・sample数1の通常Zを扱う。4× MSAAを組むときは公開Graphでアタッチメントとresolve先を指定する。
+Unlit Forwardは1×を扱う。PBR Forward／Forward+は1×でシーンのD32深度を返し、4×ではカラーのみを単一サンプルHDRへリゾルブする。
+4×のシーン深度は`None`になる。すべてのレシピで2D・mip/layer各1・通常Zを使う。
 `opaque`単体はcolor-onlyも許す。recipeの`depth: false`ならdepthは作らず、post入力のdepthも`None`となる。
 必要なdepthがなければ利用側は明示的に拒否するか別の処理を選び、暗黙の代用画像を作らない。
 
