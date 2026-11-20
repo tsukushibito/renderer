@@ -9,6 +9,7 @@
 #![deny(unsafe_code)]
 
 pub mod passes;
+pub mod pbr;
 pub mod pbr_forward;
 #[path = "../shaders/packaged.rs"]
 mod shader_binaries;
