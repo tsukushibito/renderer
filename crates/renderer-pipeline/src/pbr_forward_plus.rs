@@ -14,15 +14,16 @@ use crate::{
     pbr::{
         Bounds, Environment, Frame, FrameImages, PreparedView, SceneImages, SceneLimits, Sun,
         ViewInput,
+        raster::add_scene_passes,
+        scene::{DrawMode, PreparedScene, Programs, RasterScene},
     },
-    pbr_forward::{self, Programs, RasterScene, add_scene_passes, prepare_recipe},
 };
 
 pub use crate::passes::pbr::forward_plus::{
     LIGHT_BUFFER_BYTES, MAX_LIGHTS, MAX_TILES, PointLight, TILE_SIZE, active_tile_count,
     append_culling, compute_program, light_bytes, raster_bindings, raster_program, tile_mask_desc,
 };
-pub use crate::pbr_forward::Config;
+pub use crate::pbr::Config;
 
 const LIGHTS: BufferDesc = BufferDesc {
     size: LIGHT_BUFFER_BYTES,
@@ -30,8 +31,7 @@ const LIGHTS: BufferDesc = BufferDesc {
 
 /// Prepared Forward+ programs, frame capacities and PBR scratch.
 pub struct Prepared {
-    common: pbr_forward::Prepared,
-    config: Config,
+    common: PreparedScene,
     mask_desc: ImageDesc,
     fallback_programs: Programs,
 }
@@ -46,7 +46,7 @@ pub fn prepare(config: Config, limits: SceneLimits) -> Result<Prepared, GraphErr
         blend: raster_program(true, true),
         shadow: shadow_program(),
     };
-    let mut common = prepare_recipe(config, limits, programs, true)?;
+    let mut common = PreparedScene::new(config, limits, programs, true, DrawMode::Indirect)?;
     let preparation = common.preparation_mut();
     let count = preparation.frames_in_flight().get();
     let fallback_programs = Programs::default();
@@ -87,7 +87,6 @@ pub fn prepare(config: Config, limits: SceneLimits) -> Result<Prepared, GraphErr
     )?;
     Ok(Prepared {
         common,
-        config,
         mask_desc,
         fallback_programs,
     })
@@ -116,7 +115,7 @@ impl Prepared {
         frame: Frame<'_>,
         lights: &[PointLight],
     ) -> Result<SceneImages, GraphError> {
-        let config = self.config;
+        let config = self.common.config();
         let append_scene = |graph: &mut Graph, scene: RasterScene<'_>| {
             add_scene_passes(
                 graph,

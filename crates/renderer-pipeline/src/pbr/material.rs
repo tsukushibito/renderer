@@ -15,9 +15,89 @@ use renderer::{
 
 use crate::passes::pbr::MATERIAL_BYTES;
 
-use super::{AlphaMode, MaterialFactors};
-
 const SIZE: u64 = MATERIAL_BYTES as u64;
+
+/// Alpha interpretation of the bundled Forward and shadow shaders.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AlphaMode {
+    #[default]
+    Opaque,
+    Mask,
+    Blend,
+}
+
+/// Material constants encoded at asset creation or update. Pass them to
+/// [`super::MaterialUniform::upload`] before using the material in a recipe.
+/// The default is a white dielectric with unit normal and AO strengths.
+#[derive(Clone, Copy, Debug)]
+pub struct MaterialFactors {
+    pub base_color: [f32; 4],
+    pub emissive: [f32; 3],
+    pub normal_scale: f32,
+    pub metallic: f32,
+    pub roughness: f32,
+    pub occlusion_strength: f32,
+    pub alpha_cutoff: f32,
+    pub alpha_mode: AlphaMode,
+    pub double_sided: bool,
+}
+
+impl Default for MaterialFactors {
+    fn default() -> Self {
+        Self {
+            base_color: [1.0; 4],
+            emissive: [0.0; 3],
+            normal_scale: 1.0,
+            metallic: 0.0,
+            roughness: 1.0,
+            occlusion_strength: 1.0,
+            alpha_cutoff: 0.5,
+            alpha_mode: AlphaMode::Opaque,
+            double_sided: false,
+        }
+    }
+}
+
+impl MaterialFactors {
+    /// Encode the standard shader ABI for a custom Graph or cooked asset.
+    pub fn encode(self) -> Result<[u8; MATERIAL_BYTES], GraphError> {
+        if self
+            .base_color
+            .into_iter()
+            .chain([self.metallic, self.roughness, self.occlusion_strength])
+            .any(|value| !(0.0..=1.0).contains(&value))
+            || self
+                .emissive
+                .into_iter()
+                .any(|value| !value.is_finite() || value < 0.0)
+            || !self.normal_scale.is_finite()
+            || !self.alpha_cutoff.is_finite()
+            || self.alpha_cutoff < 0.0
+        {
+            return Err(GraphError::invalid_input("invalid PBR material factors"));
+        }
+        let floats = self.base_color.into_iter().chain(self.emissive).chain([
+            self.normal_scale,
+            self.metallic,
+            self.roughness,
+            self.occlusion_strength,
+            self.alpha_cutoff,
+        ]);
+        let mode: u32 = match self.alpha_mode {
+            AlphaMode::Opaque => 0,
+            AlphaMode::Mask => 1,
+            AlphaMode::Blend => 2,
+        };
+        let mut bytes = [0; MATERIAL_BYTES];
+        let words = floats
+            .map(f32::to_le_bytes)
+            .chain([mode, u32::from(self.double_sided), 0, 0].map(u32::to_le_bytes));
+        for (out, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+            *out = value;
+        }
+        Ok(bytes)
+    }
+}
 
 /// PBR material constants uploaded into the current Graph. The buffer and its
 /// alpha classification originate from the same checked CPU input.
@@ -221,5 +301,43 @@ impl ResidentMaterial {
         runtime.delete(self.key)?;
         self.release_snapshot();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn material_packing_matches_float_and_flag_slots() {
+        let values = MaterialFactors {
+            base_color: [0.1, 0.2, 0.3, 0.4],
+            emissive: [1.0, 2.0, 3.0],
+            normal_scale: -1.0,
+            metallic: 0.5,
+            roughness: 0.6,
+            occlusion_strength: 0.9,
+            alpha_cutoff: 2.0,
+            alpha_mode: AlphaMode::Mask,
+            double_sided: true,
+        };
+        let bytes = values.encode().unwrap();
+        let words = bytes.as_chunks::<4>().0;
+        assert_eq!(
+            words[..12],
+            [
+                0.1f32, 0.2, 0.3, 0.4, 1.0, 2.0, 3.0, -1.0, 0.5, 0.6, 0.9, 2.0
+            ]
+            .map(f32::to_le_bytes)
+        );
+        assert_eq!(words[12..], [1u32, 1, 0, 0].map(u32::to_le_bytes));
+        assert!(
+            MaterialFactors {
+                roughness: f32::NAN,
+                ..values
+            }
+            .encode()
+            .is_err()
+        );
     }
 }
