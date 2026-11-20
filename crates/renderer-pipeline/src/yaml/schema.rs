@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use renderer::ImageFormat;
 use renderer::graph::StoreOp;
 use renderer::program::SamplerDescriptor;
@@ -33,6 +35,8 @@ pub(super) struct Config {
     #[serde(default)]
     pub draw_lists: Vec<DrawListSpec>,
     #[serde(default)]
+    pub raster_batches: BTreeMap<String, Vec<RasterBatchSpec>>,
+    #[serde(default)]
     pub passes: Vec<PassSpec>,
     pub output: Option<String>,
 }
@@ -65,6 +69,7 @@ pub(super) enum ResourceSpec {
         extent: Option<ImageExtent>,
         divisor: Option<u32>,
         format: Format,
+        samples: Option<u32>,
     },
     Buffer {
         id: String,
@@ -112,11 +117,20 @@ pub(super) enum PassSpec {
         #[serde(default)]
         colors: Vec<AttachmentSpec<[f32; 4]>>,
         depth: Option<AttachmentSpec<f32>>,
+        when: Option<DrawListConditionSpec>,
+        batches: Option<RasterBatchesSpec>,
         draw_list: Option<String>,
         #[serde(default)]
         constants: Vec<u32>,
         #[serde(default)]
         bindings: Vec<BindingSpec>,
+    },
+    Attachment {
+        id: String,
+        #[serde(default)]
+        colors: Vec<AttachmentSpec<[f32; 4]>>,
+        depth: Option<AttachmentSpec<f32>>,
+        when: Option<DrawListConditionSpec>,
     },
     Compute {
         id: String,
@@ -127,12 +141,41 @@ pub(super) enum PassSpec {
     },
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RasterBatchSpec {
+    pub shader: Option<String>,
+    pub shader_template: Option<String>,
+    #[serde(default)]
+    pub material_types: Vec<String>,
+    pub draw_list: Option<String>,
+    #[serde(default)]
+    pub constants: Vec<u32>,
+    #[serde(default)]
+    pub bindings: Vec<BindingSpec>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(super) enum RasterBatchesSpec {
+    Inline(Vec<RasterBatchSpec>),
+    Named(String),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DrawListConditionSpec {
+    pub draw_list: String,
+    pub empty: bool,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AttachmentSpec<T> {
     pub image: String,
     pub load: LoadAction,
     pub clear: Option<Parameter<T>>,
+    pub resolve: Option<String>,
     #[serde(default)]
     pub store: StoreAction,
 }
@@ -162,7 +205,7 @@ impl From<StoreAction> for StoreOp {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum BindingSpec {
     Image {

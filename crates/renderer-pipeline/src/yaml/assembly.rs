@@ -26,14 +26,14 @@ pub enum PrepareValue {
     Depth(f32),
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(untagged)]
 pub(super) enum Parameter<T> {
     Literal(T),
     Named(ParameterName),
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ParameterName {
     param: String,
@@ -129,13 +129,26 @@ pub(super) fn assemble(fragments: &[&str]) -> Result<schema::Config, PipelineErr
         }
         config.resources.extend(fragment.resources);
         config.draw_lists.extend(fragment.draw_lists);
-        config.passes.extend(fragment.passes);
-        if let Some(output) = fragment.output {
-            if config.output.replace(output).is_some() {
-                return Err(PipelineError::Invalid(
-                    "pipeline fragments must declare exactly one output".into(),
-                ));
+        for (name, batches) in fragment.raster_batches {
+            match config.raster_batches.entry(name) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(batches);
+                }
+                std::collections::btree_map::Entry::Occupied(entry) => {
+                    return Err(PipelineError::Invalid(format!(
+                        "duplicate raster batch list {:?}",
+                        entry.key()
+                    )));
+                }
             }
+        }
+        config.passes.extend(fragment.passes);
+        if let Some(output) = fragment.output
+            && config.output.replace(output).is_some()
+        {
+            return Err(PipelineError::Invalid(
+                "pipeline fragments must declare exactly one output".into(),
+            ));
         }
     }
     Ok(config)

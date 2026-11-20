@@ -6,7 +6,9 @@ mod schema;
 use std::{error::Error, fmt};
 
 use renderer::capacity::{ResourceClass, WorkingSet};
-use renderer::graph::{BufferDesc, GraphError, ImageDesc, LoadOp, RasterConstants, StoreOp};
+use renderer::graph::{
+    BufferDesc, GraphError, ImageDesc, LoadOp, RasterConstants, SampleCount, StoreOp,
+};
 use renderer::program::{
     ManagedProgram, ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor,
 };
@@ -171,17 +173,21 @@ impl PreparedPipeline {
     }
 
     /// Look up a prepared Raster Program for application-owned Graph assembly.
-    /// A pass with a directly named Program uses that Program for any material type.
+    /// For a single-batch pass, a directly named Program applies to any
+    /// material type.
     pub fn raster_program(
         &self,
         pass_id: &str,
         material_type: &str,
     ) -> Option<&ManagedRasterProgram> {
         let pass = self.passes.iter().find(|pass| pass.id == pass_id)?;
-        let PassKind::Raster { program, .. } = &pass.kind else {
+        let PassKind::Raster { batches, .. } = &pass.kind else {
             return None;
         };
-        Some(&self.raster[program.select(material_type)?].program)
+        let [batch] = batches.as_slice() else {
+            return None;
+        };
+        Some(&self.raster[batch.program.select(material_type)?].program)
     }
 
     /// The transient classes and Program versions required by this pipeline.
@@ -213,20 +219,46 @@ struct Pass {
     id: String,
     bindings: Vec<PreparedBinding>,
     kind: PassKind,
+    when: Option<DrawListCondition>,
 }
 
 enum PassKind {
     Raster {
-        program: RasterPrograms,
-        colors: Vec<PreparedAttachment<[f32; 4]>>,
-        depth: Option<PreparedAttachment<f32>>,
-        draw: RasterDrawKind,
-        uses_materials: bool,
+        attachments: PreparedAttachments,
+        batches: Vec<PreparedRasterBatch>,
     },
+    Attachment(PreparedAttachments),
     Compute {
         program: usize,
         grid: Option<[u32; 2]>,
     },
+}
+
+impl PassKind {
+    fn attachments(&self) -> Option<&PreparedAttachments> {
+        match self {
+            Self::Raster { attachments, .. } | Self::Attachment(attachments) => Some(attachments),
+            Self::Compute { .. } => None,
+        }
+    }
+}
+
+struct DrawListCondition {
+    draw_list: usize,
+    empty: bool,
+}
+
+struct PreparedAttachments {
+    colors: Vec<PreparedAttachment<[f32; 4]>>,
+    depth: Option<PreparedAttachment<f32>>,
+    samples: SampleCount,
+}
+
+struct PreparedRasterBatch {
+    program: RasterPrograms,
+    bindings: Vec<PreparedBinding>,
+    draw: RasterDrawKind,
+    uses_materials: bool,
 }
 
 enum RasterPrograms {
@@ -258,6 +290,7 @@ enum RasterDrawKind {
 
 struct PreparedAttachment<T> {
     resource: usize,
+    resolve: Option<usize>,
     load: LoadOp<T>,
     store: StoreOp,
 }

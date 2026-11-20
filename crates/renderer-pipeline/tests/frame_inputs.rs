@@ -1,7 +1,7 @@
 use renderer::capacity::ResourceClass;
 use renderer::graph::{
     Attachment, BufferDesc, GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, LoadOp,
-    RasterAttachments, RasterDraw, RasterParameters, StoreOp,
+    RasterAttachments, RasterDraw, RasterParameters, SampleCount, StoreOp,
 };
 use renderer::program::{ManagedProgram, ManagedRasterProgram};
 use renderer_pipeline::{
@@ -558,4 +558,192 @@ fn indexed_capacity_overflow_precedes_frame_scratch_reservation() {
             .to_string()
             .contains("Graph declaration limits overflow")
     );
+}
+
+const MSAA_PIPELINE: &str = "
+version: 1
+resources:
+  - {id: multisampled, kind: image, width: 8, height: 4, format: rgba8_unorm, samples: 4}
+  - {id: resolved, kind: image, width: 8, height: 4, format: rgba8_unorm}
+draw_lists:
+  - {id: first, view: main, queue: opaque}
+  - {id: second, view: overlay, queue: opaque}
+raster_batches:
+  scene:
+    - {shader: mesh, draw_list: first}
+    - {shader: mesh, draw_list: second}
+passes:
+  - id: clear
+    kind: attachment
+    colors: [{image: multisampled, load: clear, clear: [0, 0, 0, 1]}]
+  - id: resolve_empty
+    kind: attachment
+    when: {draw_list: first, empty: true}
+    colors: [{image: multisampled, load: load, store: discard, resolve: resolved}]
+  - id: draw_resolve
+    kind: raster
+    batches: scene
+    when: {draw_list: first, empty: false}
+    colors: [{image: multisampled, load: load, store: discard, resolve: resolved}]
+output: resolved
+";
+
+const MSAA_OPTIONS: PrepareOptions = PrepareOptions {
+    frame_extent: None,
+    frames_in_flight: 1,
+    max_draws_per_list: 1,
+    max_materials: 0,
+};
+
+#[test]
+fn msaa_attachment_branch_and_batched_draw_branch_produce_the_same_named_output() {
+    let (resources, batches_and_passes) = MSAA_PIPELINE.split_once("raster_batches:").unwrap();
+    let (batches, passes) = batches_and_passes.split_once("passes:").unwrap();
+    let batches = format!("version: 1\nraster_batches:{batches}");
+    let passes = format!("version: 1\npasses:{passes}");
+    let prepare = |fragments: &[&str]| {
+        PreparedPipeline::from_yaml_fragments(fragments, MSAA_OPTIONS, Default::default(), |_| {
+            Ok(Program::Raster(ManagedRasterProgram::mesh()))
+        })
+    };
+    let mut pipeline = prepare(&[resources, &batches, &passes]).unwrap();
+    let duplicate = prepare(&[resources, &batches, &batches, &passes])
+        .err()
+        .unwrap();
+    assert!(
+        duplicate
+            .to_string()
+            .contains("duplicate raster batch list")
+    );
+    assert_eq!(
+        pipeline.working_set().raster[0].sample_count,
+        SampleCount::X4
+    );
+    assert_eq!(pipeline.requirements().draws, 2);
+    assert_eq!(pipeline.requirements().attachments, 3);
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    for has_draws in [false, true, false] {
+        let mut graph = pool.begin().unwrap();
+        let mut candidates = Vec::new();
+        if has_draws {
+            for (vertex_upload, index_upload) in
+                [("vertices A", "indices A"), ("vertices B", "indices B")]
+            {
+                let vertices = graph
+                    .buffer(vertex_upload, BufferDesc { size: 84 })
+                    .unwrap();
+                let indices = graph.buffer(index_upload, BufferDesc { size: 12 }).unwrap();
+                graph
+                    .upload_buffer(vertex_upload, vertices, 0, &[0; 84])
+                    .unwrap();
+                graph
+                    .upload_buffer(index_upload, indices, 0, &[0; 12])
+                    .unwrap();
+                candidates.push(DrawCandidate {
+                    queue: "opaque",
+                    material: None,
+                    draw: RasterDraw {
+                        bindings: None,
+                        vertices,
+                        indices,
+                        first_index: 0,
+                        index_count: 3,
+                        instance_count: 1,
+                        parameters: RasterParameters::default().into(),
+                    },
+                });
+            }
+        }
+        let mut views = vec![FrameView {
+            name: "main",
+            candidates: &candidates[..usize::from(has_draws)],
+        }];
+        if has_draws {
+            views.push(FrameView {
+                name: "overlay",
+                candidates: &candidates[1..],
+            });
+        }
+        let (mut graph, output) = pipeline
+            .build(
+                graph,
+                FrameInputs {
+                    views: &views,
+                    ..FrameInputs::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(output.named_image("resolved"), Some(output.image()));
+        assert_eq!(
+            graph.image_desc(output.image()).unwrap(),
+            ImageDesc::rgba8(8, 4)
+        );
+        graph.export_image(output.image()).unwrap();
+        let plan = graph.compile().unwrap();
+        let names = plan.ordered_pass_names().collect::<Vec<_>>();
+        if has_draws {
+            assert_eq!(
+                names,
+                [
+                    "vertices A",
+                    "indices A",
+                    "vertices B",
+                    "indices B",
+                    "clear",
+                    "draw_resolve"
+                ]
+            );
+        } else {
+            assert_eq!(names, ["clear", "resolve_empty"]);
+        }
+    }
+}
+
+#[test]
+fn raster_shader_is_resolved_once_when_used_at_both_sample_counts() {
+    let yaml = MSAA_PIPELINE.replace(
+        "output: resolved",
+        "  - {id: draw_1x, kind: raster, shader: mesh, draw_list: first, colors: [{image: resolved, load: load}]}\noutput: resolved",
+    );
+    let mut resolves = 0;
+    let pipeline = PreparedPipeline::from_yaml(&yaml, MSAA_OPTIONS, |_| {
+        resolves += 1;
+        Ok(Program::Raster(ManagedRasterProgram::mesh()))
+    })
+    .unwrap();
+    assert_eq!(resolves, 1);
+    assert!(
+        pipeline
+            .working_set()
+            .raster
+            .iter()
+            .map(|variant| variant.sample_count)
+            .eq([SampleCount::X4, SampleCount::X1,])
+    );
+}
+
+#[test]
+fn incompatible_resolves_are_rejected_at_preparation() {
+    for (from, to, reason) in [
+        ("samples: 4", "samples: 2", "samples must be 1 or 4"),
+        ("samples: 4", "samples: 1", "matching 1x destination"),
+        (
+            "store: discard, resolve: resolved",
+            "store: discard, resolve: multisampled",
+            "duplicate attachment",
+        ),
+        (
+            "load: load, store: discard",
+            "load: discard, store: discard",
+            "initialized 4x color",
+        ),
+    ] {
+        let yaml = MSAA_PIPELINE.replace(from, to);
+        let error = PreparedPipeline::from_yaml(&yaml, MSAA_OPTIONS, |_| {
+            Ok(Program::Raster(ManagedRasterProgram::mesh()))
+        })
+        .err()
+        .unwrap();
+        assert!(error.to_string().contains(reason), "{error}");
+    }
 }
