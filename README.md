@@ -5,25 +5,25 @@ Bistroの原本・検証済み素材と比較画像はGit LFSで共有します�
 
 ゲームエンジン向けの、RenderGraphを中心としたRust製3Dレンダラーです。
 GPUに依存しないRenderGraphの宣言・解析と、Vulkan 1.3（ash / vk-mem）および
-WindowsのD3D12による実行を提供します。両バックエンドでbuffer・RGBA8/RGBA16F画像の転送、
-indexed meshと深度、利用側shaderによるRaster/Compute、import/export・履歴、readback、
-上限付きの資源再利用とWindows表示を扱います。各バックエンドは単一キューで実行します。
+WindowsのD3D12による実行を提供します。どちらも単一キューで、メッシュ描画、深度、Raster・Compute、
+資源の転送、import/export、履歴、読み戻し、Windows表示に対応します。
 
-`renderer-pipeline`はUnlit Forward、PBR Forward、Forward+、Deferredの描画レシピと、再利用できる`passes`を提供します。
-`renderer::capacity`でレシピと独自パスの要求を集約し、同じ`renderer::graph`に[Rustで合成](docs/guides/tooling.md#rust-pipeline)できます。
-同期、資源の寿命、不要パスの除去はGraphが扱います。
-GPU実行の共通入口は `renderer::runtime` です。個別APIは `renderer::vulkan` と `renderer::d3d12` から使えます。
-アプリケーションのシーンからメッシュ・材質・変換を渡す入口は [`ViewRenderer と ViewPipeline`](docs/guides/tooling.md#scene-materials) です。
-標準PBRの方式は `pipeline::GeometryPipeline` で選びます。各方式はIBL、任意の4カスケードの影、HDRと任意のSDR出力を構築します。
-PBR Forward／Forward+は1×と4×、Deferredは1×に対応します。
-`renderer-bistro`の`bistro`は標準レシピを使い、MSAAやBloomなどの構成をVulkanとD3D12で実行します。
-同じパッケージの`bistro-graph`は公開Graph APIでパスを組み立てます。
+エンジンはシーン階層、アニメーション、カメラ、アセットのロードとフレーム進行を所有します。
+用途に合わせて次の入口を選べます。
+
+| 用途 | 入口 |
+| --- | --- |
+| メッシュ・材質を登録し、カメラごとに描く | `renderer-pipeline` の `ViewRenderer` に標準または独自の `ViewPipeline` を登録します。複数の方式・解像度のビューを一つのGraphに記録できます。[組み込み手順](docs/guides/tooling.md#scene-materials) |
+| 標準PBRに独自パスを組み込む | `GeometryPipeline` からHDRと必要な深度を受け取り、Bloomや独自エフェクト、SDR出力をつなぎます。[パス合成](docs/guides/tooling.md#rust-pipeline) |
+| 描画をエンジン独自に定義する | `renderer::graph` で依存と描画を宣言し、`renderer::runtime::Runtime` で準備・投入・完了確認を行います。[RenderGraphの契約](docs/design/rendergraph.md) |
+
+標準PBRはForward／Forward+の1×・4×とDeferredの1×に対応し、点光源、IBL、任意の4カスケードの影を扱います。
+`renderer-bistro`の`bistro`は標準レシピ、`bistro-graph`は公開Graph APIの実例です。
 native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md#対応範囲と処理の境界)、
 実行済みの確認と未確認範囲は[検証状況](docs/verification/current.md)を参照してください。
 
-既定featureではGPU・ウィンドウに依存しません。Graphを構築してから、`runtime::Runtime`で
-両バックエンド共通の準備・投入・完了確認を行います。Windows表示も同じ実行経路を使います。
-通常frameでは準備済み容量を再利用します。転送領域の物理容量は選択したバックエンドの初期設定で調整できます。
+既定featureはGPU・ウィンドウに依存しません。アプリが `renderer` の `vulkan`、`d3d12`、必要なら `presentation` を選びます。
+独自パイプラインのクレートはバックエンドを指定せずに実装できます。起動や構成変更時に `Preparation` で容量を集約し、通常フレームで再利用します。
 
 - [ドキュメント一覧](docs/README.md)
 - [図で読むRenderGraph設計](docs/design/rendergraph-overview.md)・[HTML版の生成](docs/guides/html-docs.md)

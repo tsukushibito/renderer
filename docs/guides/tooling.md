@@ -122,11 +122,15 @@ Computeでは`ManagedProgram::from_trusted_owned_descriptor`へ、該当バイ�
 両APIのバイナリを一つのProgramで使う場合は、共通ABIを持つ両形式を`ShaderBinaries::both`へ渡す。
 取込後に元のメタデータを手放せる。
 
-Rasterは`program.clone().into()`で1×の`RasterPipelineRequest`を作り、`WorkingSet::raster`へ渡す。
-Computeは`WorkingSet::compute`へ渡す。起動時の`Runtime::new`または停止中の
-`Runtime::prepare_working_set`でGPUパイプラインを準備し、Graphでは通常の`draw_fullscreen`、
-`draw`、`dispatch`などに同じProgramの参照を渡す。差し替え時は再取込してWorkingSetを準備し、
-置換した版に依存するGraphを組み直す。
+埋め込みのプラグインには `renderer::program::embedded_shader_binaries!(spirv, dxil)` を使える。
+ホストアプリの `renderer` で有効なバックエンドに応じて対応する式だけを展開する。GPU機能が無い構成ではABIだけを使ってGraphを構築できる。
+パイプライン側はバックエンド別のCargo featureや条件コンパイルを用意せずに、同じ `ViewPipeline` を実装できる。
+
+描画・dispatchの予約には以下の `Preparation` を使う。直接 `WorkingSet` を組む場合はRasterを `WorkingSet::raster`、
+Computeを `WorkingSet::compute` に渡す。標準の表示プリセットは `renderer_pipeline::passes::output` が提供する。
+単独で使う場合は `tone_map_neutral_pipeline()` と `SdrOutput::display(fxaa).pipeline()` または `SdrOutput::capture(fxaa).pipeline()` を予約する。
+起動時の `Runtime::new` または変更時の `Runtime::prepare_working_set` がGPUパイプラインを準備する。
+Graphでは同じProgramで `draw_fullscreen`、`draw`、`dispatch` する。差し替えた版を使うGraphは再構築する。
 
 バイナリの検査は取込時に行う。コードの妥当性、ABIとの一致、範囲や出力初期化などの挙動は
 アセットを渡す側が保証する。[取込と寿命の設計](../design/implementation-policy.md#external-shader-assets)を参照する。
@@ -139,23 +143,23 @@ Computeは`WorkingSet::compute`へ渡す。起動時の`Runtime::new`または�
 利用側は標準パスと独自のRaster、Compute、copyを同じGraphに登録する。
 独自のShader Programは[外部取込](#runtime-shader-import)の契約に従って用意し、標準部品と同じように準備する。
 
-1. 独自構成を起動するときは、同時処理する上限から`renderer::capacity::Preparation`を作る。`unlit_forward::PreparedForward::prepare`に
-   描画先の`ForwardConfig`と最大draw数を渡し、`PreparedOutput::prepare`に出力寸法と`SdrOutput`を渡す。
-   各レシピが必要な一時画像、Program、Graph宣言数を登録する。
-2. 独自パスの一時画像やバッファを`reserve_image`／`reserve_buffer`で登録する。個数は1フレーム当たりで指定する。
-   `add_graph_requirements`で独自パスの宣言数を加え、`add_working_set`でProgramなどを取り込む。
-   宣言数と資源をまとめて登録する場合は`add_requirements`を使う。
-   `add_working_set`に渡す`ResourceClass`の個数は同時に保持する全フレーム分で指定する。
-   `working_set()`をRuntimeに渡し、`graph_capacity`で求めた容量で`GraphPool`を作る。`graph_capacity`は集計値と
-   基準値の大きい方を宣言容量に使う。依存・範囲解析やアップロードの上限は基準となる`GraphCapacity`で指定する。
-3. `GraphPool::begin`から毎フレームGraphを受け取り、入力のimportやuploadを追加する。
-   `PreparedForward::add_passes`の`SceneColor`から色や深度を取り出し、独自パスや`PreparedOutput::add_passes`へつなぐ。
-   `OutputImages`の`display_linear`は独自の後段処理へ接続できる。保存は`SdrOutput::capture(fxaa)`で準備し、
-   `sdr.capture()`から得た画像に`readback`を宣言する。表示は`SdrOutput::display(fxaa)`で準備し、
-   `sdr.display()`から得た画像をexportする。Graphの投入受理後に`accept`し、返された画像から`present`を呼ぶ。
-   表示で使い終えた登録は、その画像のキーを`Runtime::delete`へ渡して解放する。
-   `raw_image`で独自Graphに接続する場合は、同じRGBA8形式の線形値とsRGB値を区別して扱う。
-   GPUへの投入と表示はアプリが選ぶ。寸法、設定、アセット版が変わるときは変更境界で再準備する。
+1. 起動時に同時フレーム数で `Preparation` を作る。標準部品の `prepare` へ描画寸法・方式・最大入力数を渡すと、Programと一時資源が登録される。
+2. 独自のRasterパスは `reserve_raster_pass` でアタッチメント、Programと最大描画数を宣言する。メッシュを取り込むなら `Meshes::reserve_imports` も呼ぶ。バインディング、定数、アクセス、ラベルの必要量はこれらの宣言から計算する。Computeには `reserve_dispatch`、コピーには `reserve_copy`、読み戻しには `reserve_readback` がある。
+3. `preparation.runtime_limits(base)?` で得た値を `Runtime::new` に、同じ値の `.graph` を `GraphPool::new` に渡す。CPUでGraphだけを組み立てるときは `graph_capacity(base)?` を使う。追加アップロード、部分範囲の分割、同時に保持する読み戻し結果、バックエンドの転送領域にはアプリの上限を指定する。
+4. 各フレームで `pool.begin()?` からGraphを受け取る。レシピから得たHDRを独自パスへ渡し、保存には `SdrOutput::capture(fxaa)` と `CaptureSdr::readback`、Windows表示には `SdrOutput::display(fxaa)` を使う。HDRだけを使う場合はSDR出力を省ける。
+
+たとえば独自のメッシュ描画パスに必要な容量は次のように申告できる。各ラベルには記録時と同じ名前を使う。
+
+```rust
+Meshes::reserve_imports(&mut preparation, max_meshes)?;
+preparation.reserve_raster_pass("toon", samples, |pass| {
+    pass.transient_attachment("toon color", color_desc)?;
+    pass.draws(&program, max_draws)
+})?;
+```
+
+分割画面やUIのクリップには `graph.raster` のコールバック内で `set_viewport(Some(rect))`、`set_scissor(Some(rect))` を呼ぶ。
+矩形はアタッチメントの選択mip内の画素単位で、以後の描画に効く。`None` で全域に戻す。load・clear・store・resolveは引き続きアタッチメント全域が対象となる。
 
 [`rust_pipeline`のソース](../../crates/renderer-pipeline/examples/rust_pipeline.rs)では、unlit Forwardと標準出力の間に
 HDR画像のコピーパスを挟んだGraphをCPUで構築・compileする。
@@ -166,7 +170,7 @@ cargo run --locked -p renderer-pipeline --no-default-features --example rust_pip
 
 <a id="scene-materials"></a>
 
-### メッシュにマテリアルを割り当てる
+### エンジンのシーンとカメラから描画する
 
 `renderer_pipeline::material::Materials` をシーンと一緒に保持する。単色の材質は作成時に色を渡せばよい。
 同じハンドルを複数の描画に渡すと、そのハンドルへの更新が次に構築する Graph から全描画に反映される。
@@ -186,36 +190,62 @@ materials.update_pbr(blue_paint, PbrParams::color([0.03, 0.1, 0.8, 1.0]))?;
 アプリケーションがシーン、階層、アニメーションを所有する。描画時には、メッシュと材質のハンドルと
 ワールド変換を持つ `RenderObject` のスライスを渡す。同じスライスを複数のカメラから描画できる。
 
-同じ `ViewRenderer<P>` で標準・アプリ独自の方式を扱う。
-初期化時に `P` を選び、`ViewRenderer::prepare` に寸法、登録するカメラ数、任意の SDR 出力設定、
-`Preparation` を渡す。標準 Forward の入口は `StandardPipeline::forward(extent, limits)`。
-`meshes.reserve` と後処理の要件を加えて Runtime と GraphPool を作り、`renderer.initialize` が
-初期転送 ID を返した場合はそのフレームを回収する。カメラごとに一意な `ViewId` を付けた
-`CameraView` を `register_view` に渡す。1個のレンダラーは準備した寸法のカメラを扱う。
+起動時に `ViewRenderer::new()` を作り、描画方式・寸法ごとにグループを登録する。例えば主画面に標準PBR、別の解像度のミニマップに独自方式を選べる。
+グループごとに使うビュー数を指定し、同じフレームで使うグループの資源を一つの `Preparation` に集約する。
 
 ```rust
-let scene = SceneInput::new(&meshes, &materials, &objects);
-// 作成・変更時。各レジストリの prepare_gpu で転送した後に呼ぶ。
-renderer.prepare_scene(scene)?;
-
-// 毎フレーム。GraphPool と Runtime はアプリが共有できる。
-let mut frame = renderer.begin_frame(&mut pool)?;
-let image = frame.draw_view(scene, &camera)?;
-let hdr = bloom.add_passes(frame.graph(), image.color)?;
-let sdr = frame.write_output(hdr, exposure, Some(target))?;
-sdr.display().unwrap().export(frame.graph())?;
-let receipt = frame.submit(&mut runtime)?;
+let mut renderer = ViewRenderer::new();
+let mut preparation = Preparation::new(limits.frames_in_flight);
+let group = renderer.prepare_pipeline(
+    StandardPipeline::forward(extent, limits)?,
+    extent,
+    view_count,
+    Some(SdrOutput::display(false)),
+    &mut preparation,
+)?;
+meshes.reserve(&mut preparation)?;
+let bloom = Bloom::Tent.prepare(&mut preparation, ImageDesc::rgba16_float(extent[0], extent[1]))?;
+let runtime_limits = preparation.runtime_limits(base_limits)?;
+let mut pool = GraphPool::new(runtime_limits.graph, graph_slots)?;
+let (mut runtime, mut presenter) = Runtime::for_window(
+    config, runtime_limits, preparation.working_set(), window, presentation_config,
+)?;
+let initial_upload = renderer.initialize_pipeline(group, &mut runtime)?;
+renderer.register_view(group, &camera)?;
 ```
 
-`prepare_scene` は次のフレーム群で使うメッシュ・材質の組合せ一式を置き換える。
-描画時のオブジェクト順、部分集合、ワールド変換は変更できる。資産の版や組合せが変わる場合は再準備する。
-新旧の版が重なる更新では重複分の GPU 容量を予約する。環境マップは登録済み画像を持つ `EnvironmentMaps` を渡す。
+`camera` には安定した `ViewId`、寸法、`ViewInput` を持たせる。`initial_upload` が `Some(id)` なら通常の完了処理で回収する。
+メッシュと材質はアセット作成・変更時に各レジストリの `prepare_gpu` で転送し、`prepare_scene(group, changed)` に新規・変更した組合せだけを渡す。
+使わなくなった組合せは `remove_scene_pair(group, mesh, material)` で外せる。
+
+```rust
+// アセットの作成・変更時
+renderer.prepare_scene(group, SceneInput::new(&meshes, &materials, &changed_objects))?;
+
+// 毎フレーム
+let scene = SceneInput::new(&meshes, &materials, &objects)
+    .with_sun(sun)
+    .with_lights(&point_lights);
+let mut frame = renderer.begin_frame(&mut pool)?;
+let bound = frame.bind_scene(group, scene)?;
+let hdr = frame.draw_view(bound, &camera)?.color;
+let hdr = bloom.add_passes(frame.graph(), hdr)?;
+let sdr = frame.write_output(camera.id, hdr, exposure, None)?;
+sdr.display().expect("display output configured").export_for_display(frame.graph())?;
+let mut receipt = frame.submit(&mut runtime)?;
+presenter.queue_frame(&mut receipt)?;
+let outcome = presenter.present_frame(&mut runtime)?;
+```
+
+`FrameScene` はそのフレームとグループに属する。複数カメラが同じオブジェクトを描く場合は `bind_scene` の戻り値を共有する。
+オブジェクト順、部分集合、変換は毎フレーム変更できる。照明、シーン境界、環境マップはシーン入力で共有する。
+表示が `NotReady` のときは同じPresenterの `present_frame` を再試行する。保存用のビューなら `sdr.capture()` で読み戻しを宣言してから投入する。
 
 独自方式は `ViewPipeline` を実装する。`reserve` で共有資源とビュー別の作業領域を予約し、
-`check_object` で対応材質・頂点レイアウトを確認する。`record` では準備済み入力から `meshes.import` で
-頂点・インデックス範囲を取り込み、Graph に任意のパスを追加する。戻り値は同寸の単一サンプル、
-シーンリニア Rec.709 RGBA16F と、必要なら単一サンプル D32。G-buffer を読む標準 Deferred のパスは
-`draw_view_with_gbuffer` のコールバックで Forward 合成前に追加する。
+`check_object` で対応材質・頂点レイアウトを確認する。`record` 内では `object.import_mesh(graph, scene.meshes)` で
+そのオブジェクトの頂点・インデックス範囲を取り込む。一つのメッシュを材質ごとに分けて描くには
+`RenderObject::with_index_range` を使う。戻り値は同寸の単一サンプルのシーンリニアRec.709 RGBA16Fと、任意の単一サンプルD32。
+標準DeferredのG-bufferを使う独自パスは `draw_view_with_gbuffer` のコールバックで照明前に追加する。
 [外部の Toon 実装](../../crates/renderer-pipeline/examples/support/toon_pipeline.rs)と
 [共通の描画ループ](../../crates/renderer-pipeline/examples/support/views.rs)を参照。
 
@@ -227,14 +257,27 @@ Unlit は頂点色、材質色、オブジェクトの tint を乗算する。
 ビュー履歴は方式が所有する。GPU 投入前にフレームを破棄すれば更新候補も破棄される。
 `ViewSubmitError::Rejected` は再構築できる。`Accepted` は投入済みで、
 `renderer.finish_submission()` を再試行して残りの履歴を確定し、表示へ進む。
-独自方式の `accept` はエラー時に再試行に必要な状態を保持する。カメラ削除は `remove_view`、
-リサイズは新しい寸法の要件を用意して `clear` と再初期化を行い、同じ Runtime のアセット登録を共有する。
-古い Graph を投入または破棄してから `meshes.collect` と `materials.collect_gpu` で旧版を回収し、
-終了時は履歴・両レジストリ・パイプラインの登録を解放する。
+独自方式の `accept` は再試行に必要な状態を保持する。不要なカメラは `remove_view` で解放する。
 
-独自プログラムの描画条件は 1× の indexed Forward。Deferred のビューでは照明計算後に共通の深度へ描く。
-影を描く定義には同じ頂点・マテリアル入力を受け取る深度プログラムを指定する。テクスチャとサンプラーは
-`Parameter::Binding` で宣言する。独自の定数ブロックには `Value::Uniform`、読み取り専用の構造化データには `Value::StorageRead` を使える。テクスチャの登録はアセット所有者が維持し、更新時は新しい画像スナップショットを渡す。
+**リサイズ・方式変更。** 新しい寸法と方式で `prepare_pipeline` し、引き続き使うグループの要求は `reserve_pipeline` で集める。
+実行を完了し、結果とexport付き受理票を返してから `Runtime::prepare_working_set` を呼ぶ。登録済みのメッシュ・材質・画像のキーとスナップショットは同じRuntimeで引き続き使える。
+`reconfigure_view(new_group, &camera, &mut runtime)` はそのカメラの旧履歴を解放する。最後のカメラを移したグループは `remove_pipeline` できる。
+新グループを `initialize_pipeline` し、そのグループで使う組合せを `prepare_scene` に登録する。
+Graphの記録容量が増えたら新しい容量の `GraphPool` を使う。`RuntimeLimits` に指定した実行上限は初期化時に決まるため、想定する最大構成を含める。
+
+**アセットの更新。** 大きなメッシュは `meshes.stream_gpu(&mut runtime, &mut pool, &selection, byte_budget)` で優先順と1回分の転送量を指定できる。
+完全な新版が受理されるまで既存メッシュを描画できる。旧版を使うGraphとアップロードが重なる場合は `meshes.reserve_replacement` でバッファを追加予約する。
+`Runtime::upload_texture(&mut pool, name, desc, bytes)` は画像を転送し、`(FrameId, ManagedImage)` を返す。
+あらかじめ画像の資源クラスと転送容量を予約する。入力は `ImageDesc::texture_2d` と `with_mip_levels` で記述し、
+最大mipから順に詰めた `desc.byte_len()` バイトを渡す。BC1・BC3・BC5・BC7は4×4ブロック単位で並べる。
+同じRuntimeへの次の投入ではCPUで転送完了を待たず `ManagedImage::snapshot()` を使える。材質を使うGraphの投入まで画像所有者を保持する。
+複数画像を同じGraphで転送するときは `graph.upload_texture_for_export` で画像ハンドルを受け取り、後続パスへそのまま渡せる。
+旧版を参照するGraphを投入または破棄した後に、`meshes.collect_gpu` と `materials.collect_gpu` で旧版の登録を回収する。
+終了時は `renderer.clear`、`meshes.release_gpu`、`materials.clear` で各所有者の登録を解放する。
+
+標準の材質処理に独自シェーダーを加える場合、独自Programの描画条件は1×のindexed Forwardとなる。Deferredのビューでは照明計算後に共通の深度へ描く。
+影を描く定義には同じ頂点・材質入力を受け取る深度Programを指定する。テクスチャとサンプラーは `Parameter::Binding` で宣言する。
+独自の定数ブロックには `Value::Uniform`、読み取り専用の構造化データには `Value::StorageRead` を使う。
 GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resident` で接続できる。
 [独自 Toon の登録、描画、GPU 読み戻しの実例](../../crates/renderer-pipeline/tests/pbr_gpu/mixed.rs)
 
@@ -249,9 +292,9 @@ GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resid
 
 `renderer_pipeline::pipeline::GeometryPipeline::new(technique, config, scene_limits)`でForward、Forward+、Deferredから選ぶ。
 描画寸法・出力条件と、同時フレーム・材質・描画・各カスケードのキャスターの上限を渡す。
-`Technique`のメソッドで使用できるサンプル数や点光源、深度、G-bufferの有無を確認できる。
-`add_scene_and_sdr_output`と`draw_hdr`は共通のフレーム入力を使い、Forward+では点光源のスライスを受け取る。
-ForwardとDeferredには空のスライスを渡す。点光源を渡すとGraphへの追記前にエラーになる。
+`Technique` で使用できるサンプル数、深度、G-bufferの有無を確認できる。
+標準3方式で点光源を使うには `SceneLimits::max_point_lights` にビュー当たりの上限を指定する。
+フレームの光源は `pbr::Frame::with_lights(&point_lights)` で渡す。上限0では点光源の資源を予約せず、空の入力では転送やタイル判定を省く。
 
 準備済みレシピと必要な既定画像の要求を`Preparation`へ集約し、`Runtime`と`GraphPool`を作る。
 追加パスの宣言、アップロード、表示やGPUの完了待ちまで保持する資源の容量もアプリの構成に沿って指定する。
@@ -284,7 +327,7 @@ Graph内の材質、不透明・半透明・影を落とす描画の各スライ
 カメラバッファは準備時に`CameraStorage`で選ぶ。
 `External`では呼び出し側が渡したバッファへレシピが更新を書き込み、`PreUploaded`では可視判定などの前に
 呼び出し側がビューのバイト列をアップロードする。
-`add_scene_and_sdr_output(graph, frame, lights, exposure)`は指定した露出でSDR出力まで追加し、
+`add_scene_and_sdr_output(graph, frame, exposure)` は指定した露出でSDR出力まで追加し、
 HDR・SDRと利用できるシーン深度、G-bufferを返す。
 深度は1×で単一サンプルD32、4×では`None`となる。G-bufferはDeferredで得られる。4カスケードのシャドウマップは双方で単一サンプルD32を使う。
 HDRを加工したい場合は`draw_hdr`で照明済みのHDRを受け取り、同じGraphに独自パスを追加して、
@@ -331,9 +374,9 @@ Runtimeが投入を受理した時点で履歴が反映される。アプリが�
 | Forward+ | 1×／4× | Indexed／Indirect／Instanced | Indexed／Instanced | Indexed／Instanced | 組み込み |
 | Deferred | 1× | Indexed／Indirect／Instanced | Indexed／Instanced | Indexed／Instanced | 組み込み |
 
-- `pbr_forward_plus`へビューごとに最大64件の点光源を渡す。16×16画素のタイルは最大65,536個。
-  `prepare`は描画寸法ごとの一時タイルマスクを予約する。`add_scene`または`add_scene_and_sdr_output`に光源を渡すと、
-  Graph内でマスク生成と描画を接続する。光源0件の呼び出しは通常Forwardを使う。
+- Forwardは各画素で点光源を順に評価する。Forward+は16×16画素のタイルごとに候補を絞る。
+  タイル数の上限は65,536で、タイルごとのマスク容量は準備した点光源数に応じて増える。
+  DeferredはG-buffer照明と後段の半透明合成で点光源を評価する。独自Programを渡す `prepare_with_programs` のForward ABIでは `max_point_lights` を0にする。
 - `pbr_deferred`は1×のG-bufferにベースカラー／メタリック、法線／粗さ、発光／AOとD32深度を保持する。
   照明後に、アプリが並べた半透明描画をHDRに合成する。
 - 標準の3方式では、`SceneLimits::max_transforms`を正の値にするとモデル空間の`Draw::Instanced`と
