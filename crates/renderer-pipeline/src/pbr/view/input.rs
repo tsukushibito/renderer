@@ -53,9 +53,15 @@ impl ViewInput {
         self.matrix
     }
 
-    pub fn eye(self) -> [f32; 3] { self.eye }
-    pub fn near_far(self) -> [f32; 2] { self.near_far }
-    pub fn projection(self) -> Projection { self.projection }
+    pub fn eye(self) -> [f32; 3] {
+        self.eye
+    }
+    pub fn near_far(self) -> [f32; 2] {
+        self.near_far
+    }
+    pub fn projection(self) -> Projection {
+        self.projection
+    }
     pub fn forward(self) -> [f64; 3] {
         self.forward
     }

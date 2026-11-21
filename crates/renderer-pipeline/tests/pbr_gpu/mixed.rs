@@ -119,7 +119,8 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
     let glass_mesh = meshes.create(quad(true, Some(0.3))?)?;
     let blue_mesh = meshes.create(quad(false, Some(0.2))?)?;
     let mut prep = Preparation::new(NonZeroUsize::MIN);
-    let mut scene = ViewRenderer::prepare(standard, [32, 16], NonZeroUsize::MIN, None, &mut prep)?;
+    let mut scene = ViewRenderer::new();
+    let group = scene.prepare_pipeline(standard, [32, 16], NonZeroUsize::MIN, None, &mut prep)?;
     meshes.reserve(&mut prep)?;
     let offset_desc = BufferDesc { size: 16 };
     let map_desc = renderer::graph::ImageDesc::rgba8(1, 1);
@@ -135,7 +136,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         },
         prep.working_set(),
     )?;
-    let id = scene.initialize(&mut runtime)?.unwrap();
+    let id = scene.initialize_pipeline(group, &mut runtime)?.unwrap();
     drop(
         runtime
             .wait_for_frame(id, Duration::from_secs(10))?
@@ -200,10 +201,8 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         id: ViewId(1),
         extent: [32, 16],
         camera: input,
-        bounds: pbr::Bounds::new([-1., -1., 0.], [1., 1., 1.])?,
-        sun: pbr::Sun::new([0., 0., -1.], [0.; 3])?,
     };
-    scene.register_view(&view)?;
+    scene.register_view(group, &view)?;
     for index in 0..4 {
         #[cfg(feature = "memory-profiling")]
         let before = renderer::measurement::Snapshot::now();
@@ -228,11 +227,14 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         if index % 2 == 1 {
             draws.swap(0, 3);
         }
-        let input = SceneInput::new(&meshes, &materials, &draws);
+        let input = SceneInput::new(&meshes, &materials, &draws)
+            .with_bounds(pbr::Bounds::new([-1., -1., 0.], [1., 1., 1.])?)
+            .with_sun(pbr::Sun::new([0., 0., -1.], [0.; 3])?);
         if index <= 1 {
-            scene.prepare_scene(input)?;
+            scene.prepare_scene(group, input)?;
         }
         let mut recording = scene.begin_frame(&mut pool)?;
+        let input = recording.bind_scene(group, input)?;
         let mut before_forward = None;
         if technique == pbr::Technique::Deferred {
             recording.draw_view_with_gbuffer(input, &view, |g, b| {

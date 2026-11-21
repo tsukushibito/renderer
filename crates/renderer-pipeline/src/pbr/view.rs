@@ -17,9 +17,16 @@ pub struct Sun {
 }
 
 impl Sun {
-    pub const OFF: Self = Self { direction: [0., 1., 0.], color: [0.; 3] };
-    pub fn direction(self) -> [f32; 3] { self.direction }
-    pub fn color(self) -> [f32; 3] { self.color }
+    pub const OFF: Self = Self {
+        direction: [0., 1., 0.],
+        color: [0.; 3],
+    };
+    pub fn direction(self) -> [f32; 3] {
+        self.direction
+    }
+    pub fn color(self) -> [f32; 3] {
+        self.color
+    }
 
     pub fn new(direction: [f32; 3], color: [f32; 3]) -> Result<Self, GraphError> {
         Self::from_normalized(normalize(direction, "degenerate PBR sun direction")?, color)
@@ -116,9 +123,9 @@ pub(super) fn prepare(
     }
     let shadow = match settings {
         Some(settings) => {
-            let bounds = bounds.into().ok_or_else(|| GraphError::invalid_input(
-                "directional shadows require scene bounds"
-            ))?;
+            let bounds = bounds.into().ok_or_else(|| {
+                GraphError::invalid_input("directional shadows require scene bounds")
+            })?;
             Some(shadow::calculate(view, sun.direction, bounds, settings)?)
         }
         None => None,

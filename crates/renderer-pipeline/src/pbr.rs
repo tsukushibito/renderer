@@ -149,7 +149,8 @@ impl PreparedView {
         Ok(Self {
             sort_direction: view.forward(),
             uniform: data.uniform_bytes(),
-            culling: bounds.map(|bounds| ViewCulling::new(*data.matrix(), data.shadow_matrices(), bounds)),
+            culling: bounds
+                .map(|bounds| ViewCulling::new(*data.matrix(), data.shadow_matrices(), bounds)),
             data,
             environment,
             extent,
