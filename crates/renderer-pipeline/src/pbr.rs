@@ -15,11 +15,9 @@ mod view;
 pub use crate::material::AlphaMode;
 pub use crate::pipeline::Technique;
 pub use culling::{CascadeClip, Frustum, ViewCulling};
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub use defaults::DefaultResourceError;
 pub use defaults::{DefaultResources, DefaultViews, Defaults, PreparedDefaults};
 pub use draw::{Draw, GraphMaterial, IndexedDraw, MaterialTextures};
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::{MAX_TRANSFORMS, Transform};

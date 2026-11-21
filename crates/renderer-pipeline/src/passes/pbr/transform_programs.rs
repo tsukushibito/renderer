@@ -5,9 +5,6 @@ use renderer::program::{
     RasterProgramDescriptor, ShaderStages,
 };
 
-#[cfg(all(windows, feature = "d3d12"))]
-use renderer::program::D3D12InlineConstantBinding;
-
 use crate::pbr::{
     instances::{InstanceTier, TRANSFORM_BINDING},
     scene::Programs,
@@ -62,7 +59,7 @@ macro_rules! descriptor {
                     include_bytes!(concat!("../../../shaders/dxil/", $vertex, ".vert.dxil")),
                     Some(include_bytes!(concat!("../../../shaders/dxil/", $fragment, ".frag.dxil"))),
                 ),
-                inline_constants: Some(D3D12InlineConstantBinding { register: 7, space: 0 }),
+                inline_constants: Some(renderer::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
             ),
             ..$base
         }

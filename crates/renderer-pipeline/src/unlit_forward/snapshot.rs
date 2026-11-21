@@ -1,8 +1,6 @@
 //! Standard linear RGBA8 rendering for engine snapshots.
 
 use crate::unlit_forward::{FrameSnapshot, View};
-#[cfg(feature = "vulkan")]
-use renderer::vulkan::{EngineRenderError, PreparedEngineFrame, RenderedFrame, VulkanEngine};
 
 use renderer::geometry::SnapshotInputs;
 use renderer::graph::FrameGraph;
@@ -25,31 +23,9 @@ pub fn build_graph(
     FrameGraph::select_output(graph, output, readback.then_some("view readback"))
 }
 
-/// Build the same recipe with already resident mesh inputs. The prepared
-/// frame retains the input pins through compilation and submission or drop.
-#[cfg(feature = "vulkan")]
-pub fn build_vulkan(
-    engine: &mut VulkanEngine,
-    snapshot: &FrameSnapshot,
-    readback: bool,
-    extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
-) -> Result<PreparedEngineFrame, EngineRenderError> {
-    let mut prepared = engine.begin_graph()?;
-    let inputs = engine.connect_snapshot(&mut prepared, snapshot)?;
-    let output = append_view(&mut prepared.graph, snapshot.view(), inputs, extension)?;
-    Ok(prepared.select_output(output, readback)?)
-}
-
-/// Build and submit the standard recipe with already resident mesh inputs.
-#[cfg(feature = "vulkan")]
-pub fn render_vulkan(
-    engine: &mut VulkanEngine,
-    snapshot: &FrameSnapshot,
-    readback: bool,
-    extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
-) -> Result<RenderedFrame, EngineRenderError> {
-    let prepared = build_vulkan(engine, snapshot, readback, extension)?;
-    engine.submit_frame(prepared.compile()?)
+renderer::runtime::with_vulkan! {
+    mod native_snapshot;
+    pub use native_snapshot::{build_vulkan, render_vulkan};
 }
 
 fn append_view(

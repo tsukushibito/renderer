@@ -20,24 +20,9 @@ macro_rules! packaged_shaders {
             },
         )
     };
-    ($spirv:expr, $dxil:expr $(,)?) => {{
-        #[cfg(all(feature = "vulkan", windows, feature = "d3d12"))]
-        {
-            renderer::program::ShaderBinaries::both($spirv, $dxil)
-        }
-        #[cfg(all(feature = "vulkan", not(all(windows, feature = "d3d12"))))]
-        {
-            renderer::program::ShaderBinaries::vulkan($spirv)
-        }
-        #[cfg(all(not(feature = "vulkan"), windows, feature = "d3d12"))]
-        {
-            renderer::program::ShaderBinaries::d3d12($dxil)
-        }
-        #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
-        {
-            renderer::program::ShaderBinaries::metadata_only()
-        }
-    }};
+    ($spirv:expr, $dxil:expr $(,)?) => {
+        renderer::program::embedded_shader_binaries!($spirv, $dxil)
+    };
 }
 
 pub(crate) use packaged_shaders;

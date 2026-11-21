@@ -4,11 +4,9 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 use std::{error::Error, fmt};
 
 use renderer::graph::{Graph, GraphError, ImageDesc, ImageHandle, ImportImage};
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 use renderer::{
     graph::CompiledGraph,
     runtime::{ExecutionError, FrameSubmission, Runtime},
@@ -71,7 +69,6 @@ impl Drop for FrameLease {
 #[derive(Clone, Copy)]
 struct Cascade {
     target: ImageHandle,
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     key: ShadowKey,
     reused: bool,
 }
@@ -123,7 +120,6 @@ impl ShadowFrame {
             graph.export_image(cascade.target)?;
         }
         Ok(ShadowUpdates {
-            #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
             graph_id: graph.graph_id(),
             lease: Some(self.lease),
             cascades: self.cascades,
@@ -139,12 +135,7 @@ impl ShadowFrame {
 /// submission, first publish the accepted updates, then clear the history.
 #[must_use = "publish the history updates after successful submission"]
 pub struct ShadowUpdates {
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     graph_id: u64,
-    #[cfg_attr(
-        not(any(feature = "vulkan", all(feature = "d3d12", windows))),
-        allow(dead_code, reason = "CPU-only builds release the lease on drop")
-    )]
     lease: Option<FrameLease>,
     cascades: [Cascade; CASCADE_COUNT],
 }
@@ -157,7 +148,6 @@ impl ShadowUpdates {
 }
 
 /// Failure to publish or clear a shadow history.
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ShadowHistoryError {
@@ -168,7 +158,6 @@ pub enum ShadowHistoryError {
     Execution(ExecutionError),
 }
 
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 impl fmt::Display for ShadowHistoryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -183,7 +172,6 @@ impl fmt::Display for ShadowHistoryError {
     }
 }
 
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 impl Error for ShadowHistoryError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
@@ -245,7 +233,6 @@ impl ShadowHistory {
             };
             cascades[index] = Some(Cascade {
                 target,
-                #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
                 key,
                 reused,
             });
@@ -259,7 +246,6 @@ impl ShadowHistory {
     /// Submit this history's compiled Graph and publish the scheduled maps
     /// before returning. A failed submit leaves the history and updates
     /// available for retry or cancellation via the usual runtime rules.
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub fn submit(
         &mut self,
         runtime: &mut Runtime,
@@ -280,7 +266,6 @@ impl ShadowHistory {
     /// in the runtime. A rejected receipt leaves `updates` available to retry
     /// with the matching submission. To abandon accepted history, publish it
     /// and call [`Self::clear`] to release the registrations.
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub fn accept(
         &mut self,
         submission: &FrameSubmission,
@@ -290,7 +275,6 @@ impl ShadowHistory {
         self.publish(submission, updates)
     }
 
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub(crate) fn check_updates(
         &self,
         graph_id: u64,
@@ -309,7 +293,6 @@ impl ShadowHistory {
         Ok(())
     }
 
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     fn publish(
         &mut self,
         submission: &FrameSubmission,
@@ -338,7 +321,6 @@ impl ShadowHistory {
     /// Release this history's registered images without waiting. The runtime
     /// keeps GPU work alive until retirement. If deletion fails, entries still
     /// registered retain their ownership and can be retried.
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub fn clear(&mut self, runtime: &mut Runtime) -> Result<(), ShadowHistoryError> {
         if self.in_progress.load(Ordering::Acquire) {
             return Err(ShadowHistoryError::FrameInProgress);

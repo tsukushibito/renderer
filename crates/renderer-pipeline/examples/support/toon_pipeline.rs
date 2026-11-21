@@ -6,7 +6,6 @@ use renderer::{
         RasterParameters, StoreOp,
     },
     program::ManagedRasterProgram,
-    runtime::FrameSubmission,
 };
 use renderer_pipeline::{
     material::{MaterialDefinition, MaterialInstance},
@@ -147,8 +146,5 @@ impl ViewPipeline for ToonPipeline {
             },
             (),
         ))
-    }
-    fn accept(&mut self, _: &mut (), _: &mut (), _: &FrameSubmission) -> PipelineResult<()> {
-        Ok(())
     }
 }

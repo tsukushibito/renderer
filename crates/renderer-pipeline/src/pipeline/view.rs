@@ -2,7 +2,6 @@
 use super::{history::History, *};
 use crate::pbr::ShadowUpdates;
 use renderer::graph::GraphCapacityKind;
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::runtime::{FrameId, FrameSubmission, Runtime};
 use std::num::NonZeroUsize;
 /// Standard pipeline storage associated with one registered camera.
@@ -15,7 +14,6 @@ impl StandardViewState {
             history: shadow_capacity.map(History::new),
         }
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub(super) fn clear_history(
         &mut self,
         runtime: &mut renderer::runtime::Runtime,
@@ -37,7 +35,6 @@ impl StandardViewOutput {
     pub fn reused_shadows(&self) -> Option<[bool; pbr::CASCADE_COUNT]> {
         self.updates.as_ref().map(ShadowUpdates::reused)
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub(super) fn check_submission(
         &self,
         view: &StandardViewState,
@@ -52,7 +49,6 @@ impl StandardViewOutput {
         }
         Ok(())
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub(super) fn accept(
         &mut self,
         view: &mut StandardViewState,
@@ -100,7 +96,6 @@ impl StandardPipeline {
     }
 
     /// Upload the shared default textures once for this Runtime.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn initialize(
         &mut self,
         runtime: &mut renderer::runtime::Runtime,
@@ -114,7 +109,6 @@ impl StandardPipeline {
     }
 
     /// Release this pipeline's default textures at a change boundary.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn clear(
         &mut self,
         runtime: &mut renderer::runtime::Runtime,
@@ -241,7 +235,6 @@ impl ViewPipeline for StandardPipeline {
         }
         self.reserve_views(preparation, views)
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     fn initialize(&mut self, runtime: &mut Runtime) -> PipelineResult<Option<FrameId>> {
         Ok(Some(StandardPipeline::initialize(self, runtime)?))
     }
@@ -270,7 +263,6 @@ impl ViewPipeline for StandardPipeline {
             None::<fn(&mut Graph, crate::pbr::GBuffer) -> Result<(), GraphError>>,
         )
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     fn check_submission(
         &self,
         state: &StandardViewState,
@@ -279,7 +271,6 @@ impl ViewPipeline for StandardPipeline {
     ) -> PipelineResult<()> {
         Ok(update.check_submission(state, graph_id)?)
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     fn accept(
         &mut self,
         view: &mut StandardViewState,
@@ -288,7 +279,6 @@ impl ViewPipeline for StandardPipeline {
     ) -> PipelineResult<()> {
         Ok(update.accept(view, submission)?)
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     fn release_view(
         &mut self,
         view: &mut StandardViewState,
@@ -296,7 +286,6 @@ impl ViewPipeline for StandardPipeline {
     ) -> PipelineResult<()> {
         Ok(view.clear_history(runtime)?)
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     fn release(&mut self, runtime: &mut Runtime) -> PipelineResult<()> {
         Ok(self.clear(runtime)?)
     }

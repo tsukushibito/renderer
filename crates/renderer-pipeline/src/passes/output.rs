@@ -7,19 +7,9 @@ use renderer::graph::{
     LoadOp, PassHandle, RasterAttachments, RasterConstants, SampleCount, StoreOp,
 };
 use renderer::program::{ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor};
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::{
     graph::{ImportImage, ResourceKey},
     runtime::{ExecutionError, FrameSubmission},
-};
-#[cfg(all(
-    windows,
-    feature = "presentation",
-    any(feature = "vulkan", feature = "d3d12")
-))]
-use renderer::{
-    presentation::PresentOutcome,
-    runtime::{Runtime, WindowPresenter},
 };
 
 const DISPLAY_LINEAR: &str = "display linear";
@@ -284,7 +274,6 @@ impl DisplaySdr {
     }
 
     /// Obtain the snapshot of the display image from its accepted Graph.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn accept(
         self,
         submission: &FrameSubmission,
@@ -295,23 +284,16 @@ impl DisplaySdr {
 
 /// Accepted display-linear SDR whose registered key can be released through
 /// the Runtime when the caller finishes using it.
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub struct AcceptedDisplaySdr(ImportImage);
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 impl AcceptedDisplaySdr {
     pub fn key(&self) -> ResourceKey {
         self.0.key()
     }
 
-    /// Queue presentation without a CPU wait for the producing Graph.
-    #[cfg(all(windows, feature = "presentation"))]
-    pub fn present(
-        &self,
-        runtime: &mut Runtime,
-        presenter: &mut WindowPresenter,
-    ) -> Result<PresentOutcome, ExecutionError> {
-        runtime.present(presenter, &self.0)
+    /// Borrow the accepted image for presentation with the host Runtime.
+    pub fn image(&self) -> &ImportImage {
+        &self.0
     }
 }
 

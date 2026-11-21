@@ -1,9 +1,13 @@
 #[cfg(all(windows, feature = "d3d12"))]
 use crate::capacity::ResourceClass;
-use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind, WorkingSet};
+use crate::capacity::WorkingSet;
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
 use crate::graph::GraphCapacity;
 
-use super::{ExecutionError, Runtime, RuntimeInner};
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+use super::RuntimeInner;
+use super::{ExecutionError, Runtime};
 
 /// Selects the GPU backend and its physical preparation limits.
 #[derive(Clone, Copy, Debug)]
@@ -177,6 +181,13 @@ impl RuntimeLimits {
     }
 }
 
+#[cfg_attr(
+    not(any(feature = "vulkan", all(feature = "d3d12", windows))),
+    expect(
+        unused_variables,
+        reason = "without a backend, the dispatcher has no runtime variants"
+    )
+)]
 impl Runtime {
     /// Create a headless runtime with a complete prepared execution working set.
     pub fn new(
@@ -217,13 +228,13 @@ impl Runtime {
         &mut self,
         working_set: WorkingSet<'_>,
     ) -> Result<(), ExecutionError> {
-        match &mut self.inner {
+        match self.inner {
             #[cfg(feature = "vulkan")]
-            RuntimeInner::Vulkan(runtime) => {
+            RuntimeInner::Vulkan(ref mut runtime) => {
                 Ok(runtime.prepare_graph_working_set(None, working_set)?)
             }
             #[cfg(all(feature = "d3d12", windows))]
-            RuntimeInner::D3D12(runtime) => {
+            RuntimeInner::D3D12(ref mut runtime) => {
                 let classes = D3D12Classes::new(working_set.resources)?;
                 Ok(runtime.prepare_graph_working_set(
                     Some(&classes.buffers),
@@ -315,6 +326,7 @@ impl D3D12Classes {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     use super::*;
 
     #[cfg(feature = "vulkan")]

@@ -6,6 +6,10 @@
 //! application-specific passes to the same Graph. Renderer owns native
 //! preparation, scheduling and execution.
 //!
+//! Choose the GPU backends on the host application's `renderer` dependency, or
+//! forward them through this crate's matching features. A reusable pipeline
+//! plugin can use the same implementation in CPU tools and native games.
+//!
 //! Use [`material::Materials`] to create shareable PBR, vertex-color Unlit or
 //! custom materials. Submit their handles together through [`pipeline::StandardPipeline`],
 //! which classifies draws and sorts transparent geometry across shader families.
