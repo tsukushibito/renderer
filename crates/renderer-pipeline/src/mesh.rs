@@ -201,7 +201,6 @@ impl Meshes {
     }
 }
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 impl Meshes {
     /// Upload all new or changed versions in one submission at an asset boundary.
     pub fn prepare_gpu(

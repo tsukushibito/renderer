@@ -29,7 +29,6 @@ pub use image::ImageFormat;
 pub mod profiling;
 pub use profiling::{GpuTiming, PresentationMetrics, SubmissionMetrics};
 pub mod program;
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub mod runtime;
 
 #[cfg(feature = "presentation")]
