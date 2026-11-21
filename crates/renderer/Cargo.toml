@@ -20,7 +20,7 @@ memory-profiling = []
 # Optional explicit CPU zones; independent of native layers and GPU timestamps.
 tracy = ["dep:tracy-client"]
 vulkan = ["dep:ash", "dep:vk-mem", "dep:tracing"]
-presentation = ["dep:raw-window-handle", "dep:winit"]
+presentation = ["dep:raw-window-handle", "dep:windows-sys"]
 d3d12 = ["dep:windows-core"]
 
 [dependencies]
@@ -31,8 +31,11 @@ tracy-client = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-core = { version = "=0.100.0", optional = true, default-features = false, features = ["std"] }
-raw-window-handle = { version = "0.6", optional = true }
-winit = { version = "0.30", optional = true, default-features = false, features = ["rwh_06"] }
+raw-window-handle = { version = "0.6", optional = true, features = ["std"] }
+windows-sys = { version = "0.61", optional = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 
 [dev-dependencies]
 criterion.workspace = true

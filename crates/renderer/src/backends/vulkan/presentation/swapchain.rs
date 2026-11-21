@@ -86,7 +86,7 @@ pub(in crate::backends::vulkan) fn query_present_mode(
 }
 pub(in crate::backends::vulkan) struct Swapchain {
     owner: Arc<MemoryOwner>,
-    _surface: Arc<WindowSurface>,
+    _surface: Rc<WindowSurface>,
     pub(in crate::backends::vulkan) loader: ash::khr::swapchain::Device,
     pub(in crate::backends::vulkan) handle: vk::SwapchainKHR,
     pub(super) images: Vec<vk::Image>,
@@ -105,11 +105,11 @@ pub(in crate::backends::vulkan) struct SwapchainPlan {
 impl Swapchain {
     pub(in crate::backends::vulkan) fn new(
         owner: Arc<MemoryOwner>,
-        surface: Arc<WindowSurface>,
+        surface: Rc<WindowSurface>,
         plan: SwapchainPlan,
         old: vk::SwapchainKHR,
         #[cfg(test)] fail_after_create: bool,
-    ) -> Result<Arc<Self>, RuntimeError> {
+    ) -> Result<Rc<Self>, RuntimeError> {
         let SwapchainPlan {
             extent,
             format,
@@ -180,7 +180,7 @@ impl Swapchain {
                 .map_err(|r| native(&chain.owner, "vkCreateImageView(swapchain)", r))?;
             chain.views.push(view);
         }
-        Ok(Arc::new(chain))
+        Ok(Rc::new(chain))
     }
 }
 impl Drop for Swapchain {
