@@ -494,6 +494,11 @@ pub struct D3D12_FEATURE_DATA_D3D12_OPTIONS {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_FEATURE_DATA_D3D12_OPTIONS8 {
+    pub UnalignedBlockTexturesSupported: windows_core::BOOL,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_FEATURE_DATA_FEATURE_LEVELS {
     pub NumFeatureLevels: u32,
     pub pFeatureLevelsRequested: *const D3D_FEATURE_LEVEL,
@@ -1771,6 +1776,13 @@ pub const DXGI_ERROR_WAS_STILL_DRAWING: windows_core::HRESULT =
 pub type DXGI_FEATURE = i32;
 pub const DXGI_FEATURE_PRESENT_ALLOW_TEARING: DXGI_FEATURE = 0;
 pub type DXGI_FORMAT = i32;
+pub const DXGI_FORMAT_BC1_UNORM: DXGI_FORMAT = 71;
+pub const DXGI_FORMAT_BC1_UNORM_SRGB: DXGI_FORMAT = 72;
+pub const DXGI_FORMAT_BC3_UNORM: DXGI_FORMAT = 77;
+pub const DXGI_FORMAT_BC3_UNORM_SRGB: DXGI_FORMAT = 78;
+pub const DXGI_FORMAT_BC5_UNORM: DXGI_FORMAT = 83;
+pub const DXGI_FORMAT_BC7_UNORM: DXGI_FORMAT = 98;
+pub const DXGI_FORMAT_BC7_UNORM_SRGB: DXGI_FORMAT = 99;
 pub const DXGI_FORMAT_D32_FLOAT: DXGI_FORMAT = 40;
 pub const DXGI_FORMAT_R16G16B16A16_FLOAT: DXGI_FORMAT = 10;
 pub const DXGI_FORMAT_R32G32B32A32_FLOAT: DXGI_FORMAT = 2;

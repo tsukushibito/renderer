@@ -72,8 +72,8 @@ pub struct BufferDesc {
 impl ImageFormat {
     pub(crate) const fn aspect(self) -> ImageAspect {
         match self {
-            Self::Rgba8Unorm | Self::Rgba8Srgb | Self::Rgba16Float => ImageAspect::Color,
             Self::Depth32Float => ImageAspect::Depth,
+            _ => ImageAspect::Color,
         }
     }
 }
@@ -106,40 +106,40 @@ pub struct ImageDesc {
 }
 
 impl ImageDesc {
-    pub fn rgba8(width: u32, height: u32) -> Self {
+    /// Single-sample 2D texture with one mip level.
+    pub const fn texture_2d(width: u32, height: u32, format: ImageFormat) -> Self {
         Self {
             width,
             height,
-            format: ImageFormat::Rgba8Unorm,
+            format,
             mip_levels: 1,
             array_layers: 1,
             sample_count: SampleCount::X1,
         }
+    }
+    pub const fn rgba8(width: u32, height: u32) -> Self {
+        Self::texture_2d(width, height, ImageFormat::Rgba8Unorm)
+    }
+    /// Four FP32 channels for sampled data.
+    pub const fn rgba32_float(width: u32, height: u32) -> Self {
+        Self::texture_2d(width, height, ImageFormat::Rgba32Float)
     }
     /// Eight-bit sRGB color for sampling and transfer, with linear alpha.
-    pub fn rgba8_srgb(width: u32, height: u32) -> Self {
-        Self {
-            format: ImageFormat::Rgba8Srgb,
-            ..Self::rgba8(width, height)
-        }
+    pub const fn rgba8_srgb(width: u32, height: u32) -> Self {
+        Self::texture_2d(width, height, ImageFormat::Rgba8Srgb)
     }
-    pub fn depth32(width: u32, height: u32) -> Self {
-        Self {
-            width,
-            height,
-            format: ImageFormat::Depth32Float,
-            mip_levels: 1,
-            array_layers: 1,
-            sample_count: SampleCount::X1,
-        }
+    pub const fn depth32(width: u32, height: u32) -> Self {
+        Self::texture_2d(width, height, ImageFormat::Depth32Float)
     }
     /// Scene-linear floating-point color, packed as four little-endian IEEE 754
     /// binary16 components per texel in RGBA order.
-    pub fn rgba16_float(width: u32, height: u32) -> Self {
-        Self {
-            format: ImageFormat::Rgba16Float,
-            ..Self::rgba8(width, height)
-        }
+    pub const fn rgba16_float(width: u32, height: u32) -> Self {
+        Self::texture_2d(width, height, ImageFormat::Rgba16Float)
+    }
+
+    /// Include this many consecutive levels starting at mip zero.
+    pub const fn with_mip_levels(self, mip_levels: u32) -> Self {
+        Self { mip_levels, ..self }
     }
 
     pub const fn with_sample_count(self, sample_count: SampleCount) -> Self {
@@ -158,16 +158,14 @@ impl ImageDesc {
             || (self.sample_count == SampleCount::X4
                 && (self.mip_levels != 1
                     || self.array_layers != 1
-                    || self.format == ImageFormat::Rgba8Srgb))
+                    || !self.format.supports_attachment()))
         {
             return None;
         }
         let mut bytes = 0u64;
         for mip in 0..self.mip_levels {
             let [width, height] = self.mip_extent(mip)?;
-            let level = u64::from(width)
-                .checked_mul(u64::from(height))?
-                .checked_mul(self.format.texel_bytes())?;
+            let level = self.format.packed_byte_len(width, height)?;
             bytes = bytes.checked_add(level)?;
         }
         bytes
@@ -256,6 +254,7 @@ pub struct ImportImage {
     revision: u64,
     desc: ImageDesc,
     initialized: bool,
+    partial_mips: u32,
 }
 impl ImportImage {
     /// Metadata fixtures only; real runtimes derive coverage from their state.
@@ -279,12 +278,22 @@ impl ImportImage {
                 "runtime image snapshot description must be valid",
             ));
         }
-        let initialized = validate_snapshot_ranges(initialized, ResourceDesc::Image(desc).units())?;
+        let complete = validate_snapshot_ranges(initialized, ResourceDesc::Image(desc).units())?;
+        // Native 2D images have at most 32 mip levels. The bitset is retained in
+        // the token itself; importing a mip chain never leases a CPU range slot.
+        let partial_mips = if complete || desc.array_layers != 1 {
+            0
+        } else {
+            initialized
+                .iter()
+                .fold(0, |mask, r| mask | mip_mask(r.start as u32..r.end as u32))
+        };
         Ok(Self {
             key,
             revision,
             desc,
-            initialized,
+            initialized: complete,
+            partial_mips,
         })
     }
     pub fn key(&self) -> ResourceKey {
@@ -296,9 +305,33 @@ impl ImportImage {
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
+    /// Whether this mip of a single-layer image is fully initialized.
+    pub fn is_mip_initialized(&self, mip_level: u32) -> bool {
+        self.desc.array_layers == 1
+            && mip_level < self.desc.mip_levels
+            && (self.initialized || self.partial_mips & (1 << mip_level) != 0)
+    }
     pub(crate) fn initialized(&self) -> bool {
         self.initialized
     }
+}
+
+// A validated single-layer 2D image has at most 32 mips. Each nonempty run
+// fits one word even when it includes mip 31.
+fn mip_mask(range: Range<u32>) -> u32 {
+    (u32::MAX >> (32 - (range.end - range.start))) << range.start
+}
+
+pub(super) fn mip_ranges(mut mask: u32) -> impl Iterator<Item = Range<u64>> {
+    std::iter::from_fn(move || {
+        if mask == 0 {
+            return None;
+        }
+        let start = mask.trailing_zeros();
+        let end = start + (mask >> start).trailing_ones();
+        mask &= !mip_mask(start..end);
+        Some(u64::from(start)..u64::from(end))
+    })
 }
 
 #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
@@ -340,6 +373,7 @@ pub(crate) struct Resource {
     pub import_revision: u64,
     pub initial: Range<usize>,
     pub read_only_input: bool,
+    pub export_mips: u32,
 }
 
 impl Graph {
@@ -382,6 +416,7 @@ impl Graph {
             import_revision: revision,
             initial: start..data.initial_ranges.len(),
             read_only_input: false,
+            export_mips: 0,
         });
         data.exported.push(false);
         Ok(index)
@@ -584,8 +619,8 @@ impl Graph {
 
     /// Connect a runtime-issued image snapshot to this graph.
     ///
-    /// Consistent repeated imports share one logical identity. The snapshot's
-    /// initialization guarantee covers the complete image, and conflicting
+    /// Consistent repeated imports share one logical identity. A single-layer
+    /// snapshot preserves the initialized mip levels. Conflicting
     /// revisions/descriptions are rejected. The runtime checks freshness again
     /// at submission. This operation neither waits for GPU completion nor
     /// transfers the caller's runtime registration ownership.
@@ -594,9 +629,17 @@ impl Graph {
         name: &str,
         source: &ImportImage,
     ) -> Result<ImageHandle, GraphError> {
-        let initialized = 0..ResourceDesc::Image(source.desc).units();
+        let whole = 0..ResourceDesc::Image(source.desc).units();
+        let mut ranges = [const { 0..0 }; 16];
         let initial = if source.initialized() {
-            std::slice::from_ref(&initialized)
+            std::slice::from_ref(&whole)
+        } else if source.partial_mips != 0 {
+            let mut count = 0;
+            for r in mip_ranges(source.partial_mips) {
+                ranges[count] = r;
+                count += 1;
+            }
+            &ranges[..count]
         } else {
             &[]
         };
@@ -674,6 +717,31 @@ impl Graph {
     pub fn export_image(&mut self, image: ImageHandle) -> Result<(), GraphError> {
         let id = self.image_id(image)?;
         self.single_sample_image(id)?;
+        self.data_mut().resources[id].export_mips = 0;
+        self.export(id);
+        Ok(())
+    }
+    /// Publish just these initialized mip levels of a single-layer image. Other
+    /// mips remain unreadable until initialized. Repeated declarations accumulate
+    /// mip levels; a whole-image export requires all mips.
+    pub fn export_image_mips(
+        &mut self,
+        image: ImageHandle,
+        levels: Range<u32>,
+    ) -> Result<(), GraphError> {
+        let id = self.image_id(image)?;
+        self.single_sample_image(id)?;
+        let desc = self.image_desc_at(id)?;
+        if desc.array_layers != 1 || levels.is_empty() || levels.end > desc.mip_levels {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
+                "invalid single-layer image mip export",
+                id,
+            ));
+        }
+        if !self.exported[id] || self.resources[id].export_mips != 0 {
+            self.data_mut().resources[id].export_mips |= mip_mask(levels);
+        }
         self.export(id);
         Ok(())
     }
@@ -812,7 +880,7 @@ impl Graph {
         &self,
         src: usize,
         dst: usize,
-    ) -> Result<(), GraphError> {
+    ) -> Result<ImageDesc, GraphError> {
         self.single_image(src)?;
         self.single_image(dst)?;
         let source = self.image_desc_at(src)?;
@@ -826,7 +894,7 @@ impl Graph {
                 dst,
             ));
         }
-        Ok(())
+        Ok(source)
     }
 
     pub(super) fn resource_error(

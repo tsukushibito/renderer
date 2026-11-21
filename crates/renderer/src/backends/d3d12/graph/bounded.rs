@@ -253,28 +253,24 @@ fn requirements_inner(
                 })?;
                 super::raster::use_image(graph, *dst, resource_map, storage)?;
                 let image = &storage.images[resource_map[*dst]];
-                let total = if matches!(graph.passes[pass].operation, Operation::UploadImage { .. })
-                {
-                    &mut upload_bytes
-                } else {
-                    &mut readback_bytes
+                let (total, size, limit, kind) = match graph.passes[pass].operation {
+                    Operation::UploadImage { region, .. } => (
+                        &mut upload_bytes,
+                        super::raster::upload_bytes(image, region),
+                        capacity.upload_bytes,
+                        RuntimeCapacityKind::UploadBytes,
+                    ),
+                    _ => (
+                        &mut readback_bytes,
+                        image.total_bytes,
+                        capacity.readback_bytes,
+                        RuntimeCapacityKind::ReadbackBytes,
+                    ),
                 };
-                let maximum =
-                    if matches!(graph.passes[pass].operation, Operation::UploadImage { .. }) {
-                        capacity.upload_bytes
-                    } else {
-                        capacity.readback_bytes
-                    };
                 *total = super::raster::align_transfer(*total)?;
-                let resource =
-                    if matches!(graph.passes[pass].operation, Operation::UploadImage { .. }) {
-                        RuntimeCapacityKind::UploadBytes
-                    } else {
-                        RuntimeCapacityKind::ReadbackBytes
-                    };
-                add_bytes(total, image.total_bytes, maximum, resource)?;
+                add_bytes(total, size, limit, kind)?;
             }
-            Operation::CopyImage { src, dst } => {
+            Operation::CopyImage { src, dst, .. } => {
                 let storage = raster.as_deref_mut().ok_or_else(|| {
                     D3D12RuntimeError::capacity_with(
                         "Graph image working set has not been prepared",
@@ -782,16 +778,20 @@ pub(super) fn prepare(
                     });
                     result.used += *size;
                 }
-                Operation::UploadImage { dst, .. } => super::raster::upload_image(
+                Operation::UploadImage { dst, region, .. } => super::raster::upload_image(
                     work.slot_mut(),
                     &owner,
                     graph,
                     *dst,
+                    *region,
                     &graph.passes[pass].operation,
                 )?,
-                Operation::CopyImage { src, dst } => {
-                    super::raster::copy_image(work.slot_mut(), *src, *dst)
-                }
+                Operation::CopyImage {
+                    src,
+                    dst,
+                    source,
+                    destination,
+                } => super::raster::copy_image(work.slot_mut(), *src, *dst, *source, *destination),
                 Operation::Dispatch { .. } => super::super::compute::record(
                     work.slot_mut(),
                     &owner,
