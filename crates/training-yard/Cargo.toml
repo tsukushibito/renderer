@@ -1,0 +1,24 @@
+[package]
+name = "training-yard"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["graphics"]
+graphics = ["dep:renderer"]
+vulkan = ["renderer-core/vulkan", "renderer?/vulkan"]
+d3d12 = ["renderer-core/d3d12", "renderer?/d3d12"]
+development-validation = ["renderer-core/development-validation", "renderer?/development-validation"]
+
+[dependencies]
+renderer = { package = "renderer-pipeline", path = "../renderer-pipeline", optional = true }
+renderer-core = { package = "renderer", path = "../renderer" }
+
+[[test]]
+name = "host_output"
+required-features = ["graphics"]
+
+[lints]
+workspace = true

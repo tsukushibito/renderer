@@ -4,6 +4,7 @@ members = [
     "crates/renderer-bistro",
     "crates/renderer-example-support",
     "crates/renderer-pipeline",
+    "crates/training-yard",
 ]
 resolver = "3"
 
