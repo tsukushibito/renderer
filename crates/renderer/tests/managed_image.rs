@@ -11,13 +11,7 @@ use renderer::{
 #[test]
 #[ignore = "requires a hardware GPU for each selected backend"]
 fn dropped_frame_image_and_persistent_target_have_distinct_registration_lifetimes() {
-    let configurations = [
-        #[cfg(feature = "vulkan")]
-        RuntimeConfig::Vulkan(Default::default()),
-        #[cfg(all(windows, feature = "d3d12"))]
-        RuntimeConfig::D3D12(Default::default()),
-    ];
-    for config in configurations {
+    for config in configurations() {
         let desc = ImageDesc::rgba8(1, 1);
         let capacity = GraphCapacity::default();
         let mut rt = Runtime::new(
@@ -98,31 +92,126 @@ fn dropped_frame_image_and_persistent_target_have_distinct_registration_lifetime
         drop((receipt, second));
         drop(rt.wait_for_frame(id, wait).unwrap().unwrap());
 
+        check_validation(rt);
+    }
+}
+
+fn configurations() -> impl Iterator<Item = RuntimeConfig> {
+    [
         #[cfg(feature = "vulkan")]
-        if let Some(vk) = rt.as_vulkan() {
-            let monitor = vk.validation_monitor();
-            drop(rt);
-            let report = monitor.report();
-            assert!(report.is_clean(), "{report:?}");
-            if cfg!(feature = "development-validation") {
-                assert_eq!(report.core_validation, Some(true));
-                assert_eq!(report.synchronization_validation, Some(true));
-            }
-            continue;
-        }
+        RuntimeConfig::Vulkan(Default::default()),
         #[cfg(all(windows, feature = "d3d12"))]
-        if let Some(dx) = rt.as_d3d12() {
-            let monitor = dx.validation_monitor();
-            drop(rt);
-            let report = monitor.snapshot();
-            assert!(report.is_clean(), "{report:?}");
-            if cfg!(feature = "development-validation") {
-                assert!(
-                    report.debug_layer_enabled
-                        && report.gpu_based_validation_enabled
-                        && report.teardown_checked
-                );
-            }
+        RuntimeConfig::D3D12(Default::default()),
+    ]
+    .into_iter()
+}
+
+fn check_validation(rt: Runtime) {
+    #[cfg(feature = "vulkan")]
+    if let Some(vk) = rt.as_vulkan() {
+        let monitor = vk.validation_monitor();
+        drop(rt);
+        let report = monitor.report();
+        assert!(report.is_clean(), "{report:?}");
+        if cfg!(feature = "development-validation") {
+            assert_eq!(report.core_validation, Some(true));
+            assert_eq!(report.synchronization_validation, Some(true));
         }
+        return;
+    }
+    #[cfg(all(windows, feature = "d3d12"))]
+    if let Some(dx) = rt.as_d3d12() {
+        let monitor = dx.validation_monitor();
+        drop(rt);
+        let report = monitor.snapshot();
+        assert!(report.is_clean(), "{report:?}");
+        if cfg!(feature = "development-validation") {
+            assert!(
+                report.debug_layer_enabled
+                    && report.gpu_based_validation_enabled
+                    && report.teardown_checked
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a hardware GPU for each selected backend"]
+fn uploaded_texture_is_available_to_a_batched_submission_before_waiting() {
+    for config in configurations() {
+        let desc = ImageDesc::rgba8(1, 1);
+        let mut rt = Runtime::new(
+            config,
+            RuntimeLimits {
+                resource_capacity: 3,
+                ..Default::default()
+            },
+            WorkingSet {
+                resources: &[ResourceClass::Image { desc, count: 3 }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut pool = GraphPool::new(GraphCapacity::default(), 2).unwrap();
+        assert!(matches!(
+            rt.upload_texture(&mut pool, "short", desc, &[0; 3]),
+            Err(renderer::runtime::TextureUploadError::Graph(_))
+        ));
+        assert_eq!(rt.pending_frames(), 0);
+
+        let (first_frame, first) = rt
+            .upload_texture(&mut pool, "albedo", desc, &[1; 4])
+            .unwrap();
+        let mut graph = pool.begin().unwrap();
+        let albedo = graph.import_image("albedo", first.snapshot()).unwrap();
+        let normal = graph
+            .upload_texture_for_export("normal", desc, &[2; 4])
+            .unwrap();
+        let orm = graph
+            .upload_texture_for_export("orm", desc, &[3; 4])
+            .unwrap();
+        let reads = [albedo, normal, orm]
+            .map(|image| graph.readback_image("material pixel", image).unwrap());
+        let plan = graph.compile().unwrap();
+        let error = rt
+            .submit_with_images(&plan, [normal, normal])
+            .err()
+            .expect("duplicate ownership");
+        assert_eq!(error.kind(), ExecutionErrorKind::InvalidInput);
+        let (second, [normal_owner, orm_owner]) =
+            rt.submit_with_images(&plan, [normal, orm]).unwrap();
+        let second_frame = second.id();
+        let old_key = first.snapshot().key();
+        let normal_key = normal_owner.snapshot().key();
+        assert_eq!(
+            second.export_image(orm).unwrap().key(),
+            orm_owner.snapshot().key()
+        );
+
+        // Early owner drops unregister independently, even while accepted readers
+        // or transfer work still hold the underlying textures.
+        drop((first, normal_owner, second, plan));
+        let wait = Duration::from_secs(10);
+        let mut pixels = rt.wait_for_frame(second_frame, wait).unwrap().unwrap();
+        for (read, expected) in reads.into_iter().zip([1, 2, 3]) {
+            let mut bytes = [0; 4];
+            pixels.readback_into(read, &mut bytes).unwrap();
+            assert_eq!(bytes, [expected; 4]);
+        }
+        drop(pixels);
+        drop(rt.wait_for_frame(first_frame, wait).unwrap().unwrap());
+        for retired in [old_key, normal_key] {
+            assert_eq!(
+                rt.refresh_image(retired).unwrap_err().kind(),
+                ExecutionErrorKind::StaleResource
+            );
+        }
+        assert_eq!(
+            rt.refresh_image(orm_owner.snapshot().key()).unwrap(),
+            *orm_owner.snapshot()
+        );
+        drop(orm_owner);
+        rt.collect_released_images().unwrap();
+        check_validation(rt);
     }
 }

@@ -31,6 +31,12 @@ impl ManagedImage {
         &self.image
     }
 
+    /// Update the snapshot after a submission writes this registered image.
+    pub fn refresh(&mut self, runtime: &Runtime) -> Result<(), ExecutionError> {
+        self.image = runtime.refresh_image(self.image.key())?;
+        Ok(())
+    }
+
     /// Hand registration lifetime back to the caller. A newly exported image
     /// must subsequently be released with Runtime::delete. An import keeps its
     /// existing owner.
@@ -147,32 +153,55 @@ impl Runtime {
         graph: &CompiledGraph,
         output: ImageHandle,
     ) -> Result<(FrameSubmission, ManagedImage), ExecutionError> {
-        if output.graph != graph.graph_id()
-            || !graph.has_export(output.index)
-            || !matches!(graph.resources[output.index].desc, ResourceDesc::Image(_))
-            || graph.frame_image.is_some_and(|image| image != output)
+        let (submission, [image]) = self.submit_with_images(graph, [output])?;
+        Ok((submission, image))
+    }
+
+    /// Submit once and acquire owners for distinct exported images in the given
+    /// order. For example, batch albedo and normal maps declared with
+    /// [`crate::graph::Graph::upload_texture_for_export`]. Each newly created
+    /// registration is released independently when its owner is dropped.
+    /// If the Graph selected a frame image, include it among these outputs.
+    pub fn submit_with_images<const N: usize>(
+        &mut self,
+        graph: &CompiledGraph,
+        outputs: [ImageHandle; N],
+    ) -> Result<(FrameSubmission, [ManagedImage; N]), ExecutionError> {
+        if graph
+            .frame_image
+            .is_some_and(|image| !outputs.contains(&image))
         {
             return Err(ExecutionError::invalid(
-                "expected this graph's exported frame image",
+                "expected the selected frame image among the exported images",
             ));
         }
         self.collect_released_images()?;
-        let mut ticket = if graph.resources[output.index].import.is_none() {
-            Some(self.image_releases.reserve()?)
-        } else {
-            None
-        };
-        let receipt = self.submit_native(graph)?;
-        // The accepted backend receipt contains every export of the immutable
-        // compiled Graph. ImageHandle is bound to its construction type/Graph.
-        let image = receipt
-            .export_image(output)
-            .expect("prevalidated accepted image export");
-        if let Some(ticket) = &mut ticket {
-            ticket.key = Some(image.key());
+        let mut tickets = [const { None }; N];
+        for (index, output) in outputs.iter().enumerate() {
+            if output.graph != graph.graph_id()
+                || !graph.has_export(output.index)
+                || !matches!(graph.resources[output.index].desc, ResourceDesc::Image(_))
+                || outputs[..index].contains(output)
+            {
+                return Err(ExecutionError::invalid(
+                    "expected distinct exported images from this graph",
+                ));
+            }
+            if graph.resources[output.index].import.is_none() {
+                tickets[index] = Some(self.image_releases.reserve()?);
+            }
         }
-        Ok((
-            receipt,
+        let receipt = self.submit_native(graph)?;
+        // Native acceptance publishes all prevalidated exports together. Each
+        // reserved ticket is returned automatically if any earlier step fails.
+        let images = std::array::from_fn(|index| {
+            let image = receipt
+                .export_image(outputs[index])
+                .expect("prevalidated accepted image export");
+            let mut ticket = tickets[index].take();
+            if let Some(ticket) = &mut ticket {
+                ticket.key = Some(image.key());
+            }
             ManagedImage {
                 image,
                 ticket,
@@ -182,8 +211,9 @@ impl Runtime {
                     any(feature = "vulkan", feature = "d3d12")
                 ))]
                 runtime_id: self.image_releases.runtime_id,
-            },
-        ))
+            }
+        });
+        Ok((receipt, images))
     }
 
     /// Unregister dropped frame images without waiting. Submission, frame

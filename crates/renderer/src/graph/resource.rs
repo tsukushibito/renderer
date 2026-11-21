@@ -475,7 +475,8 @@ impl Graph {
             data.resources.pop();
             data.exported.pop();
             data.names.truncate(name_end);
-            return Err(error);
+            // The slot may be reused by a different resource on retry.
+            return Err(error.without_resource_handle());
         }
         // Successful full-image upload establishes the single-sample contract.
         self.export(image.index);

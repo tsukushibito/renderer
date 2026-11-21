@@ -336,6 +336,13 @@ RGBA8 sRGB、RGBA32F、BC形式はsampled/transfer用途に使う。sRGBはRGB�
 D3D12でmip 0のBC画像の幅または高さが4の倍数でない場合は、準備時に
 [UnalignedBlockTexturesSupported](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_feature_data_d3d12_options8)
 を照会する。下位mipの寸法は1 texelまで使える。
+エンジンのアセットローダーは `Runtime::upload_texture(pool, name, desc, bytes)` で
+`(FrameId, ManagedImage)` を受け取る。所有者をアセットと一緒に保持すると、後続のGraphは
+同じRuntimeで `image.snapshot()` を即座にimportできる。GPU完了は通常のフレームと同じ方法で回収する。
+複数の画像を同じ投入で扱うときは `Graph::upload_texture_for_export` を繰り返し、返されたハンドルで
+同じGraphの描画や読み戻しを宣言できる。`Runtime::submit_with_images(&plan, [base, normal])`
+は引数順の所有者を返し、各所有者は独立して解放できる。入力長や宣言容量のエラーでは
+失敗した画像の宣言を取り消し、投入失敗では予約した解放枠を全て返す。
 linear filteringの実format能力は作成・準備境界で確認する。
 `NearestClamp`はnearest min/mag/mip、clamp、LOD0、`LinearRepeat`はlinear min/mag/mip、
 repeat、選択View内のLOD範囲を使う。`LinearClamp`は全軸clamp、`LinearRepeatUClampV`はUだけrepeatとし、

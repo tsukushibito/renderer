@@ -9,6 +9,7 @@ use super::{
     program::{self, forward_plus},
     shadow,
 };
+use renderer::runtime::ManagedImage;
 use renderer::{
     ImageFormat,
     graph::{
@@ -484,8 +485,8 @@ pub(super) struct Resident {
     pub vertices: Vec<ImportBuffer>,
     pub indices: Vec<ImportBuffer>,
     pub materials: Vec<ImportBuffer>,
-    pub images: Vec<ImportImage>,
-    pub environment: [ImportImage; 3],
+    pub images: Vec<ManagedImage>,
+    pub environment: [ManagedImage; 3],
     pub environment_mips: [u32; 3],
     pub environment_parameters: [f32; 3],
     scene_bounds: shadow::Bounds,
@@ -714,15 +715,19 @@ impl Resident {
             // This is the immutable publication boundary. Read/hash one chain,
             // upload all its subresources, then release CPU pixels before ROI.
             let pixels = image.load_bytes()?;
-            let (frame, texture) =
-                backend.upload_texture(&mut pool, "material texture", image_desc(image), &pixels)?;
+            let (frame, texture) = backend.upload_texture(
+                &mut pool,
+                "material texture",
+                image_desc(image),
+                &pixels,
+            )?;
             drop(super::backend::wait_for(backend, frame)?);
-            images.push(texture.into_registered());
+            images.push(texture);
             if (index + 1).is_multiple_of(32) {
                 eprintln!("Bistro image upload {}/{}", index + 1, scene.images.len());
             }
         }
-        let mut upload_environment = |image: &ibl::Image| -> Result<ImportImage, Error> {
+        let mut upload_environment = |image: &ibl::Image| -> Result<ManagedImage, Error> {
             let (frame, texture) = backend.upload_texture(
                 &mut pool,
                 "environment texture",
@@ -730,7 +735,7 @@ impl Resident {
                 &image.bytes,
             )?;
             drop(super::backend::wait_for(backend, frame)?);
-            Ok(texture.into_registered())
+            Ok(texture)
         };
         let environment_images = [
             upload_environment(&environment.diffuse)?,
@@ -1020,7 +1025,7 @@ pub(super) fn build(
         for value in &resident.images {
             workspace
                 .images
-                .push(graph.import_image("material image", value)?);
+                .push(graph.import_image("material image", value.snapshot())?);
         }
         let uniform = graph.import_buffer("camera", &resident.camera)?;
         graph.upload_buffer("camera update boundary", uniform, 0, &frame_uniform)?;
@@ -1044,9 +1049,9 @@ pub(super) fn build(
         }
     }
     let environment = [
-        graph.import_image("diffuse environment", &resident.environment[0])?,
-        graph.import_image("specular environment", &resident.environment[1])?,
-        graph.import_image("BRDF integration", &resident.environment[2])?,
+        graph.import_image("diffuse environment", resident.environment[0].snapshot())?,
+        graph.import_image("specular environment", resident.environment[1].snapshot())?,
+        graph.import_image("BRDF integration", resident.environment[2].snapshot())?,
     ];
     let resolution = resident.shadow_parameters.resolution;
     let shadow_desc = ImageDesc::depth32(resolution, resolution);

@@ -17,7 +17,7 @@ use super::{
 use renderer::{
     capacity::CapacityRecovery,
     graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, ImportBuffer, ImportImage},
-    runtime::{ExecutionErrorKind, FrameId, Runtime},
+    runtime::{ExecutionErrorKind, FrameId, ManagedImage, Runtime},
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use serde_json::{Value, json};
@@ -253,7 +253,10 @@ fn mip_probes(
         let width = (desc.width >> mip).max(1);
         let height = (desc.height >> mip).max(1);
         let mut graph = pool.begin()?;
-        let source = graph.import_image("replacement mip chain", &resident.images[image_index])?;
+        let source = graph.import_image(
+            "replacement mip chain",
+            resident.images[image_index].snapshot(),
+        )?;
         let source = graph.image_view(source, mip, 0)?;
         let output = graph.image("mip probe", ImageDesc::rgba8(width, height))?;
         write_sdr(
@@ -302,10 +305,10 @@ fn upload_texture(
     pool: &mut GraphPool,
     desc: ImageDesc,
     bytes: &[u8],
-) -> Result<ImportImage, Error> {
+) -> Result<ManagedImage, Error> {
     let (frame, texture) = backend.upload_texture(pool, "material texture version", desc, bytes)?;
     drop(backend::wait_for(backend, frame)?);
-    Ok(texture.into_registered())
+    Ok(texture)
 }
 
 #[allow(
@@ -461,14 +464,14 @@ pub(super) fn execute(
             &mut workspace,
         )?;
         let old_frame = accept_frame(backend, resident, built)?;
-        let old_image = resident.images[image_index].clone();
+        let old_image = resident.images[image_index].snapshot().clone();
         let old_buffer = resident.materials[material_index].clone();
         let (stale_pool, stale_image, stale_buffer) = stale_plans(&old_image, &old_buffer)?;
         backend.delete(old_image.key())?;
         resident.images[image_index] =
             upload_texture(backend, &mut upload_pool, desc, &changed_texture)?;
         require_stale(backend, &stale_image)?;
-        resident.images[image_index] = backend.refresh_image(resident.images[image_index].key())?;
+        resident.images[image_index].refresh(backend)?;
         // Isolate the texture binding: the original material is still registered
         // and the earlier frame owner has not observed completion. A simultaneous
         // material-factor change must not mask a missing texture-reference update.
@@ -555,7 +558,7 @@ pub(super) fn execute(
         )?;
         let changed_report =
             changed.save(&directory.join(format!("cycle-{cycle}-changed")), options)?;
-        backend.delete(resident.images[image_index].key())?;
+        backend.delete(resident.images[image_index].snapshot().key())?;
         backend.delete(resident.materials[material_index].key())?;
         resident.images[image_index] =
             upload_texture(backend, &mut upload_pool, desc, &original_texture)?;

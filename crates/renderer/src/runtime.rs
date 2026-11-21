@@ -23,7 +23,6 @@ pub use error::{ExecutionError, ExecutionErrorKind};
 pub use frames::{FrameCompletion, FrameSubmission};
 pub use id::FrameId;
 pub use managed_image::ManagedImage;
-pub use texture::TextureUploadError;
 #[cfg(all(feature = "d3d12", windows))]
 pub use preparation::D3D12Config;
 #[cfg(feature = "vulkan")]
@@ -31,6 +30,7 @@ pub use preparation::VulkanConfig;
 pub use preparation::{RuntimeConfig, RuntimeLimits};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(crate) use queue::{FrameQueue, Observation};
+pub use texture::TextureUploadError;
 #[cfg(all(
     feature = "presentation",
     windows,

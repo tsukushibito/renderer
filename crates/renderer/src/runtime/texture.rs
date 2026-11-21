@@ -2,7 +2,7 @@ use super::{ExecutionError, FrameId, ManagedImage, Runtime};
 use crate::graph::{GraphError, GraphPool, ImageDesc};
 use std::{error::Error, fmt};
 
-/// Failure to declare or submit a decoded texture upload.
+/// Failure to declare or submit a packed texture upload.
 #[derive(Debug)]
 pub enum TextureUploadError {
     Graph(GraphError),
@@ -30,11 +30,12 @@ impl Error for TextureUploadError {
 impl Runtime {
     /// Upload a packed texture from engine-owned asset data. The result can
     /// be used immediately by later submissions on this Runtime. Retain the
-    /// owner as long as future Graphs need the texture and poll the frame
+    /// owner as long as future Graphs need the texture. Reserve one pool slot
+    /// per concurrent upload or follow-up Graph and poll the frame
     /// through the usual completion API. No host wait is performed here.
     ///
     /// To batch several textures and other work in one submission, use
-    /// [`crate::graph::Graph::upload_texture_for_export`].
+    /// [`crate::graph::Graph::upload_texture_for_export`] and [`Runtime::submit_with_images`].
     pub fn upload_texture(
         &mut self,
         pool: &mut GraphPool,
