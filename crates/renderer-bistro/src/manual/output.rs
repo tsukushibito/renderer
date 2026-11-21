@@ -1,13 +1,13 @@
 //! Bistro's fullscreen passes assembled from the public Renderer APIs.
 
-use renderer::graph::{
+use renderer_core::graph::{
     Attachment, Binding, BindingResource, Graph, GraphError, ImageHandle, ImageView, LoadOp,
     RasterAttachments, RasterConstants, StoreOp,
 };
-use renderer::program::{ManagedRasterProgram, SamplerDescriptor};
+use renderer_core::program::{ManagedRasterProgram, SamplerDescriptor};
 
-use renderer_pipeline::passes::output::tone_map_neutral_pipeline;
-pub(super) use renderer_pipeline::passes::output::{SdrEncoding, SdrOutput};
+use renderer::passes::output::tone_map_neutral_pipeline;
+pub(super) use renderer::passes::output::{SdrEncoding, SdrOutput};
 
 pub(super) fn tone_map_neutral(
     graph: &mut Graph,

@@ -14,9 +14,7 @@ use std::time::Duration;
 use training_yard::{capture::CaptureView, scene::Scene};
 
 mod shader {
-    use ::renderer as renderer_pipeline;
-    use renderer_core as renderer;
-    include!("../../renderer-pipeline/examples/support/toon.rs");
+    include!("../../renderer/examples/support/toon.rs");
 }
 
 fn exercise(backend: RuntimeConfig) -> PipelineResult<()> {

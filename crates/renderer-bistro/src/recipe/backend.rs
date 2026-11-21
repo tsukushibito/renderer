@@ -4,8 +4,8 @@ use super::{
     Error, Options, lifecycle,
     pipeline::{Budget, PreparedSet},
 };
-use renderer::capacity::Preparation;
-use renderer::{
+use renderer_core::capacity::Preparation;
+use renderer_core::{
     graph::{BufferDesc, ImageDesc, PassHandle},
     runtime::{
         ExecutionError, FrameCompletion, FrameId, ResourceClass, Runtime, RuntimeConfig,
@@ -17,14 +17,16 @@ use std::num::NonZeroUsize;
 fn config(options: &Options, budget: &Budget) -> Result<RuntimeConfig, Error> {
     match options.api.as_str() {
         #[cfg(feature = "vulkan")]
-        "vulkan" => Ok(RuntimeConfig::Vulkan(renderer::runtime::VulkanConfig {
-            staging_bytes: budget.vulkan_staging_bytes(options.inflight),
-            staging_ranges: budget.vulkan_staging_ranges(options.inflight),
-            max_shader_bindings: budget.vulkan_shader_bindings,
-            ..Default::default()
-        })),
+        "vulkan" => Ok(RuntimeConfig::Vulkan(
+            renderer_core::runtime::VulkanConfig {
+                staging_bytes: budget.vulkan_staging_bytes(options.inflight),
+                staging_ranges: budget.vulkan_staging_ranges(options.inflight),
+                max_shader_bindings: budget.vulkan_shader_bindings,
+                ..Default::default()
+            },
+        )),
         #[cfg(all(windows, feature = "d3d12"))]
-        "d3d12" => Ok(RuntimeConfig::D3D12(renderer::runtime::D3D12Config {
+        "d3d12" => Ok(RuntimeConfig::D3D12(renderer_core::runtime::D3D12Config {
             buffer_count: budget.buffer_count,
             max_buffer_bytes: budget.max_buffer_bytes,
             upload_bytes: budget.upload_bytes as u64,
@@ -119,8 +121,8 @@ pub(super) fn open(
     options: &Options,
     budget: &Budget,
     window: std::sync::Arc<winit::window::Window>,
-    presentation: renderer::PresentationConfig,
-) -> Result<(Runtime, renderer::runtime::WindowPresenter), Error> {
+    presentation: renderer_core::PresentationConfig,
+) -> Result<(Runtime, renderer_core::runtime::WindowPresenter), Error> {
     let config = config(options, budget)?;
     let prepared = budget.prepared.as_ref().expect("prepared Bistro pipeline");
     let (runtime, presenter) = with_working_set(

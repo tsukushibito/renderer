@@ -8,7 +8,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use renderer::program::{
+use renderer_core::program::{
     D3D12InlineConstantBinding, D3D12RasterShaders, ManagedRasterProgram, RasterProgramDescriptor,
     RasterShaderStages, ShaderBinaries,
 };
@@ -156,11 +156,11 @@ fn reviewed_binary(
             "spv",
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../renderer-pipeline/shaders/pbr.vert.spv"
+                "/../renderer/shaders/pbr.vert.spv"
             )),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../renderer-pipeline/shaders/pbr.frag.spv"
+                "/../renderer/shaders/pbr.frag.spv"
             )),
         )),
         #[cfg(feature = "vulkan")]
@@ -168,11 +168,11 @@ fn reviewed_binary(
             "spv",
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../renderer-pipeline/shaders/shadow.vert.spv"
+                "/../renderer/shaders/shadow.vert.spv"
             )),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../renderer-pipeline/shaders/shadow.frag.spv"
+                "/../renderer/shaders/shadow.frag.spv"
             )),
         )),
         #[cfg(all(windows, feature = "d3d12"))]
@@ -180,11 +180,11 @@ fn reviewed_binary(
             "dxil",
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../renderer-pipeline/shaders/dxil/pbr.vert.dxil"
+                "/../renderer/shaders/dxil/pbr.vert.dxil"
             )),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../renderer-pipeline/shaders/dxil/pbr.frag.dxil"
+                "/../renderer/shaders/dxil/pbr.frag.dxil"
             )),
         )),
         #[cfg(all(windows, feature = "d3d12"))]
@@ -192,11 +192,11 @@ fn reviewed_binary(
             "dxil",
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../renderer-pipeline/shaders/dxil/shadow.vert.dxil"
+                "/../renderer/shaders/dxil/shadow.vert.dxil"
             )),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../renderer-pipeline/shaders/dxil/shadow.frag.dxil"
+                "/../renderer/shaders/dxil/shadow.frag.dxil"
             )),
         )),
         _ => Err(invalid(format!(

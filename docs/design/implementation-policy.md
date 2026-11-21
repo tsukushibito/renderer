@@ -121,9 +121,9 @@ aliasing、複数queue、vendor固有最適化の直接制御は今回の選定�
 
 全候補でModel、素材cook、PBR/IBL/CSM、Bloom、自由camera、画像差分の校正と性能測定は利用側／Rendererで作る。
 外部基盤がBistroの描画機能やGraphのproducer/cullingを完成させるわけではない。
-現行範囲は[Graphの形式・固定操作](../../crates/renderer/src/graph.rs)、
-[Vulkanの固定Program](../../crates/renderer/src/backends/vulkan/program/creation.rs)、
-[D3D12のprepare対応範囲](../../crates/renderer/src/backends/d3d12/graph.rs)から確認した。
+現行範囲は[Graphの形式・固定操作](../../crates/renderer-core/src/graph.rs)、
+[Vulkanの固定Program](../../crates/renderer-core/src/backends/vulkan/program/creation.rs)、
+[D3D12のprepare対応範囲](../../crates/renderer-core/src/backends/d3d12/graph.rs)から確認した。
 高位のrenderer/engineをさらに採用する案は、そのscene/material/Graph境界を第7章へ再適合する費用が増えるため、
 直接二APIを提供するwgpuを外部案の代表とした。候補網羅を採用の前提にしない。
 
@@ -259,7 +259,7 @@ backendのnative型は既にprivateで、D3D12本番実装からVulkanへの依�
 
 共通解析だけで全実行計画を固定せず、メモリ要件、キュー能力、フォーマット制約などをバックエンドから計画部へ返せるようにする。参考例としてAtomは、共通のFrameGraphコンパイル処理と、API固有の同期・実行への具体化を分けている。本書はその開発順序やクラス構成を再現する指示ではない。[^atom]
 
-ビュー描画の初期化は `renderer-pipeline` の `RendererSetup` が担当する。シーンの選択、ウィンドウ、
+ビュー描画の初期化は `renderer` の `RendererSetup` が担当する。シーンの選択、ウィンドウ、
 外部画像の所有権と同期はホストが担当する。シーンの走査、容量の集約、資源作成は初期化・構成変更の境界で行う。
 通常フレームは既存の ViewRenderer と同じプール、履歴トランザクション、GPU の完了契約を使う。
 共有 Runtime への接続ではホストが準備した作業用資源を使用し、初期化に使った投入のみを ID で回収する。
@@ -509,8 +509,8 @@ UXの受入条件は、入出力と処理を近くで読めること、同じ資
 
 `renderer-7ft.1.2`の設計対象は利用側から見た契約である。以下は**B1で実証する第一案**であり、
 現行`Graph`の実装済み機能や基盤採用の決定ではない。
-[当時のCPU試作](https://github.com/tsukushibito/renderer/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer/examples/graph_api_comparison.rs)は二案を同じ入力で比較する。
-[当時の利用コードと試作本体](https://github.com/tsukushibito/renderer/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer/examples/support/graph_api_comparison.rs)の`Study::add`が
+[当時のCPU試作](https://github.com/tsukushibito/renderer/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer-core/examples/graph_api_comparison.rs)は二案を同じ入力で比較する。
+[当時の利用コードと試作本体](https://github.com/tsukushibito/renderer/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer-core/examples/support/graph_api_comparison.rs)の`Study::add`が
 両案の呼出し、`scenario`が代表入力、`bloom`が利用側の多段処理である。
 固定effectの選択肢を増やす方式は、独自shaderをGraph本体の変更なしで追加する条件を満たさない。
 
@@ -667,13 +667,13 @@ snapshotを使う標準描画の入口は[現行契約](rendergraph.md#エンジ
 
 | 公開する層 | 責務と利用方法 |
 |---|---|
-| 汎用Graph API | `renderer`で提供する。利用側がProgram/pipeline、binding、draw/dispatch/copy、資源と接続を定義する。独自のGraphも構築・実行できる。 |
-| 標準パス | `renderer-pipeline`で提供する、公開Graph APIを使った再利用部品。利用側が不透明描画やポスト処理など必要な部品を直接組み合わせられる。 |
-| 標準グラフ | `renderer-pipeline`で提供する、公開標準パスを組み合わせる構築レシピ。意味を定めた箇所で利用側の処理を交換・追加できる。 |
+| 汎用Graph API | `renderer-core`で提供する。利用側がProgram/pipeline、binding、draw/dispatch/copy、資源と接続を定義する。独自のGraphも構築・実行できる。 |
+| 標準パス | `renderer`で提供する、公開Graph APIを使った再利用部品。利用側が不透明描画やポスト処理など必要な部品を直接組み合わせられる。 |
+| 標準グラフ | `renderer`で提供する、公開標準パスを組み合わせる構築レシピ。意味を定めた箇所で利用側の処理を交換・追加できる。 |
 
-依存は`アプリ → renderer-pipeline → renderer`の向きとする。Graph、Program、snapshotの入力接続、容量の集約、GPU実行は`renderer`が担う。
-描画方式に応じたパスの選択・合成を`renderer-pipeline`に置くことで、独自構成は`renderer`だけに依存できる。
-`renderer`は共通の組み込みProgramとABI、`renderer-pipeline`は標準レシピ固有の監査済みシェーダーとABIを所有する。
+依存は`アプリ → renderer → renderer-core`の向きとする。Graph、Program、snapshotの入力接続、容量の集約、GPU実行は`renderer-core`が担う。
+描画方式に応じたパスの選択・合成を`renderer`に置くことで、独自構成は`renderer-core`だけに依存できる。
+`renderer-core`は共通の組み込みProgramとABI、`renderer`は標準レシピ固有の監査済みシェーダーとABIを所有する。
 Rustの標準パス、レシピと準備APIは既定の構成で利用できる。GPUで使うProgramは選んだバックエンドの形式だけを埋め込み、
 パイプラインの作成と資源の予約は使用するレシピの`WorkingSet`に従う。
 標準グラフは標準パスを組み合わせ、各パスは通常の構築関数と型付き入出力で公開Graph APIを呼ぶ。
@@ -685,7 +685,7 @@ Graphの共通解析・backendへ、opaqueやBloom等の効果選択を追加す
 
 `geometry::MeshRegistry` はメッシュの版を管理し、描画定数とともに不変な入力をcaptureする。Unlitの入力形式・tintは上位のレシピが扱う。runtimeは資源の常駐、同期、投入、GPU完了と退役を担う。
 入力のGraph接続自体が標準opaqueを追加する設計にはしない。
-`renderer_pipeline::unlit_forward::snapshot`は、Engineの入力接続とunlit Forwardを組み合わせた便利APIを提供する。
+`renderer::unlit_forward::snapshot`は、Engineの入力接続とunlit Forwardを組み合わせた便利APIを提供する。
 利用側は同じ資源接続・実行経路で独自のGraphを構築できる。
 snapshotを使わないCompute-only、複数View、必要な数の画像・buffer出力も基本APIの設計対象とし、
 単一RGBA8画像やView寸法をすべてのGraphへ強制しない。nativeの対応範囲とPresentation固有の形式条件は別に維持する。
@@ -799,7 +799,7 @@ B2のPBR、B3の影・HDR・tone mappingは標準パスと標準グラフへ段�
 | GPU 処理・高度な統合 → `renderer-core`（Rust 名 `renderer_core`） | GPU 非依存の Graph、画像・バッファ、Program と binding、Raster・Compute・copy、資源入出力、compile。Runtime が準備・投入・完了・読み戻しを扱う。表示とネイティブデバイス・外部画像との同期は各機能の入口で提供する。 | `renderer-core` 単独で CPU 上の Graph 構築とヘッドレス Compute が成立する。GPU 基盤からシーン・材質・Canvas への逆依存がなく、同一デバイスのホスト資源を契約どおりに返却できる。 |
 
 製品の依存方向は `renderer → renderer-core`。通常利用で core の型を組み立てる手順は作らず、独自パス・ホスト記録には同一の Graph・画像・Program 型を渡す。
-現行の `renderer-pipeline` が持つ PBR、Unlit、標準パス、レシピは上位の公開部品として継承する。投影・描画技法・Canvas の区分はまずモジュールとする。
+旧 `renderer-pipeline` が持っていた PBR、Unlit、標準パス、レシピは上位の公開部品として継承する。投影・描画技法・Canvas の区分はまずモジュールとする。
 独自パイプラインだけを使うホストと外部プラグインがこの形でビルド・実行できるかが、独立パイプラインクレートを廃する判断の検証になる。
 別配布が必要になる具体的な依存や機能が判明したら、利用コードと依存グラフを記録して配置を再評価する。
 
@@ -1022,7 +1022,7 @@ pipeline、binding layout、sampler、ImageViewなどは、それぞれを導入
 実行ファイルを再ビルドせず、起動や明示的な構成変更でRasterとComputeのシェーダーを選べる。
 アプリがロードしたバイナリとABIは`ManagedRasterProgram::from_trusted_owned_descriptor`と
 `ManagedProgram::from_trusted_owned_descriptor`で取り込む。埋め込みアセットと同じ
-GraphとWorkingSetを使う。`renderer-pipeline`の利用側も、取り込んだProgramを公開Graph APIで使う。
+GraphとWorkingSetを使う。`renderer`の利用側も、取り込んだProgramを公開Graph APIで使う。
 [外部取込の利用例](../guides/tooling.md#runtime-shader-import)と
 [Program契約](rendergraph.md#program由来bindingとshader-stageのowned計画)を参照する。
 
@@ -1031,7 +1031,7 @@ GraphとWorkingSetを使う。`renderer-pipeline`の利用側も、取り込ん�
 | シェーダーのアセットビルド | HLSLなどのソースを配布対象に応じてSPIR-V、DXIL、または両方へコンパイルする。entry point、stage、bindingとアクセス契約などのメタデータを対応するバイナリと組にして配布する。 |
 | アプリのアセット層 | 起動時にアプリが選んだバックエンドに対し、シェーダーの論理名を対応するアセットへ解決する。両形式を配布した場合も、選択したバックエンド用のバイナリと対応するメタデータを読む。 |
 | アプリのレシピ | 取り込んだProgramを準備時に`WorkingSet`へ登録する。準備済みのProgramとフレーム入力を使い、公開Graph APIで資源とパスの依存を宣言する。 |
-| `renderer` | 読み込み済みのバイト列とメタデータを受け取り、不変のProgramとして扱う。実Deviceとの適合を確認し、`WorkingSet`の準備でネイティブのレイアウトとパイプラインを作る。 |
+| `renderer-core` | 読み込み済みのバイト列とメタデータを受け取り、不変のProgramとして扱う。実Deviceとの適合を確認し、`WorkingSet`の準備でネイティブのレイアウトとパイプラインを作る。 |
 
 取込時に、バイナリ形式・版・サイズ・ステージと、記述子の構造・宣言したABIの整合を確認する。
 SPIR-Vではステージに対応する`main`を確認する。DXILではコンテナとSM6.0のステージを確認する。
@@ -1052,7 +1052,7 @@ GPUが使うパイプラインと対応するProgramは既存の実行所有者�
 レシピは公開Graphを借用し、パスを追加して後段で使うハンドルを返す。構成やフレーム入力に応じた分岐は
 Rustで行う。producer、hazard、初期化、GPU同期と寿命には[RenderGraph](rendergraph.md)の契約を適用する。
 
-`renderer::capacity::Preparation`は、起動・構成変更時に標準レシピと独自パスの要求をまとめる。
+`renderer_core::capacity::Preparation`は、起動・構成変更時に標準レシピと独自パスの要求をまとめる。
 同一フレームで同時に宣言する数を合算し、同時フレーム数を考慮して一時画像とバッファの個数を予約する。
 Graphの宣言上限と`WorkingSet`を一括で加える場合は、すべての上限・資源の検査が通った時点で要求を更新する。
 同時に使う構成の容量は合算する。GPU処理や結果保持が重ならない構成は`Preparation::add_alternatives`で、
@@ -1066,7 +1066,7 @@ Graphの宣言上限と`WorkingSet`を一括で加える場合は、すべての
 管理下Programへ取り込み、その版を使う。フレーム内は公開Graphでbindingを指定し、描画順に合わせてRaster batchへ渡す。
 [テンプレートのビルド手順](../guides/tooling.md#material-shader-build)を参照する。
 
-`renderer-pipeline`のPBRレシピは、Forward／Forward+の1×／4×とDeferredの1×を提供する。
+`renderer`のPBRレシピは、Forward／Forward+の1×／4×とDeferredの1×を提供する。
 Forward系の4×はカラーを単一サンプルHDRへリゾルブする。シーン深度は1×でD32を返し、4×では`None`になる。
 ゲームエンジンはシーン階層、カメラ、アセットとワールド変換を所有する。`ViewRenderer` は描画方式と寸法ごとのグループに `PipelineId` を割り当て、
 各グループが登録されたカメラの状態を管理する。標準・独自の `ViewPipeline` は一つのGraphに共存でき、単一サンプルのシーンリニアHDRを共通出力とする。
@@ -1098,8 +1098,8 @@ Vulkanのdescriptor予約はComputeのdispatch分を含める。`renderer-bistro
 
 ### 12.1 エンジンとのデータ境界
 
-アプリはシーンとゲームアセットを所有し、`renderer-pipeline` はサーフェスの定義・インスタンスと描画パスへの割り当てを所有する。
-`renderer` は GPU 資源、プログラム、Graph の実行・完了を管理する。マテリアルには pipeline の `MaterialHandle` を使う。
+アプリはシーンとゲームアセットを所有し、`renderer` はサーフェスの定義・インスタンスと描画パスへの割り当てを所有する。
+`renderer-core` は GPU 資源、プログラム、Graph の実行・完了を管理する。マテリアルには pipeline の `MaterialHandle` を使う。
 
 材質更新では新しい版を発行する。取得済み CPU スナップショットは旧版を参照し、構築済み Graph はその時点の定数・プログラム・資源参照を保持する。
 外部テクスチャや常駐係数の登録は所有者が管理する。提出前に登録を取り消した資源は runtime の鮮度検査に従い、受理済み処理の資源は GPU 完了まで保持する。
@@ -1591,14 +1591,14 @@ B2の照明はsunと明示した一定ambientであり、B3のIBL・影・固定
 SDR確認用のclampとsRGB OETFは利用側の別passで一度だけ行う。
 標準forwardのunlit recipeへPBR固有のeffect列挙やasset読込を追加しない。
 
-Bistroと標準PBRで使うshaderのHLSLは`crates/renderer-pipeline/shaders/`を正本とし、
+Bistroと標準PBRで使うshaderのHLSLは`crates/renderer/shaders/`を正本とし、
 固定版DXCの同じ入力からSPIR-V 1.3とDXILを生成する。
 同じソースで二APIの材質処理・Compute・頂点変換を保守し、手書きのregisterとspaceをRust descriptorの
 bindingとgroupに対応させる。API固有の宣言とclip出力Yの符号はHLSLの`__spirv__`分岐に置く。
 影cascade番号とinstance配置はそれぞれ4／68 byteで、Vulkanのpush constantとD3D12の`b7, space0`のroot constantsに対応する。
 既存の生成スクリプトでソース・include・バリアント・出力を固定し、SPIRV-Crossはreflectionに使う。
 Vulkanのbuffer配置はDXCの既定規則を使い、追加Device featureを前提にしない。
-標準PBRと影の取り込みに限り、`renderer-pipeline`の非公開モジュールが固定のバイナリとdescriptorの契約を保証する。
+標準PBRと影の取り込みに限り、`renderer`の非公開モジュールが固定のバイナリとdescriptorの契約を保証する。
 そのモジュールで既存のtrusted Program入口を使い、公開レシピはGraphの安全な型付き資源とbindingを受け取る。
 生成compilerの変更は描画の丸めにも影響するため、ABI、両APIの画像、同じAPIの移行前後を
 [既存の比較閾値](../guides/development.md#bistro-pbr)で再確認する。

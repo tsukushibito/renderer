@@ -4,82 +4,27 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
-description = "RenderGraph-centered renderer for game engine integration"
+description = "Reusable RenderGraph composition for renderer"
 
 [features]
 default = []
-# Optional Renderer diagnostics, independent of optimization and native layers.
-development-validation = ["vulkan-diagnostics", "d3d12-diagnostics"]
-# Native callback monitoring and debug names/labels can be enabled independently.
-vulkan-diagnostics = []
-d3d12-diagnostics = []
-# Detailed Graph dumps are independent of validation and profiling.
-graph-diagnostics = []
-# Allocation/native event counters; independent of validation and optimization.
-memory-profiling = []
-# Optional explicit CPU zones; independent of native layers and GPU timestamps.
-tracy = ["dep:tracy-client"]
-vulkan = ["dep:ash", "dep:vk-mem", "dep:tracing"]
-presentation = ["dep:raw-window-handle", "dep:windows-sys"]
-d3d12 = ["dep:windows-core"]
+vulkan = ["renderer-core/vulkan"]
+d3d12 = ["renderer-core/d3d12"]
+development-validation = ["renderer-core/development-validation"]
+vulkan-diagnostics = ["renderer-core/vulkan-diagnostics"]
+d3d12-diagnostics = ["renderer-core/d3d12-diagnostics"]
+presentation = ["renderer-core/presentation"]
+tracy = ["renderer-core/tracy", "dep:tracy-client"]
+graph-diagnostics = ["renderer-core/graph-diagnostics"]
+memory-profiling = ["renderer-core/memory-profiling"]
 
 [dependencies]
-ash = { workspace = true, optional = true }
-vk-mem = { workspace = true, optional = true }
-tracing = { workspace = true, optional = true }
+renderer-core = { version = "0.1.0", path = "../renderer-core", default-features = false }
 tracy-client = { workspace = true, optional = true }
 
-[target.'cfg(windows)'.dependencies]
-windows-core = { version = "=0.100.0", optional = true, default-features = false, features = ["std"] }
-raw-window-handle = { version = "0.6", optional = true, features = ["std"] }
-windows-sys = { version = "0.61", optional = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
-
-[target.'cfg(windows)'.dev-dependencies]
-winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
-
 [dev-dependencies]
-criterion.workspace = true
-tracing-subscriber.workspace = true
-renderer-pipeline = { version = "0.1.0", path = "../renderer-pipeline" }
-renderer-example-support = { version = "0.1.0", path = "../renderer-example-support" }
 serde_json = "1.0"
 sha2 = "0.10.9"
 
-[[bench]]
-name = "transfer_planning"
-harness = false
-
-[[bench]]
-name = "d3d12_reuse"
-harness = false
-
-[[bench]]
-name = "vulkan_resource_cache"
-harness = false
-
-[[example]]
-name = "headless"
-required-features = ["vulkan"]
-
-[[example]]
-name = "frame_loop"
-required-features = ["vulkan"]
-
-[[example]]
-name = "windowed"
-required-features = ["presentation"]
-
 [lints]
 workspace = true
-
-[[example]]
-name = "engine_workloads"
-required-features = ["vulkan"]
-
-[[example]]
-name = "frame_memory"
-required-features = ["memory-profiling"]
-
-[[example]]
-name = "profile_workload"
-test = true

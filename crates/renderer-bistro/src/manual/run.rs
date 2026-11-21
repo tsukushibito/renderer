@@ -9,11 +9,11 @@ use super::{
     asset::Scene,
     camera::{Camera, Conditions},
 };
-use renderer::SubmissionMetrics;
+use renderer_core::SubmissionMetrics;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::graph::{CompiledGraph, GraphPool};
+use renderer_core::graph::{CompiledGraph, GraphPool};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::runtime::{FrameId, Runtime};
+use renderer_core::runtime::{FrameId, Runtime};
 use serde_json::{Value, json};
 use std::path::Path;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
@@ -239,7 +239,7 @@ fn identity(
 ) -> Value {
     let shadow = super::shadow::Parameters::default();
     let identity = json!({"cook_manifest_sha256":cook_hash,"conditions_sha256":conditions_hash,
-        "shaders_sha256":super::digest(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../renderer-pipeline/shaders/manifest.json"))),
+        "shaders_sha256":super::digest(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../renderer/shaders/manifest.json"))),
         "view":if options.fixture {"fixture"}else{options.view.as_str()},"width":options.width,"height":options.height,
         "inflight":options.inflight,"alpha_only":options.alpha_only,"alpha_override":options.force_opaque,
         "environment":environment,"shadows":options.shadows,"aa":options.aa,"bloom":options.bloom.name(),
@@ -456,7 +456,7 @@ fn measurement(
                 *total += value.as_nanos() as u64;
             }
             match metrics.gpu {
-                renderer::GpuTiming::Available { elapsed, .. } => {
+                renderer_core::GpuTiming::Available { elapsed, .. } => {
                     let ns = elapsed.as_nanos() as u64;
                     gpu_samples += 1;
                     gpu_total += ns;
@@ -482,7 +482,7 @@ fn measurement(
             "phase_ns":s.phases,"poll_calls_elapsed_ns":s.poll_cpu_ns,"yield_elapsed_ns":s.yield_ns,
             "active_host_elapsed_ns":s.phases[0]+s.phases[1]+s.phases[2]+s.poll_cpu_ns+s.phases[4],
             "iteration_wall_ns":s.iteration_ns,
-            "gpu_ns":s.native.and_then(|n|if let renderer::GpuTiming::Available{elapsed,..}=n.gpu {Some(elapsed.as_nanos() as u64)}else{None})})).collect::<Vec<_>>(),
+            "gpu_ns":s.native.and_then(|n|if let renderer_core::GpuTiming::Available{elapsed,..}=n.gpu {Some(elapsed.as_nanos() as u64)}else{None})})).collect::<Vec<_>>(),
         "active_host_scope":"nonoverlapping caller build/compile/submit/poll-call/result-return elapsed phase sum; excludes explicit yield waits and bookkeeping outside these timers (poll-loop timeout checks, metrics/sample recording); includes poll-call cost and possible OS descheduling; complete windows retain the omitted bookkeeping; not charged CPU or Godot-identical scope",
         "frame_wall_scope":"host build start to observed GPU completion; includes queue residence and intervening host work; excludes result return; not display latency",
         "readback_outside_measurement":true,"presentation":false}),
@@ -499,7 +499,7 @@ pub(super) fn write_report(directory: &Path, report: &Value) -> Result<(), Error
 }
 
 #[cfg(feature = "memory-profiling")]
-pub(super) fn memory_report(snapshot: renderer::measurement::Snapshot) -> Value {
+pub(super) fn memory_report(snapshot: renderer_core::measurement::Snapshot) -> Value {
     json!({"rust":snapshot.rust.map(|event|json!({"calls":event.calls,"bytes":event.bytes})),
         "vma_host":snapshot.vma_host.map(|event|json!({"calls":event.calls,"bytes":event.bytes})),
         "native":snapshot.native,"overflowed":snapshot.overflowed,"allocation_free":snapshot.is_allocation_free(),
@@ -516,7 +516,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     #[cfg(feature = "tracy")]
     let tracy_capture_id = super::trace::capture_id()?;
     #[cfg(feature = "memory-profiling")]
-    let setup_memory = renderer::measurement::Snapshot::now();
+    let setup_memory = renderer_core::measurement::Snapshot::now();
     let setup = Instant::now();
     let stage = Instant::now();
     let condition_bytes = include_bytes!(concat!(
@@ -644,7 +644,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     };
     let setup_ns = setup.elapsed().as_nanos() as u64;
     #[cfg(feature = "memory-profiling")]
-    let setup_memory = renderer::measurement::Snapshot::now().since(setup_memory);
+    let setup_memory = renderer_core::measurement::Snapshot::now().since(setup_memory);
     eprintln!(
         "Bistro measured frames: {} (capture is outside ROI)",
         options.frames
@@ -666,7 +666,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     #[cfg(windows)]
     let cpu_start = super::clock::Boundary::capture()?;
     #[cfg(feature = "memory-profiling")]
-    let memory_start = renderer::measurement::Snapshot::now();
+    let memory_start = renderer_core::measurement::Snapshot::now();
     let started = Instant::now();
     {
         #[cfg(feature = "tracy")]
@@ -716,7 +716,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     }
     let wall = started.elapsed().as_nanos() as u64;
     #[cfg(feature = "memory-profiling")]
-    let memory = renderer::measurement::Snapshot::now().since(memory_start);
+    let memory = renderer_core::measurement::Snapshot::now().since(memory_start);
     #[cfg(windows)]
     let cpu = super::clock::Boundary::capture()?.difference(cpu_start, frequency)?;
     let drained_native = if options.gpu_timing && !options.fixture {
@@ -884,7 +884,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         Value::Null
     };
     #[cfg(feature = "memory-profiling")]
-    let shutdown_memory = renderer::measurement::Snapshot::now();
+    let shutdown_memory = renderer_core::measurement::Snapshot::now();
     drop((resident, queue, samples, workspace));
     let validation = backend::close(backend)?;
     drop(pool);
@@ -905,7 +905,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     }
     #[cfg(feature = "memory-profiling")]
     let memory_json = json!({"normal":memory_report(memory),"normal_allocation_free":memory.is_allocation_free(),
-        "setup":memory_report(setup_memory),"shutdown":memory_report(renderer::measurement::Snapshot::now().since(shutdown_memory)),
+        "setup":memory_report(setup_memory),"shutdown":memory_report(renderer_core::measurement::Snapshot::now().since(shutdown_memory)),
         "scope":"Graph build/compile/submit/poll/retire/result return; no capture/file I/O; setup/shutdown separate positive controls"});
     #[cfg(not(feature = "memory-profiling"))]
     let memory_json = Value::Null;

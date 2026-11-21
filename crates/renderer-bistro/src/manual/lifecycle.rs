@@ -14,7 +14,7 @@ use super::{
     program,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::{
+use renderer_core::{
     capacity::CapacityRecovery,
     graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, ImportBuffer, ImportImage},
     runtime::{ExecutionErrorKind, FrameId, ManagedImage, Runtime},

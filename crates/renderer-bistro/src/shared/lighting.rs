@@ -1,7 +1,7 @@
 //! Bistro's deterministic light workload and its explicitly composed Graph input.
 
-use renderer::graph::{BufferHandle, Graph, GraphError, ImageDesc, ImageView};
-use renderer_pipeline::pbr_forward_plus::{self, PointLight, PointLightLayout, TILE_SIZE};
+use renderer::pbr_forward_plus::{self, PointLight, PointLightLayout, TILE_SIZE};
+use renderer_core::graph::{BufferHandle, Graph, GraphError, ImageDesc, ImageView};
 
 pub(crate) const PRESET_LEN: usize = 64;
 pub(crate) type Preset = [PointLight; PRESET_LEN];

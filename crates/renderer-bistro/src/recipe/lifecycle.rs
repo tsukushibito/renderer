@@ -13,13 +13,13 @@ use super::{
     program,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::{
+use renderer::passes::output::{SdrEncoding, SdrOutput, write_sdr};
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use renderer_core::{
     capacity::CapacityRecovery,
     graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, ImportImage},
     runtime::{ExecutionErrorKind, FrameId, ManagedImage, Runtime},
 };
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer_pipeline::passes::output::{SdrEncoding, SdrOutput, write_sdr};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use serde_json::{Value, json};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
@@ -192,7 +192,7 @@ fn require_stale(backend: &mut Runtime, plan: &CompiledGraph) -> Result<(), Erro
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn stale_plans(
     image: &ImportImage,
-    buffer: &renderer_pipeline::pbr::ResidentMaterialUniform,
+    buffer: &renderer::pbr::ResidentMaterialUniform,
 ) -> Result<(GraphPool, CompiledGraph, CompiledGraph), Error> {
     let mut pool = GraphPool::new(GraphCapacity::default(), 2)?;
     let mut graph = pool.begin()?;

@@ -41,7 +41,7 @@ mod window;
 mod recipes;
 mod shader_assets;
 
-use renderer_pipeline::passes::bloom::Bloom;
+use renderer::passes::bloom::Bloom;
 use sha2::{Digest, Sha256};
 use std::{borrow::Cow, path::PathBuf, time::Duration};
 
@@ -75,7 +75,7 @@ impl PipelineMode {
         matches!(self, Self::ForwardPlus | Self::ForwardReference)
     }
 
-    fn forward_program(self, blend: bool) -> renderer::program::ManagedRasterProgram {
+    fn forward_program(self, blend: bool) -> renderer_core::program::ManagedRasterProgram {
         if self.uses_local_lights() {
             program::forward_plus::raster_program(self == Self::ForwardPlus, blend)
         } else if blend {
@@ -128,7 +128,7 @@ struct Options {
     vsync: bool,
     resource_checks: bool,
     bloom: Bloom,
-    sample_count: renderer::graph::SampleCount,
+    sample_count: renderer_core::graph::SampleCount,
     pipeline: PipelineMode,
     shader_assets: Option<shader_assets::Selection>,
     instances: instancing::Mode,
@@ -159,7 +159,10 @@ impl Options {
         }
     }
 
-    fn forward_program(&self, blend: bool) -> Cow<'_, renderer::program::ManagedRasterProgram> {
+    fn forward_program(
+        &self,
+        blend: bool,
+    ) -> Cow<'_, renderer_core::program::ManagedRasterProgram> {
         match self
             .shader_assets
             .as_ref()
@@ -174,7 +177,7 @@ impl Options {
         }
     }
 
-    fn shadow_program(&self) -> Cow<'_, renderer::program::ManagedRasterProgram> {
+    fn shadow_program(&self) -> Cow<'_, renderer_core::program::ManagedRasterProgram> {
         match self
             .shader_assets
             .as_ref()
@@ -185,8 +188,8 @@ impl Options {
         }
     }
 
-    fn sdr_output(&self) -> renderer_pipeline::passes::output::SdrOutput {
-        use renderer_pipeline::passes::output::{SdrEncoding, SdrOutput};
+    fn sdr_output(&self) -> renderer::passes::output::SdrOutput {
+        use renderer::passes::output::{SdrEncoding, SdrOutput};
         SdrOutput {
             encoding: if self.windowed {
                 SdrEncoding::Linear
@@ -233,7 +236,7 @@ impl Options {
             vsync: true,
             resource_checks: false,
             bloom: Bloom::Off,
-            sample_count: renderer::graph::SampleCount::X1,
+            sample_count: renderer_core::graph::SampleCount::X1,
             pipeline: PipelineMode::Forward,
             shader_assets: None,
             instances: instancing::Mode::Off,
@@ -316,7 +319,7 @@ impl Options {
                     };
                 }
                 "--msaa" => {
-                    use renderer::graph::SampleCount;
+                    use renderer_core::graph::SampleCount;
                     result.sample_count = match args.next().as_deref() {
                         Some("1") => SampleCount::X1,
                         Some("4") => SampleCount::X4,
@@ -379,7 +382,7 @@ impl Options {
         }
         if let Some(manifest) = shader_manifest {
             if result.pipeline != PipelineMode::Forward
-                || result.sample_count != renderer::graph::SampleCount::X1
+                || result.sample_count != renderer_core::graph::SampleCount::X1
                 || result.submission != SubmissionMode::Direct
                 || result.instances.enabled()
             {
@@ -394,7 +397,7 @@ impl Options {
             });
         }
         if result.pipeline == PipelineMode::Deferred
-            && result.sample_count != renderer::graph::SampleCount::X1
+            && result.sample_count != renderer_core::graph::SampleCount::X1
         {
             return Err("the deferred pipeline requires --msaa 1".into());
         }
@@ -567,7 +570,7 @@ mod tests {
         background: [f32; 3],
     ) -> Result<
         (
-            renderer::runtime::Runtime,
+            renderer_core::runtime::Runtime,
             pipeline::Resident,
             pipeline::Built,
         ),
@@ -577,7 +580,7 @@ mod tests {
         let mut backend = backend::create(options, &budget)?;
         let resident =
             pipeline::Resident::upload(&mut backend, scene, environment, &budget, uniform)?;
-        let mut pool = renderer::graph::GraphPool::new(budget.graph, 2)?;
+        let mut pool = renderer_core::graph::GraphPool::new(budget.graph, 2)?;
         let mut workspace = pipeline::Workspace::new(
             scene,
             budget.prepared.take().expect("prepared fixture pipeline"),

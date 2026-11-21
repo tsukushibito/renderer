@@ -1,7 +1,7 @@
 //! One resident opaque mesh, placed on a fixed grid in front of the initial view.
 
 use super::{Error, asset::Scene, camera::Camera, program, shadow::Bounds};
-use renderer::graph::{RasterConstants, RasterDraw};
+use renderer_core::graph::{RasterConstants, RasterDraw};
 
 const COLUMNS: usize = 6;
 const ROWS: usize = 4;
@@ -108,7 +108,7 @@ impl Placements {
     }
 
     /// Affine rows for the same camera-relative fixture grid.
-    #[allow(dead_code, reason = "used by the renderer-pipeline Bistro adapter")]
+    #[allow(dead_code, reason = "used by the renderer Bistro adapter")]
     pub fn affine_rows(&self, index: usize) -> [[f32; 4]; 3] {
         let scale = f32::from_bits(self.layout[3]);
         let column = (index % COLUMNS) as f32;
@@ -176,7 +176,7 @@ fn front_facing(scene: &Scene, primitive: &super::asset::Primitive, forward: [f3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use renderer::graph::{BufferDesc, GraphCapacity, GraphPool};
+    use renderer_core::graph::{BufferDesc, GraphCapacity, GraphPool};
 
     #[test]
     fn draws_select_the_same_placement_records_and_resident_mesh() {

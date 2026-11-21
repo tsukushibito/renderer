@@ -13,16 +13,16 @@ WindowsのD3D12による実行を提供します。どちらも単一キュー�
 
 | 用途 | 入口 |
 | --- | --- |
-| メッシュ・材質を登録し、カメラごとに描く | `renderer-pipeline` の `ViewRenderer` に標準または独自の `ViewPipeline` を登録します。複数の方式・解像度のビューを一つのGraphに記録できます。[組み込み手順](docs/guides/tooling.md#scene-materials) |
+| メッシュ・材質を登録し、カメラごとに描く | `renderer` の `ViewRenderer` に標準または独自の `ViewPipeline` を登録します。複数の方式・解像度のビューを一つのGraphに記録できます。[組み込み手順](docs/guides/tooling.md#scene-materials) |
 | 標準PBRに独自パスを組み込む | `GeometryPipeline` からHDRと必要な深度を受け取り、Bloomや独自エフェクト、SDR出力をつなぎます。[パス合成](docs/guides/tooling.md#rust-pipeline) |
-| 描画をエンジン独自に定義する | `renderer::graph` で依存と描画を宣言し、`renderer::runtime::Runtime` で準備・投入・完了確認を行います。[RenderGraphの契約](docs/design/rendergraph.md) |
+| 描画をエンジン独自に定義する | `renderer_core::graph` で依存と描画を宣言し、`renderer_core::runtime::Runtime` で準備・投入・完了確認を行います。[RenderGraphの契約](docs/design/rendergraph.md) |
 
 標準PBRはForward／Forward+の1×・4×とDeferredの1×に対応し、点光源、IBL、任意の4カスケードの影を扱います。
 `renderer-bistro`の`bistro`は標準レシピ、`bistro-graph`は公開Graph APIの実例です。
 native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md#対応範囲と処理の境界)、
 実行済みの確認と未確認範囲は[検証状況](docs/verification/current.md)を参照してください。
 
-既定featureはGPU・ウィンドウに依存しません。アプリが `renderer` の `vulkan`、`d3d12`、必要なら `presentation` を選びます。
+既定featureはGPU・ウィンドウに依存しません。アプリは依存するクレート（`renderer` または `renderer-core`）の `vulkan`、`d3d12`、必要なら `presentation` を選びます。
 独自パイプラインのクレートはバックエンドを指定せずに実装できます。起動や構成変更時に `Preparation` で容量を集約し、通常フレームで再利用します。
 
 - [ドキュメント一覧](docs/README.md)
@@ -40,7 +40,7 @@ native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md
 最初に、GPUなしで利用側のパス合成を確認できます。
 
 ```powershell
-cargo run --locked -p renderer --no-default-features --example graph_composition
+cargo run --locked -p renderer-core --no-default-features --example graph_composition
 ```
 
 小さなPBRシーン、ヘッドレス描画、Windows表示、2つのBistroサンプルは[Examplesガイド](docs/guides/examples.md)から実行できます。

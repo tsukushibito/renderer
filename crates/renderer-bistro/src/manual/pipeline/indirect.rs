@@ -10,8 +10,8 @@ use program::visibility::{
     visibility_program,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::graph::GraphPool;
-use renderer::{
+use renderer_core::graph::GraphPool;
+use renderer_core::{
     graph::{
         Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphError, ImportBuffer,
         IndexedIndirectArgs, IndexedIndirectTable, IndexedIndirectTemplate, RasterBindings,
@@ -203,7 +203,7 @@ pub(super) struct Resident {
 impl Resident {
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn upload(
-        backend: &mut renderer::runtime::Runtime,
+        backend: &mut renderer_core::runtime::Runtime,
         geometry_pool: &mut GraphPool,
         upload_owners: &mut Vec<GraphPool>,
         scene: &Scene,

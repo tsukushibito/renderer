@@ -9,19 +9,19 @@ description = "Bistro reference scene applications for Renderer"
 
 [features]
 default = []
-vulkan = ["renderer-pipeline/vulkan"]
-d3d12 = ["renderer-pipeline/d3d12"]
-development-validation = ["renderer-pipeline/development-validation"]
-vulkan-diagnostics = ["renderer-pipeline/vulkan-diagnostics"]
-d3d12-diagnostics = ["renderer-pipeline/d3d12-diagnostics"]
-graph-diagnostics = ["renderer-pipeline/graph-diagnostics"]
-memory-profiling = ["renderer-pipeline/memory-profiling"]
-presentation = ["renderer-pipeline/presentation", "dep:winit"]
-tracy = ["renderer-pipeline/tracy", "dep:tracy-client"]
+vulkan = ["renderer/vulkan"]
+d3d12 = ["renderer/d3d12"]
+development-validation = ["renderer/development-validation"]
+vulkan-diagnostics = ["renderer/vulkan-diagnostics"]
+d3d12-diagnostics = ["renderer/d3d12-diagnostics"]
+graph-diagnostics = ["renderer/graph-diagnostics"]
+memory-profiling = ["renderer/memory-profiling"]
+presentation = ["renderer/presentation", "dep:winit"]
+tracy = ["renderer/tracy", "dep:tracy-client"]
 
 [dependencies]
+renderer-core = { version = "0.1.0", path = "../renderer-core", default-features = false }
 renderer = { version = "0.1.0", path = "../renderer", default-features = false }
-renderer-pipeline = { version = "0.1.0", path = "../renderer-pipeline", default-features = false }
 renderer-example-support = { version = "0.1.0", path = "../renderer-example-support" }
 serde_json = "1.0"
 sha2 = "0.10.9"

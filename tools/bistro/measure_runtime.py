@@ -71,7 +71,7 @@ def is_bistro_build(build):
         return ("example" not in build and build.get("package") == "renderer-bistro"
                 and build["bin"] in ("bistro", "bistro-graph"))
     return (build.get("example") == "bistro"
-            and build.get("package", "renderer") in ("renderer", "renderer-pipeline"))
+            and build.get("package", "renderer") in ("renderer-core", "renderer"))
 
 
 def check_release_manifest(manifest):

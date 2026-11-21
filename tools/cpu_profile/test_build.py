@@ -19,21 +19,21 @@ class BuildTests(unittest.TestCase):
                      "crates/renderer-example-support/Cargo.toml",
                      "tools/bistro/conditions.json",
                      "tools/bistro/ibl.py",
-                     "crates/renderer-pipeline/shaders/pbr.frag.spv",
-                     "crates/renderer-pipeline/src/passes/pbr/pbr_programs.rs",
-                     "crates/renderer-pipeline/src/passes/visibility/program.rs"):
+                     "crates/renderer/shaders/pbr.frag.spv",
+                     "crates/renderer/src/passes/pbr/pbr_programs.rs",
+                     "crates/renderer/src/passes/visibility/program.rs"):
             with self.subTest(name=name):
                 self.assertEqual(snapshot[name]["raw_sha256"],
                                  hashlib.sha256((ROOT / name).read_bytes()).hexdigest())
 
     def test_pipeline_archive_binds_the_workload_and_renderer_dependency(self):
-        snapshot = source_snapshot("renderer-pipeline")
-        self.assertIn("crates/renderer-pipeline/Cargo.toml", snapshot)
+        snapshot = source_snapshot("renderer")
         self.assertIn("crates/renderer/Cargo.toml", snapshot)
+        self.assertIn("crates/renderer-core/Cargo.toml", snapshot)
 
     def test_renderer_example_archive_binds_its_pipeline_dependency(self):
         snapshot = source_snapshot()
-        self.assertIn("crates/renderer-pipeline/src/unlit_forward.rs", snapshot)
+        self.assertIn("crates/renderer/src/unlit_forward.rs", snapshot)
 
     def test_shipping_features_reject_direct_diagnostics(self):
         self.assertEqual(parse_features("vulkan,d3d12 vulkan,presentation"),
@@ -115,7 +115,7 @@ class BuildTests(unittest.TestCase):
 
     def test_pipeline_archive_rejects_diagnostics_in_renderer_dependency(self):
         message = json.dumps({"reason": "compiler-artifact",
-                              "target": {"name": "renderer", "kind": ["lib"]},
+                              "target": {"name": "renderer_core", "kind": ["lib"]},
                               "features": ["memory-profiling"]})
         with self.assertRaisesRegex(BuildError, "Renderer enabled diagnostics transitively"):
             instrumentation_dependencies(message, "none")

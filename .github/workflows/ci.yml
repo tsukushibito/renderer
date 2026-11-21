@@ -81,7 +81,7 @@ jobs:
       - run: npm test --prefix tools/bistro-validator
       - name: Check managed shader ABI contracts without an SDK
         shell: pwsh
-        run: ./crates/renderer/shaders/test-managed-abi.ps1
+        run: ./crates/renderer-core/shaders/test-managed-abi.ps1
       - name: Verify Pipeline shader sources and generated artifacts without an SDK
         run: |
           python -B -m unittest discover -s tools/shaders -p 'test_*.py'
@@ -178,9 +178,9 @@ jobs:
             cargo test --locked --workspace --doc @featureArgs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             if ($env:BACKEND -like '*presentation*') {
-              cargo test --locked -p renderer --example windowed @featureArgs
+              cargo test --locked -p renderer-core --example windowed @featureArgs
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-              cargo test --locked --release -p renderer --example windowed @featureArgs
+              cargo test --locked --release -p renderer-core --example windowed @featureArgs
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
           }
@@ -201,32 +201,32 @@ jobs:
         if: runner.os == 'Linux' && matrix.backend == 'cpu'
         shell: pwsh
         run: |
-          cargo test --locked --release -p renderer --no-default-features --lib capacity::preparation
+          cargo test --locked --release -p renderer-core --no-default-features --lib capacity::preparation
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked --release -p renderer-pipeline --no-default-features --lib --tests
+          cargo test --locked --release -p renderer --no-default-features --lib --tests
       - name: Exercise the CPU Graph composition examples
         if: matrix.backend == 'cpu'
         shell: pwsh
         run: |
-          cargo test --locked -p renderer --example graph_composition --no-default-features
+          cargo test --locked -p renderer-core --example graph_composition --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p renderer --example graph_composition --release --no-default-features
+          cargo test --locked -p renderer-core --example graph_composition --release --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo run --locked -p renderer --example graph_composition --no-default-features
+          cargo run --locked -p renderer-core --example graph_composition --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo run --locked -p renderer-pipeline --example rust_pipeline --no-default-features
+          cargo run --locked -p renderer --example rust_pipeline --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo run --locked --release -p renderer-pipeline --example rust_pipeline --no-default-features
+          cargo run --locked --release -p renderer --example rust_pipeline --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p renderer-pipeline --example rust_pipeline --no-default-features
+          cargo test --locked -p renderer --example rust_pipeline --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test frame loop contracts without GPU access
         if: matrix.backend == 'vulkan'
         shell: pwsh
         run: |
-          cargo test --locked -p renderer --example frame_loop --no-default-features --features vulkan
+          cargo test --locked -p renderer-core --example frame_loop --no-default-features --features vulkan
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p renderer --example frame_loop --release --no-default-features --features vulkan
+          cargo test --locked -p renderer-core --example frame_loop --release --no-default-features --features vulkan
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check both Bistro demos on representative platforms
         if: (runner.os == 'Linux' && matrix.backend == 'vulkan') || matrix.backend == 'vulkan,d3d12,presentation'
@@ -242,9 +242,9 @@ jobs:
         env:
           BACKEND: ${{ matrix.backend }}
         run: |
-          cargo check --locked -p renderer-pipeline --example pbr_forward --no-default-features --features $env:BACKEND
+          cargo check --locked -p renderer --example pbr_forward --no-default-features --features $env:BACKEND
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p renderer-pipeline --test pbr_gpu --no-default-features --features $env:BACKEND
+          cargo test --locked -p renderer --test pbr_gpu --no-default-features --features $env:BACKEND
       - name: Test Bistro sample contracts once without GPU access
         if: matrix.backend == 'vulkan,d3d12,presentation'
         shell: pwsh
@@ -256,7 +256,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise the CPU frame-memory workload
         if: matrix.backend == 'cpu'
-        run: cargo run --locked -p renderer --example frame_memory --release --no-default-features --features memory-profiling -- cpu
+        run: cargo run --locked -p renderer-core --example frame_memory --release --no-default-features --features memory-profiling -- cpu
       - name: Check the memory-profiling feature with both backends
         if: matrix.backend == 'vulkan,d3d12,presentation'
         run: cargo clippy --locked --workspace --all-targets --no-default-features --features vulkan,d3d12,presentation,memory-profiling -- -D warnings

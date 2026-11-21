@@ -2,8 +2,8 @@
 
 #[cfg(feature = "memory-profiling")]
 #[global_allocator]
-static ALLOCATOR: renderer::measurement::CountingAllocator<std::alloc::System> =
-    renderer::measurement::CountingAllocator::new(std::alloc::System);
+static ALLOCATOR: renderer_core::measurement::CountingAllocator<std::alloc::System> =
+    renderer_core::measurement::CountingAllocator::new(std::alloc::System);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     renderer_bistro::run_manual()

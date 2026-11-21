@@ -84,7 +84,7 @@ class PipelineShaderManifestTest(unittest.TestCase):
             artifact[field] = self.write(self.shaders / "output" / target, b"compiled shader")
         license_path = self.shaders / "output/licenses/FXAA-notices.txt"
         glsl = {
-            "artifacts": {"../../renderer-pipeline/shaders/output/sdr_linear.frag": artifact},
+            "artifacts": {"../../renderer/shaders/output/sdr_linear.frag": artifact},
             "licenses": {license_path.name: self.write(license_path, b"notice\n")},
         }
         self.manifest["renderer_shaders_sha256"] = self.write(

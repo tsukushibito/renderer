@@ -3,18 +3,18 @@
 use super::super::{Error, asset::Scene, camera::Frustum, program, shadow::Bounds};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::{upload_buffer, upload_geometry};
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::graph::GraphPool;
 use renderer::{
+    passes::visibility::{IndexedGeometry, PreparedVisibility, WorldBounds},
+    pbr,
+};
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use renderer_core::graph::GraphPool;
+use renderer_core::{
     graph::{
         BufferHandle, Graph, GraphError, ImportBuffer, IndexedIndirectArgs, IndexedIndirectTable,
         IndexedIndirectTemplate, RasterBindings, RasterConstants, RasterDraw, RasterPass,
     },
     program::ManagedRasterProgram,
-};
-use renderer_pipeline::{
-    passes::visibility::{IndexedGeometry, PreparedVisibility, WorldBounds},
-    pbr,
 };
 use std::sync::Arc;
 
@@ -160,7 +160,7 @@ pub(super) struct Resident {
 impl Resident {
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn upload(
-        backend: &mut renderer::runtime::Runtime,
+        backend: &mut renderer_core::runtime::Runtime,
         geometry_pool: &mut GraphPool,
         upload_owners: &mut Vec<GraphPool>,
         scene: &Scene,

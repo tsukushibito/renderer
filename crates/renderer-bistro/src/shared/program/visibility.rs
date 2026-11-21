@@ -1,4 +1,4 @@
-pub use renderer_pipeline::passes::visibility::{
+pub use renderer::passes::visibility::{
     VISIBILITY_AABB_BYTES, VISIBILITY_CAMERA_BYTES, VISIBILITY_MASK_BYTES, VISIBILITY_THREADS,
     visibility_program,
 };
@@ -6,10 +6,10 @@ pub use renderer_pipeline::passes::visibility::{
 #[cfg(all(test, feature = "vulkan", feature = "d3d12", windows))]
 mod native {
     use super::*;
-    use renderer::graph::{
+    use renderer_core::graph::{
         Binding, BindingResource, BufferDesc, CompiledGraph, GraphPool, PassHandle,
     };
-    use renderer::{
+    use renderer_core::{
         d3d12::{
             D3D12BufferClass, D3D12FrameCapacity, D3D12Runtime, D3D12RuntimeConfig,
             D3D12ValidationMode,

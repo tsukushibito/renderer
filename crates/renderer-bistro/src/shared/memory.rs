@@ -4,9 +4,9 @@ use super::Error;
 use serde_json::{Value, json};
 
 #[cfg(feature = "vulkan")]
-pub(crate) fn vulkan(runtime: &renderer::vulkan::VulkanRuntime) -> Result<Value, Error> {
+pub(crate) fn vulkan(runtime: &renderer_core::vulkan::VulkanRuntime) -> Result<Value, Error> {
     let stats = runtime.memory_stats()?;
-    let staging = |s: renderer::vulkan::StagingMemoryStats| {
+    let staging = |s: renderer_core::vulkan::StagingMemoryStats| {
         json!({"capacity_bytes":s.capacity_bytes,"used_bytes":s.used_bytes,
             "reserved_bytes":s.reserved_bytes,"peak_reserved_bytes":s.peak_reserved_bytes,
             "live_ranges":s.live_ranges})
@@ -35,9 +35,9 @@ pub(crate) fn vulkan(runtime: &renderer::vulkan::VulkanRuntime) -> Result<Value,
 }
 
 #[cfg(all(windows, feature = "d3d12"))]
-pub(crate) fn d3d12(runtime: &renderer::d3d12::D3D12Runtime) -> Result<Value, Error> {
+pub(crate) fn d3d12(runtime: &renderer_core::d3d12::D3D12Runtime) -> Result<Value, Error> {
     let stats = runtime.memory_stats()?;
-    let heap = |s: renderer::d3d12::D3D12CommittedHeapStats| {
+    let heap = |s: renderer_core::d3d12::D3D12CommittedHeapStats| {
         json!({"resource_count":s.resource_count,"allocation_bytes":s.allocation_bytes,
             "alignment_4k_count":s.alignment_4k_count,"alignment_64k_count":s.alignment_64k_count,
             "alignment_4m_count":s.alignment_4m_count,"alignment_other_count":s.alignment_other_count})
@@ -57,11 +57,11 @@ pub(crate) fn d3d12(runtime: &renderer::d3d12::D3D12Runtime) -> Result<Value, Er
     } else {
         Value::Null
     };
-    let process = |s: renderer::d3d12::D3D12VideoMemoryInfo| {
+    let process = |s: renderer_core::d3d12::D3D12VideoMemoryInfo| {
         json!({"process_usage_bytes":s.current_usage_bytes,"process_budget_bytes":s.budget_bytes,
             "available_for_reservation_bytes":s.available_for_reservation_bytes,"current_reservation_bytes":s.current_reservation_bytes})
     };
-    let staging = |s: renderer::d3d12::D3D12StagingMemoryStats| {
+    let staging = |s: renderer_core::d3d12::D3D12StagingMemoryStats| {
         json!({"capacity_bytes":s.capacity_bytes,"slots":s.slots,"bytes_per_slot":s.bytes_per_slot,
             "used_bytes":s.used_bytes,"peak_used_bytes":s.peak_used_bytes})
     };

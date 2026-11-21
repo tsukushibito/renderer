@@ -36,7 +36,7 @@ upload/copyによる保証の確立・失効、未知の穴の拒否、容量と
 既存builder回帰群は`graph/tests.rs`へまとめる。
 公開型はfacadeから直接reexportし、並行する互換APIを作らない。
 
-画像形式はGraphとProgramで共通の`renderer::ImageFormat`を使う。
+画像形式はGraphとProgramで共通の`renderer_core::ImageFormat`を使う。
 `Rgba8Unorm`、`Rgba8Srgb`、`Rgba16Float`、`Depth32Float`の意味を一つの型で定め、
 論理資源とshaderのformat契約を別enum間の変換で対応づけない。
 nativeのresource／sampled view／depth viewの形式は用途ごとに導出し、
@@ -1004,7 +1004,7 @@ depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、
 
 ## 公開標準パスと標準グラフ
 
-`renderer_pipeline::passes`は公開Graph操作を使う構築関数を提供する。
+`renderer::passes`は公開Graph操作を使う構築関数を提供する。
 Unlit Forward、PBR Forward、Forward+、Deferredは公開パスを組み合わせるレシピである。
 レシピはGraphを借用してパスを追加する。unlit Forwardの入口は`RasterPass::draw`と同じowned／borrowed `RasterDraw`のiteratorを受け取り、
 `SceneColor { color, depth }`というGraph内のhandleを返す。
@@ -1023,13 +1023,13 @@ export、readback、compile、submit、presentと、その結果の所有は呼�
 | `passes::output::write_sdr` | 指定したcolor viewから同寸のRGBA8_UNORMへ書く。`SdrOutput`でFXAAの有無と出力encodingを選ぶ |
 | `passes::output::PreparedOutput` | 寸法と`SdrOutput`に応じた要求を登録し、HDR入力にトーンマッピングとSDR変換を追加する。トーンマッピング後の線形画像とSDR画像を返す |
 
-準備済みレシピは一時資源とProgram、Graph宣言数を`renderer::capacity::Preparation`へ登録する。
+準備済みレシピは一時資源とProgram、Graph宣言数を`renderer_core::capacity::Preparation`へ登録する。
 独自パスの要求も同じ準備に加えられる。
 [準備と使い方](../guides/tooling.md#rust-pipeline)を参照する。
 
 両出力パスは`RasterPass::draw_fullscreen`を使う。頂点入力のないtrusted Programが3頂点を生成し、Graphは頂点・インデックスbufferへの依存を追加しない。
-標準出力とDeferredの照明パスは、`renderer::program::fullscreen_triangle_shaders`を通じて同じ管理下の頂点shaderを使う。
-標準出力のfragment shader、ABI、露出・FXAA・SDRの選択は `renderer-pipeline::passes::output` が所有する。
+標準出力とDeferredの照明パスは、`renderer_core::program::fullscreen_triangle_shaders`を通じて同じ管理下の頂点shaderを使う。
+標準出力のfragment shader、ABI、露出・FXAA・SDRの選択は `renderer::passes::output` が所有する。
 独自の出力方式も同じ頂点shaderと `draw_fullscreen` を利用し、自分のProgramのtrusted取込でABIとアクセス範囲を保証する。
 `tone_map_neutral_pipeline()`と`SdrOutput::pipeline()`を使って実行前に対応するProgramを準備する。
 ウィンドウには`SdrEncoding::Linear`で書いた画像を渡し、PresenterがsRGB変換を行う。オフスクリーンのSDRデータには`SdrEncoding::Srgb`を選ぶ。
@@ -1063,8 +1063,8 @@ PBR Forwardは不透明・マスク描画の後にalpha blendを行い、透明�
 ここで`graph`は利用側が準備したGraph、`inputs`は任意のsnapshot接続である。
 
 ```rust,ignore
-use renderer::graph::ImageDesc;
-use renderer_pipeline::unlit_forward;
+use renderer_core::graph::ImageDesc;
+use renderer::unlit_forward;
 
 let config = unlit_forward::ForwardConfig {
     color: ImageDesc::rgba8(1280, 720),
@@ -1086,7 +1086,7 @@ effect固有の出力formatやextentは利用側のパスが決める。別画�
 多段構成の失敗後は、部分構築されたGraphを破棄するか宣言済みの状態と残り容量を考慮して利用する。
 未使用の部品・中間画像は通常のcullingに従う。部品が隠れたexportや副作用rootを追加することはない。
 
-[標準構成fixture](../../crates/renderer/fixtures/standard_fixture.rs)は、同じframe入力について
+[標準構成fixture](../../crates/renderer-core/fixtures/standard_fixture.rs)は、同じframe入力について
 標準forward直接、identity post、利用側多段Computeのpost、標準パスからの直接合成を示す。
 postは`Graph::dispatch`で既存の利用側sampled乗算／storage加算Programを接続し、
 順序の交換・追加加算・無効化を選ぶ。postを一つのGraphノードや固定effect列挙へ制限しない。
@@ -1099,7 +1099,7 @@ callbackは保持せず、完成命令は入力を所有する。準備済み容
 ## エンジン入力と標準描画
 
 **現行実装:** 利用側がGraphから構築を始め、必要なsnapshotだけを接続できる。
-`renderer_pipeline::unlit_forward::snapshot`は標準opaque、単一出力と任意のreadbackを構築する便利経路を提供する。
+`renderer::unlit_forward::snapshot`は標準opaque、単一出力と任意のreadbackを構築する便利経路を提供する。
 そのRGBA8・View寸法の契約は標準描画の便利経路で適用する。入力接続は利用側の任意の構成で使える。
 [公開標準パスと標準グラフ](#公開標準パスと標準グラフ)を同じ入力接続から選択できる。
 
@@ -1163,11 +1163,11 @@ GPU完了後までのnative保持は通常のRuntimeの仕事であり、frame m
 
 ### 現行の標準描画便利経路
 
-`renderer_pipeline::unlit_forward::snapshot::build_graph(&snapshot, &mut graph_pool, readback, extension)`は
+`renderer::unlit_forward::snapshot::build_graph(&snapshot, &mut graph_pool, readback, extension)`は
 GPU・windowなしで標準Graphを構築できる。
 この単独経路はmeshをGraph内でuploadするため、小さい入力やCPU解析用とする。
 mesh解決はsnapshot slotの予約済み配列とsort/index検索で行い、frameごとの一時BTreeMapを作らない。
-`renderer::graph::FrameGraph::select_output(graph, output, readback)`は、使用するGraphと画像から
+`renderer_core::graph::FrameGraph::select_output(graph, output, readback)`は、使用するGraphと画像から
 最終出力・export・任意readback・登録解除責任を確定する。`readback`には必要な場合だけパス名を渡す。
 任意の描画構成でこのAPIを使える。
 `graph()`は読み取り専用で、`output()`／`readback()`／`output_ownership()`も確定時の対応を保つ。
@@ -1218,7 +1218,7 @@ frame・execution・readbackのleaseを従来どおり返すが、旧assetを最
 内容の版ごとに元のimmutableな入力を共有し、chunkごとのCPUコピーを永続的な鏡像として保持しない。
 同じqueueの後続描画はCPU完了待ちを要求しない。通常の準備・poll・build・submitに暗黙waitを入れず、
 明示的な待機には`wait_uploads(timeout)`を使う。uploadの回収が別の描画frameの結果を消費しないよう、
-所有するsubmissionを分ける。`renderer_pipeline::unlit_forward::snapshot::build_vulkan`は準備済み常駐を使う。
+所有するsubmissionを分ける。`renderer::unlit_forward::snapshot::build_vulkan`は準備済み常駐を使う。
 同モジュールの`render_vulkan`は構築・compile・submitまで扱い、uploadと待機は明示した準備経路で行う。
 Fence完了後の結果・計測取得だけが失敗した場合も、退役済みuploadを回収して元のエラーを返す。
 完了不明のFenceエラーやtimeoutは同じ回収扱いにせず、所有を維持する。

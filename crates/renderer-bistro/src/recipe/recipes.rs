@@ -1,22 +1,22 @@
 //! Prepared recipe choices for Bistro and its diagnostic views.
 
-use renderer_pipeline::pipeline;
+use renderer::pipeline;
 use std::num::NonZeroUsize;
 
 use renderer::{
+    passes::{
+        bloom::PreparedBloom,
+        output::{PreparedOutput, SdrImage},
+    },
+    pbr, pbr_forward, pbr_forward_plus,
+};
+use renderer_core::{
     capacity::{GraphRequirements, Preparation, WorkingSet},
     graph::{
         Attachment, Binding, BufferDesc, BufferHandle, Graph, GraphError, ImageDesc, ImageHandle,
         ImageView, LoadOp, RasterAttachments, RasterPass, SampleCount, StoreOp,
     },
     program::{ManagedRasterProgram, RasterPipelineRequest},
-};
-use renderer_pipeline::{
-    passes::{
-        bloom::PreparedBloom,
-        output::{PreparedOutput, SdrImage},
-    },
-    pbr, pbr_forward, pbr_forward_plus,
 };
 
 use super::{
@@ -436,8 +436,8 @@ pub(super) struct SceneFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use renderer::capacity::ResourceClass;
-    use renderer_pipeline::passes::bloom::Bloom;
+    use renderer::passes::bloom::Bloom;
+    use renderer_core::capacity::ResourceClass;
 
     #[test]
     fn prepared_recipes_cover_supported_bistro_profiles() {
@@ -498,7 +498,7 @@ mod tests {
                                     .iter()
                                     .any(|request| request.sample_count == samples
                                         && request.program.color_outputs()
-                                            == [renderer::ImageFormat::Rgba16Float])
+                                            == [renderer_core::ImageFormat::Rgba16Float])
                             );
                             assert!(set.raster.iter().any(|request| {
                                 request
@@ -536,7 +536,7 @@ mod tests {
                     .any(|request| {
                         request.sample_count == samples
                             && request.program.bindings().iter().any(|binding| {
-                                binding.kind == renderer::program::BindingType::StorageRead
+                                binding.kind == renderer_core::program::BindingType::StorageRead
                             })
                     })
             );

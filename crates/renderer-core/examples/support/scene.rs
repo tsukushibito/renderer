@@ -1,0 +1,68 @@
+//! The same small scene and external Graph extension for headless and display.
+
+use super::image_transform::{self, Transform};
+use renderer::unlit_forward::{Draw, IDENTITY, Vertex, View, mesh_data};
+
+use renderer_core::{
+    geometry::{GeometryData, MeshError, MeshHandle},
+    graph::{Graph, GraphError, ImageHandle},
+};
+
+pub fn triangle(color: [f32; 4]) -> Result<GeometryData, MeshError> {
+    mesh_data(
+        &[
+            Vertex {
+                position: [-0.75, -0.75, 0.25],
+                color,
+            },
+            Vertex {
+                position: [0.75, -0.75, 0.25],
+                color,
+            },
+            Vertex {
+                position: [0.0, 0.75, 0.25],
+                color,
+            },
+        ],
+        &[0, 1, 2],
+    )
+}
+
+pub fn view(width: u32, height: u32) -> View {
+    View {
+        width,
+        height,
+        clip_from_world: IDENTITY,
+        clear_color: [0.0, 0.0, 0.0, 1.0],
+    }
+}
+
+pub fn draw(mesh: MeshHandle, tint: [f32; 4], translation_x: f32) -> Draw {
+    let mut world_from_model = IDENTITY;
+    world_from_model[3][0] = translation_x;
+    Draw {
+        mesh,
+        tint,
+        world_from_model,
+    }
+}
+
+pub fn custom_pass(
+    graph: &mut Graph,
+    color: ImageHandle,
+    enabled: bool,
+) -> Result<ImageHandle, GraphError> {
+    if !enabled {
+        return Ok(color);
+    }
+    let desc = graph.image_desc(color)?;
+    let output = graph.image("external custom output", desc)?;
+    image_transform::dispatch(
+        graph,
+        "external custom SwapRedBlue",
+        color,
+        output,
+        Transform::SwapRedBlue,
+    )?;
+    Ok(output)
+}

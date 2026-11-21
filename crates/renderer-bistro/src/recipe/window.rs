@@ -10,7 +10,7 @@ use super::{
     window_camera::Motion,
     window_input::{CameraInput, REPLAY_DT, REPLAY_STEPS},
 };
-use renderer::{
+use renderer_core::{
     PresentationMetrics, SubmissionMetrics,
     capacity::{CapacityRecovery, RuntimeCapacityKind},
     graph::{GraphPool, PassHandle},
@@ -54,9 +54,9 @@ struct Timings {
     present_ns: u64,
     poll_ns: u64,
     #[cfg(feature = "memory-profiling")]
-    start_memory: Option<renderer::measurement::Snapshot>,
+    start_memory: Option<renderer_core::measurement::Snapshot>,
     #[cfg(feature = "memory-profiling")]
-    memory: Option<renderer::measurement::Snapshot>,
+    memory: Option<renderer_core::measurement::Snapshot>,
 }
 
 impl Timings {
@@ -83,14 +83,14 @@ impl Timings {
         self.started = Some(Instant::now());
         #[cfg(feature = "memory-profiling")]
         {
-            self.start_memory = Some(renderer::measurement::Snapshot::now());
+            self.start_memory = Some(renderer_core::measurement::Snapshot::now());
         }
     }
 
     fn finish(&mut self) {
         #[cfg(feature = "memory-profiling")]
         if let Some(start) = self.start_memory.take() {
-            self.memory = Some(renderer::measurement::Snapshot::now().since(start));
+            self.memory = Some(renderer_core::measurement::Snapshot::now().since(start));
         }
         if let Some(start) = self.started.take() {
             self.duration = start.elapsed();
@@ -704,8 +704,8 @@ fn present_json(metrics: &PresentationMetrics) -> Value {
         "gpu_ns": gpu_ns(metrics.gpu)})
 }
 
-fn gpu_ns(timing: renderer::GpuTiming) -> Option<u64> {
-    if let renderer::GpuTiming::Available { elapsed, .. } = timing {
+fn gpu_ns(timing: renderer_core::GpuTiming) -> Option<u64> {
+    if let renderer_core::GpuTiming::Available { elapsed, .. } = timing {
         Some(ns(elapsed))
     } else {
         None
@@ -872,7 +872,7 @@ pub(super) fn execute(mut options: Options) -> Result<(), Error> {
         "cook_manifest_sha256": super::run::loaded_cook_hash(&scene, options.fixture)?,
         "ibl_manifest_sha256": environment.identity["manifest_sha256"],
         "conditions_sha256": super::digest(condition_bytes),
-        "shaders_sha256": super::digest(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../renderer-pipeline/shaders/manifest.json"))),
+        "shaders_sha256": super::digest(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../renderer/shaders/manifest.json"))),
     });
     let deadline = options
         .frame_limit
@@ -901,7 +901,7 @@ pub(super) fn execute(mut options: Options) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use renderer::graph::BufferDesc;
+    use renderer_core::graph::BufferDesc;
 
     #[test]
     fn replay_discards_attempts_before_and_after_readback() {

@@ -14,8 +14,8 @@ d3d12 = ["renderer-core/d3d12", "renderer?/d3d12"]
 development-validation = ["renderer-core/development-validation", "renderer?/development-validation"]
 
 [dependencies]
-renderer = { package = "renderer-pipeline", version = "0.1.0", path = "../renderer-pipeline", optional = true }
-renderer-core = { package = "renderer", version = "0.1.0", path = "../renderer" }
+renderer = { version = "0.1.0", path = "../renderer", optional = true }
+renderer-core = { version = "0.1.0", path = "../renderer-core" }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = { version = "0.6", optional = true }

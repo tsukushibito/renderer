@@ -125,10 +125,10 @@ def profile_settings(root, name):
     return {**release, **selected}
 
 
-def source_snapshot(package="renderer"):
-    # Renderer examples use renderer-pipeline as a dev-dependency.
-    sources = ["crates/renderer", "crates/renderer-pipeline"]
-    if package in ("renderer", "renderer-bistro"):
+def source_snapshot(package="renderer-core"):
+    # renderer-core examples use renderer as a dev-dependency.
+    sources = ["crates/renderer-core", "crates/renderer"]
+    if package in ("renderer-core", "renderer-bistro"):
         sources.append("crates/renderer-example-support")
     if package == "renderer-bistro":
         sources.extend(["crates/renderer-bistro", "tools/bistro/conditions.json", "tools/bistro/ibl.py"])
@@ -216,7 +216,7 @@ def instrumentation_dependencies(messages, instrumentation):
         if item.get("reason") != "compiler-artifact":
             continue
         target = item.get("target", {})
-        if target.get("name") == "renderer" and "lib" in target.get("kind", []):
+        if target.get("name") in ("renderer_core", "renderer") and "lib" in target.get("kind", []):
             forbidden = DIAGNOSTICS.intersection(item.get("features", []))
             if forbidden:
                 raise BuildError("Renderer enabled diagnostics transitively: " + ", ".join(sorted(forbidden)))
@@ -322,10 +322,10 @@ def build(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("profiling", "release"), default="profiling")
-    parser.add_argument("--package", choices=("renderer", "renderer-pipeline", "renderer-bistro"),
-                        default="renderer")
+    parser.add_argument("--package", choices=("renderer-core", "renderer", "renderer-bistro"),
+                        default="renderer-core")
     target = parser.add_mutually_exclusive_group()
-    target.add_argument("--example", help="Cargo example (defaults to windowed for renderer)")
+    target.add_argument("--example", help="Cargo example (defaults to windowed for renderer-core)")
     target.add_argument("--bin", help="Cargo binary (defaults to bistro for renderer-bistro)")
     parser.add_argument("--features", default="vulkan,d3d12,presentation")
     parser.add_argument("--instrumentation", choices=("none", "tracy"), default="none",

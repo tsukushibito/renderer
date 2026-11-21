@@ -1138,11 +1138,34 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "renderer"
 version = "0.1.0"
 dependencies = [
+ "renderer-core",
+ "serde_json",
+ "sha2",
+ "tracy-client",
+]
+
+[[package]]
+name = "renderer-bistro"
+version = "0.1.0"
+dependencies = [
+ "renderer",
+ "renderer-core",
+ "renderer-example-support",
+ "serde_json",
+ "sha2",
+ "tracy-client",
+ "winit",
+]
+
+[[package]]
+name = "renderer-core"
+version = "0.1.0"
+dependencies = [
  "ash",
  "criterion",
  "raw-window-handle",
+ "renderer",
  "renderer-example-support",
- "renderer-pipeline",
  "serde_json",
  "sha2",
  "tracing",
@@ -1155,33 +1178,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "renderer-bistro"
-version = "0.1.0"
-dependencies = [
- "renderer",
- "renderer-example-support",
- "renderer-pipeline",
- "serde_json",
- "sha2",
- "tracy-client",
- "winit",
-]
-
-[[package]]
 name = "renderer-example-support"
 version = "0.1.0"
 dependencies = [
  "serde_json",
-]
-
-[[package]]
-name = "renderer-pipeline"
-version = "0.1.0"
-dependencies = [
- "renderer",
- "serde_json",
- "sha2",
- "tracy-client",
 ]
 
 [[package]]
@@ -1548,7 +1548,7 @@ version = "0.1.0"
 dependencies = [
  "raw-window-handle",
  "renderer",
- "renderer-pipeline",
+ "renderer-core",
  "winit",
 ]
 

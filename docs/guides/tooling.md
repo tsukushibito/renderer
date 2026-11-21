@@ -62,7 +62,7 @@ Vulkan SDK **1.4.341.1**の`glslc`と`spirv-val`を使う。
 明示したtoolや`VULKAN_SDK`が無効な場合は、その原因を報告して失敗する。
 複数SDKが入っている環境では、上の例のように版の分かるパスを渡す。
 
-管理下のShaderと生成済みSPIR-Vは`crates/renderer/shaders/`にある。
+管理下のShaderと生成済みSPIR-Vは`crates/renderer-core/shaders/`にある。
 固定compilerでの再生成・validator・binary一致確認は[開発手順](development.md#rendergraphとヘッドレス描画)を参照する。
 通常のCPU試験やCPUだけのCriterion測定にVulkan SDKを要求しない。
 SDKの構成は[固定版のSPIR-V toolchain](https://vulkan.lunarg.com/doc/view/1.4.341.1/windows/spirv_toolchain.html)を参照する。
@@ -77,7 +77,7 @@ Vulkan向けはlittle-endian SPIR-V 1.3以下、D3D12向けはDXIL SM6.0で、en
 読み込む。アプリ側でこの契約を満たすと確認したアセットを渡す。
 
 ```rust
-use renderer::{
+use renderer_core::{
     ImageFormat,
     program::{
         BlendState, DepthState, ManagedRasterProgram, RasterParameterLayout,
@@ -122,12 +122,12 @@ Computeでは`ManagedProgram::from_trusted_owned_descriptor`へ、該当バイ�
 両APIのバイナリを一つのProgramで使う場合は、共通ABIを持つ両形式を`ShaderBinaries::both`へ渡す。
 取込後に元のメタデータを手放せる。
 
-埋め込みのプラグインには `renderer::program::embedded_shader_binaries!(spirv, dxil)` を使える。
-ホストアプリの `renderer` で有効なバックエンドに応じて対応する式だけを展開する。GPU機能が無い構成ではABIだけを使ってGraphを構築できる。
+埋め込みのプラグインには `renderer_core::program::embedded_shader_binaries!(spirv, dxil)` を使える。
+ホストアプリの `renderer-core` で有効なバックエンドに応じて対応する式だけを展開する。GPU機能が無い構成ではABIだけを使ってGraphを構築できる。
 パイプライン側はバックエンド別のCargo featureや条件コンパイルを用意せずに、同じ `ViewPipeline` を実装できる。
 
 描画・dispatchの予約には以下の `Preparation` を使う。直接 `WorkingSet` を組む場合はRasterを `WorkingSet::raster`、
-Computeを `WorkingSet::compute` に渡す。標準の表示プリセットは `renderer_pipeline::passes::output` が提供する。
+Computeを `WorkingSet::compute` に渡す。標準の表示プリセットは `renderer::passes::output` が提供する。
 単独で使う場合は `tone_map_neutral_pipeline()` と `SdrOutput::display(fxaa).pipeline()` または `SdrOutput::capture(fxaa).pipeline()` を予約する。
 起動時の `Runtime::new` または変更時の `Runtime::prepare_working_set` がGPUパイプラインを準備する。
 Graphでは同じProgramで `draw_fullscreen`、`draw`、`dispatch` する。差し替えた版を使うGraphは再構築する。
@@ -139,7 +139,7 @@ Graphでは同じProgramで `draw_fullscreen`、`draw`、`dispatch` する。差
 
 ## Rustで描画パイプラインを組み立てる
 
-`renderer-pipeline`の標準レシピは、フレームの`Graph`にパスを追加し、後段へ渡す画像ハンドルを返す。
+`renderer`の標準レシピは、フレームの`Graph`にパスを追加し、後段へ渡す画像ハンドルを返す。
 利用側は標準パスと独自のRaster、Compute、copyを同じGraphに登録する。
 独自のShader Programは[外部取込](#runtime-shader-import)の契約に従って用意し、標準部品と同じように準備する。
 
@@ -161,22 +161,22 @@ preparation.reserve_raster_pass("toon", samples, |pass| {
 分割画面やUIのクリップには `graph.raster` のコールバック内で `set_viewport(Some(rect))`、`set_scissor(Some(rect))` を呼ぶ。
 矩形はアタッチメントの選択mip内の画素単位で、以後の描画に効く。`None` で全域に戻す。load・clear・store・resolveは引き続きアタッチメント全域が対象となる。
 
-[`rust_pipeline`のソース](../../crates/renderer-pipeline/examples/rust_pipeline.rs)では、unlit Forwardと標準出力の間に
+[`rust_pipeline`のソース](../../crates/renderer/examples/rust_pipeline.rs)では、unlit Forwardと標準出力の間に
 HDR画像のコピーパスを挟んだGraphをCPUで構築・compileする。
 
 ```sh
-cargo run --locked -p renderer-pipeline --no-default-features --example rust_pipeline
+cargo run --locked -p renderer --no-default-features --example rust_pipeline
 ```
 
 <a id="scene-materials"></a>
 
 ### エンジンのシーンとカメラから描画する
 
-`renderer_pipeline::material::Materials` をシーンと一緒に保持する。単色の材質は作成時に色を渡せばよい。
+`renderer::material::Materials` をシーンと一緒に保持する。単色の材質は作成時に色を渡せばよい。
 同じハンドルを複数の描画に渡すと、そのハンドルへの更新が次に構築する Graph から全描画に反映される。
 
 ```rust
-use renderer_pipeline::material::{Materials, PbrParams, UnlitParams};
+use renderer::material::{Materials, PbrParams, UnlitParams};
 
 let mut materials = Materials::default();
 let red_paint = materials.create_pbr(PbrParams::color([0.8, 0.04, 0.02, 1.0]))?;
@@ -194,7 +194,7 @@ materials.update_pbr(blue_paint, PbrParams::color([0.03, 0.1, 0.8, 1.0]))?;
 `build` は参照されたメッシュと材質を転送し、初期化に使った投入の完了を回収して返る。
 
 ```rust
-use renderer_pipeline::pipeline::{RendererSetup, SceneAssets, SceneInput};
+use renderer::pipeline::{RendererSetup, SceneAssets, SceneInput};
 
 let assets = SceneAssets::new(&mut meshes, &mut materials, &objects).with_lights(&lights);
 let mut renderer = RendererSetup::standard(camera).build(backend, assets)?;
@@ -250,8 +250,8 @@ let mut renderer = plan.begin_with_runtime(&mut runtime)?.wait()?;
 そのオブジェクトの頂点・インデックス範囲を取り込む。一つのメッシュを材質ごとに分けて描くには
 `RenderObject::with_index_range` を使う。戻り値は同寸の単一サンプルのシーンリニアRec.709 RGBA16Fと、任意の単一サンプルD32。
 標準DeferredのG-bufferを使う独自パスは `draw_view_with_gbuffer` のコールバックで照明前に追加する。
-[外部の Toon 実装](../../crates/renderer-pipeline/examples/support/toon_pipeline.rs)と
-[共通の描画ループ](../../crates/renderer-pipeline/examples/support/views.rs)を参照。
+[外部の Toon 実装](../../crates/renderer/examples/support/toon_pipeline.rs)と
+[共通の描画ループ](../../crates/renderer/examples/support/views.rs)を参照。
 
 半透明物はすべての材質をまとめてビュー奥行きで整列する。基準点はインデックスが参照する頂点の
 境界箱の中心で、モデル変換も反映する。必要なら `RenderObject::sort_center` で変更できる。
@@ -287,7 +287,7 @@ Unlit は頂点色、材質色、オブジェクトの tint を乗算する。
 影を描く定義には同じ頂点・材質入力を受け取る深度Programを指定する。テクスチャとサンプラーは `Parameter::Binding` で宣言する。
 独自の定数ブロックには `Value::Uniform`、読み取り専用の構造化データには `Value::StorageRead` を使う。
 GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resident` で接続できる。
-[独自 Toon の登録、描画、GPU 読み戻しの実例](../../crates/renderer-pipeline/tests/pbr_gpu/mixed.rs)
+[独自 Toon の登録、描画、GPU 読み戻しの実例](../../crates/renderer/tests/pbr_gpu/mixed.rs)
 
 <a id="pbr-forward-recipe"></a>
 
@@ -298,7 +298,7 @@ GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resid
 材質係数をフレーム間で共有するときは `ResidentMaterialUniform::import` で係数を接続し、
 当該Graphのテクスチャ・サンプラーと合わせて `pbr::GraphMaterial` を組み立てる。
 
-`renderer_pipeline::pipeline::GeometryPipeline::new(technique, config, scene_limits)`でForward、Forward+、Deferredから選ぶ。
+`renderer::pipeline::GeometryPipeline::new(technique, config, scene_limits)`でForward、Forward+、Deferredから選ぶ。
 描画寸法・出力条件と、同時フレーム・材質・描画・各カスケードのキャスターの上限を渡す。
 `Technique` で使用できるサンプル数、深度、G-bufferの有無を確認できる。
 標準3方式で点光源を使うには `SceneLimits::max_point_lights` にビュー当たりの上限を指定する。
@@ -308,8 +308,8 @@ GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resid
 追加パスの宣言、アップロード、表示やGPUの完了待ちまで保持する資源の容量もアプリの構成に沿って指定する。
 
 ```rust
-use renderer::capacity::Preparation;
-use renderer_pipeline::{pbr::{Defaults, Technique}, pipeline::GeometryPipeline};
+use renderer_core::capacity::Preparation;
+use renderer::{pbr::{Defaults, Technique}, pipeline::GeometryPipeline};
 
 let mut preparation = Preparation::new(scene_limits.frames_in_flight);
 let recipe = GeometryPipeline::new(Technique::Forward, config, scene_limits)?;
@@ -370,7 +370,7 @@ Runtimeが投入を受理した時点で履歴が反映される。アプリが�
 先行フレームのGPU完了はRuntimeが管理する。影の解像度変更や終了時には`clear`で画像の登録を解除する。
 キャッシュで保持する4枚の登録をRuntimeの容量に含める。
 
-準備、入力アップロード、Bloom、シャドウ再利用は[`pbr_forward`のソース](../../crates/renderer-pipeline/examples/pbr_forward.rs)で確認できる。
+準備、入力アップロード、Bloom、シャドウ再利用は[`pbr_forward`のソース](../../crates/renderer/examples/pbr_forward.rs)で確認できる。
 実行方法は[小さなPBRシーン](examples.md#pbr-forward-example)を参照する。
 
 #### 照明方式と描画リストを選ぶ
@@ -408,11 +408,11 @@ Runtimeが投入を受理した時点で履歴が反映される。アプリが�
 ビルド入力はJSONで、`schema_version: 1`、名前付きの`templates`と`materials`、コンパイルする組を並べた`programs`を指定する。
 ソースと任意の`include_dirs`は入力ファイルからの相対パスで指定できる。
 
-Python 3.11以降と固定版Vulkan SDKを使い、たとえば[Bistroのビルド入力](../../crates/renderer-pipeline/shaders/material-programs.json)を次のようにビルドする。
+Python 3.11以降と固定版Vulkan SDKを使い、たとえば[Bistroのビルド入力](../../crates/renderer/shaders/material-programs.json)を次のようにビルドする。
 出力先には新しいディレクトリを指定する。SDKの場所は`VULKAN_SDK`または`--sdk-root`で指定できる。
 
 ```powershell
-python -B tools/shaders/build_material_programs.py --manifest crates/renderer-pipeline/shaders/material-programs.json --output .tools/bistro-material-programs
+python -B tools/shaders/build_material_programs.py --manifest crates/renderer/shaders/material-programs.json --output .tools/bistro-material-programs
 ```
 
 `manifest.json`はテンプレート・材質型の組と、各ステージのSPIR-V／DXIL、反射情報とhashを結ぶ。
@@ -475,24 +475,24 @@ zlib-style licenseの所在は[provenance](../../tools/bistro/mikktspace/provena
 ClangやMikk shared libraryをRendererのruntime依存へ追加しない。
 
 標準PBRと影、BistroのBloom、Deferred、Forward+、可視性判定の正本は
-`crates/renderer-pipeline/shaders/`の`.hlsl`と共通`.hlsli`に置く。両方のBistroサンプルもこの資産を参照する。
-[生成スクリプト](../../crates/renderer-pipeline/shaders/regenerate.ps1)から
+`crates/renderer/shaders/`の`.hlsl`と共通`.hlsli`に置く。両方のBistroサンプルもこの資産を参照する。
+[生成スクリプト](../../crates/renderer/shaders/regenerate.ps1)から
 固定版DXCを呼び、同じ正本をSPIR-VとDXILに直接コンパイルする。
-標準のNeutral・FXAA・SDR出力shaderとライセンスは`crates/renderer-pipeline/shaders/output/`に置く。
+標準のNeutral・FXAA・SDR出力shaderとライセンスは`crates/renderer/shaders/output/`に置く。
 表示プリセットのGLSLを変更した場合は次の順で標準fragmentのSPIR-V、DXIL、両者を含むPipelineのmanifestを更新する。
 通常buildは同梱のバイナリを読み込む。
 
 ```powershell
+& ./crates/renderer-core/shaders/regenerate.ps1
+& ./crates/renderer-core/shaders/regenerate-dxil.ps1
 & ./crates/renderer/shaders/regenerate.ps1
-& ./crates/renderer/shaders/regenerate-dxil.ps1
-& ./crates/renderer-pipeline/shaders/regenerate.ps1
 ```
 
 PBRなどPipeline側のHLSLのみを変更した場合は、Pipelineの生成と照合を実行する。
 
 ```powershell
-& ./crates/renderer-pipeline/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
-& ./crates/renderer-pipeline/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+& ./crates/renderer/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
+& ./crates/renderer/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
 ```
 
 `-Verify`は一時directoryで再生成し、checkoutを書き換えずbinary・reflection・manifestを照合する。
@@ -536,7 +536,7 @@ timer/query無効と有効を独立反復し、差にはrun間変動が含まれ
 ## D3D12 bindingsの生成
 
 `d3d12` featureはWindows限定のprivate bindingsを使う。公開Graph／Engineへnative型を出さず、
-通常ビルドは[生成済みRust](../../crates/renderer/src/backends/d3d12/bindings.rs)を使う。
+通常ビルドは[生成済みRust](../../crates/renderer-core/src/backends/d3d12/bindings.rs)を使う。
 Device・単一DIRECT queue・buffer Graph実行もこのprivate生成型を使う。
 COM参照やnative handleを公開runtime／Graph APIへ露出させない。
 
@@ -577,13 +577,13 @@ COM ABIが同じでも、他の`windows` crateの型とprivate生成型のRust�
 通常のRustビルドは管理下のbinaryを利用し、shader compilerやSDKを要求しない。
 
 ```powershell
-& ./crates/renderer/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
-& ./crates/renderer/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+& ./crates/renderer-core/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
+& ./crates/renderer-core/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
 ```
 
 `-Verify`は生成済みファイルを変更せず、不足・差分・tool不一致・変換失敗をエラーにする。
 先に`regenerate.ps1 -Verify`で対象SPIR-Vの再生成一致と`spirv-val`を確認する。
-[toolchain定義](../../crates/renderer/shaders/dxil-toolchain.json)でWindows x64 SDKの
+[toolchain定義](../../crates/renderer-core/shaders/dxil-toolchain.json)でWindows x64 SDKの
 glslc・spirv-val・SPIRV-Cross・DXC・dxcompiler.dllのSHA-256と、変換引数を固定する。
 SPIRV-Crossは`vulkan-sdk-1.4.341.0`、DXCは`1.9.0.5180 (e35541826)`である。
 DXCの`-WX`と通常の内部validatorを使い、`-Vd`は使わない。
@@ -591,13 +591,13 @@ DXCの`-WX`と通常の内部validatorを使い、`-Vd`は使わない。
 [DXCのvalidator変更](https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.8.2505)と
 [CLI・reflectionの公式説明](https://github.com/microsoft/DirectXShaderCompiler/wiki/Using-dxc.exe-and-dxcompiler.dll)を参照する。
 
-[生成物](../../crates/renderer/shaders/dxil/)にはHLSL、検証付きコンパイルで生成したDXIL、
+[生成物](../../crates/renderer-core/shaders/dxil/)にはHLSL、検証付きコンパイルで生成したDXIL、
 DXCのsignature／binding／constant offsetのreflection、入力と出力のSHA-256 manifestを保存する。
 shader modelは6.0、entry pointは`main`、HLSLは2021、最適化は`-O3`、debug情報・include・macroはない。
 GLSLの入力hashだけはGitの改行設定に依存しないUTF-8／LFへ正規化し、binaryは全byteを比較する。
 HLSL・reflection・manifestの改行は管理下の`.gitattributes`でLFへ固定し、reflectionの行末空白は除く。
 
-[固定ABIの契約](../../crates/renderer/shaders/dxil-contracts.json)には次を記録する。
+[固定ABIの契約](../../crates/renderer-core/shaders/dxil-contracts.json)には次を記録する。
 
 - Computeは8×8×1で、RGBA8 sourceは`u0`、destinationは`u1`、modeのu32は`b0`のoffset 0、4 byte。
   読み取り専用のstorage imageも既定変換ではUAVになるため、D3D12側はRGBA8 typed UAV load/store能力を照会する。
@@ -632,7 +632,7 @@ HLSL・reflection・manifestの改行は管理下の`.gitattributes`でLFへ固�
   half格納のRGBA16FをFP32で読み、16-bit shader演算型を要求しない。
   `managed-abi.ps1`とSDK不要の改変回帰は4本のmanaged assetを確認する。
 
-利用側のCompute受入shaderは`crates/renderer/tests/support/shaders/`へ置く。
+利用側のCompute受入shaderは`crates/renderer-core/tests/support/shaders/`へ置く。
 `compute_hdr_sampled.comp`はsampled画像・samplerと16-byte UniformからRGBA16F storage画像へ書き、
 `compute_hdr_storage.comp`はreadonly storage画像と16-byte StorageRead bufferから別のRGBA16F storage画像へ書く。
 両方local sizeは4×4×1で、端数invocationをguardする。既存の再生成scriptはこれらの外部配置も列挙し、
@@ -810,12 +810,12 @@ full debug情報とstripなしだけを変更する。`release`は通常構成�
 PDBが存在しても行情報を得られるとは限らない。両構成を同条件で測り、debug情報を加えた差も記録する。
 helperは専用のCargo出力領域を作り、実行ファイル、対応するPDB、`manifest.json`を保存する。
 manifestにはCargoパッケージとexample、source/lock/toolchain、要求・実効feature、観測したCargo profile、EXE/PDBのhashとGUID/ageを含める。
-`--package renderer-pipeline`を選ぶと両crateのソースを記録する。
+`--package renderer`を選ぶと両crateのソースを記録する。
 Bistroの両バイナリは、`renderer-bistro`と依存パッケージ（Renderer、Pipeline、サンプル補助）のソースをビルド記録に含める。
 BistroのRustレシピと固定条件`tools/bistro/conditions.json`もsource hashの対象になる。
 capture/export/行解決は保存したbytesを再検証し、後のCargo buildで置換される`target/`のEXEを直接使わない。
 
-既定のパッケージは`renderer`、exampleは`windowed`、featuresは`vulkan,d3d12,presentation`であるため、
+既定のパッケージは`renderer-core`、exampleは`windowed`、featuresは`vulkan,d3d12,presentation`であるため、
 上のヘッドレス用指定を省略しない。変更中のsourceは既定で拒否し、
 調査上必要なときだけ`--allow-dirty`で実際のhashを記録する。
 profile/rustflags/compilerの環境・Cargo設定による上書き、

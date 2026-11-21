@@ -270,7 +270,7 @@ def run(args):
     require(not output.exists(), "Choose a new output directory")
     binaries = {"strict": args.strict_binary.resolve(), "disabled": args.shipping_binary.resolve()}
     source_paths = {"conditions": ROOT / "tools/bistro/conditions.json",
-                    "shaders": ROOT / "crates/renderer-pipeline/shaders/manifest.json",
+                    "shaders": ROOT / "crates/renderer/shaders/manifest.json",
                     "driver": Path(__file__).resolve(),
                     "resource_driver": ROOT / "tools/bistro/resource_acceptance.py",
                     "comparator": ROOT / "tools/bistro/compare_runtime.py"}

@@ -9,8 +9,8 @@ use super::{
     program::{self, forward_plus},
     shadow,
 };
-use renderer::runtime::ManagedImage;
-use renderer::{
+use renderer_core::runtime::ManagedImage;
+use renderer_core::{
     ImageFormat,
     graph::{
         Attachment, Binding, BindingResource, BufferHandle, Graph, GraphCapacity, GraphPool,
@@ -21,7 +21,7 @@ use renderer::{
     program::{ManagedRasterProgram, SamplerDescriptor},
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::{
+use renderer_core::{
     graph::BufferDesc,
     runtime::{FrameSubmission, Runtime},
 };
@@ -508,7 +508,7 @@ fn upload_geometry(
     vertices: &[u8],
     indices: &[u32],
 ) -> Result<(ImportBuffer, ImportBuffer), Error> {
-    let geometry = renderer::geometry::GeometryData::new(stride, vertices, indices)?;
+    let geometry = renderer_core::geometry::GeometryData::new(stride, vertices, indices)?;
     let mut graph = pool.begin()?;
     let vertex = graph.buffer(
         "immutable vertex stream",
@@ -1308,7 +1308,8 @@ pub(super) fn build(
                 graph.raster_bindings(&program::deferred::gbuffer_program(), &material_bindings)?
             } else {
                 let program = options.pipeline.forward_program(material.blend);
-                let mut bindings = [material_bindings[0]; renderer::program::MAX_RASTER_BINDINGS];
+                let mut bindings =
+                    [material_bindings[0]; renderer_core::program::MAX_RASTER_BINDINGS];
                 let shared = material_bindings.len() + lighting_bindings.len();
                 bindings[..material_bindings.len()].copy_from_slice(&material_bindings);
                 bindings[material_bindings.len()..shared].copy_from_slice(&lighting_bindings);
@@ -1733,7 +1734,7 @@ mod tests {
             .copied()
             .map(u32::from_le_bytes)
             .collect::<Vec<_>>();
-        renderer::geometry::GeometryData::new(48, &scene.vertices, &indices).unwrap();
+        renderer_core::geometry::GeometryData::new(48, &scene.vertices, &indices).unwrap();
         let pair_bytes = scene.vertices.len() + scene.indices.len();
         assert!(
             pair_bytes > scene.vertices.len() + 4096,

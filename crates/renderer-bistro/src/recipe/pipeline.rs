@@ -6,8 +6,15 @@ use super::{
     Bloom, Error, Options, PipelineMode, SubmissionMode, asset::Scene, camera::Camera, ibl,
     instancing, lighting, program, recipes, shadow,
 };
-use renderer::runtime::ManagedImage;
 use renderer::{
+    pbr::{
+        self, MaterialUniform, ResidentMaterialUniform, ShadowFrame, ShadowHistory, ShadowKey,
+        ShadowUpdates,
+    },
+    pbr_forward, pbr_forward_plus,
+};
+use renderer_core::runtime::ManagedImage;
+use renderer_core::{
     ImageFormat,
     capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},
     graph::{
@@ -18,16 +25,9 @@ use renderer::{
     program::{MAX_RASTER_BINDINGS, ManagedRasterProgram, SamplerDescriptor},
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::{
+use renderer_core::{
     graph::BufferDesc,
     runtime::{ExecutionError, FrameSubmission, Runtime},
-};
-use renderer_pipeline::{
-    pbr::{
-        self, MaterialUniform, ResidentMaterialUniform, ShadowFrame, ShadowHistory, ShadowKey,
-        ShadowUpdates,
-    },
-    pbr_forward, pbr_forward_plus,
 };
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -558,7 +558,7 @@ fn upload_geometry(
     vertices: &[u8],
     indices: &[u32],
 ) -> Result<(ImportBuffer, ImportBuffer), Error> {
-    let geometry = renderer::geometry::GeometryData::new(stride, vertices, indices)?;
+    let geometry = renderer_core::geometry::GeometryData::new(stride, vertices, indices)?;
     let mut graph = pool.begin()?;
     let vertex = graph.buffer(
         "immutable vertex stream",
@@ -1053,7 +1053,7 @@ impl Workspace {
 }
 pub(super) struct Built {
     pub graph: Graph,
-    pub output: renderer_pipeline::passes::output::SdrImage,
+    pub output: renderer::passes::output::SdrImage,
     pub camera_update: BufferHandle,
     pub captures: Option<Captures>,
     pub bloom_capture: Option<PassHandle>,
@@ -1701,7 +1701,7 @@ fn sort_blended(blended: &mut [usize], scene: &Scene, camera: Camera) {
 struct SceneImages {
     hdr: ImageHandle,
     depth: Option<ImageHandle>,
-    output: renderer_pipeline::passes::output::SdrImage,
+    output: renderer::passes::output::SdrImage,
     bloom: Option<ImageHandle>,
     shadows: Option<[ImageHandle; shadow::CASCADE_COUNT]>,
 }
@@ -1810,7 +1810,7 @@ fn finish_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use renderer::graph::SampleCount;
+    use renderer_core::graph::SampleCount;
 
     #[test]
     fn shadow_caster_policy_changes_the_revision() {
@@ -1902,7 +1902,7 @@ mod tests {
             .copied()
             .map(u32::from_le_bytes)
             .collect::<Vec<_>>();
-        renderer::geometry::GeometryData::new(48, &scene.vertices, &indices).unwrap();
+        renderer_core::geometry::GeometryData::new(48, &scene.vertices, &indices).unwrap();
         let pair_bytes = scene.vertices.len() + scene.indices.len();
         assert!(
             pair_bytes > scene.vertices.len() + 4096,

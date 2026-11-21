@@ -21,7 +21,7 @@ writer数4/5の境界、元の宣言順の競合pair、全access容量、read属
 [現在のGraph構築比較](../verification/current.md#rendergraph-hotspot-optimization)はsource/EXE/PDBのidentity、
 全独立process、個別sampleのp95、一般入力の交換条件、未実行範囲を記録している。
 
-`FrameGraph`は確定済み出力を持つ。標準snapshotの拡張と出力選択は`renderer_pipeline::unlit_forward::snapshot::build_graph`のcallback内で行い、
+`FrameGraph`は確定済み出力を持つ。標準snapshotの拡張と出力選択は`renderer::unlit_forward::snapshot::build_graph`のcallback内で行い、
 `output()`／`readback()`のhandleを保存してから`compile()`へ渡す。任意の構築を続ける場合は
 `connect_graph`と通常のGraphを使い、確定済みの出力・所有情報を個別に変更しない。
 
@@ -34,7 +34,7 @@ foreach ($features in @('vulkan,d3d12,memory-profiling', 'vulkan,d3d12,memory-pr
     cargo test --locked --workspace --release --no-default-features --features $features
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     foreach ($test in @('vulkan_owned_raster_descriptor_capacity_recovery', 'd3d12_raster_srv_reuse_preserves_views_cancel_and_pending_ownership', 'd3d12_index_provenance_capacity_rejects_and_recovers')) {
-        cargo test --locked -p renderer --release --lib --no-default-features --features $features $test -- --ignored --nocapture --test-threads=1
+        cargo test --locked -p renderer-core --release --lib --no-default-features --features $features $test -- --ignored --nocapture --test-threads=1
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
 }
@@ -332,7 +332,7 @@ python -B tools/bistro/ibl.py --source assets/bistro/environment/san_giuseppe_br
 両出力のmanifest、raw3画像、Godot用HDRのhashを比較する。最大prefilter LOD4で粗さ1の方向依存を保持し、
 全11 mipを初期化する。BRDF/環境の独立数値pilotは`tools/bistro/ibl_pilot.py --help`を参照する。
 Godot用HDRは同じcap済み元画像をU方向へ四分の一周ずらし、両実装の投影方向を揃える。
-shaderの再生成は[`crates/renderer-pipeline/shaders/regenerate.ps1`](../../crates/renderer-pipeline/shaders/regenerate.ps1)の
+shaderの再生成は[`crates/renderer/shaders/regenerate.ps1`](../../crates/renderer/shaders/regenerate.ps1)の
 `-Verify`で確認し、配布時には同directoryの`licenses/`通知も保持する。
 
 ### 同じ描画例を二APIで実行する
@@ -385,8 +385,8 @@ full-sceneのAO適用は固定照明profileに従って無効とし、元ORM・g
 Windowsの同一物理GPUで最適化済みのstrictとshippingを別processとして実行する。
 
 ```powershell
-cargo test --locked --release -p renderer-pipeline --test bloom_graph --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics native::consumer_bloom_gpu -- --exact --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer-pipeline --test bloom_graph --no-default-features --features vulkan,d3d12 native::consumer_bloom_gpu -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --test bloom_graph --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics native::consumer_bloom_gpu -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --test bloom_graph --no-default-features --features vulkan,d3d12 native::consumer_bloom_gpu -- --exact --ignored --nocapture --test-threads=1
 ```
 
 全Bistroでは、`memory-profiling`付きのstrictとshippingを別にビルドする。
@@ -402,7 +402,7 @@ python -B tools/bistro/bloom_acceptance.py $cohortDirectory
 
 ### 全Bistroの表示と統合受入
 
-シーンのHDRにアプリ側のBloomをつなぎ、`renderer_pipeline::passes::output`のNeutralとSDR変換を適用する。
+シーンのHDRにアプリ側のBloomをつなぎ、`renderer::passes::output`のNeutralとSDR変換を適用する。
 WindowsのPresenterには、swapchainと同寸法のlinear RGBA8画像をexportして渡す。
 オフスクリーンでは`SdrOutput::capture`を選んでsRGBのバイト列を読み戻す。ウィンドウでは`SdrOutput::display`で線形出力を準備し、
 投入受理済みの表示画像をPresenterへ渡す。sRGBへの変換はPresenterの描画先が行う。
@@ -433,7 +433,7 @@ Forward+はフレーム内の一時タイルマスクを全域書き込み、Win
 標準レシピは点光源が0件のとき通常Forwardを選ぶ。
 
 ```powershell
-cargo test --locked --release -p renderer-pipeline --test pbr_tile_masks --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture
+cargo test --locked --release -p renderer --test pbr_tile_masks --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture
 python -B tools/bistro/compare_runtime.py $tiledReport $allLightReport --profile repeat --planes hdr sdr --forward-plus-reference --output $comparison
 ```
 
@@ -450,7 +450,7 @@ python -B tools/bistro/compare_runtime.py $tiledReport $allLightReport --profile
 インスタンス比較はForwardの `--submission direct` で実行する。
 
 ```powershell
-cargo test --locked --release -p renderer --test raster_batches --test indexed_instancing --test indexed_indirect --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --test raster_batches --test indexed_instancing --test indexed_indirect --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture --test-threads=1
 python -B tools/bistro/b5_benchmark.py --scenario window-tearing --binary $ordinaryRelease --manifest $manifest --ibl-manifest $iblManifest --submission indirect --output $performanceDirectory
 ```
 
@@ -458,8 +458,8 @@ python -B tools/bistro/b5_benchmark.py --scenario window-tearing --binary $ordin
 描画の方法を変える場合は、出力先を分けて各比較で同じカメラ巡回と画質条件を使う。
 
 ```powershell
-cargo run --locked --release -p renderer --example msaa --no-default-features --features vulkan,d3d12
-cargo test --locked --release -p renderer --test msaa --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture
+cargo run --locked --release -p renderer-core --example msaa --no-default-features --features vulkan,d3d12
+cargo test --locked --release -p renderer-core --test msaa --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture
 ```
 
 専用例と実GPU試験では、同じGPU上の両APIで斜めの輪郭の1×/4×画像、奥の三角形の遮蔽、
@@ -836,9 +836,9 @@ Windowsではbackendを選ばない`presentation`単独と、`vulkan,presentatio
 Graphのowned構成は、SDKやGPUを使わず次の例で確認できる。
 
 ```powershell
-cargo run --locked -p renderer --example graph_composition
-cargo test --locked -p renderer --test graph_shader_bindings
-cargo test --locked -p renderer --example graph_composition
+cargo run --locked -p renderer-core --example graph_composition
+cargo test --locked -p renderer-core --test graph_shader_bindings
+cargo test --locked -p renderer-core --example graph_composition
 ```
 
 例は利用側の関数に二段のsampled Rasterと中間画像を隠し、出力handleだけを返す。
@@ -854,8 +854,8 @@ native実行は`Graph::dispatch`と、実行前のCompute Program準備を使う
 SDKなしのABI契約回帰は次を使う。生成条件を更新した場合は[shader再生成](tooling.md)も実行する。
 
 ```powershell
-./crates/renderer/shaders/test-managed-abi.ps1
-./crates/renderer/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+./crates/renderer-core/shaders/test-managed-abi.ps1
+./crates/renderer-core/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
 ./scripts/regenerate-d3d12-bindings.ps1 -Verify
 ```
 
@@ -890,13 +890,13 @@ WindowsのD3D12も`D3D12ValidationMode`で同じ既定を選び、`d3d12-diagnos
 ```sh
 cargo test --locked --workspace --release --no-default-features --features vulkan
 cargo test --locked --workspace --release --no-default-features --features vulkan,development-validation,graph-diagnostics
-cargo tree --locked -p renderer -e features --no-default-features --features vulkan
+cargo tree --locked -p renderer-core -e features --no-default-features --features vulkan
 ```
 
 製品経路の実GPU内容・CPU保持の確認は、native受入と別runで実行します。
 
 ```sh
-cargo test --locked -p renderer --release --lib --no-default-features --features vulkan ::vulkan_shipping_ -- --ignored --nocapture --test-threads=1
+cargo test --locked -p renderer-core --release --lib --no-default-features --features vulkan ::vulkan_shipping_ -- --ignored --nocapture --test-threads=1
 ```
 
 これはnative検証なしの内容照合です。offのmonitorは診断を収集しないため、
@@ -1008,7 +1008,7 @@ probeの単独実行コマンドは次のとおりです。レポートを保存
 反復スクリプトはこの環境変数を各回へ渡し、終了時に元の値へ戻します。
 
 ```powershell
-cargo test --locked -p renderer --lib --no-default-features --features vulkan,d3d12,development-validation ::d3d12_preparation_ -- --ignored --nocapture --test-threads=1
+cargo test --locked -p renderer-core --lib --no-default-features --features vulkan,d3d12,development-validation ::d3d12_preparation_ -- --ignored --nocapture --test-threads=1
 ```
 
 準備段階では実hardware adapterの照合、Device作成前のDebug Layer／GBV要求と診断interface、
@@ -1035,7 +1035,7 @@ CPU／GPU時間とメモリ比較は診断なしの別のrelease実行とし、G
 
 ### D3D12のbuffer Graph実行
 
-[公開APIの二API試験](../../crates/renderer/tests/d3d12_graph.rs)は、一度compileした同じGraphを
+[公開APIの二API試験](../../crates/renderer-core/tests/d3d12_graph.rs)は、一度compileした同じGraphを
 実際のVulkan／D3D12 Deviceで逐次実行します。vendor／device IDと有効なLUIDを照合し、
 部分範囲・複数copy・同一bufferの非重複copyを含むreadbackの全byteを期待値と両API間で比較します。
 この段階はbufferの受入であり、画像・shaderのGBV実行や性能の優位を確認したとは扱いません。
@@ -1047,8 +1047,8 @@ D3D12のDebug Layer／GBV設定は最初のDevice作成前に固定する必要�
 前提不足、LUID照合不能、診断の実効未確認、試験・レポート不在は失敗です。
 
 ```powershell
-cargo test --locked -p renderer --release --test d3d12_graph --no-default-features --features vulkan,d3d12,development-validation m4_buffer_shared_graph_strict -- --exact --ignored --nocapture --test-threads=1
-cargo test --locked -p renderer --release --test d3d12_graph --no-default-features --features vulkan,d3d12 m4_buffer_shared_graph_shipping -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked -p renderer-core --release --test d3d12_graph --no-default-features --features vulkan,d3d12,development-validation m4_buffer_shared_graph_strict -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked -p renderer-core --release --test d3d12_graph --no-default-features --features vulkan,d3d12 m4_buffer_shared_graph_shipping -- --exact --ignored --nocapture --test-threads=1
 ```
 
 製品構成は追加検証・両native診断featureをコンパイル除外し、native検証の要求は`Disabled`です。
@@ -1077,11 +1077,11 @@ backend内の試験では未投入キャンセル・作成失敗の後始末、F
 
 ### owned Rasterの二API受入
 
-[公開API試験](../../crates/renderer/tests/raster_graph.rs)は同じowned Graphの複数draw、color-only、
+[公開API試験](../../crates/renderer-core/tests/raster_graph.rs)は同じowned Graphの複数draw、color-only、
 depth付きcolor、depth-only、draw別Uniform/画像/samplerとRGBA16Fを二APIで逐次実行します。
 公開標準パスによる同geometry prepass後のLoad／等深度描画／depth非更新と、
 標準forwardの0 draw clear・二段画像copyのpost・HDR出力copyも同じfixtureで確認します。
-さらに[標準構成fixture](../../crates/renderer/fixtures/standard_fixture.rs)で、
+さらに[標準構成fixture](../../crates/renderer-core/fixtures/standard_fixture.rs)で、
 標準forward直接、identity post、利用側多段Computeのpost、標準パスと同じComputeの直接合成を比較します。
 3×7のRGBA16Fに既存の利用側sampled乗算／storage加算shaderを接続し、
 無効・乗算→加算・加算→乗算・追加加算、draw数0／1／4／2と定数を変えます。
@@ -1101,8 +1101,8 @@ backend内の`d3d12_shared_buffer_scopes_preserve_clear_results`と
 設定ごとに別processで実行します。
 
 ```powershell
-cargo test --locked --release -p renderer --test raster_graph --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics owned_raster_common_graph_strict -- --exact --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --test raster_graph --no-default-features --features vulkan,d3d12 owned_raster_common_graph_shipping -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --test raster_graph --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics owned_raster_common_graph_strict -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --test raster_graph --no-default-features --features vulkan,d3d12 owned_raster_common_graph_shipping -- --exact --ignored --nocapture --test-threads=1
 ```
 
 `RASTER_GRAPH_REPORT`に条件・内容・実効native検証と最終解放後の診断を出力します。
@@ -1113,13 +1113,13 @@ strictはCore＋SyncVal／Debug Layer＋GBV、shippingはRenderer追加検証と
 テストのvertex shaderを更新する場合は、固定SDKの生成手順に`-Fullscreen`を指定します。
 
 ```powershell
-./crates/renderer/tests/support/shaders/custom_raster-regenerate.ps1 -Fullscreen -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
-cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation --test fullscreen -- --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12 --test fullscreen -- --ignored --nocapture --test-threads=1
+./crates/renderer-core/tests/support/shaders/custom_raster-regenerate.ps1 -Fullscreen -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+cargo test --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,development-validation --test fullscreen -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --no-default-features --features vulkan,d3d12 --test fullscreen -- --ignored --nocapture --test-threads=1
 ```
 
-独自Rasterの公開契約は[`custom_raster`](../../crates/renderer/tests/custom_raster.rs)と
-[利用側fixture](../../crates/renderer/fixtures/custom_raster_fixture.rs)で確認します。
+独自Rasterの公開契約は[`custom_raster`](../../crates/renderer-core/tests/custom_raster.rs)と
+[利用側fixture](../../crates/renderer-core/fixtures/custom_raster_fixture.rs)で確認します。
 この試験は`RasterProgramDescriptor`の静的取込を使います。外部ファイルから読み込む場合は
 [実行時の取込手順](tooling.md#runtime-shader-import)を参照してください。
 24-byte頂点、32-byteのVS／FS inline定数、三groupの疎なUniform／StorageRead／画像／sampler bindingを使い、
@@ -1131,20 +1131,20 @@ straight／premultiplied alpha・加算・置換、draw順、depth testとwrite�
 外部ファイルのRasterとComputeを実GPUで確認するには、次のテストを両構成で逐次実行します。
 
 ```powershell
-cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics --test fullscreen --test compute_graph runtime_loaded_ -- --ignored --test-threads=1
-cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12 --test fullscreen --test compute_graph runtime_loaded_ -- --ignored --test-threads=1
+cargo test --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics --test fullscreen --test compute_graph runtime_loaded_ -- --ignored --test-threads=1
+cargo test --locked --release -p renderer-core --no-default-features --features vulkan,d3d12 --test fullscreen --test compute_graph runtime_loaded_ -- --ignored --test-threads=1
 ```
 
 通常ビルドはチェックイン済みartifactを使い、shader compilerを要求しません。
 shader変更時は[固定SDKの生成手順](tooling.md)に加え、利用側fixtureの全artifactを再生成・照合します。
 
 ```powershell
-./crates/renderer/tests/support/shaders/custom_raster-regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+./crates/renderer-core/tests/support/shaders/custom_raster-regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
 ```
 
 ```powershell
-cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation --test custom_raster -- --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12 --test custom_raster -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,development-validation --test custom_raster -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --no-default-features --features vulkan,d3d12 --test custom_raster -- --ignored --nocapture --test-threads=1
 ```
 
 同fixtureの変動frame全体を独立processで計測するときは、次のmodeを使います。
@@ -1153,8 +1153,8 @@ cargo test --locked --release -p renderer --no-default-features --features vulka
 初期化／明示Program集合の変更時のpipeline・descriptor準備は通常frameと分けます。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-custom-raster
-cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-custom-raster
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-custom-raster
+cargo run --locked --release -p renderer-core --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-custom-raster
 ```
 
 通常フレームのヒープ/native作成・破棄はlibtest外の独立processで別に測定します。
@@ -1164,15 +1164,15 @@ Graph構築からreadback消費・全token返却までを連続窓に含めま�
 `--baseline`だけで診断featureを有効化するものではありません。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-raster
-cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-raster
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-raster
+cargo run --locked --release -p renderer-core --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-raster
 ```
 
 <a id="general-resource-acceptance"></a>
 
 ### 一般資源・履歴の二API受入
 
-[`general_resources`](../../crates/renderer/tests/general_resources.rs)は、同じ利用側のowned Computeと
+[`general_resources`](../../crates/renderer-core/tests/general_resources.rs)は、同じ利用側のowned Computeと
 標準opaqueパスをVulkan／D3D12で逐次実行する。初回／reset／resize、3未完了Graphの履歴chain、
 一般buffer・HDR画像の更新／delete、重複import、read-only snapshotの再利用、古いrevisionの拒否、
 importしたvertex/indexとattachment Loadを全画素照合する。D3D12はprepare後の更新拒否、未投入cancel、
@@ -1183,8 +1183,8 @@ resizeとProgram追加を同じ利用側処理で両APIへ実行する。新clas
 export付きsubmissionを保持したときの交換拒否、buffer snapshotの最後のcloneを保持したままの交換と通常返却時の確保／解放ゼロも確認する。
 
 ```powershell
-cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation,memory-profiling --test general_resources general_resources_strict -- --exact --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,memory-profiling --test general_resources general_resources_shipping -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,development-validation,memory-profiling --test general_resources general_resources_strict -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,memory-profiling --test general_resources general_resources_shipping -- --exact --ignored --nocapture --test-threads=1
 ```
 
 `GENERAL_RESOURCE_REPORT`はadapter/LUID、履歴9出力の全byteと最終native解放後の診断をJSONで出す。
@@ -1198,7 +1198,7 @@ timeout／Signal失敗と部分native作成失敗は既存CPU注入／実GPU寿�
 
 ### owned Compute・画像copyの二API受入
 
-[公開API試験](../../crates/renderer/tests/compute_graph.rs)は利用側のレビュー済みshaderを
+[公開API試験](../../crates/renderer-core/tests/compute_graph.rs)は利用側のレビュー済みshaderを
 `ComputeProgramDescriptor`のunsafe境界で取り込み、同じowned Graphを二APIで逐次実行する。
 3×7のRGBA16F入力にsampled画像＋Uniformの乗算、storage画像＋GPU生成StorageRead bufferの加算を
 1/2/3段で接続し、画像copy、FP32 sample、buffer dispatchとcopyの計4出力・416 byteを
@@ -1206,8 +1206,8 @@ timeout／Signal失敗と部分native作成失敗は既存CPU注入／実GPU寿�
 固定sampleの座標がtexel境界に当たらない寸法を選び、画像の許容差を広げて通さない。
 
 ```powershell
-cargo test --locked --release -p renderer --test compute_graph --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics native::owned_compute_common_graph_strict -- --exact --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --test compute_graph --no-default-features --features vulkan,d3d12 native::owned_compute_common_graph_shipping -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --test compute_graph --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics native::owned_compute_common_graph_strict -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --test compute_graph --no-default-features --features vulkan,d3d12 native::owned_compute_common_graph_shipping -- --exact --ignored --nocapture --test-threads=1
 ```
 
 `COMPUTE_GRAPH_REPORT`へ実adapter/LUID、入力条件、全readback byte、実効検証と最終native解放後の診断を出す。
@@ -1221,8 +1221,8 @@ shader自体の安全性はunsafe取込のレビュー責務であり、reflecti
 Graph構築から全readback消費・poll/retire・全plan/result/Graph slot返却までを連続窓に含める。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-compute
-cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-compute
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-compute
+cargo run --locked --release -p renderer-core --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-compute
 ```
 
 標準構成の混合Raster／Computeを計測するときは、同じフレーム全体の計測基盤へ
@@ -1231,8 +1231,8 @@ cargo run --locked --release -p renderer --no-default-features --features d3d12,
 Raster用draw／attachment、vertex/index bufferとprovenance、画像classと両種のProgramは準備境界で予約します。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-standard
-cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-standard
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-standard
+cargo run --locked --release -p renderer-core --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-standard
 ```
 
 診断baselineは各backendのfeatureへ`development-validation,graph-diagnostics`を追加した別buildで、
@@ -1248,7 +1248,7 @@ cargo run --locked --release -p renderer --no-default-features --features d3d12,
 後述の性能試験はこのfilterに含まれません。
 
 ```sh
-cargo test --locked -p renderer --no-default-features --features vulkan,development-validation,graph-diagnostics ::vulkan_ -- --ignored --nocapture --test-threads=1
+cargo test --locked -p renderer-core --no-default-features --features vulkan,development-validation,graph-diagnostics ::vulkan_ -- --ignored --nocapture --test-threads=1
 ```
 
 一部だけを確認するときは、上の`::vulkan_`を次のfilterへ置き換えます。
@@ -1272,7 +1272,7 @@ producer・不要パス除去・Attachment・import/exportの契約は
 Vulkan環境では、ウィンドウなしで次の例を実行できます。
 
 ```powershell
-cargo run --locked -p renderer --features vulkan,development-validation,graph-diagnostics --example headless -- .tools/m2.ppm
+cargo run --locked -p renderer-core --features vulkan,development-validation,graph-diagnostics --example headless -- .tools/m2.ppm
 ```
 
 出力先の親ディレクトリは事前に用意します。
@@ -1285,7 +1285,7 @@ PPMは表示用のsRGB変換をしていないlinear RGBのデータであり、
 
 ### CPUプロファイル用の固定負荷
 
-[`profile_workload`](../../crates/renderer/examples/profile_workload.rs)は、毎frameで変わる16 byteをuploadし、
+[`profile_workload`](../../crates/renderer-core/examples/profile_workload.rs)は、毎frameで変わる16 byteをuploadし、
 `resources - 1`回のbuffer copyとreadback後に全16 byteを照合するWindowsのheadless例である。
 1件のin-flightと準備済み容量を使い、build/compile/submit/poll/readback/返却を通す。
 描画、present/VSync、GPU timestamp、native metricsは含まず、大きな転送帯域を測る負荷でもない。
@@ -1298,13 +1298,13 @@ Core/SyncValまたはDebug Layer/GBVの実効設定とwarning/errorゼロを、�
 4/256資源やpoll方針を比較する場合は同じ条件のshipping実行も確認する。
 
 ```powershell
-cargo run --locked --profile profiling -p renderer --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics --example profile_workload -- --api vulkan --resources 4 --seed 1 --warmup-ms 500 --duration-ms 3000 --poll yield
-cargo run --locked --profile profiling -p renderer --no-default-features --features vulkan,d3d12 --example profile_workload -- --api vulkan --resources 4 --seed 1 --warmup-ms 500 --duration-ms 3000 --poll yield
+cargo run --locked --profile profiling -p renderer-core --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics --example profile_workload -- --api vulkan --resources 4 --seed 1 --warmup-ms 500 --duration-ms 3000 --poll yield
+cargo run --locked --profile profiling -p renderer-core --no-default-features --features vulkan,d3d12 --example profile_workload -- --api vulkan --resources 4 --seed 1 --warmup-ms 500 --duration-ms 3000 --poll yield
 ```
 
 受入には`PROFILE_WORKLOAD_REPORT`と終了code 0、内容照合、`retained_graph_slots=0`、
 最終native検証結果を使い、途中のDONEだけを成功としない。
-CPU契約試験は`cargo test --locked -p renderer --no-default-features --example profile_workload`でGPUなしに実行できる。
+CPU契約試験は`cargo test --locked -p renderer-core --no-default-features --example profile_workload`でGPUなしに実行できる。
 `memory-profiling`を追加する場合は別runとし、通常窓のallocation/native判定とsetup/shutdownの正の対照を確認する。
 これらの正しさ・メモリ試験の時間をshipping性能へ流用しない。
 
@@ -1336,7 +1336,7 @@ Runtimeが未完了処理を所有し、容量不足なら利用側がpollや明
 readback結果は`FrameCompletion::result`から消費でき、未読結果の保持中にも完了済みnative資源を再利用できます。
 終了時の`drain_frames(timeout)`は結果を破棄するため、必要な結果を先に受け取ります。
 
-`geometry::MeshRegistry`はGPUなしでメッシュの版を管理し、UnlitのView・Drawは `renderer_pipeline::unlit_forward` で捕捉します。
+`geometry::MeshRegistry`はGPUなしでメッシュの版を管理し、UnlitのView・Drawは `renderer::unlit_forward` で捕捉します。
 `VulkanEngine`は外部で作ったsnapshotを上限付きGPU mesh cacheと通常のGraphへ接続します。
 `MeshCacheConfig`で常駐件数・論理byte数・未回収upload数を指定します。
 `prepare_snapshot(snapshot, non_mesh_resources)`／`poll_uploads`で分割転送を進め、必要なら`wait_uploads(timeout)`で明示的に待ちます。
@@ -1356,12 +1356,12 @@ graph.raster("opaque", attachments, |raster| {
 ```
 
 mesh inputは読み取り専用で直接exportできません。必要な変更・exportは独立bufferへのcopy後に行います。
-`renderer_pipeline::unlit_forward::forward`の出力を標準または独自の後処理へ直接つなげます。
-`renderer_pipeline::passes`のopaqueやdepth prepassを直接組み合わせることもできます。
+`renderer::unlit_forward::forward`の出力を標準または独自の後処理へ直接つなげます。
+`renderer::passes`のopaqueやdepth prepassを直接組み合わせることもできます。
 出力handleから必要な消費方法を選び、同formatの別画像に保存する場合は`Graph::copy_image`を使います。
 API例・Load/Store・任意depth・色／深度規約は[標準部品の契約](../design/rendergraph.md#公開標準パスと標準グラフ)を参照してください。
 同geometry prepass後には`OpaqueDepth::Prepassed`とdepth Loadを使い、`mesh_prepassed`／`mesh_hdr_prepassed`も明示準備します。
-`renderer_pipeline::unlit_forward::snapshot::build_vulkan`も公開forwardを呼び、
+`renderer::unlit_forward::snapshot::build_vulkan`も公開forwardを呼び、
 custom passは描画後の同寸linear RGBA8画像にGraph操作を追加する構築時の拡張です。
 返した画像を直接exportし、無変換の全画面copyを追加しません。
 出力はconsumer投入後に`release_output`で解放します。callerがimportした出力の登録は維持します。
@@ -1372,8 +1372,8 @@ custom passは描画後の同寸linear RGBA8画像にGraph操作を追加する�
 cancel、readonly、出力解放権限を通常経路とCore/SyncVal有効経路で確認します。
 
 ```powershell
-cargo test --locked --release -p renderer --test engine_graph --no-default-features --features vulkan,development-validation,graph-diagnostics caller_composed_engine_graph_strict -- --exact --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --test engine_graph --no-default-features --features vulkan caller_composed_engine_graph_shipping -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --test engine_graph --no-default-features --features vulkan,development-validation,graph-diagnostics caller_composed_engine_graph_strict -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --test engine_graph --no-default-features --features vulkan caller_composed_engine_graph_shipping -- --exact --ignored --nocapture --test-threads=1
 ```
 
 次の例は標準描画、外部custom処理、1×1の履歴chainを同じGraphで動かします。
@@ -1384,7 +1384,7 @@ cargo test --locked --release -p renderer --test engine_graph --no-default-featu
 完了済みreadbackを一件遅らせて消費し、3件まで未回収frameを保持します。
 
 ```powershell
-cargo run --locked -p renderer --no-default-features --features vulkan,development-validation --example frame_loop -- --verify .tools/frame-verify.json --churn --ppm .tools/frame.ppm
+cargo run --locked -p renderer-core --no-default-features --features vulkan,development-validation --example frame_loop -- --verify .tools/frame-verify.json --churn --ppm .tools/frame.ppm
 ```
 
 JSONには終了後のValidation件数とCore／SyncValの実効設定を含めます。
@@ -1400,9 +1400,9 @@ JSONには終了後のValidation件数とCore／SyncValの実効設定を含め�
 winitのevent loop・camera・入力は例側が所有し、ライブラリは`Arc<Window>`をnative表示所有者とともに保持します。
 
 ```powershell
-cargo run --locked -p renderer --no-default-features --features vulkan,presentation --example windowed -- --api vulkan
-cargo run --locked -p renderer --no-default-features --features d3d12,presentation --example windowed -- --api d3d12
-cargo run --locked -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --vsync off --graph custom
+cargo run --locked -p renderer-core --no-default-features --features vulkan,presentation --example windowed -- --api vulkan
+cargo run --locked -p renderer-core --no-default-features --features d3d12,presentation --example windowed -- --api d3d12
+cargo run --locked -p renderer-core --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --vsync off --graph custom
 ```
 
 Vulkanには同一Graphics＋Compute＋present queue、EXT swapchain maintenance1等の依存extension／feature、
@@ -1413,17 +1413,17 @@ VSyncは既定ON。`--vsync on|off`で起動時に選び、Vキーで変更し�
 OFFにはVulkanのIMMEDIATE、DXGIのtearing capabilityが必要で、未対応要求は既存設定を維持して失敗します。
 タイトルの要求設定と、prepare後に反映されるnative状態、実際のcompositor／driverの表示挙動は区別します。
 
-同じ常駐cube meshと入力行列から、`--graph standard`は`renderer_pipeline::unlit_forward::forward`、
+同じ常駐cube meshと入力行列から、`--graph standard`は`renderer::unlit_forward::forward`、
 `--graph custom`は利用側のRasterと明示的な出力copyを使います。backendごとにGraphを実装し直しません。
 操作はWASDで前後左右、Q／Eで上下、Shiftで加速、右mouseで視点操作、Tで固定巡回、Escで終了です。
 focusを失うと押下状態とmouse操作を解除し、復帰直後の長いdeltaを移動へそのまま適用しません。
 `--tour`は受理frame番号を基準に固定巡回します。CPU実行速度やVSyncが違っても同じ番号に同じcameraを渡せます。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation,development-validation,graph-diagnostics --example windowed -- --api vulkan --smoke
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation,development-validation,graph-diagnostics --example windowed -- --api d3d12 --smoke
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api vulkan --tour --verify --frames 24
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --tour --verify --frames 24
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,presentation,development-validation,graph-diagnostics --example windowed -- --api vulkan --smoke
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,presentation,development-validation,graph-diagnostics --example windowed -- --api d3d12 --smoke
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api vulkan --tour --verify --frames 24
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --tour --verify --frames 24
 ```
 
 `--smoke`は最初の5 frameで共通入力controllerへ移動・相対mouse・右ボタン解放・focus lossを再生し、
@@ -1459,16 +1459,16 @@ strictはCore＋SyncVal／Debug Layer＋GBVの実効とwarning／error／corrupt
 最初のウィンドウを閉じた後も、残りの Presenter と資源登録を使用できることを確認します。
 
 ```powershell
-cargo test --locked --release -p renderer --test host_windows --no-default-features --features vulkan,d3d12,presentation,development-validation -- --ignored --test-threads=1
-cargo test --locked --release -p renderer --test host_windows --no-default-features --features vulkan,d3d12,presentation -- --ignored --test-threads=1
+cargo test --locked --release -p renderer-core --test host_windows --no-default-features --features vulkan,d3d12,presentation,development-validation -- --ignored --test-threads=1
+cargo test --locked --release -p renderer-core --test host_windows --no-default-features --features vulkan,d3d12,presentation -- --ignored --test-threads=1
 ```
 
 既存のVulkan WSI受入も保持します。同じsourceの再present、取得後取消、旧世代の保持、
 複数pendingと保持readback、全owner返却を通常frameのメモリ窓まで確認する試験です。
 
 ```powershell
-cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,presentation,development-validation,graph-diagnostics vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,presentation vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --lib --no-default-features --features vulkan,presentation,development-validation,graph-diagnostics vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --lib --no-default-features --features vulkan,presentation vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
 ```
 
 D3D12の独立した実Window試験も、同じstrict／shippingの区別で実行します。
@@ -1477,8 +1477,8 @@ resize／VSync／最小化復帰／取得後cancel／pending終了と、18 sourc
 各Window試験は独立processで起動します。winitは一processで複数event loopを作成できないため、両APIの試験を一つのfilterへまとめません。
 
 ```powershell
-cargo test --locked --release -p renderer --lib --no-default-features --features d3d12,presentation,development-validation,graph-diagnostics,memory-profiling d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory -- --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --lib --no-default-features --features d3d12,presentation,memory-profiling d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --lib --no-default-features --features d3d12,presentation,development-validation,graph-diagnostics,memory-profiling d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer-core --lib --no-default-features --features d3d12,presentation,memory-profiling d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory -- --ignored --nocapture --test-threads=1
 ```
 
 共通の契約は[Graphの表示接続](../design/rendergraph.md#windows-presentation)、nativeの根拠は
@@ -1497,11 +1497,11 @@ counterがゼロでも未接続のhookを覆った証拠にはならないため
 
 ```powershell
 $env:CARGO_INCREMENTAL='0'
-cargo run --locked --release -p renderer --no-default-features --features memory-profiling --example frame_memory -- cpu
-cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12
-cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan
-cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-image
-cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,presentation,memory-profiling vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
+cargo run --locked --release -p renderer-core --no-default-features --features memory-profiling --example frame_memory -- cpu
+cargo run --locked --release -p renderer-core --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-image
+cargo test --locked --release -p renderer-core --lib --no-default-features --features vulkan,presentation,memory-profiling vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
 ```
 
 末尾の`--baseline`は値を記録しゼロassertを省く観測モードで、ゼロ目標の受入には使わない。
@@ -1549,10 +1549,10 @@ VSync OFFの処理時間とONのpacingを別process・同じAPI／Graph／camera
 strictの正しさ受入を別に行い、計装されたGPU実行を製品性能へ混ぜません。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api vulkan --tour --measure --vsync off
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --tour --measure --vsync off
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api vulkan --tour --measure --vsync on
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --tour --measure --vsync on
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api vulkan --tour --measure --vsync off
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --tour --measure --vsync off
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api vulkan --tour --measure --vsync on
+cargo run --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --tour --measure --vsync on
 ```
 
 | 区間 | 測る対象 |
@@ -1597,7 +1597,7 @@ headless測定は補助として維持し、upload／readback込みの小fixture
 ### 再現可能なフレーム基準測定
 
 ```powershell
-cargo run --release --locked -p renderer --no-default-features --features vulkan --example frame_loop -- --benchmark .tools/frame-baseline.json
+cargo run --release --locked -p renderer-core --no-default-features --features vulkan --example frame_loop -- --benchmark .tools/frame-baseline.json
 ```
 
 既定は128×96、3 in-flight、warm-up 32 frame、測定128 frameを3 runです。
@@ -1627,9 +1627,9 @@ startup uploadは測定loopの前に完了させ、そのbyte数とCPU・待機�
 各画像は決定的な全RGBA期待値と照合し、検証modeはnative所有者の破棄後までCore／SyncValを要求します。
 
 ```powershell
-cargo run --release --locked -p renderer --no-default-features --features vulkan,development-validation --example engine_workloads -- --verify .tools/engine-workloads-verify.json
-cargo run --release --locked -p renderer --no-default-features --features vulkan --example engine_workloads -- --benchmark .tools/engine-workloads-benchmark.json
-cargo test --locked -p renderer --no-default-features --features vulkan,development-validation --test engine_workloads vulkan_ -- --ignored --nocapture --test-threads=1
+cargo run --release --locked -p renderer-core --no-default-features --features vulkan,development-validation --example engine_workloads -- --verify .tools/engine-workloads-verify.json
+cargo run --release --locked -p renderer-core --no-default-features --features vulkan --example engine_workloads -- --benchmark .tools/engine-workloads-benchmark.json
+cargo test --locked -p renderer-core --no-default-features --features vulkan,development-validation --test engine_workloads vulkan_ -- --ignored --nocapture --test-threads=1
 ```
 
 性能modeはValidation無効を明示し、32 warm-up＋128測定frameを3 run実行します。
@@ -1651,7 +1651,7 @@ import出力の解放権限、少ない物理枠での常駐入れ替えは内�
 変換・色を使い、事前生成した二つの入力を交互に描く。両条件とも2 in-flightで、既定は120 warmup＋600測定frame。
 
 ```powershell
-cargo build --locked --release -p renderer --no-default-features --features vulkan,d3d12 --example raster_draw_scaling
+cargo build --locked --release -p renderer-core --no-default-features --features vulkan,d3d12 --example raster_draw_scaling
 target/release/examples/raster_draw_scaling.exe --api vulkan --draws 50000 --words 0 --report .tools/raster-50000-vulkan.json
 target/release/examples/raster_draw_scaling.exe --api d3d12 --draws 50000 --words 20 --report .tools/raster-50000-d3d12.json
 ```
@@ -1675,8 +1675,8 @@ distinctはasset churnと併用できません。meshは開始時に登録し、
 history/customなしの1024 distinct drawでは、物理entry容量は2057です。
 
 ```powershell
-cargo run --release --locked -p renderer --no-default-features --features vulkan --example frame_loop -- --benchmark .tools/draw-scaling.json --draws 512 --layout grid --extent 512x512 --no-history --no-custom --rgba .tools/draw-scaling.rgba
-cargo run --release --locked -p renderer --no-default-features --features vulkan --example frame_loop -- --benchmark .tools/distinct-scaling.json --draws 512 --layout grid --extent 512x512 --mesh-layout distinct --no-history --no-custom --rgba .tools/distinct-scaling.rgba
+cargo run --release --locked -p renderer-core --no-default-features --features vulkan --example frame_loop -- --benchmark .tools/draw-scaling.json --draws 512 --layout grid --extent 512x512 --no-history --no-custom --rgba .tools/draw-scaling.rgba
+cargo run --release --locked -p renderer-core --no-default-features --features vulkan --example frame_loop -- --benchmark .tools/distinct-scaling.json --draws 512 --layout grid --extent 512x512 --mesh-layout distinct --no-history --no-custom --rgba .tools/distinct-scaling.rgba
 ```
 
 比較するdraw数は0、1、8、32、128、512、1024、管理負担用はoverlap・64×64、
@@ -1708,12 +1708,12 @@ eprintln!("{lowering}");
 生成理由、最終予定状態を含みます。投入が失敗した場合は既存の型付きエラーを返します。
 診断文字列をGPU完了や外部資源の所有権の証明には使いません。
 
-Shaderのソースと生成済みbinaryは`crates/renderer/shaders/`にあります。
+Shaderのソースと生成済みbinaryは`crates/renderer-core/shaders/`にあります。
 通常のRustビルドはチェックイン済みSPIR-Vを使います。
 Windowsでは固定SDKの同じcompiler・validatorを使って再生成できます。
 
 ```powershell
-& crates/renderer/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+& crates/renderer-core/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
 ```
 
 `-Verify`は一時ファイルへコンパイルし、`spirv-val --target-env vulkan1.3`の成功と
@@ -1770,7 +1770,7 @@ alloc／alloc_zeroed／realloc／deallocを出力します。各通常測定窓�
 Vulkanのkeyは整数、D3D12のnative所有境界は`Arc<()>`であり、GPUやdriverを起動しません。
 したがって資源探索と所有取得・返却のCPU費用だけを比較し、native prepare全体、GPU時間、
 FPSの改善を主張しません。登録済みprefix、多数候補、多class、lease保持候補を別caseで確認します。
-単独で現在のharnessを試す場合は`cargo bench --locked -p renderer --no-default-features --bench vulkan_resource_cache`、
+単独で現在のharnessを試す場合は`cargo bench --locked -p renderer-core --no-default-features --bench vulkan_resource_cache`、
 `--bench d3d12_reuse`を使えます。後者の`-- --reference`は旧scanの比較専用です。
 通常CIへ固定の時間閾値は加えません。
 
@@ -1781,7 +1781,7 @@ FPSの改善を主張しません。登録済みprefix、多数候補、多class
 ビルドにはCriterionのC helper用コンパイラーが必要ですが、SDKやVMA用C++コンパイラーは不要です。
 
 ```sh
-cargo bench --locked -p renderer --no-default-features --bench transfer_planning
+cargo bench --locked -p renderer-core --no-default-features --bench transfer_planning
 ```
 
 測定・統計解析をせず全caseを短く確認する場合は、末尾に`-- --test`を付けます。
@@ -1796,8 +1796,8 @@ buffer作成、stagingへのコピー、submit、GPU実行時間は含みませ�
 同じ機材・負荷・設定で名前付き基準値を保存し、変更後に比較します。
 
 ```sh
-cargo bench --locked -p renderer --no-default-features --bench transfer_planning -- --save-baseline planning-main
-cargo bench --locked -p renderer --no-default-features --bench transfer_planning -- --baseline planning-main
+cargo bench --locked -p renderer-core --no-default-features --bench transfer_planning -- --save-baseline planning-main
+cargo bench --locked -p renderer-core --no-default-features --bench transfer_planning -- --baseline planning-main
 ```
 
 保存先の既定はGit対象外の`target/criterion/`です。
@@ -1826,7 +1826,7 @@ releaseと`RENDERER_RUN_PERFORMANCE=1`を指定します。
 $rendererPreviousPerformance = $env:RENDERER_RUN_PERFORMANCE
 try {
     $env:RENDERER_RUN_PERFORMANCE = '1'
-    cargo test --release --locked -p renderer --no-default-features --features vulkan performance_transfer_measurements -- --ignored --nocapture --test-threads=1
+    cargo test --release --locked -p renderer-core --no-default-features --features vulkan performance_transfer_measurements -- --ignored --nocapture --test-threads=1
 } finally {
     $env:RENDERER_RUN_PERFORMANCE = $rendererPreviousPerformance
 }
@@ -1835,7 +1835,7 @@ try {
 Linuxでは次のように実行します。
 
 ```sh
-RENDERER_RUN_PERFORMANCE=1 cargo test --release --locked -p renderer --no-default-features --features vulkan performance_transfer_measurements -- --ignored --nocapture --test-threads=1
+RENDERER_RUN_PERFORMANCE=1 cargo test --release --locked -p renderer-core --no-default-features --features vulkan performance_transfer_measurements -- --ignored --nocapture --test-threads=1
 ```
 
 固定負荷のwarm-up後、CPUのwrite・record・submit・wait（回収を含む）・readbackを分けて測定します。
@@ -1851,14 +1851,14 @@ native資源の毎回作成と再利用の比較に加え、複数submitと単�
 ## 診断ログと生成物
 
 ライブラリは`tracing`へログを発行し、global subscriberや出力先を設定しません。
-実Vulkan試験の既定filterは`renderer=info,renderer::vulkan::validation=warn`です。
+実Vulkan試験の既定filterは`renderer=info,renderer_core::vulkan::validation=warn`です。
 `--nocapture`で成功時も表示できます。詳細な転送ログは`debug`で有効になります。
 
 ```powershell
 $rendererPreviousRustLog = $env:RUST_LOG
 try {
     $env:RUST_LOG = 'renderer=trace'
-    cargo test --locked -p renderer --no-default-features --features vulkan,development-validation,graph-diagnostics ::vulkan_ -- --ignored --nocapture --test-threads=1
+    cargo test --locked -p renderer-core --no-default-features --features vulkan,development-validation,graph-diagnostics ::vulkan_ -- --ignored --nocapture --test-threads=1
 } finally {
     $env:RUST_LOG = $rendererPreviousRustLog
 }

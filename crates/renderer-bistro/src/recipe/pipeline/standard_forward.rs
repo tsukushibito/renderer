@@ -1,7 +1,7 @@
 //! Connect Bistro's materials, draws and history to the public PBR recipes.
 
 use super::{Scene, shadow};
-use renderer_pipeline::pbr::{Draw, GraphMaterial};
+use renderer::pbr::{Draw, GraphMaterial};
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::{
@@ -10,14 +10,14 @@ use super::{
     select_draws, shadow_casters,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer_pipeline::pbr::{self, Frame, FrameShadows, IndexedDraw, ShadowSource};
+use renderer::pbr::{self, Frame, FrameShadows, IndexedDraw, ShadowSource};
 
-use renderer::graph::{Graph, GraphError};
-use renderer::runtime::ManagedImage;
-use renderer_pipeline::material::{
+use renderer::material::{
     MaterialHandle, MaterialInstance, MaterialTextures, Materials, PbrMaterial,
 };
-use renderer_pipeline::pbr::ResidentMaterialUniform;
+use renderer::pbr::ResidentMaterialUniform;
+use renderer_core::graph::{Graph, GraphError};
+use renderer_core::runtime::ManagedImage;
 
 /// Cooked tables and GPU culling use dense asset indices. Keep their mapping to
 /// shareable pipeline handles at the asset boundary.

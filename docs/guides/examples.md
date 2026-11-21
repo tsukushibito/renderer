@@ -7,7 +7,7 @@
 ## メッシュと材質からビューを描く
 
 ```powershell
-cargo run --locked --release -p renderer-pipeline --features vulkan --example textured_view -- vulkan
+cargo run --locked --release -p renderer --features vulkan --example textured_view -- vulkan
 ```
 
 | 例 | エンジンに取り込める処理 |
@@ -19,18 +19,18 @@ cargo run --locked --release -p renderer-pipeline --features vulkan --example te
 
 コマンドの `--example` の値を表の名前に替えて実行できる。WindowsのD3D12ではfeatureと末尾の引数をともに `d3d12` に替える。
 ヘッドレスの各例は描画結果を読み戻して確認する。エンジン側のイベントループへ組み込む際の起動・更新・解放は[ビューとアセットの手順](tooling.md#scene-materials)、
-実際のフレーム処理は[共通のサンプルコード](../../crates/renderer-pipeline/examples/support/views.rs)を参照。
+実際のフレーム処理は[共通のサンプルコード](../../crates/renderer/examples/support/views.rs)を参照。
 
 ## 最初に動かす
 
 **Graphの合成をCPUだけで確認する**
 
 `graph_composition`は公開Graph APIで利用側のRasterパスをつなぎます。
-`rust_pipeline`は`renderer-pipeline`の標準レシピと独自パスを合成します。どちらもCPUでGraphをcompileします。
+`rust_pipeline`は`renderer`の標準レシピと独自パスを合成します。どちらもCPUでGraphをcompileします。
 
 ```sh
-cargo run --locked -p renderer --no-default-features --example graph_composition
-cargo run --locked -p renderer-pipeline --no-default-features --example rust_pipeline
+cargo run --locked -p renderer-core --no-default-features --example graph_composition
+cargo run --locked -p renderer --no-default-features --example rust_pipeline
 ```
 
 <a id="pbr-forward-example"></a>
@@ -48,9 +48,9 @@ cargo run --locked -p renderer-pipeline --no-default-features --example rust_pip
 `--copy-hdr`はシーン描画と出力の間にアプリ独自のコピーパスを追加します。
 
 ```sh
-cargo run --locked -p renderer-pipeline --no-default-features --features vulkan --example pbr_forward -- --api vulkan
-cargo run --locked -p renderer-pipeline --no-default-features --features vulkan --example pbr_forward -- --api vulkan --technique deferred
-cargo run --locked -p renderer-pipeline --no-default-features --features d3d12 --example pbr_forward -- --api d3d12 --technique forward-plus --msaa 4 --bloom --reuse-shadows --output pbr-forward-plus.ppm
+cargo run --locked -p renderer --no-default-features --features vulkan --example pbr_forward -- --api vulkan
+cargo run --locked -p renderer --no-default-features --features vulkan --example pbr_forward -- --api vulkan --technique deferred
+cargo run --locked -p renderer --no-default-features --features d3d12 --example pbr_forward -- --api d3d12 --technique forward-plus --msaa 4 --bloom --reuse-shadows --output pbr-forward-plus.ppm
 ```
 
 D3D12はWindowsで実行できます。準備とパスの接続は[PBRレシピの使い方](tooling.md#pbr-forward-recipe)を参照してください。
@@ -62,7 +62,7 @@ D3D12はWindowsで実行できます。準備とパスの接続は[PBRレシピ�
 
 ```powershell
 New-Item -ItemType Directory -Force .tools | Out-Null
-cargo run --locked -p renderer --no-default-features --features vulkan,development-validation,graph-diagnostics --example headless -- .tools/headless.ppm
+cargo run --locked -p renderer-core --no-default-features --features vulkan,development-validation,graph-diagnostics --example headless -- .tools/headless.ppm
 ```
 
 **Windowsで描画する**
@@ -74,8 +74,8 @@ Windowsでは `Runtime::for_window` に `HasWindowHandle` を実装するウィ�
 画面操作と検証手順は[Windows表示](development.md#windows-presentation)を参照してください。
 
 ```powershell
-cargo run --locked -p renderer --no-default-features --features vulkan,presentation --example windowed -- --api vulkan
-cargo run --locked -p renderer --no-default-features --features d3d12,presentation --example windowed -- --api d3d12
+cargo run --locked -p renderer-core --no-default-features --features vulkan,presentation --example windowed -- --api vulkan
+cargo run --locked -p renderer-core --no-default-features --features d3d12,presentation --example windowed -- --api d3d12
 ```
 
 **Bistroの小さなシーンを描画する**
@@ -98,9 +98,9 @@ Bistroで全シーンを描画するには[Bistroのcook・描画手順](develop
 `--target-dir`で各構成の出力を個別に保持します。
 
 ```powershell
-cargo build --locked --release -p renderer --no-default-features --features vulkan,presentation --example windowed --target-dir target/dist-vulkan
-cargo build --locked --release -p renderer --no-default-features --features d3d12,presentation --example windowed --target-dir target/dist-d3d12
-cargo build --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed --target-dir target/dist-dual
+cargo build --locked --release -p renderer-core --no-default-features --features vulkan,presentation --example windowed --target-dir target/dist-vulkan
+cargo build --locked --release -p renderer-core --no-default-features --features d3d12,presentation --example windowed --target-dir target/dist-d3d12
+cargo build --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,presentation --example windowed --target-dir target/dist-dual
 
 & ./target/dist-dual/release/examples/windowed.exe --api vulkan
 & ./target/dist-dual/release/examples/windowed.exe --api d3d12
@@ -140,5 +140,5 @@ Bistroの全シーン以外の実行には、リポジトリに含まれる小�
 BistroのCLI、シェーダーとの接続、レシピのCPUテストはWindowsで各版を一度ずつ実行します。
 Bistroの実GPUテストは`cargo test -p renderer-bistro --lib`に対象featureと`-- --ignored`を指定して実行します。
 
-`rust_pipeline`と`pbr_forward`の入口は`crates/renderer-pipeline/examples/`、Bistroの2つの入口は`crates/renderer-bistro/src/bin/`にあります。
-ほかの入口は`crates/renderer/examples/`にあり、試験や計測と共用するfixtureのRustコードは`crates/renderer/fixtures/`にあります。
+`rust_pipeline`と`pbr_forward`の入口は`crates/renderer/examples/`、Bistroの2つの入口は`crates/renderer-bistro/src/bin/`にあります。
+ほかの入口は`crates/renderer-core/examples/`にあり、試験や計測と共用するfixtureのRustコードは`crates/renderer-core/fixtures/`にあります。

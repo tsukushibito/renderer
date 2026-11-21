@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "crates/renderer",
+    "crates/renderer-core",
     "crates/renderer-bistro",
     "crates/renderer-example-support",
-    "crates/renderer-pipeline",
+    "crates/renderer",
     "crates/training-yard",
 ]
 resolver = "3"
