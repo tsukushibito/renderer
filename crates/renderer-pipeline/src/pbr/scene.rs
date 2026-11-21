@@ -133,8 +133,9 @@ impl PreparedScene {
             0
         };
         let transforms = tier.is_some();
+        let pages = tier.map_or(0, |tier| limits.max_transforms.div_ceil(tier.records()));
         let instances = tier
-            .map(|tier| PreparedInstances::reserve(&mut preparation, tier))
+            .map(|tier| PreparedInstances::reserve(&mut preparation, tier, limits.max_transforms))
             .transpose()?;
 
         let shadow_draws = checked(casters.checked_mul(CASCADE_COUNT))?;
@@ -175,6 +176,25 @@ impl PreparedScene {
             })
             .sum();
 
+        // Each material first uses the usual per-program cache. Additional
+        // page/material pairs cannot exceed the number of recorded commands.
+        let extra_pairs = limits.max_materials.saturating_mul(pages.saturating_sub(1));
+        let extra_bindings = match &programs.model {
+            Some(model) => {
+                let scene =
+                    checked(extra_pairs.min(limits.max_draws).checked_mul(
+                        model.opaque.bindings().len() + model.blend.bindings().len(),
+                    ))?;
+                let shadows = checked(
+                    extra_pairs
+                        .min(shadow_draws)
+                        .checked_mul(model.shadow.bindings().len()),
+                )?;
+                checked(scene.checked_add(shadows))?
+            }
+            None => 0,
+        };
+
         preparation.add_requirements(
             GraphRequirements {
                 resources: cascades + 2 + usize::from(transient_camera) + usize::from(msaa),
@@ -190,7 +210,12 @@ impl PreparedScene {
                 } else {
                     shadow_draws
                 },
-                bindings: checked(limits.max_materials.checked_mul(material_bindings))?,
+                bindings: checked(
+                    limits
+                        .max_materials
+                        .checked_mul(material_bindings)
+                        .and_then(|n| n.checked_add(extra_bindings)),
+                )?,
                 attachments: cascades + 4 + usize::from(msaa),
                 name_bytes: 256,
                 upload_bytes: if upload_camera { CAMERA_BYTES } else { 0 },
@@ -214,8 +239,18 @@ impl PreparedScene {
             opaque_uses_lighting,
             mode,
             instances,
-            opaque: Batch::prepare(limits.max_materials, limits.max_draws, transforms)?,
-            transparent: Batch::prepare(limits.max_materials, limits.max_draws, transforms)?,
+            opaque: Batch::prepare(
+                limits.max_materials,
+                limits.max_draws,
+                pages,
+                limits.max_draws,
+            )?,
+            transparent: Batch::prepare(
+                limits.max_materials,
+                limits.max_draws,
+                pages,
+                limits.max_draws,
+            )?,
             shadow: Batch::prepare(
                 if render_shadows {
                     limits.max_materials
@@ -223,7 +258,8 @@ impl PreparedScene {
                     0
                 },
                 casters,
-                transforms,
+                pages,
+                shadow_draws,
             )?,
         })
     }
@@ -413,41 +449,43 @@ impl PreparedScene {
         )?;
         check_limit(
             GraphCapacityKind::Draws,
-            self.limits.max_draws,
-            frame.opaque.len().checked_add(frame.transparent.len()),
-        )?;
-        check_limit(
-            GraphCapacityKind::Draws,
             self.limits.max_transforms,
             Some(frame.transforms.len()),
         )?;
         let has_model = self.instances.is_some();
-        let mut transform_end =
+        let (opaque_end, opaque_commands) =
             validate_draws(frame.opaque, self.mode, has_model, frame, DrawPass::Opaque)?;
-        transform_end = transform_end.max(validate_draws(
+        let (transparent_end, transparent_commands) = validate_draws(
             frame.transparent,
             DrawMode::Direct,
             has_model,
             frame,
             DrawPass::Transparent,
-        )?);
+        )?;
+        check_limit(
+            GraphCapacityKind::Draws,
+            self.limits.max_draws,
+            opaque_commands.checked_add(transparent_commands),
+        )?;
+        let mut transform_end = opaque_end.max(transparent_end);
         match (self.config.shadows, frame.shadows) {
             (Some(settings), FrameShadows::Cascades(sources)) => {
                 validate_shadow_sources(graph, sources, shadow_desc(settings))?;
                 for (cascade, source) in sources.into_iter().enumerate() {
                     if let ShadowSource::Render { casters, .. } = source {
-                        check_limit(
-                            GraphCapacityKind::Draws,
-                            self.limits.max_casters_per_cascade,
-                            Some(casters.len()),
-                        )?;
-                        transform_end = transform_end.max(validate_draws(
+                        let (end, commands) = validate_draws(
                             casters,
                             DrawMode::Direct,
                             has_model,
                             frame,
                             DrawPass::Shadow(cascade),
-                        )?);
+                        )?;
+                        check_limit(
+                            GraphCapacityKind::Draws,
+                            self.limits.max_casters_per_cascade,
+                            Some(commands),
+                        )?;
+                        transform_end = transform_end.max(end);
                     }
                 }
             }
@@ -550,6 +588,8 @@ impl RasterScene<'_> {
 
     pub(crate) fn draw_transparent(&self, pass: &mut RasterPass<'_, '_>) -> Result<(), GraphError> {
         if let Some(draws) = self.forward_draws {
+            // StandardPipeline records one PBR command per sorted object, so
+            // these ranges also index the recorded commands.
             return draws.draw_color(pass, |pass, range| {
                 self.transparent.draw_range(
                     pass,
@@ -607,7 +647,8 @@ fn validate_draws(
     has_model: bool,
     frame: &Frame<'_>,
     pass: DrawPass,
-) -> Result<usize, GraphError> {
+) -> Result<(usize, usize), GraphError> {
+    let mut commands = draws.len();
     let wants_blend = matches!(pass, DrawPass::Transparent);
     let mut transform_end = 0;
     for (index, draw) in draws.iter().enumerate() {
@@ -649,6 +690,9 @@ fn validate_draws(
                     GraphError::invalid_input("PBR instance range exceeds the transform table")
                         .with_pass_name(pass.name())
                 })?;
+            if count > 1 {
+                commands = checked(commands.checked_add(draw.command_count() - 1))?;
+            }
             transform_end = transform_end.max(end);
         }
         let factors = frame.materials.get(material).ok_or_else(|| {
@@ -666,7 +710,7 @@ fn validate_draws(
             .with_pass_name(pass.name()));
         }
     }
-    Ok(transform_end)
+    Ok((transform_end, commands))
 }
 
 fn validate_shadow_sources(

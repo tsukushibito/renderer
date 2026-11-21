@@ -1,8 +1,8 @@
 use renderer::capacity::{GraphRequirements, Preparation};
 use renderer::graph::{BufferDesc, BufferHandle, Graph, GraphCapacityKind, GraphError};
 
-/// Maximum model transforms in the fixed table used by one PBR view.
-pub const MAX_TRANSFORMS: usize = 1_024;
+// The full shader reads one bounded page per draw.
+pub(crate) const PAGE_RECORDS: u32 = 1_024;
 const TRANSFORM_BYTES: usize = 96;
 pub(crate) const TRANSFORM_BINDING: u32 = 4;
 const SMALL_TABLE: usize = 64;
@@ -18,19 +18,22 @@ impl InstanceTier {
         match limit {
             0 => Ok(None),
             1..=SMALL_TABLE => Ok(Some(Self::Small)),
-            n if n <= MAX_TRANSFORMS => Ok(Some(Self::Full)),
+            n if u32::try_from(n).is_ok() => Ok(Some(Self::Full)),
             _ => Err(GraphError::invalid_input(
-                "PBR transform limit exceeds 1,024",
+                "PBR transform indices must fit u32",
             )),
         }
     }
 
-    pub(crate) const fn bytes(self) -> usize {
-        let records = match self {
+    pub(crate) const fn records(self) -> usize {
+        match self {
             Self::Small => SMALL_TABLE,
-            Self::Full => MAX_TRANSFORMS,
-        };
-        records * TRANSFORM_BYTES
+            Self::Full => PAGE_RECORDS as usize,
+        }
+    }
+
+    pub(crate) const fn bytes(self) -> usize {
+        self.records() * TRANSFORM_BYTES
     }
 }
 
@@ -101,6 +104,11 @@ impl Transform {
         })
     }
 
+    /// The validated model rows uniquely determine the derived normal matrix.
+    pub(crate) fn model_key(self) -> [[u32; 4]; 3] {
+        self.model.map(|row| row.map(f32::to_bits))
+    }
+
     /// Encode the canonical 96-byte transform record.
     pub fn encode(self) -> [u8; TRANSFORM_BYTES] {
         let mut bytes = [0; TRANSFORM_BYTES];
@@ -132,20 +140,32 @@ fn cross([ax, ay, az]: [f64; 3], [bx, by, bz]: [f64; 3]) -> [f64; 3] {
 #[derive(Clone, Copy)]
 pub(super) struct InstanceBuffer {
     pub(super) handle: BufferHandle,
-    pub(super) size: u64,
+    pub(super) page_bytes: u64,
+}
+
+impl InstanceBuffer {
+    pub(super) fn page_offset(self, page: u32) -> u64 {
+        u64::from(page) * self.page_bytes
+    }
 }
 
 pub(crate) struct PreparedInstances {
     bytes: Vec<u8>,
     previous_len: usize,
+    page_bytes: usize,
 }
 
 impl PreparedInstances {
     pub(crate) fn reserve(
         preparation: &mut Preparation,
         tier: InstanceTier,
+        max_transforms: usize,
     ) -> Result<Self, GraphError> {
-        let byte_count = tier.bytes();
+        let page_bytes = tier.bytes();
+        let byte_count = max_transforms
+            .div_ceil(tier.records())
+            .checked_mul(page_bytes)
+            .ok_or_else(|| GraphError::invalid_input("transform buffer capacity overflow"))?;
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(byte_count).map_err(|_| {
             GraphError::capacity_error(GraphCapacityKind::UploadBytes, byte_count, None)
@@ -175,6 +195,7 @@ impl PreparedInstances {
         Ok(Self {
             bytes,
             previous_len: 0,
+            page_bytes,
         })
     }
 
@@ -202,8 +223,17 @@ impl PreparedInstances {
         self.previous_len = transforms.len();
         let size = self.bytes.len() as u64;
         let handle = graph.buffer("pbr transforms", BufferDesc { size })?;
-        graph.upload_buffer("pbr transforms upload", handle, 0, &self.bytes)?;
-        Ok(InstanceBuffer { handle, size })
+        let used_bytes = (transforms.len() * TRANSFORM_BYTES).next_multiple_of(self.page_bytes);
+        graph.upload_buffer(
+            "pbr transforms upload",
+            handle,
+            0,
+            &self.bytes[..used_bytes],
+        )?;
+        Ok(InstanceBuffer {
+            handle,
+            page_bytes: self.page_bytes as u64,
+        })
     }
 }
 
@@ -295,7 +325,7 @@ mod tests {
     fn uploads_full_prepared_prefix_and_clears_reused_padding() {
         let mut preparation = Preparation::new(NonZeroUsize::MIN);
         let mut instances =
-            PreparedInstances::reserve(&mut preparation, InstanceTier::Small).unwrap();
+            PreparedInstances::reserve(&mut preparation, InstanceTier::Small, 2).unwrap();
         let cap = preparation
             .graph_capacity(GraphCapacity {
                 upload_bytes: 0,

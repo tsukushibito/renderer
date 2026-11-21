@@ -6,8 +6,9 @@ use renderer::program::{MAX_RASTER_BINDINGS, ManagedRasterProgram, SamplerDescri
 
 use crate::passes::pbr::CAMERA_BYTES;
 
-use super::instances::{InstanceBuffer, TRANSFORM_BINDING};
+use super::instances::{InstanceBuffer, PAGE_RECORDS, TRANSFORM_BINDING};
 use super::{AlphaMode, MaterialUniform};
+use std::collections::HashMap;
 
 /// The standard material maps. Base color and emissive use sRGB views for
 /// sRGB-encoded assets. Normal and ORM use linear views. ORM stores occlusion,
@@ -102,6 +103,22 @@ pub enum Draw {
 }
 
 impl Draw {
+    /// Number of recorded draw commands used against [`super::SceneLimits`].
+    /// An instance range crossing transform pages is split in original order.
+    pub const fn command_count(&self) -> usize {
+        match *self {
+            Self::Instanced {
+                first_transform,
+                instance_count,
+                ..
+            } => {
+                let records = (first_transform % PAGE_RECORDS) as u64 + instance_count as u64;
+                records.div_ceil(PAGE_RECORDS as u64) as usize
+            }
+            _ => 1,
+        }
+    }
+
     /// Draw a single model-space mesh using the indexed frame transform.
     pub const fn model(geometry: IndexedDraw, transform_index: u32) -> Self {
         Self::Instanced {
@@ -135,6 +152,9 @@ impl Command {
 pub(crate) struct Batch {
     bindings: Vec<Option<RasterBindings>>,
     instanced_bindings: Vec<Option<RasterBindings>>,
+    // Page zero is indexed directly for small scenes. Only pairs actually used
+    // on subsequent pages occupy this prepared cache.
+    paged_bindings: HashMap<(usize, u32), RasterBindings>,
     commands: Vec<Command>,
 }
 
@@ -142,8 +162,16 @@ impl Batch {
     pub(crate) fn prepare(
         materials: usize,
         draws: usize,
-        transforms: bool,
+        pages: usize,
+        binding_uses: usize,
     ) -> Result<Self, GraphError> {
+        let paged_capacity = materials
+            .saturating_mul(pages.saturating_sub(1))
+            .min(binding_uses);
+        let mut paged_bindings = HashMap::new();
+        paged_bindings.try_reserve(paged_capacity).map_err(|_| {
+            GraphError::capacity_error(GraphCapacityKind::Bindings, paged_capacity, None)
+        })?;
         let bindings = |count| {
             let mut slots = Vec::new();
             slots.try_reserve_exact(count).map_err(|_| {
@@ -158,12 +186,14 @@ impl Batch {
             .map_err(|_| GraphError::capacity_error(GraphCapacityKind::Draws, draws, None))?;
         Ok(Self {
             bindings: bindings(materials)?,
-            instanced_bindings: bindings(if transforms { materials } else { 0 })?,
+            instanced_bindings: bindings(if pages > 0 { materials } else { 0 })?,
+            paged_bindings,
             commands,
         })
     }
 
     pub(crate) fn reset_bindings(&mut self, material_count: usize) {
+        self.paged_bindings.clear();
         self.bindings[..material_count].fill(None);
         if !self.instanced_bindings.is_empty() {
             self.instanced_bindings[..material_count].fill(None);
@@ -192,7 +222,6 @@ impl Batch {
                         stage,
                         materials,
                         draw.material,
-                        None,
                     )?;
                     Command::Indexed(indexed(draw, bindings, 1, parameters))
                 }
@@ -204,7 +233,6 @@ impl Batch {
                         stage,
                         materials,
                         material,
-                        None,
                     )?;
                     Command::Indirect {
                         args,
@@ -219,43 +247,57 @@ impl Batch {
                 } => {
                     let (program, table) =
                         instances.expect("frame preflight guarantees the indirect transform table");
-                    let bindings = Self::material_binding(
-                        &mut self.instanced_bindings,
+                    let (page, first) = (transform / PAGE_RECORDS, transform % PAGE_RECORDS);
+                    let bindings = self.model_binding(
                         graph,
                         program,
                         stage,
                         materials,
                         material,
-                        Some(table),
+                        (table, page),
                     )?;
                     Command::Indirect {
                         args,
                         bindings,
-                        first_transform: Some(transform),
+                        first_transform: Some(first),
                     }
                 }
                 Draw::Instanced {
                     geometry,
-                    first_transform,
-                    instance_count,
+                    mut first_transform,
+                    mut instance_count,
                 } => {
                     let (program, table) =
                         instances.expect("frame preflight guarantees the instance transform table");
-                    let bindings = Self::material_binding(
-                        &mut self.instanced_bindings,
-                        graph,
-                        program,
-                        stage,
-                        materials,
-                        geometry.material,
-                        Some(table),
-                    )?;
-                    Command::Instanced(indexed(
-                        geometry,
-                        bindings,
-                        instance_count,
-                        stage.parameters(Some(first_transform))?,
-                    ))
+                    // Instance IDs restart at zero for each page. The native binding
+                    // is rebased; shaders always address the same bounded range.
+                    loop {
+                        let (page, first) = (
+                            first_transform / PAGE_RECORDS,
+                            first_transform % PAGE_RECORDS,
+                        );
+                        let count = instance_count.min(PAGE_RECORDS - first);
+                        let bindings = self.model_binding(
+                            graph,
+                            program,
+                            stage,
+                            materials,
+                            geometry.material,
+                            (table, page),
+                        )?;
+                        let command = Command::Instanced(indexed(
+                            geometry,
+                            bindings,
+                            count,
+                            stage.parameters(Some(first))?,
+                        ));
+                        if count == instance_count {
+                            break command;
+                        }
+                        self.commands.push(command);
+                        first_transform += count;
+                        instance_count -= count;
+                    }
                 }
             };
             self.commands.push(command);
@@ -270,15 +312,42 @@ impl Batch {
         stage: Bindings<'_>,
         materials: &[GraphMaterial],
         material: usize,
-        transforms: Option<InstanceBuffer>,
     ) -> Result<RasterBindings, GraphError> {
         let slot = &mut cache[material];
         if let Some(bindings) = *slot {
             return Ok(bindings);
         }
-        let bindings = stage.bind(graph, program, materials[material], transforms)?;
+        let bindings = stage.bind(graph, program, materials[material], None)?;
         *slot = Some(bindings);
         Ok(bindings)
+    }
+
+    fn model_binding(
+        &mut self,
+        graph: &mut Graph,
+        program: &ManagedRasterProgram,
+        stage: Bindings<'_>,
+        materials: &[GraphMaterial],
+        material: usize,
+        (table, page): (InstanceBuffer, u32),
+    ) -> Result<RasterBindings, GraphError> {
+        if page == 0 {
+            let slot = &mut self.instanced_bindings[material];
+            if let Some(bindings) = *slot {
+                return Ok(bindings);
+            }
+            let bindings = stage.bind(graph, program, materials[material], Some((table, page)))?;
+            *slot = Some(bindings);
+            return Ok(bindings);
+        }
+        match self.paged_bindings.entry((material, page)) {
+            std::collections::hash_map::Entry::Occupied(entry) => Ok(*entry.get()),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let bindings =
+                    stage.bind(graph, program, materials[material], Some((table, page)))?;
+                Ok(*entry.insert(bindings))
+            }
+        }
     }
 
     pub(crate) fn draw(
@@ -384,7 +453,7 @@ impl Bindings<'_> {
         graph: &mut Graph,
         program: &ManagedRasterProgram,
         material: GraphMaterial,
-        transforms: Option<InstanceBuffer>,
+        transforms: Option<(InstanceBuffer, u32)>,
     ) -> Result<RasterBindings, GraphError> {
         let camera = match self {
             Self::Scene { camera, .. } | Self::Shadow { camera, .. } => camera,
@@ -416,9 +485,13 @@ impl Bindings<'_> {
                 4
             }
         };
-        if let Some(transforms) = transforms {
-            bindings[count] =
-                buffer_binding(TRANSFORM_BINDING, transforms.handle, 0, transforms.size);
+        if let Some((table, page)) = transforms {
+            bindings[count] = buffer_binding(
+                TRANSFORM_BINDING,
+                table.handle,
+                table.page_offset(page),
+                table.page_bytes,
+            );
             count += 1;
         }
         graph.raster_bindings(program, &bindings[..count])

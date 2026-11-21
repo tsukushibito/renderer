@@ -128,6 +128,8 @@ mod cpu {
     fn transformed_scene_declares_all_cascades() {
         for placement in [
             Placement::Individual,
+            Placement::Instanced,
+            Placement::PagedInstanced,
             Placement::Tilted(Some(-40)),
             Placement::Mirrored {
                 baked: false,
@@ -325,17 +327,28 @@ mod gpu {
     }
 
     fn transformed_instances_match_individual_draws(api: Api) {
-        let render = |placement| {
+        let capture = |technique, placement| {
             let settings = Settings {
+                technique,
                 placement,
                 ..Settings::new(SampleCount::X1)
             };
             render(api, settings, false, Bloom::Off, &[]).unwrap()
         };
-        let individual = render(Placement::Individual);
-        let instanced = render(Placement::Instanced);
+        let individual = capture(Technique::Forward, Placement::Individual);
+        let instanced = capture(Technique::Forward, Placement::Instanced);
         let output = &instanced[0].output;
         assert_eq!(individual[0].output, *output);
+        assert_eq!(
+            capture(Technique::Forward, Placement::PagedInstanced)[0].output,
+            *output
+        );
+
+        for technique in [Technique::ForwardPlus, Technique::Deferred] {
+            let reference = capture(technique, Placement::Individual);
+            let paged = capture(technique, Placement::PagedInstanced);
+            assert_eq!(paged[0].output, reference[0].output, "{technique:?}");
+        }
 
         // Both objects must contribute distinct covered pixels.
         let depth = output.depth.as_ref().unwrap();

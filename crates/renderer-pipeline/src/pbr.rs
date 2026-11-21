@@ -22,7 +22,7 @@ pub use draw::{Draw, GraphMaterial, IndexedDraw, MaterialTextures};
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
-pub use instances::{MAX_TRANSFORMS, Transform};
+pub use instances::Transform;
 pub use material::{MaterialFactors, MaterialUniform, ResidentMaterialUniform};
 pub use unshadowed::UnshadowedView;
 pub use vertex::PbrVertex;
@@ -84,16 +84,16 @@ impl Config {
 }
 
 /// Upper bounds for frame construction. The scene draw count combines opaque
-/// and blended submissions, and the shadow draw limit is per cascade.
+/// and blended commands, and the shadow draw limit is per cascade. Budget
+/// instanced ranges using [`Draw::command_count`].
 #[derive(Clone, Copy, Debug)]
 pub struct SceneLimits {
     pub frames_in_flight: NonZeroUsize,
     pub max_draws: usize,
     pub max_materials: usize,
     pub max_casters_per_cascade: usize,
-    /// Maximum model transforms in this view, up to [`MAX_TRANSFORMS`].
-    /// Zero reserves no transform resources. Positive limits select the
-    /// smallest prepared GPU table that fits (64 or 1,024 records).
+    /// Maximum model transforms across all draws in one view (u32 addressing).
+    /// Zero reserves no table. Larger tables use bounded descriptor pages.
     pub max_transforms: usize,
 }
 

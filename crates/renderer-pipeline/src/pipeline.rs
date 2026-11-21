@@ -133,6 +133,7 @@ pub struct StandardPipeline {
     transparent: Vec<pbr::Draw>,
     casters: [Vec<pbr::Draw>; pbr::CASCADE_COUNT],
     transforms: Vec<Transform>,
+    transform_indices: HashMap<[[u32; 4]; 3], u32>,
     connected: Vec<Draw>,
     order: Vec<(f64, usize, [bool; pbr::CASCADE_COUNT])>,
     forward: ForwardDraws,
@@ -236,6 +237,7 @@ impl StandardPipeline {
             transparent: Vec::with_capacity(max),
             casters: std::array::from_fn(|_| Vec::with_capacity(shadow_max)),
             transforms: Vec::with_capacity(limits.max_transforms),
+            transform_indices: HashMap::with_capacity(limits.max_transforms),
             connected: Vec::with_capacity(max),
             order: Vec::with_capacity(max),
             forward: ForwardDraws {
@@ -332,6 +334,7 @@ impl StandardPipeline {
             casters.clear();
         }
         self.transforms.clear();
+        self.transform_indices.clear();
         self.order.clear();
         self.forward.opaque.clear();
         self.forward.blend.clear();
@@ -440,15 +443,22 @@ impl StandardPipeline {
                 material,
             };
             let command = if let Some(transform) = draw.transform {
-                if self.transforms.len() >= self.limits.max_transforms {
-                    return Err(GraphError::capacity_error(
-                        renderer::graph::GraphCapacityKind::Draws,
-                        self.limits.max_transforms,
-                        Some(self.transforms.len() + 1),
-                    ));
-                }
-                let index = self.transforms.len() as u32;
-                self.transforms.push(transform);
+                let key = transform.model_key();
+                let index = if let Some(&index) = self.transform_indices.get(&key) {
+                    index
+                } else {
+                    if self.transforms.len() >= self.limits.max_transforms {
+                        return Err(GraphError::capacity_error(
+                            renderer::graph::GraphCapacityKind::Draws,
+                            self.limits.max_transforms,
+                            Some(self.transforms.len() + 1),
+                        ));
+                    }
+                    let index = self.transforms.len() as u32;
+                    self.transform_indices.insert(key, index);
+                    self.transforms.push(transform);
+                    index
+                };
                 pbr::Draw::model(geometry, index)
             } else {
                 pbr::Draw::WorldSpaceIndexed(geometry)

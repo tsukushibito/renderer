@@ -751,7 +751,7 @@ fn transformed_draws_check_ranges_before_appending_to_the_graph() {
     let mut recipe = prepare(
         config(),
         SceneLimits {
-            max_transforms: 1,
+            max_transforms: 1_025,
             ..limits()
         },
     )
@@ -760,10 +760,10 @@ fn transformed_draws_check_ranges_before_appending_to_the_graph() {
     let mut graph = pool.begin().unwrap();
     let (view, material, draw) = inputs(&recipe, &mut graph);
     let materials = [material];
-    let transforms = [Transform::IDENTITY];
+    let transforms = vec![Transform::IDENTITY; 1_025];
     let invalid = [Draw::Instanced {
         geometry: draw,
-        first_transform: 1,
+        first_transform: 1_025,
         instance_count: 1,
     }];
     let mut frame = Frame::with_cascades(&view, &materials, &invalid, &[], &[]);
@@ -776,11 +776,20 @@ fn transformed_draws_check_ranges_before_appending_to_the_graph() {
         GraphErrorKind::InvalidInput
     );
 
-    let instanced = Draw::Instanced {
+    let across_pages = [Draw::Instanced {
         geometry: draw,
-        first_transform: 0,
-        instance_count: 1,
-    };
+        first_transform: 1_023,
+        instance_count: 2,
+    }];
+    assert_eq!(across_pages[0].command_count(), 2);
+    let mut frame = Frame::with_cascades(&view, &materials, &across_pages, &[], &across_pages);
+    frame.transforms = &transforms;
+    let error = recipe.add_scene(&mut graph, frame).unwrap_err();
+    let bounds = error.capacity().unwrap();
+    assert_eq!(bounds.kind, GraphCapacityKind::Draws);
+    assert_eq!(bounds.required, Some(2)); // One caster command was reserved per cascade.
+
+    let instanced = Draw::model(draw, 1_024);
     let opaque = [Draw::WorldSpaceIndexed(draw), instanced];
     let casters = [instanced];
     let mut frame = Frame::with_cascades(&view, &materials, &opaque, &[], &casters);
@@ -802,7 +811,7 @@ fn opaque_indirect_group_uses_one_prepared_model_transform() {
     let mut recipe = prepare(
         config(),
         SceneLimits {
-            max_transforms: 1,
+            max_transforms: 1_025,
             ..limits()
         },
     )
@@ -840,10 +849,10 @@ fn opaque_indirect_group_uses_one_prepared_model_transform() {
     let opaque = [Draw::TransformedIndirect {
         args,
         material: 0,
-        transform: 0,
+        transform: 1_024,
     }];
     let materials = [material];
-    let transforms = [Transform::IDENTITY];
+    let transforms = vec![Transform::IDENTITY; 1_025];
     let mut frame = Frame::with_cascades(&view, &materials, &opaque, &[], &[]);
     frame.transforms = &transforms;
     let scene = recipe.add_scene(&mut graph, frame).unwrap();

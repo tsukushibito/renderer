@@ -176,6 +176,8 @@ pub enum Placement {
     #[cfg(test)]
     Instanced,
     #[cfg(test)]
+    PagedInstanced,
+    #[cfg(test)]
     Tilted(Option<i32>),
     #[cfg(test)]
     Mirrored {
@@ -193,7 +195,7 @@ impl Placement {
             #[cfg(test)]
             Self::Mirrored { baked, .. } => !baked,
             #[cfg(test)]
-            Self::Individual | Self::Instanced => true,
+            Self::Individual | Self::Instanced | Self::PagedInstanced => true,
         }
     }
 }
@@ -331,10 +333,11 @@ pub fn prepare(frames_in_flight: NonZeroUsize, settings: Settings) -> Result<Pre
         max_draws: count,
         max_materials: 1,
         max_casters_per_cascade: count,
-        max_transforms: if settings.placement.uses_transforms() {
-            count
-        } else {
-            0
+        max_transforms: match settings.placement {
+            #[cfg(test)]
+            Placement::PagedInstanced => 1_026,
+            placement if placement.uses_transforms() => count,
+            _ => 0,
         },
     };
     Prepared::new(settings.technique, config, limits)
@@ -414,6 +417,7 @@ pub fn build_graph(
         Placement::Individual => &test_draws[..],
         #[cfg(test)]
         Placement::Instanced
+        | Placement::PagedInstanced
         | Placement::Tilted(Some(_))
         | Placement::Mirrored { baked: false, .. } => &test_draws[..1],
         #[cfg(test)]
@@ -437,7 +441,20 @@ pub fn build_graph(
     };
     let mut frame = Frame::new(&view, &materials, opaque, transparent, opaque, defaults)?;
     #[cfg(test)]
-    if placement.uses_transforms() {
+    let mut paged_transforms;
+    #[cfg(test)]
+    if placement == Placement::PagedInstanced {
+        // Exercise 1,025 active instances beginning at a nonzero index. Only
+        // the two straddling the page boundary are visible to the view or sun.
+        let outside = Transform::new([
+            [1.0, 0.0, 0.0, 1_000.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ])?;
+        paged_transforms = vec![outside; 1_026];
+        paged_transforms[1_023..1_025].copy_from_slice(&transforms);
+        frame.transforms = &paged_transforms;
+    } else if placement.uses_transforms() {
         frame.transforms = &transforms;
     }
     if let Some(shadows) = &shadows {
@@ -536,11 +553,11 @@ fn placed_draws(
         [
             Draw::Instanced {
                 geometry: indexed,
-                first_transform: 0,
-                instance_count: if placement == Placement::Instanced {
-                    2
-                } else {
-                    1
+                first_transform: u32::from(placement == Placement::PagedInstanced),
+                instance_count: match placement {
+                    Placement::PagedInstanced => 1_025,
+                    Placement::Instanced => 2,
+                    _ => 1,
                 },
             },
             Draw::model(indexed, 1),

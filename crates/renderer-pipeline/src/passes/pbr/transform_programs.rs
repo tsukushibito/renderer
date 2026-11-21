@@ -150,12 +150,12 @@ pub(crate) fn transformed_programs(tier: InstanceTier, technique: TransformTechn
     }
 }
 
-/// Forward PBR Program with the full 1,024-record transform table.
+/// Forward PBR Program with one 1,024-record transform page at the bound offset.
 pub const fn transformed_opaque_program() -> ManagedRasterProgram {
     import(&full::FORWARD)
 }
 
-/// Depth-only shadow Program with the full 1,024-record transform table.
+/// Depth-only shadow Program with one 1,024-record transform page at the bound offset.
 pub const fn transformed_shadow_program() -> ManagedRasterProgram {
     import(&full::CASCADE)
 }
