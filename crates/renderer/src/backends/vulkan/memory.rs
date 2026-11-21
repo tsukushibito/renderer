@@ -49,7 +49,7 @@ impl VulkanAllocator {
             device.raw(),
             device.physical_device(),
         );
-        // Match the application's Instance API, not the adapter's newer API.
+        // Both an owned and a host-supplied instance support this 1.3 baseline.
         create_info.vulkan_api_version = REQUIRED_API;
         #[cfg(feature = "memory-profiling")]
         let host_callbacks = profiling::host_callbacks();

@@ -11,6 +11,9 @@ use ash::vk;
 
 use super::instance::{LOG_TARGET, REQUIRED_API, VulkanInstance, api_version};
 
+mod host;
+pub use host::{VulkanHostDevice, VulkanHostFeatures};
+
 #[derive(Clone, Debug)]
 struct DriverInfo {
     name: String,
@@ -160,6 +163,10 @@ fn supported_api(api: u32) -> bool {
 
 impl Candidate {
     fn assess(self) -> Result<SelectedDevice, AdapterRejection> {
+        self.assess_queue(None)
+    }
+
+    fn assess_queue(self, requested: Option<u32>) -> Result<SelectedDevice, AdapterRejection> {
         let mut failures = self.property_failures;
         let api = self.info.api_version;
         if vk::api_version_variant(api) != 0 {
@@ -183,10 +190,11 @@ impl Candidate {
             }
         }
         let required = vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE;
-        let queue_family_index = self
-            .queues
-            .iter()
-            .position(|queue| queue.queue_count != 0 && queue.queue_flags.contains(required));
+        let queue_family_index = self.queues.iter().enumerate().position(|(index, queue)| {
+            requested.is_none_or(|family| family as usize == index)
+                && queue.queue_count != 0
+                && queue.queue_flags.contains(required)
+        });
         if queue_family_index.is_none() {
             failures.push(RequirementFailure::GraphicsComputeQueue);
         }
@@ -405,10 +413,12 @@ pub(super) struct VulkanDevice {
     max_buffer_size: vk::DeviceSize,
     limits: vk::PhysicalDeviceLimits,
     memory_budget_enabled: bool,
+    owns_device: bool,
+    sampler_limit: u32,
     #[cfg(all(feature = "presentation", windows))]
     presentation_enabled: bool,
     queue: vk::Queue,
-    queue_lock: Mutex<()>,
+    queue_lock: Arc<Mutex<()>>,
     state: AtomicU8,
     samplers: SamplerCount,
 }
@@ -462,20 +472,17 @@ impl VulkanDevice {
         &self,
         info: &vk::SamplerCreateInfo<'_>,
     ) -> Result<vk::Sampler, super::error::RuntimeError> {
-        let mut reservation = self
-            .samplers
-            .reserve(self.limits.max_sampler_allocation_count)
-            .map_err(|()| {
-                super::error::RuntimeError::capacity_with(
-                    "Device sampler allocation limit exhausted",
-                    RuntimeCapacityError::new(
-                        RuntimeCapacityKind::Samplers,
-                        CapacityRecovery::ReleaseOwners,
-                        Some(u64::from(self.limits.max_sampler_allocation_count)),
-                        Some(u64::from(self.limits.max_sampler_allocation_count) + 1),
-                    ),
-                )
-            })?;
+        let mut reservation = self.samplers.reserve(self.sampler_limit).map_err(|()| {
+            super::error::RuntimeError::capacity_with(
+                "Device sampler allocation limit exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Samplers,
+                    CapacityRecovery::ReleaseOwners,
+                    Some(u64::from(self.sampler_limit)),
+                    Some(u64::from(self.sampler_limit) + 1),
+                ),
+            )
+        })?;
         #[cfg(feature = "memory-profiling")]
         crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: The caller guarantees configuration/feature validity. The
@@ -639,6 +646,10 @@ impl VulkanDevice {
         self._instance.raw()
     }
 
+    pub(super) fn instance_api_version(&self) -> u32 {
+        self._instance.api_version
+    }
+
     pub(super) fn raw(&self) -> &ash::Device {
         &self.device
     }
@@ -778,11 +789,10 @@ impl VulkanDevice {
         Self::create_selected_shared(Arc::new(instance), selected, false)
     }
 
-    fn create_selected_shared(
-        instance: Arc<VulkanInstance>,
-        selected: SelectedDevice,
-        presentation: bool,
-    ) -> Result<Self, DeviceInitError> {
+    fn query_limits(
+        instance: &VulkanInstance,
+        selected: &SelectedDevice,
+    ) -> (vk::PhysicalDeviceLimits, vk::DeviceSize) {
         let mut maintenance4 = vk::PhysicalDeviceMaintenance4Properties::default();
         let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut maintenance4);
         // SAFETY: Selection requires Vulkan 1.3 on this retained Instance and
@@ -795,8 +805,15 @@ impl VulkanDevice {
         }
         // Optional feature enablement does not change the reported limit. Use
         // this adapter's actual value rather than assuming either 24 or 32 bits.
-        let limits = properties.properties.limits;
-        let max_buffer_size = maintenance4.max_buffer_size;
+        (properties.properties.limits, maintenance4.max_buffer_size)
+    }
+
+    fn create_selected_shared(
+        instance: Arc<VulkanInstance>,
+        selected: SelectedDevice,
+        presentation: bool,
+    ) -> Result<Self, DeviceInitError> {
+        let (limits, max_buffer_size) = Self::query_limits(&instance, &selected);
         // Optional observation only. Vulkan 1.3 supplies the properties2
         // dependency in core; this extension has no feature to enable.
         // SAFETY: The selected adapter belongs to this retained Instance.
@@ -855,10 +872,12 @@ impl VulkanDevice {
             max_buffer_size,
             limits,
             memory_budget_enabled,
+            owns_device: true,
+            sampler_limit: limits.max_sampler_allocation_count,
             #[cfg(all(feature = "presentation", windows))]
             presentation_enabled: presentation,
             queue: vk::Queue::null(),
-            queue_lock: Mutex::new(()),
+            queue_lock: Arc::new(Mutex::new(())),
             state: AtomicU8::new(DeviceState::Active as u8),
             samplers: SamplerCount::default(),
         };
@@ -903,6 +922,9 @@ impl VulkanDevice {
 
 impl Drop for VulkanDevice {
     fn drop(&mut self) {
+        if !self.owns_device {
+            return;
+        }
         #[cfg(feature = "memory-profiling")]
         crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
         // SAFETY: Buffer and submission owners retain the containing MemoryOwner.

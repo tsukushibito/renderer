@@ -112,8 +112,9 @@ impl Runtime {
     }
 
     /// Attach an independent window to the same runtime and resource registry.
-    /// Create the Vulkan runtime with `for_window` or `new_with_presentation`. Its queue
-    /// must support the new surface. Presenters share the execution slots.
+    /// Use `for_window`, `new_with_presentation`, or an adopted Vulkan device
+    /// with presentation slots. Its queue must support this surface.
+    /// Presenters share the execution slots.
     /// Poll each presenter when several windows have work in flight.
     pub fn create_presenter(
         &self,
