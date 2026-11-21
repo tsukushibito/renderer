@@ -28,6 +28,13 @@ pub struct VulkanHostDevice {
     pub queue: vk::Queue,
     pub queue_family: u32,
     pub enabled: VulkanHostFeatures,
+    /// Zero selects headless execution. On Windows, a nonzero value opts
+    /// into attaching windows and reserves this many additional execution
+    /// slots in the common Runtime. This requires the host instance to have
+    /// KHR_surface, KHR_win32_surface, KHR_get_surface_capabilities2 and
+    /// EXT_surface_maintenance1 enabled and the device to have KHR_swapchain,
+    /// EXT_swapchain_maintenance1 and the swapchainMaintenance1 feature enabled.
+    pub presentation_slots: usize,
     /// Device-wide sampler slots exclusively reserved for this runtime.
     pub sampler_budget: u32,
     /// Shared exclusion for host operations on this queue, including waits.
@@ -46,6 +53,11 @@ impl VulkanDevice {
         diagnostics: DiagnosticsHandle,
     ) -> Result<Self, RuntimeError> {
         let enabled = host.enabled;
+        if host.presentation_slots != 0 && !cfg!(all(feature = "presentation", windows)) {
+            return Err(RuntimeError::unsupported(
+                "host presentation slots require Windows presentation support",
+            ));
+        }
         if !supported_api(enabled.instance_api_version)
             || !enabled.timeline_semaphore
             || !enabled.synchronization2
@@ -101,6 +113,8 @@ impl VulkanDevice {
             max_buffer_size,
             // Optional extensions are never inferred from support on an adopted device.
             memory_budget_enabled: false,
+            #[cfg(all(feature = "presentation", windows))]
+            presentation_enabled: host.presentation_slots != 0,
             owns_device: false,
             sampler_limit: host.sampler_budget,
             queue: host.queue,
@@ -114,11 +128,14 @@ impl VulkanDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backends::vulkan::{diagnostics::Diagnostics, instance::ValidationMode};
-    use crate::capacity::{ResourceClass, WorkingSet};
-    use crate::graph::{BufferDesc, GraphCapacity, GraphPool};
+    use crate::backends::vulkan::{
+        diagnostics::Diagnostics, instance::ValidationMode, memory::VulkanAllocator,
+        resources::DeviceImage,
+    };
+    use crate::capacity::WorkingSet;
+    use crate::graph::ImageDesc;
     use crate::runtime::{ExecutionErrorKind, Runtime, RuntimeLimits, VulkanConfig};
-    use std::time::Duration;
+    use crate::vulkan::VulkanImageState;
 
     #[test]
     #[ignore = "requires a hardware Vulkan 1.3 device; diagnostics builds require Core/SyncVal"]
@@ -129,9 +146,33 @@ mod tests {
             ValidationMode::Disabled
         };
         let diagnostics = Diagnostics::new();
-        let instance = VulkanInstance::with_validation(diagnostics.clone(), validation).unwrap();
-        let original = Arc::new(VulkanDevice::new(instance).unwrap());
+        #[cfg(all(feature = "presentation", windows))]
+        let device = {
+            use crate::backends::vulkan::presentation::WindowSurface;
+            let instance = WindowSurface::instance(diagnostics.clone(), validation).unwrap();
+            VulkanDevice::for_presentation(instance, None).unwrap()
+        };
+        #[cfg(not(all(feature = "presentation", windows)))]
+        let device = {
+            let instance =
+                VulkanInstance::with_validation(diagnostics.clone(), validation).unwrap();
+            VulkanDevice::new(instance).unwrap()
+        };
+        #[cfg(feature = "vulkan-diagnostics")]
+        crate::backends::vulkan::assert_real_validation(&diagnostics);
+        let memory = VulkanAllocator::new(device).unwrap().owner;
+        let original = &memory.device;
         assert_ne!(original.device_type(), vk::PhysicalDeviceType::CPU);
+        // The host creates and binds its texture before the Renderer runtime exists.
+        let desc = ImageDesc::rgba8(2, 1);
+        let texture = Arc::new(
+            DeviceImage::create(
+                memory.clone(),
+                DeviceImage::prepare(&memory, desc).unwrap(),
+                "host texture",
+            )
+            .unwrap(),
+        );
         let host = || VulkanHostDevice {
             entry: original._instance.entry().clone(),
             instance: original.instance_raw().clone(),
@@ -140,8 +181,9 @@ mod tests {
             queue: original.queue(),
             queue_family: original.queue_family(),
             queue_lock: Arc::clone(&original.queue_lock),
-            lifetime: original.clone(),
+            lifetime: memory.clone(),
             sampler_budget: 8,
+            presentation_slots: usize::from(cfg!(all(feature = "presentation", windows))),
             enabled: VulkanHostFeatures {
                 instance_api_version: REQUIRED_API,
                 timeline_semaphore: true,
@@ -151,11 +193,7 @@ mod tests {
                 debug_utils: cfg!(feature = "vulkan-diagnostics"),
             },
         };
-        let desc = BufferDesc { size: 4 };
-        let work = WorkingSet {
-            resources: &[ResourceClass::Buffer { desc, count: 1 }],
-            ..WorkingSet::default()
-        };
+        let work = WorkingSet::default();
         let settings = VulkanConfig {
             validation: ValidationMode::Disabled,
             ..Default::default()
@@ -171,48 +209,72 @@ mod tests {
         unavailable.enabled.timeline_semaphore = false;
         // SAFETY: Original retains the live handles and exclusively owns all
         // destruction. Queue and allocation capacity are shared as documented.
+        let rejected = unsafe { Runtime::from_vulkan_device(unavailable, settings, limits, work) };
         assert_eq!(
-            unsafe { Runtime::from_vulkan_device(unavailable, settings, limits, work) }
-                .err()
-                .unwrap()
-                .kind(),
+            rejected.err().unwrap().kind(),
             ExecutionErrorKind::Unsupported
         );
         // SAFETY: Same live device and queue, actual creation settings, and
         // original owns all native handles and observes any validation output.
         let mut runtime =
             unsafe { Runtime::from_vulkan_device(host(), settings, limits, work) }.unwrap();
-        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
-        let mut graph = pool.begin().unwrap();
-        let buffer = graph.buffer("buffer on host device", desc).unwrap();
-        graph
-            .upload_buffer("host bytes", buffer, 0, &[1, 2, 3, 4])
-            .unwrap();
-        let read = graph
-            .readback_buffer("read host bytes", buffer, 0, 4)
-            .unwrap();
-        let submission = runtime.submit(&graph.compile().unwrap()).unwrap();
-        let mut completion = runtime
-            .wait_for_frame(submission.id(), Duration::from_secs(15))
+        #[cfg(all(feature = "presentation", windows))]
+        {
+            use winit::{
+                event_loop::EventLoop, platform::windows::EventLoopBuilderExtWindows,
+                window::Window,
+            };
+            let events = EventLoop::builder().with_any_thread(true).build().unwrap();
+            // A hidden surface suffices to verify adoption of the host's enabled
+            // WSI extensions and this exact queue's support for the surface.
+            #[allow(
+                deprecated,
+                reason = "this Windows-only synchronous fixture needs one hidden HWND"
+            )]
+            let window = events
+                .create_window(Window::default_attributes().with_visible(false))
+                .unwrap();
+            let mut presenter = runtime
+                .create_presenter(window, Default::default())
+                .unwrap();
+            assert!(presenter.close(std::time::Duration::from_secs(5)).unwrap());
+        }
+        let renderer_device = runtime.as_vulkan().unwrap().external_device();
+        // SAFETY: The preexisting bound host image uses this exact device and
+        // queue, starts in UNDEFINED and is exclusively lent until release.
+        let image = unsafe {
+            runtime.as_vulkan_mut().unwrap().register_external_image(
+                &renderer_device,
+                texture.image,
+                desc,
+                VulkanImageState::DISCARD,
+                texture.clone(),
+            )
+        }
+        .unwrap();
+        crate::runtime::native_image_tests::transfer(&mut runtime, &image, true, |_| {});
+        let state = runtime
+            .as_vulkan_mut()
+            .unwrap()
+            .release_external_image(image.key())
             .unwrap()
             .unwrap();
-        let mut bytes = [0; 4];
-        completion.readback_into(read, &mut bytes).unwrap();
-        assert_eq!(bytes, [1, 2, 3, 4]);
-        drop((completion, submission, runtime));
-        assert_eq!(Arc::strong_count(&original), 1);
+        assert!(state.initialized);
+        assert_eq!(state.layout, vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
+        drop((renderer_device, runtime));
+        assert_eq!(Arc::strong_count(&texture), 1);
+        drop(texture);
+        assert_eq!(Arc::strong_count(&memory), 1);
         // Exercise the host queue after all Renderer children have been destroyed.
         let guard = original.lock_queue().unwrap();
         // SAFETY: We hold the original queue gate and the device remains live.
         unsafe { original.raw().queue_wait_idle(original.queue()).unwrap() };
         drop(guard);
-        drop(original);
+        drop(memory);
         assert!(
             diagnostics.snapshot().is_clean(),
             "{:?}",
             diagnostics.snapshot()
         );
-        #[cfg(feature = "vulkan-diagnostics")]
-        crate::backends::vulkan::assert_real_validation(&diagnostics);
     }
 }

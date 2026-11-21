@@ -7,19 +7,86 @@ use super::*;
 impl VulkanRuntime {
     pub fn for_window(
         config: RuntimeConfig,
-        window: Arc<Window>,
+        window: impl HasWindowHandle + 'static,
         presentation: PresentationConfig,
     ) -> Result<(Self, Presenter), RuntimeError> {
         Self::for_window_with_validation(config, window, presentation, ValidationMode::default())
     }
     pub fn for_window_with_validation(
         config: RuntimeConfig,
-        window: Arc<Window>,
+        window: impl HasWindowHandle + 'static,
         presentation: PresentationConfig,
         validation: ValidationMode,
     ) -> Result<(Self, Presenter), RuntimeError> {
         Self::validate_config(config)?;
         validate_config(presentation)?;
+        let window = HostWindow::new(window).map_err(|e| RuntimeError::invalid(e.to_string()))?;
+        let size = window.extent;
+        let diagnostics = Diagnostics::new();
+        let instance = WindowSurface::instance(diagnostics.clone(), validation)?;
+        let surface = WindowSurface::new(window, instance)?;
+        let device = VulkanDevice::for_presentation(Arc::clone(&surface.instance), Some(&surface))?;
+        let runtime = Self::from_device(config, diagnostics, device)?;
+        let presenter = runtime.presenter_for_surface(surface, size, presentation)?;
+        Ok((runtime, presenter))
+    }
+
+    /// Select a Win32-capable queue and enable WSI before a host window exists.
+    /// Each window is checked against the selected queue when it is attached.
+    pub fn new_with_presentation(
+        config: RuntimeConfig,
+        validation: ValidationMode,
+    ) -> Result<Self, RuntimeError> {
+        Self::validate_config(config)?;
+        let diagnostics = Diagnostics::new();
+        let instance = WindowSurface::instance(diagnostics.clone(), validation)?;
+        let device = VulkanDevice::for_presentation(instance, None)?;
+        Self::from_device(config, diagnostics, device)
+    }
+
+    /// Attach a host window to a runtime created with Vulkan presentation enabled.
+    /// Each presenter independently owns its surface and swapchain generations.
+    pub fn create_presenter(
+        &self,
+        window: impl HasWindowHandle + 'static,
+        presentation: PresentationConfig,
+    ) -> Result<Presenter, RuntimeError> {
+        validate_config(presentation)?;
+        let device = &self.owner.device;
+        device
+            .ensure_active()
+            .map_err(RuntimeError::device_unavailable)?;
+        let instance = device.presentation_instance().ok_or_else(|| {
+            RuntimeError::unsupported(
+                "Vulkan presentation was not enabled when this runtime was created",
+            )
+        })?;
+        let window = HostWindow::new(window).map_err(|e| RuntimeError::invalid(e.to_string()))?;
+        let size = window.extent;
+        let surface = WindowSurface::new(window, Arc::clone(instance))?;
+        // SAFETY: The retained instance owns this surface, physical device and queue family.
+        let supported = unsafe {
+            surface.loader.get_physical_device_surface_support(
+                device.physical_device(),
+                device.queue_family(),
+                surface.handle,
+            )
+        }
+        .map_err(|result| native(&self.owner, "vkGetPhysicalDeviceSurfaceSupportKHR", result))?;
+        if !supported {
+            return Err(RuntimeError::unsupported(
+                "selected queue cannot present to this window",
+            ));
+        }
+        self.presenter_for_surface(surface, size, presentation)
+    }
+
+    fn presenter_for_surface(
+        &self,
+        surface: Rc<WindowSurface>,
+        size: (u32, u32),
+        presentation: PresentationConfig,
+    ) -> Result<Presenter, RuntimeError> {
         let mut retired = Vec::new();
         let mut slots = Vec::new();
         let mut pending = Vec::new();
@@ -44,13 +111,8 @@ impl VulkanRuntime {
                     "cannot reserve pending presentation records: {e}"
                 ))
             })?;
-        let size = window.inner_size();
-        let diagnostics = Diagnostics::new();
-        let surface = WindowSurface::new(window, diagnostics.clone(), validation)?;
-        let device = VulkanDevice::for_surface(Arc::clone(&surface.instance), &surface)?;
-        let runtime = Self::from_device(config, diagnostics, device)?;
         let mut inner = Inner {
-            owner: Arc::clone(&runtime.owner),
+            owner: Arc::clone(&self.owner),
             surface,
             current: None,
             retired,
@@ -60,7 +122,7 @@ impl VulkanRuntime {
             pending,
             profiling_enabled: false,
             profiles: None,
-            desired: (size.width, size.height),
+            desired: size,
             dirty: true,
             closed: false,
             surface_lost: false,
@@ -75,7 +137,7 @@ impl VulkanRuntime {
         // Reject an unsupported initial request even for a minimized Window.
         inner.query_present_mode(presentation.vsync)?;
         inner.ensure_swapchain()?;
-        Ok((runtime, Presenter { inner: Some(inner) }))
+        Ok(Presenter { inner: Some(inner) })
     }
 
     /// Sample a fresh exported linear RGBA8 image into this Window's SRGB
@@ -124,7 +186,7 @@ impl VulkanRuntime {
             }
             prepare_source(previous)
         };
-        let chain = Arc::clone(inner.current.as_ref().expect("configured Swapchain"));
+        let chain = Rc::clone(inner.current.as_ref().expect("configured Swapchain"));
         if desc.format != ImageFormat::Rgba8Unorm
             || (desc.width, desc.height) != (chain.extent.width, chain.extent.height)
         {
@@ -177,7 +239,7 @@ impl VulkanRuntime {
             }
             Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
                 inner.surface_lost = true;
-                return Err(RuntimeError::unsupported("Surface lost during acquire"));
+                return Err(RuntimeError::surface_lost("Surface lost during acquire"));
             }
             Err(r) => return Err(native(&self.owner, "vkAcquireNextImageKHR", r)),
         };
@@ -187,7 +249,7 @@ impl VulkanRuntime {
         // SAFETY: Successful acquire above returned this exact image using
         // the uniquely prepared idle Slot. Install its native guard immediately.
         let mut acquired =
-            unsafe { Acquired::new(Arc::clone(&chain), Arc::clone(&slot), image_index) };
+            unsafe { Acquired::new(Rc::clone(&chain), Arc::clone(&slot), image_index) };
         #[cfg(test)]
         if std::mem::take(&mut inner.cancel_next_acquire) {
             acquired.cancel()?;
@@ -210,7 +272,7 @@ impl VulkanRuntime {
             serial,
             commands: PresentCommands::new(
                 Arc::clone(&self.owner),
-                Arc::clone(&chain),
+                Rc::clone(&chain),
                 Arc::clone(&slot),
                 image_index,
             ),

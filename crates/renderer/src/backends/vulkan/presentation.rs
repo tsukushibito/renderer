@@ -4,9 +4,9 @@
 use super::error::RuntimeError;
 use super::memory::MemoryOwner;
 use ash::vk;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use std::{rc::Rc, sync::Arc};
 
 mod surface;
 pub(super) use surface::WindowSurface;
@@ -76,7 +76,7 @@ impl QueuedPresent {
             }
             Self::SurfaceLost => {
                 *surface_lost = true;
-                Err(RuntimeError::unsupported(
+                Err(RuntimeError::surface_lost(
                     "Surface lost during present; pending presentation retained",
                 ))
             }
@@ -209,7 +209,7 @@ mod state_tests {
                 .finish(false, &mut dirty, &mut surface_lost)
                 .unwrap_err()
                 .kind(),
-            crate::backends::vulkan::error::RuntimeErrorKind::Unsupported
+            crate::backends::vulkan::error::RuntimeErrorKind::SurfaceLost
         );
         assert!(surface_lost);
         assert!(!dirty);

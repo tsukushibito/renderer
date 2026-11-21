@@ -23,6 +23,7 @@ pub enum RuntimeErrorKind {
     CapacityExhausted,
     StaleResource,
     WrongOwner,
+    SurfaceLost,
     DeviceLost,
     DeviceUnavailable,
     Native,
@@ -148,6 +149,10 @@ impl RuntimeError {
         Self::classified(RuntimeErrorKind::Unsupported, message)
     }
     #[cfg(all(feature = "presentation", windows))]
+    pub(super) fn surface_lost(message: &'static str) -> Self {
+        Self::classified(RuntimeErrorKind::SurfaceLost, message)
+    }
+    #[cfg(all(feature = "presentation", windows))]
     pub(super) fn reservation_error(message: impl Into<Cow<'static, str>>) -> Self {
         Self::capacity_with(
             message,
@@ -247,6 +252,7 @@ impl std::error::Error for NativeRuntimeCause {
 
 fn native_kind(result: vk::Result) -> RuntimeErrorKind {
     match result {
+        vk::Result::ERROR_SURFACE_LOST_KHR => RuntimeErrorKind::SurfaceLost,
         vk::Result::ERROR_DEVICE_LOST => RuntimeErrorKind::DeviceLost,
         vk::Result::ERROR_FORMAT_NOT_SUPPORTED
         | vk::Result::ERROR_FEATURE_NOT_PRESENT

@@ -406,6 +406,8 @@ pub(super) struct VulkanDevice {
     memory_budget_enabled: bool,
     owns_device: bool,
     sampler_limit: u32,
+    #[cfg(all(feature = "presentation", windows))]
+    presentation_enabled: bool,
     queue: vk::Queue,
     queue_lock: Arc<Mutex<()>>,
     state: AtomicU8,
@@ -518,11 +520,11 @@ impl VulkanDevice {
     }
 
     #[cfg(all(feature = "presentation", windows))]
-    pub(super) fn for_surface(
+    pub(super) fn for_presentation(
         instance: Arc<VulkanInstance>,
-        surface: &super::presentation::WindowSurface,
+        surface: Option<&super::presentation::WindowSurface>,
     ) -> Result<Self, DeviceInitError> {
-        // SAFETY: Surface retains this Instance, and all handles are queried
+        // SAFETY: This live WSI instance owns each enumerated adapter; surface capabilities are queried
         // synchronously before the selected Device is created.
         let physical =
             unsafe { instance.raw().enumerate_physical_devices() }.map_err(|result| {
@@ -535,19 +537,32 @@ impl VulkanDevice {
         let mut candidates = Vec::new();
         for physical in physical {
             let mut candidate = inspect(instance.raw(), physical);
-            let supported_surface = surface
-                .assess_device(physical, &mut candidate.queues)
-                .map_err(|result| DeviceInitError::Vulkan {
-                    operation: "query Surface presentation support",
-                    device_name: Some(candidate.info.name.clone()),
-                    result,
-                })?;
-            if !supported_surface {
-                candidate
-                    .property_failures
-                    .push(RequirementFailure::Presentation(
-                        "opaque sRGB color-attachment Surface",
-                    ));
+            if let Some(surface) = surface {
+                let supported = surface
+                    .assess_device(physical, &mut candidate.queues)
+                    .map_err(|result| DeviceInitError::Vulkan {
+                        operation: "query Surface presentation support",
+                        device_name: Some(candidate.info.name.clone()),
+                        result,
+                    })?;
+                if !supported {
+                    candidate
+                        .property_failures
+                        .push(RequirementFailure::Presentation(
+                            "opaque sRGB color-attachment Surface",
+                        ));
+                }
+            } else {
+                let win32 =
+                    ash::khr::win32_surface::Instance::new(instance.entry(), instance.raw());
+                for (index, family) in candidate.queues.iter_mut().enumerate() {
+                    // SAFETY: This adapter and enumerated family belong to the Win32 WSI instance.
+                    if !unsafe {
+                        win32.get_physical_device_win32_presentation_support(physical, index as u32)
+                    } {
+                        family.queue_count = 0;
+                    }
+                }
             }
             if !candidate.queues.iter().any(|queue| {
                 queue.queue_count != 0
@@ -611,6 +626,11 @@ impl VulkanDevice {
             candidates.push(candidate);
         }
         Self::create_selected_shared(instance, select_device(candidates)?, true)
+    }
+
+    #[cfg(all(feature = "presentation", windows))]
+    pub(super) fn presentation_instance(&self) -> Option<&Arc<VulkanInstance>> {
+        self.presentation_enabled.then_some(&self._instance)
     }
 
     pub(super) fn instance_raw(&self) -> &ash::Instance {
@@ -840,6 +860,8 @@ impl VulkanDevice {
             memory_budget_enabled,
             owns_device: true,
             sampler_limit: limits.max_sampler_allocation_count,
+            #[cfg(all(feature = "presentation", windows))]
+            presentation_enabled: presentation,
             queue: vk::Queue::null(),
             queue_lock: Arc::new(Mutex::new(())),
             state: AtomicU8::new(DeviceState::Active as u8),

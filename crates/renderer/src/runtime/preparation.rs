@@ -223,7 +223,10 @@ impl Runtime {
         }
         // SAFETY: The caller accepts the native sharing contract.
         let runtime = unsafe {
-            crate::vulkan::VulkanRuntime::from_host_device(limits.vulkan_config(settings, 0)?, host)
+            crate::vulkan::VulkanRuntime::from_host_device(
+                limits.vulkan_config(settings, host.presentation_slots)?,
+                host,
+            )
         }?;
         Self::prepare_vulkan_runtime(runtime, limits, working_set)
     }

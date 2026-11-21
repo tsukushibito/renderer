@@ -791,17 +791,19 @@ impl VulkanRuntime {
     /// The dispatch tables, physical device, logical device and unprotected
     /// graphics/compute queue must belong to the same live single-device Vulkan
     /// configuration. The handles and callback state must stay valid while
-    /// `host.lifetime` is retained. Enabled features must describe the host's
-    /// actual creation arguments. Use the supplied mutex for all host access
+    /// `host.lifetime` is retained. Each claimed feature and the extensions
+    /// required by nonzero `presentation_slots` must actually be enabled.
+    /// Include the requested presentation capacity in `config.execution_slots`.
+    /// Use the supplied mutex for all host access
     /// requiring external synchronization on this queue (including device-wide
     /// waits). Never enter Renderer queue operations while holding that mutex.
-    /// The mutex serializes host access; the host must separately synchronize
-    /// GPU access and ownership when sharing native resources.
+    /// The mutex serializes host access. The host separately synchronizes GPU
+    /// access and ownership when sharing native resources.
     ///
     /// Reserve `sampler_budget` of the device's available sampler slots for
     /// this runtime. Provision headroom for its VMA allocations at creation
-    /// and every working-set change, including simultaneous old/new pools:
-    /// all allocators on this device together must obey maxMemoryAllocationCount.
+    /// and every working-set change, including simultaneous old/new pools.
+    /// All allocators on this device together must obey maxMemoryAllocationCount.
     pub unsafe fn from_host_device(
         config: RuntimeConfig,
         host: super::VulkanHostDevice,

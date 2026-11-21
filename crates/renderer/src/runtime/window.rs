@@ -1,7 +1,5 @@
-use std::sync::Arc;
-use std::time::Duration;
-
-use winit::window::Window;
+use raw_window_handle::HasWindowHandle;
+use std::{num::NonZeroUsize, time::Duration};
 
 use crate::graph::ImportImage;
 use crate::{PresentOutcome, PresentationConfig, PresentationMetrics};
@@ -36,12 +34,15 @@ enum WindowPresenterInner {
 
 impl Runtime {
     /// Create a runtime, its prepared Graph working set, and a presenter for
-    /// the Window. Presentation slots are additional to the Graph frame limit.
+    /// the window. Move in a host window owner (for example an Arc to a winit
+    /// window, or an Rc around an engine window implementing HasWindowHandle).
+    /// The presenter retains that owner on the calling thread through native teardown.
+    /// Presentation execution slots are additional to the Graph frame limit.
     pub fn for_window(
         config: RuntimeConfig,
         limits: RuntimeLimits,
         working_set: WorkingSet<'_>,
-        window: Arc<Window>,
+        window: impl HasWindowHandle + 'static,
         presentation: PresentationConfig,
     ) -> Result<(Self, WindowPresenter), ExecutionError> {
         limits.validate()?;
@@ -83,6 +84,60 @@ impl Runtime {
         }
     }
 
+    /// Prepare a runtime for host windows that will be attached later. Reserve
+    /// the total number of additional Vulkan presentation executions across
+    /// those windows. D3D12 reserves slots separately when each window attaches.
+    pub fn new_with_presentation(
+        config: RuntimeConfig,
+        limits: RuntimeLimits,
+        working_set: WorkingSet<'_>,
+        presentation_slots: NonZeroUsize,
+    ) -> Result<Self, ExecutionError> {
+        #[cfg(not(feature = "vulkan"))]
+        let _ = presentation_slots;
+        match config {
+            #[cfg(feature = "vulkan")]
+            RuntimeConfig::Vulkan(settings) => {
+                limits.validate()?;
+                let capacity = limits.vulkan_capacity()?;
+                let mut runtime = crate::vulkan::VulkanRuntime::new_with_presentation(
+                    limits.vulkan_config(settings, presentation_slots.get())?,
+                    settings.validation,
+                )?;
+                runtime.set_frame_limit(limits.frames)?;
+                runtime.prepare_graph_working_set(Some(capacity), working_set)?;
+                Ok(Self {
+                    inner: RuntimeInner::Vulkan(runtime),
+                })
+            }
+            #[cfg(feature = "d3d12")]
+            RuntimeConfig::D3D12(_) => Self::new(config, limits, working_set),
+        }
+    }
+
+    /// Attach an independent window to the same runtime and resource registry.
+    /// Use `for_window`, `new_with_presentation`, or an adopted Vulkan device
+    /// with presentation slots. Its queue must support this surface.
+    /// Presenters share the execution slots.
+    /// Poll each presenter when several windows have work in flight.
+    pub fn create_presenter(
+        &self,
+        window: impl HasWindowHandle + 'static,
+        presentation: PresentationConfig,
+    ) -> Result<WindowPresenter, ExecutionError> {
+        let inner = match &self.inner {
+            #[cfg(feature = "vulkan")]
+            RuntimeInner::Vulkan(runtime) => {
+                WindowPresenterInner::Vulkan(runtime.create_presenter(window, presentation)?)
+            }
+            #[cfg(feature = "d3d12")]
+            RuntimeInner::D3D12(runtime) => {
+                WindowPresenterInner::D3D12(runtime.create_presenter(window, presentation)?)
+            }
+        };
+        Ok(WindowPresenter { inner })
+    }
+
     /// Queue an exported linear RGBA8 image for display. Same-queue ordering
     /// handles its producer; this operation adds no CPU wait for the Graph.
     pub fn present(
@@ -113,7 +168,18 @@ impl WindowPresenter {
     pub fn prepare(&mut self) -> Result<WindowReadiness, ExecutionError> {
         let (outcome, extent) = match &mut self.inner {
             #[cfg(feature = "vulkan")]
-            WindowPresenterInner::Vulkan(presenter) => (presenter.prepare()?, presenter.extent()),
+            WindowPresenterInner::Vulkan(presenter) => match presenter.prepare() {
+                Ok(outcome) => (outcome, presenter.extent()),
+                Err(error)
+                    if error.capacity().is_some_and(|shortage| {
+                        shortage.resource == crate::capacity::RuntimeCapacityKind::RetiredSwapchains
+                            && shortage.recovery == crate::capacity::CapacityRecovery::Poll
+                    }) =>
+                {
+                    return Ok(WindowReadiness::Pending);
+                }
+                Err(error) => return Err(error.into()),
+            },
             #[cfg(feature = "d3d12")]
             WindowPresenterInner::D3D12(presenter) => (presenter.prepare()?, presenter.extent()),
         };

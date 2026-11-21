@@ -52,6 +52,24 @@ Graphのnative実行は次の責務に分ける。公開APIや汎用backend trai
 
 ### ホストが所有する画像
 
+すでに Vulkan を初期化したエンジンは `Runtime::from_vulkan_device` に元の instance・physical device・device・queue、
+それらを保持する `Arc` と、ホストが同じ queue の操作に使う `Arc<Mutex<()>>` を渡す。
+Renderer は同じ device に自身の VMA と実行資源を用意し、最後の GPU 利用者までホストの所有者を保持する。
+ホスト側の device・instance の破棄はその所有者が行う。外部画像は Runtime 作成前に確保したものも登録できる。
+明示した instance API、timelineSemaphore、synchronization2、dynamicRendering とキューの実能力を照合し、
+multiDrawIndirect はホストが有効化を申告した場合だけ使う。Vulkan は論理 device の有効化済み feature を再照会できないため、
+実際の作成設定と申告値の対応は unsafe 境界でホストが保証する。
+
+ホストは `sampler_budget` の個数を Renderer 用に確保し、他の allocator と合わせて
+`maxMemoryAllocationCount` を守る。初期化・working set の変更では新旧資源が同時に存在する。
+queue のロックは CPU の排他制御を担い、画像の GPU アクセスとメモリ可視性は以下の受け渡し契約に従う。
+既存 instance の layer 設定と診断 callback はホストが管理する。共通 API の `VulkanConfig.validation` は
+`Disabled` に設定し、ホストのログで実効設定と診断数を検証する。診断機能付きビルドは
+オブジェクト名とラベルに使う `VK_EXT_debug_utils` を既存 instance に必要とする。
+Windows 表示に使う場合は `VulkanHostDevice::presentation_slots` に追加の実行枠を指定し、
+同フィールドに記載した WSI 拡張と swapchainMaintenance1 の有効化を保証する。
+各ウィンドウの取り付け時には実際の surface と queue の対応を確認する。
+
 `VulkanRuntime::external_device` はInstance・Device・loaderを保持する。`image_create_info(desc)` で、実Device上で必要なformat・tiling・sample数・usageを確認できる。ホストは対応する単一layerの2D画像、bind済みmemory、両方の寿命を保証する `Arc` を渡す。ホストのDropでVulkanを呼ぶ場合、そのownerにもDeviceを保持する。Vulkanは既存のVkImageから作成時の全属性を照会できないため、`register_external_image` のunsafe契約で実際の属性との一致を保証する。Rendererは利用するviewだけを作成・破棄し、ホストの画像をVMAの所有物として解放しない。
 
 初回の `VulkanImageState::DISCARD` は内容を破棄する。既存内容を読むときは全subresourceの現在のlayoutと、全mipのtexelが定義済みであることを伝える。同一queueのhost submissionには `with_queue` を使う。別queueから渡す場合は、先行GPUアクセスの完了・可視性と、必要なqueue family release/acquireをホスト側で確立する。登録・返却はCPUの変更境界で、待機やGPU命令を発行しない。返却後の最初のbarrierは返却されたlayoutと、先行アクセスを覆うALL_COMMANDS / MEMORY_READ | MEMORY_WRITEを起点にする。別Deviceとの共有には外部memory・semaphoreとOSハンドルの専用契約が必要になる。[Vulkanの同期とqueue family ownership](https://docs.vulkan.org/spec/latest/chapters/synchronization.html)
@@ -672,13 +690,15 @@ slotとguardの状態はprivateに保ち、状態遷移を所有者の操作へ�
 表示例は次回再描画期限を早期eventで後ろへ動かさず、ゼロ寸法ではevent/明示復帰期限を待つ。
 復帰時の描画可否はWindow寸法から決め、Swapchain作成済みかどうかには依存させない。
 
-`for_window`は`Arc<winit::window::Window>`を受け取り、Runtimeと`Presenter`を返す。
-Surface所有者がWindowとInstanceを保持し、Deviceと同じInstanceに由来することを保証する。
-対象をWin32に限定し、winitの`HWND`／`HINSTANCE`からashのWin32 Surface作成を直接呼ぶ。
-別Window libraryや別OSのadapterを含む`ash-window`依存は持たず、D3D12だけの表示構成へashを追加しない。
-イベントループは利用側に置く。M3では確実なWindow寿命を優先した限定adapterとし、
-他のwindow libraryへの接続はPresentation内の境界で追加できるよう、Graph・engine入力から分離する。
-CPUのみの構築とheadless Vulkanはwindow依存を持たず、表示依存はWindows targetのoptional依存に限定する。
+`for_window`は Win32 の `HasWindowHandle` を実装する所有者を受け取り、実 Surface でアダプターと queue を選ぶ。
+先に GPU 資源を準備するホストは `Runtime::new_with_presentation` で Windows 表示拡張と表示用の総実行枠を予約できる。
+この場合は Win32 表示が可能な queue family を選ぶ。`create_presenter` は追加する実 Surface ごとに同じ queue の
+present 対応を照会し、既存の Device・登録簿を共有する。通常の headless 初期化は従来の能力だけを要求する。
+
+Surface は host window と Instance を保持し、各 Swapchain 世代が Surface を保持する。
+クライアント領域から初期寸法を得て、必要なら HWND から HINSTANCE を取得する。ウィンドウのイベントとリサイズ通知はホストが所有する。
+Presenter は呼び出し元スレッドに属し、`Rc` のエンジンウィンドウや `Arc<winit::window::Window>` を受け取れる。
+表示機能の製品依存は Windows の `raw-window-handle` と Win32 照会に限定する。通常フレームでホストのハンドルを再取得しない。
 
 `Presenter::prepare`で再作成を進め、`extent`に合うGraph出力を作る。
 Graphのlinear RGBA8_UNORM出力を`present`へ渡し、BGRA8_SRGBまたはRGBA8_SRGB、
