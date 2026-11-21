@@ -7,7 +7,7 @@ mod programs;
 pub use effect::Bloom;
 use effect::{COMBINE_PASS, FILTER_PASSES, RESULT_IMAGE};
 
-use renderer::capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet};
+use renderer::capacity::Preparation;
 use renderer::graph::{Graph, GraphError, ImageDesc, ImageHandle};
 
 /// Bloom configured for a specific HDR extent and blur kernel.
@@ -36,31 +36,21 @@ impl Bloom {
                     "Bloom requires single-subresource 1× RGBA16F scene color",
                 ));
             }
-            let count = preparation.frames_in_flight().get();
-            let resources = images.map(|desc| ResourceClass::Image { desc, count });
-            let passes = FILTER_PASSES.len() + 1;
-            // Each filter samples and writes one image. Combine reads two
-            // source images and writes one. Each binding is one image access.
-            let bindings = 2 * FILTER_PASSES.len() + 3;
-            let name_bytes = 2 * FILTER_PASSES.iter().map(|name| name.len()).sum::<usize>()
-                + COMBINE_PASS.len()
-                + RESULT_IMAGE.len();
-            preparation.add_requirements(
-                GraphRequirements {
-                    resources: resources.len(),
-                    passes,
-                    compute_dispatches: passes,
-                    accesses: bindings,
-                    bindings,
-                    name_bytes,
-                    ..GraphRequirements::default()
-                },
-                WorkingSet {
-                    resources: &resources,
-                    raster: &[],
-                    compute: self.programs(),
-                },
-            )?;
+            let mut stages = Preparation::new(preparation.frames_in_flight());
+            let [half, quarter, blur] = FILTER_PASSES;
+            let names = [
+                (half, half),
+                (quarter, quarter),
+                (blur, blur),
+                (RESULT_IMAGE, COMBINE_PASS),
+            ];
+            for ((image, (target, pass)), program) in
+                images.into_iter().zip(names).zip(self.programs())
+            {
+                stages.reserve_transient_image(target, image)?;
+                stages.reserve_dispatch(pass, program)?;
+            }
+            preparation.add_requirements(stages.graph_requirements(), stages.working_set())?;
         }
         Ok(PreparedBloom {
             mode: self,

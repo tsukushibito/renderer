@@ -6,6 +6,9 @@ use super::{ResourceClass, WorkingSet};
 use crate::graph::{BufferDesc, GraphCapacity, GraphError, ImageDesc};
 use crate::program::{ManagedProgram, RasterPipelineRequest};
 
+mod operations;
+pub use operations::RasterPassBudget;
+
 /// Upper bounds for Graph declarations in one frame, including declarations
 /// later culled by compilation. Sum requirements for parts in the same Graph.
 /// Take the maximum for mutually exclusive configurations of a single slot.
@@ -20,6 +23,8 @@ pub struct GraphRequirements {
     pub raster_constant_words: usize,
     pub bindings: usize,
     pub attachments: usize,
+    /// Initialized intervals captured by distinct imported resource declarations.
+    pub initial_ranges: usize,
     pub name_bytes: usize,
     /// Bytes copied into the Graph-owned upload arena in one frame.
     pub upload_bytes: usize,
@@ -39,6 +44,7 @@ impl GraphRequirements {
             )?,
             bindings: checked_add(self.bindings, rhs.bindings)?,
             attachments: checked_add(self.attachments, rhs.attachments)?,
+            initial_ranges: checked_add(self.initial_ranges, rhs.initial_ranges)?,
             name_bytes: checked_add(self.name_bytes, rhs.name_bytes)?,
             upload_bytes: checked_add(self.upload_bytes, rhs.upload_bytes)?,
         })
@@ -54,6 +60,7 @@ impl GraphRequirements {
             raster_constant_words: self.raster_constant_words.max(rhs.raster_constant_words),
             bindings: self.bindings.max(rhs.bindings),
             attachments: self.attachments.max(rhs.attachments),
+            initial_ranges: self.initial_ranges.max(rhs.initial_ranges),
             name_bytes: self.name_bytes.max(rhs.name_bytes),
             upload_bytes: self.upload_bytes.max(rhs.upload_bytes),
         }
@@ -164,8 +171,9 @@ impl Preparation {
     }
 
     /// Raise the caller's minimum declaration limits to cover all registered
-    /// parts. Set import, dependency and read/write analysis limits in `base`
-    /// for the assembled Graph.
+    /// parts. Reserve a reader for each possible access and an initial analysis
+    /// segment per resource. Cross-pass dependencies and additional interval
+    /// fragmentation depend on the assembled Graph; budget these in `base`.
     pub fn graph_capacity(&self, mut base: GraphCapacity) -> Result<GraphCapacity, GraphError> {
         let requirements = self.requirements;
         base.resources = base.resources.max(requirements.resources);
@@ -183,8 +191,34 @@ impl Preparation {
         }
         base.bindings = base.bindings.max(requirements.bindings);
         base.attachments = base.attachments.max(requirements.attachments);
+        base.initial_ranges = base.initial_ranges.max(requirements.initial_ranges);
+        base.readers = base.readers.max(requirements.accesses);
+        base.segments = base.segments.max(requirements.resources);
         base.name_bytes = base.name_bytes.max(requirements.name_bytes);
         base.upload_bytes = base.upload_bytes.max(requirements.upload_bytes);
+        Ok(base)
+    }
+
+    /// Physical slots across the prepared classes, including frame concurrency.
+    pub fn resource_count(&self) -> Result<usize, GraphError> {
+        self.resources.iter().try_fold(0, |total, class| {
+            let (ResourceClass::Buffer { count, .. } | ResourceClass::Image { count, .. }) = class;
+            checked_add(total, *count)
+        })
+    }
+
+    /// Raise the supplied runtime limits to accommodate the prepared Graph,
+    /// frame concurrency, one result per in-flight frame, and all resource classes.
+    /// Include additional retained results or external registrations in `base`.
+    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+    pub fn runtime_limits(
+        &self,
+        mut base: crate::runtime::RuntimeLimits,
+    ) -> Result<crate::runtime::RuntimeLimits, GraphError> {
+        base.graph = self.graph_capacity(base.graph)?;
+        base.frames = base.frames.max(self.frames_in_flight.get());
+        base.results = base.results.max(self.frames_in_flight.get());
+        base.resource_capacity = base.resource_capacity.max(self.resource_count()?);
         Ok(base)
     }
 

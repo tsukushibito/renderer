@@ -1,15 +1,16 @@
 //! Application implementation using the public asset and Graph APIs.
 use renderer::{
-    capacity::{GraphRequirements, Preparation, WorkingSet},
+    capacity::Preparation,
     graph::{
         Attachment, Graph, GraphError, ImageDesc, LoadOp, RasterAttachments, RasterDraw,
-        RasterParameters, StoreOp,
+        RasterParameters, SampleCount, StoreOp,
     },
     program::ManagedRasterProgram,
     runtime::FrameSubmission,
 };
 use renderer_pipeline::{
     material::{MaterialDefinition, MaterialInstance},
+    mesh::Meshes,
     pbr::SceneLimits,
     pipeline::{
         CameraView, PipelineResult, PreparedScene, RenderObject, SceneInput, ViewImages,
@@ -17,6 +18,10 @@ use renderer_pipeline::{
     },
 };
 use std::num::NonZeroUsize;
+
+const COLOR_TARGET: &str = "toon color";
+const DEPTH_TARGET: &str = "toon depth";
+const GEOMETRY_PASS: &str = "toon";
 
 pub struct ToonPipeline {
     program: ManagedRasterProgram,
@@ -45,26 +50,13 @@ impl ViewPipeline for ToonPipeline {
         [w, h]: [u32; 2],
         views: NonZeroUsize,
     ) -> Result<(), GraphError> {
-        p.reserve_image(ImageDesc::rgba16_float(w, h), views.get())?;
-        p.reserve_image(ImageDesc::depth32(w, h), views.get())?;
         for _ in 0..views.get() {
-            let draws = self.limit;
-            p.add_requirements(
-                GraphRequirements {
-                    resources: 2 + 2 * draws,
-                    passes: 1,
-                    draws,
-                    accesses: 2 + 2 * draws,
-                    attachments: 2,
-                    raster_constant_words: 20 * draws,
-                    name_bytes: 64 + 32 * draws,
-                    ..Default::default()
-                },
-                WorkingSet {
-                    raster: &[self.program.clone().into()],
-                    ..Default::default()
-                },
-            )?;
+            Meshes::reserve_imports(p, self.limit)?;
+            p.reserve_raster_pass(GEOMETRY_PASS, SampleCount::X1, |pass| {
+                pass.transient_attachment(COLOR_TARGET, ImageDesc::rgba16_float(w, h))?;
+                pass.transient_attachment(DEPTH_TARGET, ImageDesc::depth32(w, h))?;
+                pass.draws(&self.program, self.limit)
+            })?;
         }
         Ok(())
     }
@@ -116,10 +108,10 @@ impl ViewPipeline for ToonPipeline {
             });
         }
         let [w, h] = camera.extent;
-        let color = g.image("toon color", ImageDesc::rgba16_float(w, h))?;
-        let depth = g.image("toon depth", ImageDesc::depth32(w, h))?;
+        let color = g.image(COLOR_TARGET, ImageDesc::rgba16_float(w, h))?;
+        let depth = g.image(DEPTH_TARGET, ImageDesc::depth32(w, h))?;
         g.raster(
-            "toon",
+            GEOMETRY_PASS,
             RasterAttachments {
                 colors: &[Attachment {
                     view: g.image_view(color, 0, 0)?,

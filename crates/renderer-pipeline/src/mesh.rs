@@ -17,6 +17,9 @@ mod upload;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub use upload::MeshUploadProgress;
 
+const VERTEX_BUFFER: &str = "mesh vertices";
+const INDEX_BUFFER: &str = "mesh indices";
+
 /// One indexed primitive and the vertex interpretation established at import.
 pub struct MeshData {
     geometry: GeometryData,
@@ -131,6 +134,17 @@ pub struct Meshes {
     retired: Vec<ResourceKey>,
 }
 impl Meshes {
+    /// Budget the two initialized imports for each distinct mesh referenced by
+    /// this frame. Register their resident physical classes with [`Self::reserve`].
+    pub fn reserve_imports(
+        preparation: &mut Preparation,
+        max_meshes: usize,
+    ) -> Result<(), GraphError> {
+        preparation.add_graph_requirements(
+            GraphRequirements::imports(VERTEX_BUFFER, max_meshes, 1)?
+                .checked_add(GraphRequirements::imports(INDEX_BUFFER, max_meshes, 1)?)?,
+        )
+    }
     pub fn new(capacity: MeshCapacity) -> Result<Self, MeshError> {
         Ok(Self {
             registry: MeshRegistry::new(capacity)?,
@@ -271,8 +285,8 @@ impl Meshes {
         Ok(Mesh {
             bounds: active.layout.bounds,
             vertex_stride: active.layout.vertex_stride,
-            vertices: graph.import_readonly_buffer("mesh vertices", &active.buffers[0])?,
-            indices: graph.import_readonly_buffer("mesh indices", &active.buffers[1])?,
+            vertices: graph.import_readonly_buffer(VERTEX_BUFFER, &active.buffers[0])?,
+            indices: graph.import_readonly_buffer(INDEX_BUFFER, &active.buffers[1])?,
             first_index: 0,
             index_count: active.layout.index_count,
         })
