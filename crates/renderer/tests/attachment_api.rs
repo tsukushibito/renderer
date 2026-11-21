@@ -169,7 +169,7 @@ fn subnormal_depth_clear_rejection_returns_capacity_for_zero_and_normal_minimum(
 
 fn observe(graph: &mut Graph, name: &str, view: ImageView) {
     graph
-        .declare_pass(
+        .declare_analysis_pass(
             name,
             PassKind::Copy,
             &[Access {

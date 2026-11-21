@@ -5,7 +5,7 @@ pub(crate) mod toon;
 pub(crate) mod validation;
 use renderer::{
     capacity::Preparation,
-    graph::{GraphCapacity, GraphPool, ImageDesc},
+    graph::{GraphPool, ImageDesc},
     runtime::{Runtime, RuntimeConfig, RuntimeLimits},
 };
 use renderer_pipeline::{
@@ -147,15 +147,9 @@ pub fn run_on<P: ViewPipeline + 'static>(
         Bloom::Off
     };
     let bloom = bloom.prepare(&mut preparation, ImageDesc::rgba16_float(64, 64))?;
-    let capacity = preparation.graph_capacity(GraphCapacity::default())?;
-    let mut runtime = Runtime::new(
-        api,
-        RuntimeLimits {
-            graph: capacity,
-            ..Default::default()
-        },
-        preparation.working_set(),
-    )?;
+    let runtime_limits = preparation.runtime_limits(RuntimeLimits::default())?;
+    let capacity = runtime_limits.graph;
+    let mut runtime = Runtime::new(api, runtime_limits, preparation.working_set())?;
     let id = pipeline.initialize_pipeline(group, &mut runtime)?;
     let wait = |runtime: &mut Runtime, id| -> Result<(), Box<dyn Error>> {
         drop(
@@ -170,15 +164,13 @@ pub fn run_on<P: ViewPipeline + 'static>(
     }
     let mut startup = GraphPool::new(capacity, 1)?;
     let mut graph = startup.begin()?;
-    let checker = graph.image("checker", texture_desc)?;
-    graph.upload_image(
+    let checker = graph.upload_texture_for_export(
         "checker",
-        checker,
+        texture_desc,
         &[
             255, 255, 255, 255, 80, 80, 80, 255, 80, 80, 80, 255, 255, 255, 255, 255,
         ],
     )?;
-    graph.export_image(checker)?;
     let sent = runtime.submit(&graph.compile()?)?;
     let texture = sent.export_image(checker)?;
     wait(&mut runtime, sent.id())?;
@@ -247,6 +239,7 @@ pub fn run_on<P: ViewPipeline + 'static>(
             extent = [32, 32];
             let (next, mut replacement) = prepare(&mut pipeline, extent)?;
             meshes.reserve(&mut replacement)?;
+            meshes.reserve_replacement(model, &mut replacement)?;
             replacement.reserve_image(texture_desc, 1)?;
             runtime.prepare_working_set(replacement.working_set())?;
             for camera in &mut views {
@@ -258,9 +251,6 @@ pub fn run_on<P: ViewPipeline + 'static>(
             if let Some(id) = pipeline.initialize_pipeline(group, &mut runtime)? {
                 wait(&mut runtime, id)?;
             }
-            // The old frame has returned, so its mesh registration can be
-            // collected before reserving the same buffer class again.
-            meshes.collect(&mut runtime)?;
             let id = meshes
                 .prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)?
                 .expect("changed mesh version");
@@ -351,9 +341,10 @@ pub fn run_on<P: ViewPipeline + 'static>(
             let delta = renderer::measurement::Snapshot::now().since(before);
             assert!(delta.is_allocation_free(), "{delta:?}");
         }
+        meshes.collect_gpu(&mut runtime)?;
         materials.collect_gpu(&mut runtime)?;
     }
-    meshes.clear(&mut runtime)?;
+    meshes.release_gpu(&mut runtime)?;
     materials.clear(&mut runtime)?;
     pipeline.clear(&mut runtime)?;
     runtime.delete(texture.key())?;

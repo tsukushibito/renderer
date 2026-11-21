@@ -47,6 +47,41 @@ pub struct RasterAttachments<'a> {
     pub depth: Option<Attachment<f32>>,
 }
 
+/// Rectangle in attachment pixels, measured from the top left. The right
+/// and bottom edges are exclusive.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RasterRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl RasterRect {
+    pub const fn new(x: u32, y: u32, width: u32, height: u32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RasterRegions {
+    pub viewport: Option<RasterRect>,
+    pub scissor: Option<RasterRect>,
+}
+
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+impl RasterRegions {
+    pub(crate) fn resolve(self, width: u32, height: u32) -> (RasterRect, RasterRect) {
+        let full = RasterRect::new(0, 0, width, height);
+        (self.viewport.unwrap_or(full), self.scissor.unwrap_or(full))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AttachmentOperand {
     pub view: ImageView,
@@ -342,6 +377,7 @@ pub(crate) enum MeshUpload {
 )]
 pub(crate) struct RasterBatchOperands {
     pub program: crate::program::ProgramId,
+    pub regions: RasterRegions,
     pub draws: Range<usize>,
     /// The draw constants use the size established during Graph construction.
     pub constants_start: usize,

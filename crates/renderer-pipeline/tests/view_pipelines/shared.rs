@@ -130,7 +130,7 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
     assert_ne!(a, b);
     drop((result, receipt));
     driver.clear(&mut rt)?;
-    meshes.clear(&mut rt)?;
+    meshes.release_gpu(&mut rt)?;
     materials.clear(&mut rt)?;
     super::validation::check_validation(rt)
 }

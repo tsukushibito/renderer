@@ -15,6 +15,35 @@ ARTIFACT_SUFFIXES = ("spv", "dxil", "reflection.txt", "spirv-reflection.json")
 ASSET_SUFFIXES = (".hlsl", ".hlsli", *(f".{suffix}" for suffix in ARTIFACT_SUFFIXES))
 
 
+def output_hashes(renderer_manifest: dict) -> dict[str, str]:
+    """The shared GLSL generator records these fragments alongside the fullscreen vertex stage."""
+    expected = {}
+    prefix = "../../renderer-pipeline/shaders/output/"
+    for key, record in renderer_manifest["artifacts"].items():
+        if not key.startswith(prefix):
+            continue
+        variant = key.removeprefix(prefix)
+        if not re.fullmatch(r"(?:tone_neutral|sdr(?:_fxaa)?(?:_linear)?)\.frag", variant):
+            raise ValueError(f"Unknown standard output variant: {variant}")
+        source = variant.replace("_linear.frag", ".frag")
+        name = f"output/{source}"
+        if expected.setdefault(name, record["source_utf8_lf"]) != record["source_utf8_lf"]:
+            raise ValueError(f"Variants disagree on the SHA-256 of {name}")
+        expected[f"output/{variant}.spv"] = record["spirv"]
+        for suffix, field in [
+            ("hlsl", "hlsl"),
+            ("dxil", "dxil"),
+            ("reflection.txt", "reflection"),
+            ("spirv-reflection.json", "spirv_reflection"),
+        ]:
+            expected[f"output/dxil/{variant}.{suffix}"] = record[field]
+    for license_name, digest in renderer_manifest["licenses"].items():
+        if not re.fullmatch(r"[A-Za-z0-9.-]+\.txt", license_name):
+            raise ValueError(f"Invalid standard output license name: {license_name}")
+        expected[f"output/licenses/{license_name}"] = digest
+    return expected
+
+
 def verify(root: Path) -> tuple[int, int]:
     shaders = root / SHADERS
     renderer_shaders = root / RENDERER_SHADERS
@@ -49,11 +78,22 @@ def verify(root: Path) -> tuple[int, int]:
         if not re.fullmatch(r"[a-zA-Z0-9_-]+\.hlsli", name):
             raise ValueError(f"Invalid shader include name: {name!r}")
 
-    expected = sources | includes | generated
+    for field, path in (
+        ("toolchain_sha256", renderer_shaders / "dxil-toolchain.json"),
+        ("renderer_shaders_sha256", renderer_shaders / "dxil/manifest.json"),
+    ):
+        if hash_file(path) != manifest[field]:
+            raise ValueError(f"SHA-256 differs from the Pipeline shader manifest: {path.relative_to(root)}")
+    renderer_manifest = json.loads(
+        (renderer_shaders / "dxil/manifest.json").read_text(encoding="utf-8"),
+        object_pairs_hook=object_pairs,
+    )
+    expected = sources | includes | generated | output_hashes(renderer_manifest)
+    output = shaders / "output"
     actual = {
         path.relative_to(shaders).as_posix()
         for path in shaders.rglob("*")
-        if path.name.lower().endswith(ASSET_SUFFIXES) and path.is_file()
+        if path.is_file() and (path.name.lower().endswith(ASSET_SUFFIXES) or path.is_relative_to(output))
     }
     if expected.keys() != actual:
         missing = sorted(expected.keys() - actual)
@@ -71,13 +111,7 @@ def verify(root: Path) -> tuple[int, int]:
         if actual_digest != digest:
             raise ValueError(f"SHA-256 differs from the Pipeline shader manifest: {SHADERS / name}")
 
-    for field, path in (
-        ("toolchain_sha256", renderer_shaders / "dxil-toolchain.json"),
-        ("renderer_shaders_sha256", renderer_shaders / "dxil/manifest.json"),
-    ):
-        if hash_file(path) != manifest[field]:
-            raise ValueError(f"SHA-256 differs from the Pipeline shader manifest: {path.relative_to(root)}")
-    return len(artifacts), len(includes)
+    return sum(name.endswith(".spv") for name in expected), len(includes)
 
 
 def main():

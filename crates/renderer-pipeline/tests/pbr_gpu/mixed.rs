@@ -354,7 +354,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         )?;
     }
     scene.clear(&mut runtime)?;
-    meshes.clear(&mut runtime)?;
+    meshes.release_gpu(&mut runtime)?;
     materials.clear(&mut runtime)?;
     for key in [offset.key(), cyan.key(), yellow.key()] {
         runtime.delete(key)?;

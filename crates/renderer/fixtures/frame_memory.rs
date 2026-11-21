@@ -380,7 +380,7 @@ fn attachment_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         reads[0] = reads[2].clone();
     }
     graph
-        .declare_pass(
+        .declare_analysis_pass(
             "consume Views",
             PassKind::Copy,
             &reads[..color_count + usize::from(has_depth)],

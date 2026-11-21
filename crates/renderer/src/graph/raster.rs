@@ -7,6 +7,7 @@ use super::{
     AccessPurpose, Binding, Graph, GraphCapacityKind, GraphError, GraphErrorKind,
     IndexedIndirectArgs, IndirectDrawOperands, LoadOp, Operation, PassHandle, RasterAttachments,
     RasterBatchOperands, RasterBindings, RasterConstants, RasterDraw, RasterDrawOperands,
+    RasterRect, RasterRegions,
 };
 use crate::program::{INDIRECT_COMMAND_BYTES, ManagedRasterProgram};
 use std::{borrow::Borrow, ops::Range};
@@ -16,10 +17,71 @@ use std::{borrow::Borrow, ops::Range};
 pub struct RasterPass<'graph, 'attachments> {
     graph: &'graph mut Graph,
     attachments: RasterAttachments<'attachments>,
+    regions: RasterRegions,
     error: Option<GraphError>,
 }
 
 impl RasterPass<'_, '_> {
+    /// Map subsequent draws into this rectangle. The viewport must have positive
+    /// width and height and fit the selected attachment mip. Depth remains 0..1.
+    /// `None` restores the full attachment, the default on entry to every pass.
+    /// Load, clear, store and resolve still apply to the complete attachment.
+    pub fn set_viewport(&mut self, rect: Option<RasterRect>) -> Result<(), GraphError> {
+        self.check_rect(rect, true)?;
+        self.regions.viewport = rect;
+        Ok(())
+    }
+
+    /// Clip subsequent draws to a rectangle inside the selected attachment mip.
+    /// An empty rectangle clips every fragment. `None` restores the full
+    /// attachment. Changing the scissor leaves the current viewport in effect.
+    pub fn set_scissor(&mut self, rect: Option<RasterRect>) -> Result<(), GraphError> {
+        self.check_rect(rect, false)?;
+        self.regions.scissor = rect;
+        Ok(())
+    }
+
+    fn check_rect(&mut self, rect: Option<RasterRect>, viewport: bool) -> Result<(), GraphError> {
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
+        let Some(rect) = rect else { return Ok(()) };
+        self.validate_rect(rect, viewport).inspect_err(|error| {
+            self.error = Some(error.clone());
+        })
+    }
+
+    fn validate_rect(&self, rect: RasterRect, viewport: bool) -> Result<(), GraphError> {
+        let view = self
+            .attachments
+            .colors
+            .first()
+            .map(|a| a.view)
+            .or_else(|| self.attachments.depth.map(|a| a.view))
+            .ok_or_else(|| GraphError::invalid_input("Raster rectangle requires an attachment"))?;
+        let extent = self
+            .graph
+            .image_desc(view.image())?
+            .mip_extent(view.mip_level())
+            .expect("immutable view has a valid mip extent");
+        // Both native APIs use signed scissor coordinates and positive-height viewports.
+        let fits = |offset: u32, size: u32, limit: u32| {
+            offset
+                .checked_add(size)
+                .is_some_and(|end| end <= limit.min(i32::MAX as u32))
+        };
+        if viewport && (rect.width == 0 || rect.height == 0) {
+            return Err(GraphError::invalid_input(
+                "Raster viewport must have positive dimensions",
+            ));
+        }
+        if !fits(rect.x, rect.width, extent[0]) || !fits(rect.y, rect.height, extent[1]) {
+            return Err(GraphError::invalid_input(
+                "Raster rectangle exceeds attachment or native coordinate bounds",
+            ));
+        }
+        Ok(())
+    }
     /// Append an ordered batch of indexed triangle draws for one Raster Program.
     /// An empty batch still validates the Program's attachment contract.
     pub fn draw<I, D>(&mut self, program: &ManagedRasterProgram, draws: I) -> Result<(), GraphError>
@@ -101,6 +163,7 @@ impl RasterPass<'_, '_> {
         data.raster_constant_words.extend_from_slice(words);
         data.raster_batches.push(RasterBatchOperands {
             program: program.identity(),
+            regions: self.regions,
             draws: first_draw..first_draw + 1,
             constants_start,
             constant_words_per_draw: words.len(),
@@ -143,6 +206,7 @@ impl RasterPass<'_, '_> {
         ))?;
         graph.data_mut().raster_batches.push(RasterBatchOperands {
             program: program.identity(),
+            regions: self.regions,
             draws: first_draw..first_draw + 1,
             constants_start,
             constant_words_per_draw: program.parameter_size() as usize / size_of::<u32>(),
@@ -188,6 +252,7 @@ impl RasterPass<'_, '_> {
             // reserved at the draw limit always has capacity here.
             graph.data_mut().raster_batches.push(RasterBatchOperands {
                 program: program.identity(),
+                regions: self.regions,
                 draws,
                 constants_start,
                 constant_words_per_draw: program.parameter_size() as usize / size_of::<u32>(),
@@ -333,6 +398,7 @@ impl Graph {
             let mut raster = RasterPass {
                 graph,
                 attachments,
+                regions: RasterRegions::default(),
                 error: None,
             };
             let result = record(&mut raster);

@@ -32,7 +32,7 @@ mod cpu {
         let mut prepared = prepare(NonZeroUsize::MIN, Settings::new(SampleCount::X1)).unwrap();
         for (copy_hdr, bloom) in [(false, Bloom::Off), (true, Bloom::Off), (true, Bloom::Tent)] {
             let (preparation, post) = reserve(&prepared, &triangle, copy_hdr, bloom).unwrap();
-            assert!(resource_count(&preparation) >= 10);
+            assert!(preparation.resource_count().unwrap() >= 10);
             let capacity = preparation
                 .graph_capacity(GraphCapacity::default())
                 .unwrap();

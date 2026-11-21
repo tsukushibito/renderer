@@ -288,7 +288,7 @@ owner・範囲を作成境界で確認し、aspectをRGBA8（UNORM/sRGB）/RGBA1
 storage/attachment Viewはcount1を要求する。native sampled実行はcount1の任意mip、または
 base0から全chainまでのViewを扱い、部分的な複数mip範囲は明示的に未対応とする。
 論理解析は`layer * mip_levels + mip`の区間へ写像し、producer・未初期化拒否・RAW/WAR/WAW・cullingを共通解析へ接続する。
-`declare_pass`の画像範囲も同じ各subresourceを扱う。エラーでは最初の未初期化subresourceをmip/layer/aspectへ戻す。
+`declare_analysis_pass`の画像範囲も同じ各subresourceを扱う。エラーでは最初の未初期化subresourceをmip/layer/aspectへ戻す。
 `export_image`は全subresourceの有効内容を要求する。native importのinitialized boolは画像全体を表し、
 全mipの内容が確立した場合にだけ有効なsnapshotとなる。
 
@@ -383,7 +383,7 @@ payloadと通常backpressureのmessageは確保せず、同期・容量検査・
 
 宣言の範囲・用途・初期化は不要パス除去の前に検査する。
 deadなreadも未初期化ならエラーになり、不要な処理で入力ミスを隠さない。
-解析専用の`declare_pass`と実際の操作builderを分け、実行時にliveな解析専用パスを拒否する。
+解析専用の`declare_analysis_pass`と実際の操作builderを分け、実行時にliveな解析専用パスを拒否する。
 native記録中の任意の実行callbackは提供しないので、Graph構築や除去をCPUのゲーム更新の代わりにしない。
 
 公開`upload_buffer`／`upload_image`は`&[u8]`を借り、構築時に準備済みblobへcaptureする。
@@ -637,7 +637,7 @@ hazardと容量検査を終えた全辺が`from < to`なら、liveなpassを宣�
 診断用lifetimesは別に求める。いずれもそのframeで構築した入力を解析し直す通常compileの処理で、
 固定Graphのplan cacheや未初期化read・hazard・容量検査の省略ではない。
 
-解析専用の`declare_pass`もsafe入力の保証境界であり、owner・範囲・用途を先に検査してから競合を拒否する。
+解析専用の`declare_analysis_pass`もsafe入力の保証境界であり、owner・範囲・用途を先に検査してから競合を拒否する。
 共有の競合検査は宣言順で最初の衝突pairを選び、read/readや無関係な資源の総当たりをしない。
 Aアクセスに対してO(A log A)の処理とO(A)の予約済みscratchを使い、全readならO(A)でsortを省略する。
 構築境界と追加検証は同じhelperへ不変なaccess iteratorを渡し、判定algorithmを二重保持しない。
@@ -977,7 +977,8 @@ export、readback、compile、submit、presentと、その結果の所有は呼�
 
 両出力パスは`RasterPass::draw_fullscreen`を使う。頂点入力のないtrusted Programが3頂点を生成し、Graphは頂点・インデックスbufferへの依存を追加しない。
 標準出力とDeferredの照明パスは、`renderer::program::fullscreen_triangle_shaders`を通じて同じ管理下の頂点shaderを使う。
-fragment shaderのABIとアクセス範囲の保証は、それぞれのProgramのtrusted取込で成立する。
+標準出力のfragment shader、ABI、露出・FXAA・SDRの選択は `renderer-pipeline::passes::output` が所有する。
+独自の出力方式も同じ頂点shaderと `draw_fullscreen` を利用し、自分のProgramのtrusted取込でABIとアクセス範囲を保証する。
 `tone_map_neutral_pipeline()`と`SdrOutput::pipeline()`を使って実行前に対応するProgramを準備する。
 ウィンドウには`SdrEncoding::Linear`で書いた画像を渡し、PresenterがsRGB変換を行う。オフスクリーンのSDRデータには`SdrEncoding::Srgb`を選ぶ。
 Bloomなど露出前の効果はscene-linear画像に接続し、トーンマッピングとSDR変換の間にも任意のGraph処理を組み込める。

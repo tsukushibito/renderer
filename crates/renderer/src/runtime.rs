@@ -169,6 +169,26 @@ impl Runtime {
         Ok(true)
     }
 
+    /// Register an uninitialized device buffer from the prepared working set.
+    /// Upload ranges through Graph imports; retain the key until explicit deletion.
+    pub fn register_buffer(
+        &mut self,
+        name: &str,
+        desc: crate::graph::BufferDesc,
+    ) -> Result<ResourceKey, ExecutionError> {
+        match self.inner {
+            #[cfg(feature = "vulkan")]
+            RuntimeInner::Vulkan(ref mut runtime) => {
+                Ok(runtime.register_buffer(name, desc, false)?.key())
+            }
+            #[cfg(all(feature = "d3d12", windows))]
+            RuntimeInner::D3D12(ref mut runtime) => {
+                let _ = name;
+                Ok(runtime.register_buffer(desc)?)
+            }
+        }
+    }
+
     /// Capture the latest accepted scheduled contents for a registered buffer.
     pub fn refresh_buffer(&self, key: ResourceKey) -> Result<ImportBuffer, ExecutionError> {
         match self.inner {
