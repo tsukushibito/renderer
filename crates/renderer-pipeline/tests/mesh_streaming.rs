@@ -17,6 +17,11 @@ use renderer_pipeline::{
 use std::{error::Error, num::NonZeroUsize, time::Duration};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
+#[cfg(feature = "memory-profiling")]
+#[global_allocator]
+static ALLOCATOR: renderer::measurement::CountingAllocator<std::alloc::System> =
+    renderer::measurement::CountingAllocator::new(std::alloc::System);
+
 fn wait(runtime: &mut Runtime, frame: FrameId) -> Result<()> {
     runtime
         .wait_for_frame(frame, Duration::from_secs(15))?
@@ -30,9 +35,19 @@ fn upload(
     mesh: MeshHandle,
 ) -> Result<()> {
     loop {
-        let part = meshes.stream_gpu(runtime, pool, &[mesh], 128)?;
+        #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
+        let before = renderer::measurement::Snapshot::now();
+        let part = meshes.stream_gpu(runtime, pool, &[mesh; 64], 128)?;
         assert!(part.submitted_bytes > 0 && part.submitted_bytes <= 128);
         wait(runtime, part.submission.ok_or("missing transfer")?)?;
+        #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
+        {
+            let events = renderer::measurement::Snapshot::now().since(before);
+            assert!(
+                events.is_allocation_free(),
+                "mesh chunk {part:?}: {events:?}"
+            );
+        }
         if part.remaining_bytes == 0 {
             assert_eq!(part.published_meshes, 1);
             return Ok(());
@@ -102,7 +117,35 @@ fn check(api: RuntimeConfig) -> Result<()> {
         .stream_gpu(&mut runtime, &mut pool, &[mesh, mesh], 0)?
         .remaining_bytes;
     assert!(bytes > 1024);
+    // The graph retains private buffer registrations after staging exhaustion,
+    // but neither progress nor a drawable revision may be published on failure.
+    assert!(
+        meshes
+            .stream_gpu(&mut runtime, &mut pool, &[mesh], u64::MAX)
+            .is_err()
+    );
+    assert_eq!(
+        meshes
+            .stream_gpu(&mut runtime, &mut pool, &[mesh], 0)?
+            .remaining_bytes,
+        bytes
+    );
     upload(&mut runtime, &mut pool, &mut meshes, mesh)?;
+    #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
+    let before = renderer::measurement::Snapshot::now();
+    let ready = meshes.stream_gpu(&mut runtime, &mut pool, &[mesh; 64], 128)?;
+    let idle = meshes.stream_gpu(&mut runtime, &mut pool, &[other; 64], 0)?;
+    #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
+    {
+        let events = renderer::measurement::Snapshot::now().since(before);
+        assert!(
+            events.is_allocation_free(),
+            "idle mesh streaming: {events:?}"
+        );
+    }
+    assert!(ready.submission.is_none() && idle.submission.is_none());
+    assert_eq!(ready.remaining_bytes, 0);
+    assert_eq!(idle.remaining_bytes, bytes);
     assert_eq!(
         first_coordinate(&mut runtime, &mut pool, &meshes, object)?,
         1.

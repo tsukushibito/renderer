@@ -48,7 +48,8 @@ impl MeshError {
         }
     }
 
-    fn capacity(message: &'static str) -> Self {
+    /// A prepared mesh limit was exhausted or its storage could not be reserved.
+    pub fn capacity_exhausted(message: &'static str) -> Self {
         Self {
             kind: MeshErrorKind::CapacityExhausted,
             message: Cow::Borrowed(message),
@@ -111,10 +112,10 @@ impl MeshRegistry {
         let mut retired_meshes = Vec::new();
         meshes
             .try_reserve_exact(capacity.meshes)
-            .map_err(|_| MeshError::capacity("unable to reserve mesh slots"))?;
+            .map_err(|_| MeshError::capacity_exhausted("unable to reserve mesh slots"))?;
         retired_meshes
             .try_reserve_exact(capacity.retired_mesh_versions)
-            .map_err(|_| MeshError::capacity("unable to reserve retired mesh slots"))?;
+            .map_err(|_| MeshError::capacity_exhausted("unable to reserve retired mesh slots"))?;
         Ok(Self {
             id,
             meshes,
@@ -149,7 +150,9 @@ impl MeshRegistry {
             .checked_add(1)
             .ok_or_else(|| MeshError::invalid_input("mesh revision exhausted"))?;
         if self.retired_meshes.len() == self.retired_mesh_capacity {
-            return Err(MeshError::capacity("retired mesh capacity exhausted"));
+            return Err(MeshError::capacity_exhausted(
+                "retired mesh capacity exhausted",
+            ));
         }
         let previous = std::mem::replace(
             mesh,
@@ -165,7 +168,9 @@ impl MeshRegistry {
         self.check_owner(handle.owner)?;
         lookup(&self.meshes, handle.index, handle.generation)?;
         if self.retired_meshes.len() == self.retired_mesh_capacity {
-            return Err(MeshError::capacity("retired mesh capacity exhausted"));
+            return Err(MeshError::capacity_exhausted(
+                "retired mesh capacity exhausted",
+            ));
         }
         let previous = self.meshes[handle.index as usize]
             .value
@@ -261,7 +266,9 @@ impl MeshRegistry {
         constants: impl Fn(&T, &GeometryData) -> Result<RasterConstants, MeshError>,
     ) -> Result<MeshSnapshot, MeshError> {
         if draws.len() > pool.owner.draw_capacity {
-            return Err(MeshError::capacity("snapshot draw capacity exhausted"));
+            return Err(MeshError::capacity_exhausted(
+                "snapshot draw capacity exhausted",
+            ));
         }
         // Construct the lease before fallible capture so every early return
         // returns its storage without freeing the prepared arrays.
@@ -368,16 +375,16 @@ impl SnapshotPool {
         }
         let mut free = Vec::new();
         free.try_reserve_exact(slots)
-            .map_err(|_| MeshError::capacity("unable to reserve snapshot slots"))?;
+            .map_err(|_| MeshError::capacity_exhausted("unable to reserve snapshot slots"))?;
         for _ in 0..slots {
             let mut draws = Vec::new();
             let mut meshes = Vec::new();
             draws
                 .try_reserve_exact(draw_capacity)
-                .map_err(|_| MeshError::capacity("unable to reserve snapshot draws"))?;
+                .map_err(|_| MeshError::capacity_exhausted("unable to reserve snapshot draws"))?;
             meshes
                 .try_reserve_exact(draw_capacity)
-                .map_err(|_| MeshError::capacity("unable to reserve snapshot meshes"))?;
+                .map_err(|_| MeshError::capacity_exhausted("unable to reserve snapshot meshes"))?;
             free.push(SnapshotStorage { draws, meshes });
         }
         Ok(Self {
@@ -395,7 +402,7 @@ impl SnapshotPool {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pop()
-            .ok_or_else(|| MeshError::capacity("snapshot slots exhausted"))?;
+            .ok_or_else(|| MeshError::capacity_exhausted("snapshot slots exhausted"))?;
         Ok(MeshSnapshot {
             draws: storage.draws,
             meshes: Mutex::new(Some(storage.meshes)),
@@ -435,7 +442,7 @@ fn insert<T>(
         return Ok((index as u32, slot.generation));
     }
     if slots.len() >= capacity {
-        return Err(MeshError::capacity("asset capacity exhausted"));
+        return Err(MeshError::capacity_exhausted("asset capacity exhausted"));
     }
     let index = slots.len() as u32;
     slots.push(Slot {

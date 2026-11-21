@@ -369,6 +369,13 @@ private asset pinを`release_idle`により返し、`collect_retired_meshes`が�
 上限不足なら変更を部分適用せずに返す。asset変更後の最終解放を通常frameへ漏らさない所有契約と、
 通常のsnapshot/Graph/plan入力領域を再利用する契約を区別する。
 
+標準pipelineの `Meshes::new(MeshCapacity)` は登録表、同時に選べるmesh数の転送計画、
+公開済み・転送途中の旧版を保持する退役キューを予約する。`stream_gpu` は選択順にbyte予算を配り、
+同じhandleを何度指定しても計画は1件とする。予算ゼロの照会、部分転送、完成版への切替では同じ領域を再利用する。
+submitに失敗した場合は既に取得したprivate登録を保持し、次の呼び出しで直前に受理されたoffsetから再試行する。
+meshの作成・更新でgeometryとlayoutを所有する費用はasset変更境界に属する。旧版の最終layout解放と
+登録解除は明示した `collect_gpu` ／ `release_gpu` で行う。
+
 CPUのallocation、reallocation、deallocationは、それぞれcaptureから結果返却までの連続区間で確認する。
 optional dump/ログの費用やnative作成・破棄は別に記録する。
 論理Graphの区間は予約済みAVL node arena、nativeのCPU provenance等は予約済み配列を使う。

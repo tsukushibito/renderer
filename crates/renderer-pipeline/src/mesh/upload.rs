@@ -1,12 +1,12 @@
 //! Explicit, resumable uploads into prepared device storage.
-use super::{Meshes, Resident};
+use super::{Asset, Meshes, Resident};
 use crate::pbr::DefaultResourceError;
 use renderer::{
-    geometry::{GeometryData, GeometryStream, MeshHandle},
+    geometry::{GeometryData, GeometryStream, MeshError, MeshHandle, MeshRegistry},
     graph::{BufferDesc, BufferHandle, Graph, GraphError, GraphPool},
     runtime::{ExecutionError, FrameId, Runtime},
 };
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 /// Progress for the meshes selected by this call. A completed upload is usable
 /// by subsequent draws on the same queue before its GPU fence signals.
@@ -24,6 +24,82 @@ struct Transfer {
     exports: Option<[BufferHandle; 2]>,
 }
 
+pub(super) struct UploadBatch {
+    transfers: Vec<Transfer>,
+    epoch: u64,
+}
+
+impl UploadBatch {
+    pub(super) fn new(capacity: usize) -> Result<Self, MeshError> {
+        let mut transfers = Vec::new();
+        transfers
+            .try_reserve_exact(capacity)
+            .map_err(|_| MeshError::capacity_exhausted("unable to reserve mesh transfer plans"))?;
+        Ok(Self {
+            transfers,
+            epoch: 0,
+        })
+    }
+
+    fn select(
+        &mut self,
+        registry: &MeshRegistry,
+        assets: &mut HashMap<MeshHandle, Asset>,
+        selection: impl Iterator<Item = MeshHandle>,
+        byte_budget: u64,
+    ) -> Result<MeshUploadProgress, GraphError> {
+        self.transfers.clear();
+        if self.epoch == u64::MAX {
+            for asset in assets.values_mut() {
+                asset.selected_epoch = 0;
+            }
+            self.epoch = 0;
+        }
+        self.epoch += 1;
+        let mut available = byte_budget / 4 * 4;
+        let mut progress = MeshUploadProgress {
+            submission: None,
+            submitted_bytes: 0,
+            remaining_bytes: 0,
+            published_meshes: 0,
+        };
+        for mesh in selection {
+            let asset = assets
+                .get_mut(&mesh)
+                .ok_or_else(|| GraphError::invalid_input("unknown mesh handle"))?;
+            if asset.selected_epoch == self.epoch {
+                continue;
+            }
+            asset.selected_epoch = self.epoch;
+            if asset
+                .active
+                .as_ref()
+                .is_some_and(|ready| ready.revision == asset.revision)
+            {
+                continue;
+            }
+            let data = registry.geometry(mesh).expect("registered mesh");
+            let remaining = data.byte_len() - asset.upload.accepted_bytes;
+            let bytes = available.min(remaining);
+            progress.remaining_bytes = progress
+                .remaining_bytes
+                .checked_add(remaining)
+                .ok_or_else(|| GraphError::invalid_input("selected mesh upload size overflow"))?;
+            if bytes != 0 {
+                self.transfers.push(Transfer {
+                    mesh,
+                    end: asset.upload.accepted_bytes + bytes,
+                    exports: None,
+                });
+                available -= bytes;
+                progress.submitted_bytes += bytes;
+            }
+        }
+        progress.remaining_bytes -= progress.submitted_bytes;
+        Ok(progress)
+    }
+}
+
 impl Meshes {
     /// Upload every pending version in a single startup/asset submission.
     /// Use `stream_gpu` for a bounded frame or a mesh larger than staging.
@@ -32,20 +108,13 @@ impl Meshes {
         runtime: &mut Runtime,
         pool: &mut GraphPool,
     ) -> Result<Option<FrameId>, DefaultResourceError> {
-        let selection: Vec<_> = self
-            .registry
-            .live_mesh_handles()
-            .filter(|mesh| {
-                let asset = &self.assets[mesh];
-                asset
-                    .active
-                    .as_ref()
-                    .is_none_or(|ready| ready.revision != asset.revision)
-            })
-            .collect();
-        Ok(self
-            .stream_gpu(runtime, pool, &selection, u64::MAX)?
-            .submission)
+        let progress = self.batch.select(
+            &self.registry,
+            &mut self.assets,
+            self.registry.live_mesh_handles(),
+            u64::MAX,
+        )?;
+        Ok(self.submit_uploads(runtime, pool, progress)?.submission)
     }
 
     /// Prefer meshes in caller order, uploading at most `byte_budget` bytes in
@@ -61,58 +130,40 @@ impl Meshes {
         selection: &[MeshHandle],
         byte_budget: u64,
     ) -> Result<MeshUploadProgress, DefaultResourceError> {
-        let mut pending = Vec::new();
-        let mut seen = HashSet::new();
-        let mut remaining_bytes = 0u64;
-        for &mesh in selection {
-            if !seen.insert(mesh) {
-                continue;
-            }
-            let asset = self
-                .assets
-                .get(&mesh)
-                .ok_or_else(|| GraphError::invalid_input("unknown mesh handle"))?;
-            if asset
-                .active
-                .as_ref()
-                .is_some_and(|ready| ready.revision == asset.revision)
-            {
-                continue;
-            }
-            let data = self.registry.geometry(mesh).expect("registered mesh");
-            let remaining = data.byte_len() - asset.upload.accepted_bytes;
-            remaining_bytes = remaining_bytes
-                .checked_add(remaining)
-                .ok_or_else(|| GraphError::invalid_input("selected mesh upload size overflow"))?;
-            pending.push((mesh, remaining));
-        }
-        let mut progress = MeshUploadProgress {
-            submission: None,
-            submitted_bytes: 0,
-            remaining_bytes,
-            published_meshes: 0,
-        };
-        let mut available = byte_budget / 4 * 4;
-        if available == 0 || pending.is_empty() {
+        let progress = self.batch.select(
+            &self.registry,
+            &mut self.assets,
+            selection.iter().copied(),
+            byte_budget,
+        )?;
+        self.submit_uploads(runtime, pool, progress)
+    }
+
+    fn submit_uploads(
+        &mut self,
+        runtime: &mut Runtime,
+        pool: &mut GraphPool,
+        mut progress: MeshUploadProgress,
+    ) -> Result<MeshUploadProgress, DefaultResourceError> {
+        if self.batch.transfers.is_empty() {
             return Ok(progress);
         }
         let mut graph = pool.begin()?;
-        let mut transfers = Vec::new();
-        for (mesh, remaining) in pending {
-            let bytes = available.min(remaining);
-            let geometry = self.registry.geometry(mesh).expect("registered mesh");
-            let asset = self.assets.get_mut(&mesh).expect("registered mesh");
-            let end = asset.upload.accepted_bytes + bytes;
-            let exports = asset.upload.append(&mut graph, runtime, geometry, end)?;
-            transfers.push(Transfer { mesh, end, exports });
-            available -= bytes;
-            progress.submitted_bytes += bytes;
-            if available == 0 {
-                break;
-            }
+        for transfer in &mut self.batch.transfers {
+            let geometry = self
+                .registry
+                .geometry(transfer.mesh)
+                .expect("registered mesh");
+            let asset = self
+                .assets
+                .get_mut(&transfer.mesh)
+                .expect("registered mesh");
+            transfer.exports = asset
+                .upload
+                .append(&mut graph, runtime, geometry, transfer.end)?;
         }
         let sent = runtime.submit(&graph.compile()?)?;
-        for transfer in transfers {
+        for transfer in &self.batch.transfers {
             let asset = self
                 .assets
                 .get_mut(&transfer.mesh)
@@ -132,24 +183,36 @@ impl Meshes {
             }
         }
         progress.submission = Some(sent.id());
-        progress.remaining_bytes -= progress.submitted_bytes;
         Ok(progress)
     }
 
     /// Unregister superseded or removed versions after submitting or discarding
     /// their CPU graphs. Accepted GPU work retains its own leases until completion.
     pub fn collect_gpu(&mut self, runtime: &mut Runtime) -> Result<(), ExecutionError> {
-        while let Some(&key) = self.retired.last() {
-            runtime.delete(key)?;
+        self.delete_retired(runtime)?;
+        self.registry.collect_retired_meshes();
+        Ok(())
+    }
+
+    fn delete_retired(&mut self, runtime: &mut Runtime) -> Result<(), ExecutionError> {
+        while let Some(version) = self.retired.last_mut() {
+            for key in &mut version.keys {
+                if let Some(key) = *key {
+                    runtime.delete(key)?;
+                }
+                *key = None;
+            }
             self.retired.pop();
         }
-        self.registry.collect_retired_meshes();
         Ok(())
     }
 
     /// Release device registrations at a maintenance boundary. Mesh handles and
     /// CPU assets survive, so they can be uploaded again, including on a new runtime.
     pub fn release_gpu(&mut self, runtime: &mut Runtime) -> Result<(), ExecutionError> {
+        // Preserve the bound across retries even when deletion on an incorrect
+        // runtime failed: dispose the previous batch before detaching this one.
+        self.delete_retired(runtime)?;
         for asset in self.assets.values_mut() {
             asset.retire_upload(&mut self.retired);
             asset.retire_active(&mut self.retired);
