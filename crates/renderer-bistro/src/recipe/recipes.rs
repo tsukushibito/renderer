@@ -70,6 +70,7 @@ impl Prepared {
                 frames_in_flight: concurrent,
                 max_draws,
                 max_materials: scene.materials.len(),
+                max_point_lights: if options.pipeline.uses_local_lights() { crate::recipe::lighting::PRESET_LEN } else { 0 },
                 max_casters_per_cascade: max_draws,
                 max_transforms: if options.instances.enabled() {
                     crate::shared::instancing::COUNT
@@ -375,6 +376,7 @@ impl Reference {
         deferred::append(
             graph,
             deferred::Inputs {
+                point_lights: None,
                 hdr: hdr_view,
                 depth: depth_view,
                 clear: self.clear,

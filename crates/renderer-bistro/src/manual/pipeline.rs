@@ -1464,6 +1464,7 @@ pub(super) fn build(
         deferred::append(
             &mut graph,
             deferred::Inputs {
+                point_lights: None,
                 hdr: color_view,
                 depth: depth_view,
                 clear: scene_clear,
