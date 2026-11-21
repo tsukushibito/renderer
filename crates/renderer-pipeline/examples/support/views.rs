@@ -176,24 +176,19 @@ pub fn run_on<P: ViewPipeline>(
         wait(&mut runtime, id)?;
     }
     let mut startup = GraphPool::new(capacity, 1)?;
-    let mut graph = startup.begin()?;
-    let checker = graph.image("checker", texture_desc)?;
-    graph.upload_image(
+    let (upload, texture) = runtime.upload_texture(
+        &mut startup,
         "checker",
-        checker,
+        texture_desc,
         &[
             255, 255, 255, 255, 80, 80, 80, 255, 80, 80, 80, 255, 255, 255, 255, 255,
         ],
     )?;
-    graph.export_image(checker)?;
-    let sent = runtime.submit(&graph.compile()?)?;
-    let texture = sent.export_image(checker)?;
-    wait(&mut runtime, sent.id())?;
-    drop(sent);
+    wait(&mut runtime, upload)?;
     let paint = |color| {
         let mut params = PbrParams::color(color);
         params.factors.double_sided = true;
-        params.textures.base_color = Some(texture.clone());
+        params.textures.base_color = Some(texture.snapshot().clone());
         params
     };
     let red = [1., 0.2, 0.1, 1.];
@@ -360,6 +355,6 @@ pub fn run_on<P: ViewPipeline>(
     meshes.clear(&mut runtime)?;
     materials.clear(&mut runtime)?;
     pipeline.clear(&mut runtime)?;
-    runtime.delete(texture.key())?;
+    drop(texture);
     validation::check_validation(runtime)
 }

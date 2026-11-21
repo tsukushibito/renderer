@@ -876,30 +876,23 @@ impl Resident {
             // This is the immutable publication boundary. Read/hash one chain,
             // upload all its subresources, then release CPU pixels before ROI.
             let pixels = image.load_bytes()?;
-            let mut graph = pool.begin()?;
-            let target = graph.image("immutable texture", image_desc(image))?;
-            graph.upload_image("texture import boundary", target, &pixels)?;
-            graph.export_image(target)?;
-            let plan = graph.compile()?;
-            let pending = backend.submit(&plan)?;
-            images.push(pending.export_image(target)?);
-            drop(super::backend::wait_for(backend, pending.id())?);
-            drop((pending, plan, pixels));
+            let (frame, texture) =
+                backend.upload_texture(&mut pool, "material texture", image_desc(image), &pixels)?;
+            drop(super::backend::wait_for(backend, frame)?);
+            images.push(texture.into_registered());
             if (index + 1).is_multiple_of(32) {
                 eprintln!("Bistro image upload {}/{}", index + 1, scene.images.len());
             }
         }
         let mut upload_environment = |image: &ibl::Image| -> Result<ImportImage, Error> {
-            let mut graph = pool.begin()?;
-            let target = graph.image("immutable environment", environment_desc(image))?;
-            graph.upload_image("environment import boundary", target, &image.bytes)?;
-            graph.export_image(target)?;
-            let plan = graph.compile()?;
-            let pending = backend.submit(&plan)?;
-            let imported = pending.export_image(target)?;
-            drop(super::backend::wait_for(backend, pending.id())?);
-            drop((pending, plan));
-            Ok(imported)
+            let (frame, texture) = backend.upload_texture(
+                &mut pool,
+                "environment texture",
+                environment_desc(image),
+                &image.bytes,
+            )?;
+            drop(super::backend::wait_for(backend, frame)?);
+            Ok(texture.into_registered())
         };
         let environment_images = [
             upload_environment(&environment.diffuse)?,

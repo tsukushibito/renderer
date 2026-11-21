@@ -301,16 +301,9 @@ fn upload_texture(
     desc: ImageDesc,
     bytes: &[u8],
 ) -> Result<ImportImage, Error> {
-    let mut graph = pool.begin()?;
-    let image = graph.image("new material texture version", desc)?;
-    graph.upload_image("replace every texture mip", image, bytes)?;
-    graph.export_image(image)?;
-    let plan = graph.compile()?;
-    let pending = backend.submit(&plan)?;
-    let import = pending.export_image(image)?;
-    drop(backend::wait_for(backend, pending.id())?);
-    drop((pending, plan));
-    Ok(import)
+    let (frame, texture) = backend.upload_texture(pool, "material texture version", desc, bytes)?;
+    drop(backend::wait_for(backend, frame)?);
+    Ok(texture.into_registered())
 }
 
 #[allow(

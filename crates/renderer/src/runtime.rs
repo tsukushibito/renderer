@@ -5,6 +5,8 @@ mod frames;
 mod id;
 mod preparation;
 mod queue;
+mod texture;
+pub use texture::TextureUploadError;
 #[cfg(all(feature = "presentation", windows))]
 mod window;
 
