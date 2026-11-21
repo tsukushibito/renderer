@@ -47,7 +47,7 @@ pub fn run(
         Some("d3d12") => RuntimeConfig::D3D12(Default::default()),
         _ => return Err("pass the enabled GPU backend: vulkan or d3d12".into()),
     };
-    let extent = [64, 64];
+    let mut extent = [64, 64];
     let count = if example == Example::TwoViews { 2 } else { 1 };
     let limits = SceneLimits {
         frames_in_flight: NonZeroUsize::MIN,
@@ -61,10 +61,18 @@ pub fn run(
         retired_mesh_versions: 2,
     })?;
     let points = [[-0.6, -0.6, 0.5], [0.6, -0.6, 0.5], [0., 0.6, 0.5]];
-    let pbr_vertices = points.map(|p| {
-        PbrVertex::new(p, [0., 0., -1.], [1., 0., 0., 1.], [p[0] + 0.5, p[1] + 0.5]).unwrap()
-    });
-    let model = meshes.create(MeshData::pbr(&pbr_vertices, &[0, 2, 1])?)?;
+    let vertices = |scale| {
+        points.map(|p| {
+            PbrVertex::new(
+                [p[0] * scale, p[1] * scale, p[2]],
+                [0., 0., -1.],
+                [1., 0., 0., 1.],
+                [p[0] + 0.5, p[1] + 0.5],
+            )
+            .unwrap()
+        })
+    };
+    let model = meshes.create(MeshData::pbr(&vertices(1.), &[0, 2, 1])?)?;
     let mut materials = Materials::default();
     let mut definitions = Vec::new();
     let mut extra = Vec::new();
@@ -95,7 +103,17 @@ pub fn run(
         &definitions,
     )?;
     let mut preparation = Preparation::new(NonZeroUsize::MIN);
-    pipeline.reserve_views(&mut preparation, NonZeroUsize::new(count).unwrap())?;
+    // The textured example exercises an extent change at the asset-update boundary.
+    let mut resized = if example == Example::Textured {
+        Some(RenderPipeline::standard([32, 32], limits)?)
+    } else {
+        None
+    };
+    if let Some(next) = &resized {
+        preparation.add_alternatives(&[pipeline.preparation(), next.preparation()])?;
+    } else {
+        pipeline.reserve_views(&mut preparation, NonZeroUsize::new(count).unwrap())?;
+    }
     meshes.reserve(&mut preparation)?;
     let texture_desc = ImageDesc::rgba8_srgb(2, 2);
     preparation.reserve_image(texture_desc, 1)?;
@@ -182,6 +200,21 @@ pub fn run(
     let mut previous = [None; 2];
     for step in 0..2 {
         if step == 1 {
+            if let Some(next) = resized.take() {
+                extent = [32, 32];
+                pipeline.clear(&mut runtime)?;
+                pipeline = next;
+                let id = pipeline.initialize(&mut runtime)?;
+                wait(&mut runtime, id)?;
+                // The old frame has returned, so its mesh registration can be
+                // collected before reserving the same buffer class again.
+                meshes.update(model, MeshData::pbr(&vertices(0.75), &[0, 2, 1])?)?;
+                meshes.collect(&mut runtime)?;
+                let id = meshes
+                    .prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)?
+                    .expect("changed mesh version");
+                wait(&mut runtime, id)?;
+            }
             materials.update_pbr(material, paint([0.15, 1., 0.25, 1.]))?;
         }
         if let Some(id) = materials.prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)? {
@@ -202,7 +235,8 @@ pub fn run(
             .ok_or("frame timed out")?;
         for (i, read) in reads.into_iter().flatten().enumerate() {
             let mut pixels = [0; 64 * 64 * 4];
-            frame.readback_into(read, &mut pixels)?;
+            let pixels = &mut pixels[..(extent[0] * extent[1] * 4) as usize];
+            frame.readback_into(read, pixels)?;
             let center = (extent[0] * (extent[1] / 2) + extent[0] / 2) as usize * 4;
             let color = &pixels[center..center + 4];
             let coverage = pixels
