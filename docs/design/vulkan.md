@@ -52,6 +52,24 @@ Graphのnative実行は次の責務に分ける。公開APIや汎用backend trai
 
 ### ホストが所有する画像
 
+すでに Vulkan を初期化したエンジンは `Runtime::from_vulkan_device` に元の instance・physical device・device・queue、
+それらを保持する `Arc` と、ホストが同じ queue の操作に使う `Arc<Mutex<()>>` を渡す。
+Renderer は同じ device に自身の VMA と実行資源を用意し、最後の GPU 利用者までホストの所有者を保持する。
+ホスト側の device・instance の破棄はその所有者が行う。外部画像は Runtime 作成前に確保したものも登録できる。
+明示した instance API、timelineSemaphore、synchronization2、dynamicRendering とキューの実能力を照合し、
+multiDrawIndirect と textureCompressionBC はホストが有効化を申告した場合だけ使う。Vulkan は論理 device の有効化済み feature を再照会できないため、
+実際の作成設定と申告値の対応は unsafe 境界でホストが保証する。
+
+ホストは `sampler_budget` の個数を Renderer 用に確保し、他の allocator と合わせて
+`maxMemoryAllocationCount` を守る。初期化・working set の変更では新旧資源が同時に存在する。
+queue のロックは CPU の排他制御を担い、画像の GPU アクセスとメモリ可視性は以下の受け渡し契約に従う。
+既存 instance の layer 設定と診断 callback はホストが管理する。共通 API の `VulkanConfig.validation` は
+`Disabled` に設定し、ホストのログで実効設定と診断数を検証する。診断機能付きビルドは
+オブジェクト名とラベルに使う `VK_EXT_debug_utils` を既存 instance に必要とする。
+Windows 表示に使う場合は `VulkanHostDevice::presentation_slots` に追加の実行枠を指定し、
+同フィールドに記載した WSI 拡張と swapchainMaintenance1 の有効化を保証する。
+各ウィンドウの取り付け時には実際の surface と queue の対応を確認する。
+
 `VulkanRuntime::external_device` はInstance・Device・loaderを保持する。`image_create_info(desc)` で、実Device上で必要なformat・tiling・sample数・usageを確認できる。ホストは対応する単一layerの2D画像、bind済みmemory、両方の寿命を保証する `Arc` を渡す。ホストのDropでVulkanを呼ぶ場合、そのownerにもDeviceを保持する。Vulkanは既存のVkImageから作成時の全属性を照会できないため、`register_external_image` のunsafe契約で実際の属性との一致を保証する。Rendererは利用するviewだけを作成・破棄し、ホストの画像をVMAの所有物として解放しない。
 
 初回の `VulkanImageState::DISCARD` は内容を破棄する。既存内容を読むときは全subresourceの現在のlayoutと、全mipのtexelが定義済みであることを伝える。同一queueのhost submissionには `with_queue` を使う。別queueから渡す場合は、先行GPUアクセスの完了・可視性と、必要なqueue family release/acquireをホスト側で確立する。登録・返却はCPUの変更境界で、待機やGPU命令を発行しない。返却後の最初のbarrierは返却されたlayoutと、先行アクセスを覆うALL_COMMANDS / MEMORY_READ | MEMORY_WRITEを起点にする。別Deviceとの共有には外部memory・semaphoreとOSハンドルの専用契約が必要になる。[Vulkanの同期とqueue family ownership](https://docs.vulkan.org/spec/latest/chapters/synchronization.html)

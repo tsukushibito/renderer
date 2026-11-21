@@ -367,6 +367,10 @@ fn discover(entry: &Entry, validation: ValidationMode) -> Result<Discovery, Init
 pub(super) struct VulkanInstance {
     _entry: Entry,
     instance: ash::Instance,
+    pub(super) api_version: u32,
+    // Also anchors callbacks, loader and the host logical device through
+    // any derived surfaces, native resources and pending submissions.
+    host_owner: Option<std::sync::Arc<dyn Send + Sync>>,
     #[cfg(feature = "vulkan-diagnostics")]
     debug_utils: Option<ash::ext::debug_utils::Instance>,
     #[cfg(feature = "vulkan-diagnostics")]
@@ -378,6 +382,28 @@ pub(super) struct VulkanInstance {
 }
 
 impl VulkanInstance {
+    pub(super) fn from_host(
+        entry: Entry,
+        instance: ash::Instance,
+        api_version: u32,
+        lifetime: std::sync::Arc<dyn Send + Sync>,
+        _diagnostics: DiagnosticsHandle,
+    ) -> Self {
+        Self {
+            _entry: entry,
+            instance,
+            api_version,
+            host_owner: Some(lifetime),
+            #[cfg(feature = "vulkan-diagnostics")]
+            debug_utils: None,
+            #[cfg(feature = "vulkan-diagnostics")]
+            messenger: None,
+            #[cfg(feature = "vulkan-diagnostics")]
+            _diagnostics,
+            #[cfg(feature = "vulkan-diagnostics")]
+            validation: ValidationMode::Disabled,
+        }
+    }
     #[cfg(feature = "vulkan-diagnostics")]
     pub(super) fn validation_mode(&self) -> ValidationMode {
         self.validation
@@ -404,7 +430,7 @@ impl VulkanInstance {
         &self.instance
     }
 
-    #[cfg(all(feature = "presentation", windows))]
+    #[cfg(any(test, all(feature = "presentation", windows)))]
     pub(super) fn entry(&self) -> &Entry {
         &self._entry
     }
@@ -544,6 +570,8 @@ impl VulkanInstance {
         let mut owner = Self {
             _entry: entry,
             instance,
+            api_version: REQUIRED_API,
+            host_owner: None,
             #[cfg(feature = "vulkan-diagnostics")]
             debug_utils: None,
             #[cfg(feature = "vulkan-diagnostics")]
@@ -605,6 +633,9 @@ impl VulkanInstance {
 
 impl Drop for VulkanInstance {
     fn drop(&mut self) {
+        if self.host_owner.is_some() {
+            return;
+        }
         #[cfg(feature = "vulkan-diagnostics")]
         if let (Some(debug_utils), Some(messenger)) = (&self.debug_utils, self.messenger.take()) {
             #[cfg(feature = "memory-profiling")]

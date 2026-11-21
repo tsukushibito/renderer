@@ -2,6 +2,7 @@
 
 mod buffer;
 mod device;
+pub use device::{VulkanHostDevice, VulkanHostFeatures};
 mod diagnostics;
 pub(crate) mod engine;
 mod error;
