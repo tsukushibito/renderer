@@ -86,7 +86,7 @@ bufferは半開byte範囲を指定する。
 | 実行基盤 | 現在の範囲 |
 |---|---|
 | Vulkan | bufferと画像のupload・copy・readback、owned Compute・Rasterとattachment操作、canonical import／export・履歴と上限付き再利用 |
-| D3D12 | bufferとRGBA8・RGBA16F画像のupload・copy・readback、owned Compute・Rasterとattachment操作、canonical import／export・履歴と上限付き再利用。単一DIRECT queue、committed resource、物理aliasingなし |
+| D3D12 | bufferと画像のupload・copy・readback、owned Compute・Rasterとattachment操作、canonical import／export・履歴と上限付き再利用。単一DIRECT queue、committed resource、物理aliasingなし |
 
 両APIともnative未対応の操作や準備済み容量の不足をprepareで明示エラーにする。
 共有Graphを構築できることだけで、すべてのbackendがその操作を実行できるとは扱わない。
@@ -281,7 +281,7 @@ layer数は非ゼロとし、全mipの縮小extentとlayer数のpacked byte合�
 これはnative allocation sizeやVRAM使用量の見積もりではない。
 
 `Graph::image_view(image, mip, layer)`は同じ画像の単一subresourceを指す不変な値を返す。
-owner・範囲を作成境界で確認し、aspectをRGBA8（UNORM/sRGB）/RGBA16FのColor／D32のDepthから導く。
+owner・範囲を作成境界で確認し、aspectを色形式のColor／D32のDepthから導く。
 `ImageView`は画像を別resourceとして登録せず、複数Viewの重なりを元の画像で解析する。
 `Graph::sampled_image_view(image, base_mip, mip_level_count)`は単一layerの連続mip範囲を選ぶ。
 `ImageView::mip_level_count()`で範囲を確認でき、`image_view`のcountは1である。
@@ -320,13 +320,17 @@ VulkanはDynamic Renderingのカラーresolve、D3D12は描画後の `ResolveSub
 4×画像はアタッチメントで使い、sampling・storage・upload・readback・exportには1×画像を使う。
 通常フレームの前に、各画像クラスと `RasterPipelineRequest` のProgram／sample数を準備する。
 
-whole-image uploadはRGBA8（UNORM/sRGB）/RGBA16Fを扱う。複数mipはmip0から順に、
-各levelを隙間のないrow-major texel列として連結する。whole-chainの長さ・全level初期化を保証し、
-nativeのrow pitch・offset alignmentはbackendのstaging配置へ変換する。
-readbackはmip数1のRGBA8/RGBA16F/D32のpacked bytesを扱う。
-texelはRGBA8/D32が4 byte、RGBA16Fが8 byteであり、native allocation sizeの代用にはしない。
-画像copyは同じextentとformatの1×・1 mipのcolor画像を受け入れる。
-`Rgba8Srgb`はsample/transfer用途で、storage/attachmentへは受け付けない。
+whole-image uploadはRGBA8（UNORM/sRGB）、RGBA16F、RGBA32F、BC1/BC3/BC7（UNORM/sRGB）、BC5（RG UNORM）を扱う。
+`ImageDesc::texture_2d(width, height, format).with_mip_levels(count)` で形式とlevel数を選び、mip 0から順に各levelのデータを連結する。
+RGBA画像は隙間のないtexel行、BC画像は4×4ブロックの行を使う。各mipの幅・高さを個別にブロック数へ切り上げ、
+BC1は1ブロック8 byte、BC3/BC5/BC7は16 byteとする。1×1の末端mipにも1ブロックを渡す。
+`ImageFormat::packed_row_bytes`、`packed_rows`、`packed_byte_len` でそれぞれの寸法の転送量を得られる。
+Graphは全chainの長さを照合して全levelを初期化し、backendがnativeのpitchとoffsetへ変換する。
+1×・1 mipのcolor画像は同じ形式・extentへcopyでき、readbackは上記のcolor形式とD32を元のpacked bytesで返す。
+RGBA8 sRGB、RGBA32F、BC形式はsampled/transfer用途に使う。sRGBはRGBのみをsampling時にデコードする。
+D3D12でmip 0のBC画像の幅または高さが4の倍数でない場合は、準備時に
+[UnalignedBlockTexturesSupported](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_feature_data_d3d12_options8)
+を照会する。下位mipの寸法は1 texelまで使える。
 linear filteringの実format能力は作成・準備境界で確認する。
 `NearestClamp`はnearest min/mag/mip、clamp、LOD0、`LinearRepeat`はlinear min/mag/mip、
 repeat、選択View内のLOD範囲を使う。`LinearClamp`は全軸clamp、`LinearRepeatUClampV`はUだけrepeatとし、

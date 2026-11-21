@@ -117,36 +117,29 @@ impl ImageDesc {
             sample_count: SampleCount::X1,
         }
     }
-    pub fn rgba8(width: u32, height: u32) -> Self {
+    pub const fn rgba8(width: u32, height: u32) -> Self {
         Self::texture_2d(width, height, ImageFormat::Rgba8Unorm)
     }
-    pub fn rgba32_float(width: u32, height: u32) -> Self {
+    /// Four FP32 channels for sampled data.
+    pub const fn rgba32_float(width: u32, height: u32) -> Self {
         Self::texture_2d(width, height, ImageFormat::Rgba32Float)
     }
     /// Eight-bit sRGB color for sampling and transfer, with linear alpha.
-    pub fn rgba8_srgb(width: u32, height: u32) -> Self {
-        Self {
-            format: ImageFormat::Rgba8Srgb,
-            ..Self::rgba8(width, height)
-        }
+    pub const fn rgba8_srgb(width: u32, height: u32) -> Self {
+        Self::texture_2d(width, height, ImageFormat::Rgba8Srgb)
     }
-    pub fn depth32(width: u32, height: u32) -> Self {
-        Self {
-            width,
-            height,
-            format: ImageFormat::Depth32Float,
-            mip_levels: 1,
-            array_layers: 1,
-            sample_count: SampleCount::X1,
-        }
+    pub const fn depth32(width: u32, height: u32) -> Self {
+        Self::texture_2d(width, height, ImageFormat::Depth32Float)
     }
     /// Scene-linear floating-point color, packed as four little-endian IEEE 754
     /// binary16 components per texel in RGBA order.
-    pub fn rgba16_float(width: u32, height: u32) -> Self {
-        Self {
-            format: ImageFormat::Rgba16Float,
-            ..Self::rgba8(width, height)
-        }
+    pub const fn rgba16_float(width: u32, height: u32) -> Self {
+        Self::texture_2d(width, height, ImageFormat::Rgba16Float)
+    }
+
+    /// Include this many consecutive levels starting at mip zero.
+    pub const fn with_mip_levels(self, mip_levels: u32) -> Self {
+        Self { mip_levels, ..self }
     }
 
     pub const fn with_sample_count(self, sample_count: SampleCount) -> Self {

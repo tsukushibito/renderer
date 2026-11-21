@@ -128,7 +128,7 @@ impl ComputePipeline {
                     crate::ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
                     _ => {
                         return Err(RuntimeError::unsupported(
-                            "depth and sRGB storage images are unsupported",
+                            "storage images require Rgba8Unorm or Rgba16Float",
                         ));
                     }
                 };

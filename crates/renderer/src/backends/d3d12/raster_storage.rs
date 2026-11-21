@@ -523,11 +523,11 @@ fn require_image_format(owner: &DeviceOwner, desc: ImageDesc) -> Result<(), D3D1
                 size_of_val(&support) as u32,
             )
         };
-        if let Err(e) = status.ok() {
-            // Older runtimes do not recognize OPTIONS8 and require aligned mip zero.
-            if e.code() != windows_core::HRESULT(0x80070057u32 as i32) {
-                return Err(owner.native("CheckFeatureSupport(OPTIONS8)", e));
-            }
+        // Older runtimes report E_INVALIDARG for OPTIONS8 and require aligned mip zero.
+        if let Err(e) = status.ok()
+            && e.code() != windows_core::HRESULT(0x80070057u32 as i32)
+        {
+            return Err(owner.native("CheckFeatureSupport(OPTIONS8)", e));
         }
         if !support.UnalignedBlockTexturesSupported.as_bool() {
             return Err(D3D12RuntimeError::unsupported(
@@ -676,6 +676,8 @@ fn copy_layout(
             || footprint.Footprint.RowPitch % D3D12_TEXTURE_DATA_PITCH_ALIGNMENT as u32 != 0
             || footprint.Offset % D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT as u64 != 0
             || footprint.Offset < previous_end
+            || footprint.Footprint.Width < width
+            || footprint.Footprint.Height < height
             || footprint.Footprint.Width.div_ceil(block_w) != width.div_ceil(block_w)
             || footprint.Footprint.Height.div_ceil(block_h) != block_rows
             || footprint.Footprint.Depth != 1

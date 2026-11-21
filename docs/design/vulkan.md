@@ -199,14 +199,16 @@ GraphのRGBA8_UNORM画像はtransfer source／destination、storage、sampled、
 固定usage組を持つ。RGBA16Fはtransfer source／destination、storage、sampled、color attachment、
 D32_SFLOATはdepth attachment、sampled、transfer source／destinationを持つ。
 public GraphのD32 uploadは受け付けず、ここでのusageは実装した同期・転送と再利用の能力条件を表す。
-`Rgba8Srgb`は`R8G8B8A8_SRGB`のsampledとtransfer source／destinationを使い、
-storage/color attachment用途へは受け付けない。色のdecodeはfilterの前にnativeで行い、alphaは変換しない。
+RGBA8 sRGB、RGBA32FとBC1/BC3/BC5/BC7画像はsampledとtransfer source／destinationのusageを使う。
+Deviceが対応する場合にコアfeatureの [textureCompressionBC](https://docs.vulkan.org/spec/latest/chapters/features.html#features-textureCompressionBC)
+を有効化し、BC画像を準備する際にこのfeatureと実format/usageの能力を確認する。
+sRGB形式のRGBはfilterの前にnativeでデコードし、alphaはそのまま扱う。
 2D・optimal tiling・1 layerとし、実際のusage組の能力とextent、mip数、sample数、
 framebuffer／viewport上限を照会する。4×画像はattachment用のusageを選び、Graph画像はallocationとImageViewを一緒に保持する。
 固定usageはexport後に対応操作へ再importできるようにするためであり、
 usage削減による最適化や、未確認GPUでの対応を主張しない。
 
-B2のmip chain uploadはmip0から順のpacked texel列を受け、各levelのextent・byte offsetを
+mip chain uploadはmip0から順のpacked texel列またはBCブロック列を受け、各levelの論理texel extent・byte offsetを
 `VkBufferImageCopy`へ写像する。全chainのbyte数を照合し、copyした全mipを初期化する。
 画像copy/readbackはmip数1に限定する。画像単位のstate/layoutを保持し、barrierの範囲も全chainとする。
 部分native更新やsubresourceごとの独立状態を実装したという意味ではない。
@@ -329,8 +331,9 @@ runtime生涯の追加回数ではなく、明示準備した現在の集合に�
 失敗時は旧集合を利用でき、通常frameのlookupに可変Vecの再確保やlockを加えない。
 この変更境界のpipeline再作成費用は通常frameメモリ保証と区別し、時間性能の改善を主張しない。
 
-RGBA16Fのpacked転送は1 texel8 byteであり、共有stagingのoffset alignmentをatom sizeと8 byte以上にする。
-D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyは同extent/formatのRGBA8/RGBA16Fを扱い、
+共有stagingのoffset alignmentはnonCoherentAtomSizeと最大ブロックサイズ16 byteの大きい方を使う。
+BCのbyte offsetは各mipのceil(幅/4) × ceil(高さ/4) × ブロックbyte数を積算する。
+D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyは同extent/formatのcolor画像を扱い、
 各実format/usage能力の作成時照会とnative失敗処理を行う。
 
 `renderer_pipeline`の各レシピと`passes`は通常のGraph／Program／copy APIを使って構築する。
