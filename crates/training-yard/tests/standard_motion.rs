@@ -14,11 +14,14 @@ use renderer::{
 use renderer_core::runtime::RuntimeConfig;
 use std::time::Duration;
 
+#[path = "../../renderer/examples/support/validation.rs"]
+mod validation;
+
 mod shader {
     include!("../../renderer/examples/support/toon.rs");
 }
 
-fn exercise(backend: RuntimeConfig) -> PipelineResult<()> {
+fn exercise(backend: RuntimeConfig, load_after_start: bool) -> PipelineResult<()> {
     let camera = CameraView {
         id: ViewId(1),
         extent: [32, 16],
@@ -56,8 +59,9 @@ fn exercise(backend: RuntimeConfig) -> PipelineResult<()> {
         &[("color", Value::Color([0., 1., 0., 1.]))],
     )?;
     let mut scene = Scene::default();
-    let actor = scene.spawn(RenderObject::new(pbr, red));
-    scene.spawn(RenderObject::new(toon, green));
+    if !load_after_start {
+        scene.spawn(RenderObject::new(toon, green));
+    }
     let mut view = Renderer::headless(
         backend,
         camera,
@@ -74,9 +78,20 @@ fn exercise(backend: RuntimeConfig) -> PipelineResult<()> {
     let mut ui_pixels = [0; 32 * 16 * 4];
     assert!(view.read_capture(&ticket, &mut ui_pixels, Duration::from_secs(15))?);
     assert_eq!(&ui_pixels[..8], &[0, 0, 0, 255, 137, 0, 0, 255]);
+    let actor = scene.spawn(RenderObject::new(pbr, red));
+    view.prepare_assets(SceneAssets::new(
+        &mut meshes,
+        &mut materials,
+        scene.objects(),
+    ))?;
     let mut capture = |objects: &[RenderObject]| -> PipelineResult<_> {
         let mut frame = view.begin_frame()?;
         frame.draw_scene(SceneInput::new(&meshes, &materials, objects), 1.)?;
+        frame.draw_overlay(&[renderer::canvas::Layer {
+            paint: renderer::canvas::Paint::Color([0., 0., 0.25, 1.]),
+            rect: renderer::core::graph::RasterRect::new(31, 15, 1, 1),
+            clip: None,
+        }])?;
         let pending = frame.capture()?;
         let mut pixels = [0; 32 * 16 * 4];
         assert!(
@@ -84,16 +99,18 @@ fn exercise(backend: RuntimeConfig) -> PipelineResult<()> {
                 .is_err()
         );
         assert!(view.read_capture(&pending, &mut pixels, Duration::from_secs(15))?);
+        assert_eq!(&pixels[pixels.len() - 4..], &[0, 0, 137, 255]);
         Ok(pixels)
     };
     let original = capture(scene.objects())?;
     let motion = Transform::new([[1., 0., 0., 0.25], [0., 1., 0., 0.], [0., 0., 1., 0.]])?;
     scene.instance_mut(actor).unwrap().transform = motion;
     let moved = capture(scene.objects())?;
-    let host = [
-        RenderObject::new(pbr, red).with_transform(motion),
-        RenderObject::new(toon, green),
-    ];
+    let mut host = Vec::new();
+    if !load_after_start {
+        host.push(RenderObject::new(toon, green));
+    }
+    host.push(RenderObject::new(pbr, red).with_transform(motion));
     assert_eq!(moved, capture(&host)?);
     let red_pixels = |pixels: &[u8]| {
         pixels
@@ -106,28 +123,37 @@ fn exercise(backend: RuntimeConfig) -> PipelineResult<()> {
     assert!(red_pixels(&original) > 0);
     assert_eq!(red_pixels(&original), red_pixels(&moved));
     assert_ne!(original, moved);
-    assert!(
+    assert_eq!(
         moved
             .as_chunks::<4>()
             .0
             .iter()
-            .any(|p| p[1] > p[0] && p[1] > p[2])
+            .any(|p| p[1] > p[0] && p[1] > p[2]),
+        !load_after_start
     );
+    scene.remove(actor).unwrap();
+    assert_eq!(red_pixels(&capture(scene.objects())?), 0);
     let mut runtime = view.into_runtime()?;
     meshes.release_gpu(&mut runtime)?;
     materials.clear(&mut runtime)?;
-    Ok(())
+    validation::check_validation(runtime)
 }
 
 #[cfg(feature = "vulkan")]
 #[test]
 #[ignore = "requires a Vulkan device"]
 fn vulkan_standard_motion() -> PipelineResult<()> {
-    exercise(RuntimeConfig::Vulkan(Default::default()))
+    for empty in [true, false] {
+        exercise(RuntimeConfig::Vulkan(Default::default()), empty)?;
+    }
+    Ok(())
 }
 #[cfg(all(windows, feature = "d3d12"))]
 #[test]
 #[ignore = "requires a D3D12 device"]
 fn d3d12_standard_motion() -> PipelineResult<()> {
-    exercise(RuntimeConfig::D3D12(Default::default()))
+    for empty in [true, false] {
+        exercise(RuntimeConfig::D3D12(Default::default()), empty)?;
+    }
+    Ok(())
 }

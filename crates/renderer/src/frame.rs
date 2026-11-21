@@ -9,6 +9,7 @@ use crate::{
 };
 use renderer_core::{
     ImageFormat,
+    capacity::Preparation,
     graph::{Graph, GraphError, ImageDesc, ImageHandle, LoadOp, PassHandle, SampleCount},
     runtime::{FrameId, FrameSubmission, Runtime, RuntimeConfig},
 };
@@ -37,6 +38,7 @@ const TONE_MAP: &str = "frame tone map";
 pub struct Renderer {
     drawing: SceneRenderer,
     camera: CameraView,
+    working_set: Preparation,
 }
 
 impl Renderer {
@@ -51,7 +53,11 @@ impl Renderer {
             StandardConfig::new(camera.extent),
         );
         group.output = None;
-        let mut plan = RendererSetup::new(group).prepare(assets)?;
+        let mut setup = RendererSetup::new(group);
+        // Small scenes commonly load the first models after showing their UI.
+        // Reserve instance operands here; geometry sizes are known at model load.
+        setup.additional_objects = 16;
+        let mut plan = setup.prepare(assets)?;
         let [w, h] = camera.extent;
         let target = ImageDesc::rgba8(w, h);
         let prep = plan.preparation_mut();
@@ -81,8 +87,59 @@ impl Renderer {
         camera: CameraView,
         assets: SceneAssets<'_>,
     ) -> PipelineResult<Self> {
-        let drawing = Self::prepare(camera, assets, SdrOutput::capture(false))?.build(backend)?;
-        Ok(Self { drawing, camera })
+        Self::headless_with(backend, camera, assets, |_| Ok(()))
+    }
+
+    /// Include host passes and resources that will be used on this frame's Graph.
+    pub fn headless_with(
+        backend: RuntimeConfig,
+        camera: CameraView,
+        assets: SceneAssets<'_>,
+        configure: impl FnOnce(&mut Preparation) -> Result<(), GraphError>,
+    ) -> PipelineResult<Self> {
+        let mut plan = Self::prepare(camera, assets, SdrOutput::capture(false))?;
+        configure(plan.preparation_mut())?;
+        let working_set = Self::base_working_set(&plan)?;
+        let drawing = plan.build(backend)?;
+        Ok(Self {
+            drawing,
+            camera,
+            working_set,
+        })
+    }
+
+    fn base_working_set(plan: &PreparedSetup<'_>) -> PipelineResult<Preparation> {
+        let mut base = Preparation::new(plan.preparation().frames_in_flight());
+        base.add_working_set(plan.preparation().working_set())?;
+        Ok(base)
+    }
+
+    /// Prepare geometry and materials at a load boundary. Supply the active
+    /// model selection. Subsequent pose changes use only the scene input.
+    pub fn prepare_assets(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
+        use crate::material::MaterialInstance;
+        use std::collections::HashSet;
+        let mut meshes = HashSet::new();
+        let mut uniforms = HashSet::new();
+        for object in assets.objects {
+            meshes.insert(object.mesh);
+            if matches!(
+                assets.materials.get(object.material)?,
+                MaterialInstance::Pbr(_)
+            ) {
+                uniforms.insert(object.material);
+            }
+        }
+        let mut active = Preparation::new(self.working_set.frames_in_flight());
+        active.add_working_set(self.working_set.working_set())?;
+        assets
+            .meshes
+            .reserve_selection(&mut active, meshes.into_iter())?;
+        active.reserve_buffer(crate::pbr::MaterialUniform::DESC, uniforms.len())?;
+        self.drawing
+            .runtime()
+            .prepare_working_set(active.working_set())?;
+        self.drawing.prepare_assets(assets)
     }
 
     pub fn begin_frame(&mut self) -> PipelineResult<Frame<'_>> {

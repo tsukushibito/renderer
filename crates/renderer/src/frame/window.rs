@@ -20,11 +20,25 @@ pub struct WindowRenderer {
 impl WindowRenderer {
     pub fn new(
         window: impl HasWindowHandle + 'static,
-        mut backend: RuntimeConfig,
+        backend: RuntimeConfig,
         camera: CameraView,
         assets: SceneAssets<'_>,
     ) -> PipelineResult<Self> {
-        let plan = Renderer::prepare(camera, assets, SdrOutput::display(false))?;
+        Self::new_with(window, backend, camera, assets, |_| Ok(()))
+    }
+
+    /// Prepare application passes for the same Graph as the scene and screen overlay.
+    pub fn new_with(
+        window: impl HasWindowHandle + 'static,
+        mut backend: RuntimeConfig,
+        camera: CameraView,
+        assets: SceneAssets<'_>,
+        configure: impl FnOnce(
+            &mut renderer_core::capacity::Preparation,
+        ) -> Result<(), renderer_core::graph::GraphError>,
+    ) -> PipelineResult<Self> {
+        let mut plan = Renderer::prepare(camera, assets, SdrOutput::display(false))?;
+        configure(plan.preparation_mut())?;
         plan.fit_backend(&mut backend)?;
         let (runtime, presenter) = Runtime::for_window(
             backend,
@@ -33,12 +47,21 @@ impl WindowRenderer {
             window,
             Default::default(),
         )?;
+        let working_set = Renderer::base_working_set(&plan)?;
         let drawing = plan.begin_with_runtime(runtime)?.wait()?;
         Ok(Self {
             presenter,
-            renderer: Renderer { drawing, camera },
+            renderer: Renderer {
+                drawing,
+                camera,
+                working_set,
+            },
             accepted: None,
         })
+    }
+
+    pub fn prepare_assets(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
+        self.renderer.prepare_assets(assets)
     }
 
     /// A pending present retries the accepted image. It does not resubmit the scene.
