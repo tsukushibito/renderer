@@ -2,3 +2,6 @@
 
 #[cfg(feature = "graphics")]
 pub mod canvas;
+
+#[cfg(feature = "graphics")]
+pub mod scene;

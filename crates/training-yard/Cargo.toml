@@ -13,8 +13,8 @@ d3d12 = ["renderer-core/d3d12", "renderer?/d3d12"]
 development-validation = ["renderer-core/development-validation", "renderer?/development-validation"]
 
 [dependencies]
-renderer = { package = "renderer-pipeline", path = "../renderer-pipeline", optional = true }
-renderer-core = { package = "renderer", path = "../renderer" }
+renderer = { package = "renderer-pipeline", version = "0.1.0", path = "../renderer-pipeline", optional = true }
+renderer-core = { package = "renderer", version = "0.1.0", path = "../renderer" }
 
 [[test]]
 name = "host_output"
