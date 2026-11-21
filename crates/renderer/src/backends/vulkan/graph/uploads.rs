@@ -22,11 +22,19 @@ impl VulkanRuntime {
         name: impl AsRef<str>,
         desc: BufferDesc,
     ) -> Result<ImportBuffer, RuntimeError> {
+        self.register_buffer(name.as_ref(), desc, true)
+    }
+
+    pub(crate) fn register_buffer(
+        &mut self,
+        name: &str,
+        desc: BufferDesc,
+        allow_creation: bool,
+    ) -> Result<ImportBuffer, RuntimeError> {
         self.owner
             .device
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
-        let name = name.as_ref();
         // C-string validity belongs to optional native debug naming. Logical
         // Graph/resource names remain arbitrary Rust strings in shipping.
         // Validate even when acquisition can reuse an existing allocation.
@@ -37,7 +45,8 @@ impl VulkanRuntime {
             ));
         }
         validate_buffer_size(desc.size, self.owner.device.max_buffer_size())?;
-        let (key, physical) = self.acquire_inner(ResourceDesc::Buffer(desc), name, true)?;
+        let (key, physical) =
+            self.acquire_inner(ResourceDesc::Buffer(desc), name, allow_creation)?;
         let revision = physical.lock().scheduled.revision;
         // A poisoned resource state stops the Device. Do not publish a new
         // registration after acquisition has observed that terminal condition.

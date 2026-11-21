@@ -542,6 +542,20 @@ impl Graph {
             index,
         })
     }
+    /// Import a buffer for shared reading. Every alias of this registration in
+    /// the graph is protected against writes and re-export. Copy to a separate
+    /// buffer when independent writable contents are needed.
+    pub fn import_readonly_buffer(
+        &mut self,
+        name: &str,
+        source: &ImportBuffer,
+    ) -> Result<BufferHandle, GraphError> {
+        let previous_len = self.resources.len();
+        let buffer = self.import_buffer(name, source)?;
+        self.protect_input(buffer, buffer.index >= previous_len)?;
+        Ok(buffer)
+    }
+
     /// Connect a runtime-issued image snapshot to this graph.
     ///
     /// Consistent repeated imports share one logical identity. The snapshot's

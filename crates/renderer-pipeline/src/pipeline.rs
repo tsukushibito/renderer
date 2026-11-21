@@ -27,7 +27,7 @@ mod view;
 pub use input::{Draw, Frame, Mesh};
 pub use view::{StandardViewOutput, StandardViewState};
 mod scene;
-pub use scene::{EnvironmentMaps, RenderObject, SceneInput};
+pub use scene::{EnvironmentMaps, MeshIndexRange, RenderObject, SceneInput};
 mod contract;
 pub use contract::*;
 
