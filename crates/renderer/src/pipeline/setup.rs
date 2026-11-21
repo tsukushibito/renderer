@@ -264,6 +264,7 @@ impl RendererSetup {
             groups,
             preparation,
             limits,
+            definitions,
             mesh_budget: self.mesh_upload_bytes,
             transfer: mesh_bytes.min(self.mesh_upload_bytes),
             readback: 0,
@@ -295,6 +296,7 @@ pub struct PreparedSetup<'a> {
     groups: Vec<PipelineId>,
     preparation: Preparation,
     limits: SceneLimits,
+    definitions: Vec<MaterialDefinition>,
     mesh_budget: u64,
     transfer: u64,
     readback: u64,
@@ -361,33 +363,7 @@ impl<'a> PreparedSetup<'a> {
         Ok(())
     }
     pub fn runtime_limits(&self, base: RuntimeLimits) -> Result<RuntimeLimits, GraphError> {
-        let mut limits = self.preparation.runtime_limits(base)?;
-        let req = self.preparation.graph_requirements();
-        let overflow = || GraphError::invalid_input("scene metadata capacity overflow");
-        // The runtime keeps registered assets and view histories during a working-set
-        // replacement. Reserve registry metadata for both sets, not a second set of GPU allocations.
-        limits.resource_capacity = limits.resource_capacity.max(
-            self.preparation
-                .resource_count()?
-                .checked_mul(2)
-                .ok_or_else(overflow)?,
-        );
-        limits.graph.edges = limits
-            .graph
-            .edges
-            .max(req.accesses.checked_mul(2).ok_or_else(overflow)?);
-        limits.graph.segments = limits.graph.segments.max(
-            req.initial_ranges
-                .checked_add(req.accesses)
-                .ok_or_else(overflow)?,
-        );
-        limits.range_snapshots = limits.range_snapshots.max(
-            limits
-                .resource_capacity
-                .checked_mul(2)
-                .ok_or_else(overflow)?,
-        );
-        Ok(limits)
+        self.preparation.replacement_limits(base)
     }
     /// Fit engine-supplied backend settings before constructing a headless, windowed or adopted runtime.
     pub fn fit_backend(&self, backend: &mut RuntimeConfig) -> PipelineResult<()> {

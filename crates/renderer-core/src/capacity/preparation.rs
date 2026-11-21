@@ -221,6 +221,37 @@ impl Preparation {
         Ok(base)
     }
 
+    /// Size recording arenas and reserve registry metadata for overlapping old and new sets.
+    pub fn replacement_limits(
+        &self,
+        base: crate::runtime::RuntimeLimits,
+    ) -> Result<crate::runtime::RuntimeLimits, GraphError> {
+        let mut limits = self.runtime_limits(base)?;
+        let req = self.graph_requirements();
+        let overflow = || GraphError::invalid_input("working set metadata capacity overflow");
+        // The runtime keeps registered assets and view histories during a working-set
+        // replacement. Reserve registry metadata for both sets, not a second set of GPU allocations.
+        limits.resource_capacity = limits
+            .resource_capacity
+            .max(self.resource_count()?.checked_mul(2).ok_or_else(overflow)?);
+        limits.graph.edges = limits
+            .graph
+            .edges
+            .max(req.accesses.checked_mul(2).ok_or_else(overflow)?);
+        limits.graph.segments = limits.graph.segments.max(
+            req.initial_ranges
+                .checked_add(req.accesses)
+                .ok_or_else(overflow)?,
+        );
+        limits.range_snapshots = limits.range_snapshots.max(
+            limits
+                .resource_capacity
+                .checked_mul(2)
+                .ok_or_else(overflow)?,
+        );
+        Ok(limits)
+    }
+
     pub fn working_set(&self) -> WorkingSet<'_> {
         WorkingSet {
             resources: &self.resources,

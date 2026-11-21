@@ -22,6 +22,8 @@ impl std::error::Error for RetiredViewError {
 
 /// Prepared views, reusable graph storage and the runtime used for their submissions.
 pub struct SceneRenderer<R: BorrowMut<Runtime> = Runtime> {
+    pub(crate) limits: SceneLimits,
+    pub(crate) definitions: Vec<MaterialDefinition>,
     pub(super) driver: ViewRenderer,
     pub(super) pool: GraphPool,
     pub(super) runtime: Option<R>,
@@ -30,16 +32,41 @@ pub struct SceneRenderer<R: BorrowMut<Runtime> = Runtime> {
     pub(super) retired: Option<ViewRenderer>,
 }
 impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
+    pub(crate) fn mesh_upload_budget(&self) -> u64 {
+        self.mesh_budget
+    }
     /// Recreate all views on this runtime at a change boundary. The plan describes
     /// the complete replacement working set, including other engine passes using
     /// the device. Return outstanding result/export owners first. A rejected working
     /// set or failed initialization preserves the old views. If old-view release
     /// fails after publication, the error is a [`RetiredViewError`].
     pub fn replace_working_set(&mut self, plan: PreparedSetup<'_>) -> PipelineResult<()> {
+        self.replace_plan(plan, |plan, runtime, overlap| {
+            plan.check_runtime(runtime)?;
+            Ok(runtime.prepare_working_set(overlap.working_set())?)
+        })
+    }
+    pub(crate) fn replace_fitted_working_set(
+        &mut self,
+        plan: PreparedSetup<'_>,
+    ) -> PipelineResult<()> {
+        self.replace_plan(plan, |plan, runtime, overlap| {
+            Ok(runtime.prepare_fitted_working_set(
+                overlap,
+                plan.upload_capacity()?,
+                plan.readback,
+            )?)
+        })
+    }
+
+    fn replace_plan(
+        &mut self,
+        plan: PreparedSetup<'_>,
+        prepare: impl FnOnce(&PreparedSetup<'_>, &mut Runtime, &Preparation) -> PipelineResult<()>,
+    ) -> PipelineResult<()> {
         self.collect_retired_views()?;
         self.driver.check_idle()?;
         let runtime = self.runtime.as_mut().expect("live renderer").borrow_mut();
-        plan.check_runtime(runtime)?;
         // Keep every transient class and program the original cameras could
         // need if the new pipeline rejects an asset or fails to initialize.
         // Registered images and buffers retain their separate native leases.
@@ -47,7 +74,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         old.add_working_set(self.configured.working_set())?;
         let mut overlap = Preparation::new(old.frames_in_flight());
         overlap.add_alternatives(&[&old, plan.preparation()])?;
-        runtime.prepare_working_set(overlap.working_set())?;
+        prepare(&plan, runtime, &overlap)?;
         let mut next = plan.begin_with_runtime(runtime)?.wait()?;
         self.retired = Some(std::mem::replace(
             &mut self.driver,
@@ -55,6 +82,8 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         ));
         std::mem::swap(&mut self.pool, &mut next.pool);
         std::mem::swap(&mut self.configured, &mut next.configured);
+        std::mem::swap(&mut self.definitions, &mut next.definitions);
+        self.limits = next.limits;
         self.mesh_budget = next.mesh_budget;
         drop(next);
         self.collect_retired_views()
@@ -69,8 +98,21 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         Ok(())
     }
 
-    pub(crate) fn prepare_native_set(&mut self, set: Preparation) -> PipelineResult<()> {
-        self.runtime().prepare_working_set(set.working_set())?;
+    pub(crate) fn prepare_native_set(
+        &mut self,
+        set: Preparation,
+        transfer: u64,
+    ) -> PipelineResult<()> {
+        let limits = self.runtime().limits();
+        let graph = set.replacement_limits(limits)?.graph;
+        let pool = (graph != limits.graph)
+            .then(|| GraphPool::new(graph, set.frames_in_flight().get()))
+            .transpose()?;
+        self.runtime()
+            .prepare_fitted_working_set(&set, transfer, 0)?;
+        if let Some(pool) = pool {
+            self.pool = pool;
+        }
         self.configured = set;
         Ok(())
     }

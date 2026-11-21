@@ -35,6 +35,19 @@ impl RecycleQueue {
         }
     }
 
+    pub(super) fn grow(&self, capacity: usize) -> Result<(), TryReserveError> {
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if capacity <= state.queued.len() {
+            return Ok(());
+        }
+        let additional = capacity.saturating_sub(state.indices.len());
+        state.indices.try_reserve_exact(additional)?;
+        let additional = capacity.saturating_sub(state.queued.len());
+        state.queued.try_reserve_exact(additional)?;
+        state.queued.resize(capacity, false);
+        Ok(())
+    }
+
     pub(super) fn drain_into(&self, output: &mut Vec<usize>) {
         let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
         assert!(
@@ -165,9 +178,13 @@ impl<K: Copy + Ord> CacheIndex<K> {
 
     /// Keep tentative selections private to an explicit preparation attempt.
     pub(super) fn for_preparation(&self) -> Result<Self, TryReserveError> {
-        let mut scratch = Self::new(self.records.len())?;
-        scratch.records.copy_from_slice(&self.records);
-        scratch.available.copy_from_slice(&self.available);
+        self.with_capacity(self.records.len())
+    }
+
+    pub(super) fn with_capacity(&self, capacity: usize) -> Result<Self, TryReserveError> {
+        let mut scratch = Self::new(capacity.max(self.records.len()))?;
+        scratch.records[..self.records.len()].copy_from_slice(&self.records);
+        scratch.available[..self.available.len()].copy_from_slice(&self.available);
         scratch.classes.extend_from_slice(&self.classes);
         scratch.last_class = self.last_class;
         scratch.count = self.count;

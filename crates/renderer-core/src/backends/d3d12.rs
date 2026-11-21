@@ -297,6 +297,23 @@ impl D3D12Runtime {
         programs: &[crate::program::RasterPipelineRequest],
         compute_programs: &[crate::program::ManagedProgram],
     ) -> Result<(), D3D12RuntimeError> {
+        self.prepare_graph_with_capacity(
+            self.pool.capacity(),
+            buffers,
+            images,
+            programs,
+            compute_programs,
+        )
+    }
+
+    pub(crate) fn prepare_graph_with_capacity(
+        &mut self,
+        capacity: D3D12FrameCapacity,
+        buffers: Option<&[D3D12BufferClass]>,
+        images: &[D3D12ImageClass],
+        programs: &[crate::program::RasterPipelineRequest],
+        compute_programs: &[crate::program::ManagedProgram],
+    ) -> Result<(), D3D12RuntimeError> {
         self.device.ensure_active()?;
         self.pool.reap()?;
         if !self.pool.is_idle() {
@@ -325,7 +342,7 @@ impl D3D12Runtime {
         let registered_images = registry.registered_images()?;
         let mut pool = frame::FramePool::with_graph(
             Arc::clone(&self.device),
-            self.pool.capacity(),
+            capacity,
             buffers.unwrap_or_else(|| self.pool.buffer_classes()),
             images,
             &registered_images,

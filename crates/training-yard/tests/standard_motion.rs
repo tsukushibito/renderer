@@ -133,6 +133,35 @@ fn exercise(backend: RuntimeConfig, load_after_start: bool) -> PipelineResult<()
     );
     scene.remove(actor).unwrap();
     assert_eq!(red_pixels(&capture(scene.objects())?), 0);
+    if load_after_start {
+        for i in 0..17 {
+            let pose = Transform::new([
+                [1., 0., 0., i as f32 / 128.],
+                [0., 1., 0., 0.],
+                [0., 0., 1., 0.],
+            ])?;
+            scene.spawn(RenderObject::new(pbr, red).with_transform(pose));
+        }
+        scene.spawn(RenderObject::new(toon, green));
+        view.prepare_assets(SceneAssets::new(
+            &mut meshes,
+            &mut materials,
+            scene.objects(),
+        ))?;
+        let mut frame = view.begin_frame()?;
+        frame.draw_scene(SceneInput::new(&meshes, &materials, scene.objects()), 1.)?;
+        let loaded = frame.capture()?;
+        let mut pixels = [0; 32 * 16 * 4];
+        assert!(view.read_capture(&loaded, &mut pixels, Duration::from_secs(15))?);
+        assert!(red_pixels(&pixels) > 0);
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p[1] > p[0] && p[1] > p[2])
+        );
+    }
     let mut runtime = view.into_runtime()?;
     meshes.release_gpu(&mut runtime)?;
     materials.clear(&mut runtime)?;

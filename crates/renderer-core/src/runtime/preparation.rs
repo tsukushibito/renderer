@@ -74,7 +74,7 @@ impl RuntimeConfig {
     }
 }
 
-/// Physical Vulkan limits fixed at initialization.
+/// Initial physical Vulkan limits for ordinary Graph execution.
 #[cfg(feature = "vulkan")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VulkanConfig {
@@ -101,7 +101,7 @@ impl Default for VulkanConfig {
     }
 }
 
-/// Physical D3D12 limits fixed at initialization. Transfer bytes include the
+/// Initial physical D3D12 limits. Transfer bytes include the
 /// native padding of placed texture footprints.
 #[cfg(all(feature = "d3d12", windows))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,8 +134,8 @@ impl Default for D3D12Config {
     }
 }
 
-/// Logical limits shared by headless and windowed Graph runtimes. Bounds are
-/// fixed at initialization. Graph storage is allocated separately by the caller.
+/// Logical limits shared by headless and windowed Graph runtimes. The caller
+/// allocates Graph storage separately and selects concurrency at startup.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeLimits {
     pub graph: GraphCapacity,
@@ -404,6 +404,67 @@ impl Runtime {
                     working_set.compute,
                 )?)
             }
+        }
+    }
+
+    /// Resize this device's recording storage and replace its prepared classes at
+    /// an explicit load boundary. The queue, registered resources and snapshots
+    /// keep their identities. Frame concurrency stays under the host's control.
+    pub fn prepare_fitted_working_set(
+        &mut self,
+        preparation: &crate::capacity::Preparation,
+        upload_bytes: u64,
+        readback_bytes: u64,
+    ) -> Result<(), ExecutionError> {
+        self.collect_released_images()?;
+        let limits = preparation
+            .replacement_limits(self.limits)
+            .map_err(|_| ExecutionError::invalid("working set limits overflow"))?;
+        if limits.frames != self.limits.frames || limits.results != self.limits.results {
+            return Err(ExecutionError::invalid(
+                "new working set exceeds runtime concurrency",
+            ));
+        }
+        let mut config = self.config;
+        config
+            .fit_preparation(preparation, upload_bytes, readback_bytes)
+            .map_err(|_| ExecutionError::invalid("backend capacity overflow"))?;
+        let set = preparation.working_set();
+        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        self.image_releases
+            .reserve_capacity(limits.resource_capacity)?;
+        match (&mut self.inner, config) {
+            #[cfg(feature = "vulkan")]
+            (RuntimeInner::Vulkan(runtime), RuntimeConfig::Vulkan(settings)) => {
+                runtime.grow_graph_working_set(
+                    limits.vulkan_capacity()?,
+                    settings,
+                    limits.resource_capacity,
+                    set,
+                )?;
+            }
+            #[cfg(all(feature = "d3d12", windows))]
+            (RuntimeInner::D3D12(runtime), RuntimeConfig::D3D12(settings)) => {
+                let classes = D3D12Classes::new(set.resources)?;
+                runtime.prepare_graph_with_capacity(
+                    limits.d3d12_config(settings).capacity,
+                    Some(&classes.buffers),
+                    &classes.images,
+                    set.raster,
+                    set.compute,
+                )?;
+            }
+            #[cfg(all(feature = "vulkan", windows, feature = "d3d12"))]
+            _ => unreachable!("runtime owns its backend configuration"),
+            #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
+            _ => match config {},
+        }
+        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        {
+            self.image_releases.set_limit(limits.resource_capacity);
+            self.config = config;
+            self.limits = limits;
+            Ok(())
         }
     }
 }

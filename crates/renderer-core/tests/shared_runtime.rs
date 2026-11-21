@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use renderer_core::capacity::CapacityRecovery;
+use renderer_core::capacity::{CapacityRecovery, Preparation};
 use renderer_core::graph::{BufferDesc, GraphCapacity, GraphPool, ImageDesc, ImportBuffer};
 use renderer_core::runtime::{
     D3D12Config, ResourceClass, Runtime, RuntimeConfig, RuntimeLimits, VulkanConfig, WorkingSet,
@@ -97,6 +97,61 @@ fn reprepare(runtime: &mut Runtime, limits: RuntimeLimits) {
     drop(snapshot);
     let snapshot = runtime.refresh_buffer(key).unwrap();
     expect_buffer(runtime, &mut pool, &snapshot);
+
+    // Cold growth on the same device preserves the live range snapshot and
+    // registered contents, even if the first requested native class is invalid.
+    const SIZE: usize = 128 * 1024;
+    let mut grown = Preparation::new(std::num::NonZeroUsize::MIN);
+    grown
+        .reserve_buffer(BufferDesc { size: SIZE as u64 }, 35)
+        .unwrap();
+    let mut invalid = Preparation::new(grown.frames_in_flight());
+    invalid.add_working_set(grown.working_set()).unwrap();
+    invalid.reserve_image(unsupported, 1).unwrap();
+    assert!(
+        runtime
+            .prepare_fitted_working_set(&invalid, SIZE as u64, SIZE as u64)
+            .is_err()
+    );
+    assert_eq!(runtime.limits(), limits);
+    expect_buffer(runtime, &mut pool, &snapshot);
+    grown
+        .add_graph_requirements(renderer_core::capacity::GraphRequirements {
+            resources: 8,
+            passes: 8,
+            accesses: 12,
+            upload_bytes: SIZE,
+            ..Default::default()
+        })
+        .unwrap();
+    runtime
+        .prepare_fitted_working_set(&grown, SIZE as u64, SIZE as u64)
+        .unwrap();
+    assert!(runtime.limits().resource_capacity > limits.resource_capacity);
+    let fresh = runtime.refresh_buffer(key).unwrap();
+    expect_buffer(runtime, &mut pool, &fresh);
+    expect_buffer(runtime, &mut pool, &snapshot);
+    let mut larger_pool = GraphPool::new(runtime.limits().graph, 1).unwrap();
+    let mut graph = larger_pool.begin().unwrap();
+    let large = graph
+        .buffer("large transfer", BufferDesc { size: SIZE as u64 })
+        .unwrap();
+    let data = vec![123; SIZE];
+    graph
+        .upload_buffer("new upload arena", large, 0, &data)
+        .unwrap();
+    let read = graph
+        .readback_buffer("new readback arena", large, 0, SIZE as u64)
+        .unwrap();
+    let id = runtime.submit(&graph.compile().unwrap()).unwrap().id();
+    let mut bytes = vec![0; SIZE];
+    runtime
+        .wait_for_frame(id, WAIT)
+        .unwrap()
+        .unwrap()
+        .readback_into(read, &mut bytes)
+        .unwrap();
+    assert_eq!(bytes, data);
     runtime.delete(key).unwrap();
     assert!(runtime.drain_frames(Duration::ZERO).unwrap());
 }
@@ -123,6 +178,7 @@ fn run(strict: bool) {
     };
     let mut vk = Runtime::new(
         RuntimeConfig::Vulkan(VulkanConfig {
+            staging_bytes: 4096,
             validation: if strict {
                 ValidationMode::Required
             } else {
@@ -136,6 +192,8 @@ fn run(strict: bool) {
     .unwrap();
     let mut dx = Runtime::new(
         RuntimeConfig::D3D12(D3D12Config {
+            upload_bytes: 4096,
+            readback_bytes: 4096,
             validation: if strict {
                 D3D12ValidationMode::Required
             } else {

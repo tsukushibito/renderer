@@ -73,6 +73,7 @@ impl Drop for ReleaseTicket {
 }
 
 struct ReleaseState {
+    limit: usize,
     active: usize,
     pending: Vec<ResourceKey>,
 }
@@ -84,22 +85,41 @@ pub(super) struct ImageReleases {
         any(feature = "vulkan", feature = "d3d12")
     ))]
     pub(super) runtime_id: u64,
-    limit: usize,
     ready: AtomicBool,
     state: Mutex<ReleaseState>,
 }
 
 impl ImageReleases {
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub(super) fn reserve_capacity(&self, limit: usize) -> Result<(), ExecutionError> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let additional = limit.saturating_sub(state.pending.len());
+        state.pending.try_reserve_exact(additional).map_err(|_| {
+            ExecutionError::with_capacity(
+                "unable to grow managed image release records",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::HostMemory,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    Some(limit as u64),
+                ),
+            )
+        })
+    }
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub(super) fn set_limit(&self, limit: usize) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).limit = limit;
+    }
     fn reserve(self: &Arc<Self>) -> Result<ReleaseTicket, ExecutionError> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if state.active == self.limit {
+        if state.active == state.limit {
             return Err(ExecutionError::with_capacity(
                 "release retained managed images before submitting another image",
                 RuntimeCapacityError::new(
                     RuntimeCapacityKind::Resources,
                     CapacityRecovery::ReleaseOwners,
-                    Some(self.limit as u64),
-                    (self.limit as u64).checked_add(1),
+                    Some(state.limit as u64),
+                    (state.limit as u64).checked_add(1),
                 ),
             ));
         }
@@ -142,9 +162,12 @@ impl Runtime {
                     any(feature = "vulkan", feature = "d3d12")
                 ))]
                 runtime_id: crate::graph::next_id(),
-                limit,
                 ready: AtomicBool::new(false),
-                state: Mutex::new(ReleaseState { active: 0, pending }),
+                state: Mutex::new(ReleaseState {
+                    active: 0,
+                    pending,
+                    limit,
+                }),
             }),
         })
     }

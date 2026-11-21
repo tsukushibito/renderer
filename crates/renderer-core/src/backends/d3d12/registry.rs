@@ -484,11 +484,29 @@ impl Registry {
     /// All allocation/native creation has completed in `prepared`. Check the
     /// index budget before moving anything; the commit below cannot fail.
     pub(super) fn replace_prepared(&mut self, prepared: &mut Self) -> Result<(), Error> {
+        let capacity = prepared.capacity;
+        self.entries
+            .try_reserve_exact(
+                capacity
+                    .resource_capacity
+                    .saturating_sub(self.entries.len()),
+            )
+            .map_err(|_| Error::invalid("unable to expand registry entry storage"))?;
+        let ranges = self
+            .ranges
+            .expanded_slots(capacity.range_snapshots)
+            .map_err(|_| Error::invalid("unable to expand import snapshot storage"))?;
         replace_entries(
             &mut self.entries,
             &mut prepared.entries,
-            self.capacity.resource_capacity,
+            capacity.resource_capacity,
         )?;
+        self.capacity = capacity;
+        if let Some(ranges) = ranges {
+            self.ranges = ranges;
+        }
+        std::mem::swap(&mut self.exports, &mut prepared.exports);
+        std::mem::swap(&mut self.reuse, &mut prepared.reuse);
         self.rebuild_reuse_index();
         Ok(())
     }

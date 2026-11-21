@@ -64,6 +64,28 @@ pub struct ImportRangesPool {
 }
 
 impl ImportRangesPool {
+    /// Add backing at a load boundary. Existing leases stay anchored in this
+    /// pool, so returning their final clone during a frame cannot free memory.
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub(crate) fn expanded_slots(&self, slots: usize) -> Result<Option<Self>, GraphError> {
+        let additional = slots.saturating_sub(self.slots.len());
+        if additional > 0 {
+            let mut extra = Self::new(self.range_capacity, additional)?;
+            extra
+                .slots
+                .try_reserve_exact(self.slots.len())
+                .map_err(|_| {
+                    GraphError::capacity_error(
+                        GraphCapacityKind::ImportRangeSlots,
+                        self.slots.len(),
+                        Some(slots),
+                    )
+                })?;
+            extra.slots.extend_from_slice(&self.slots);
+            return Ok(Some(extra));
+        }
+        Ok(None)
+    }
     #[cfg(feature = "vulkan")]
     pub(crate) fn has_capacity(&self, ranges_per_slot: usize, slots: usize) -> bool {
         self.range_capacity == ranges_per_slot && self.slots.len() == slots

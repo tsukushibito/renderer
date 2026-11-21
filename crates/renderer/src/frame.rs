@@ -83,7 +83,7 @@ impl Renderer {
         let mut setup = RendererSetup::new(group);
         // Small scenes commonly load the first models after showing their UI.
         // Reserve instance operands here; geometry sizes are known at model load.
-        setup.additional_objects = 16;
+        setup.additional_objects = 16usize.saturating_sub(assets.objects.len());
         let mut plan = setup.prepare(assets)?;
         let [w, h] = camera.extent;
         let target = ImageDesc::rgba8(w, h);
@@ -179,7 +179,7 @@ impl Renderer {
         plan.preparation_mut()
             .add_requirements(self.host.graph_requirements(), self.host.working_set())?;
         let working_set = Self::base_working_set(&plan)?;
-        let replaced = self.drawing.replace_working_set(plan);
+        let replaced = self.drawing.replace_fitted_working_set(plan);
         if replaced.is_ok()
             || replaced
                 .as_ref()
@@ -203,26 +203,65 @@ impl Renderer {
         use crate::material::MaterialInstance;
         use std::collections::HashSet;
         let mut meshes = HashSet::new();
-        let mut uniforms = HashSet::new();
+        let mut materials = HashSet::new();
+        let mut uniforms = 0;
+        let mut transforms = 0;
+        let mut casters = 0;
+        let mut new_program = false;
         for object in assets.objects {
             meshes.insert(object.mesh);
-            if matches!(
-                assets.materials.get(object.material)?,
-                MaterialInstance::Pbr(_)
-            ) {
-                uniforms.insert(object.material);
+            let first = materials.insert(object.material);
+            casters += usize::from(object.casts_shadow);
+            match assets.materials.get(object.material)? {
+                MaterialInstance::Pbr(_) => {
+                    uniforms += usize::from(first);
+                    transforms += 1;
+                }
+                MaterialInstance::Custom(m) if first => {
+                    new_program |= !self.drawing.definitions.contains(m.definition());
+                }
+                _ => {}
             }
+        }
+        // Asset loading can introduce new techniques or more independent objects
+        // than the initial scene. Negotiate the change before publishing its assets.
+        let limits = self.drawing.limits;
+        if new_program
+            || assets.objects.len() > limits.max_draws
+            || materials.len() > limits.max_materials
+            || transforms > limits.max_transforms
+            || casters > limits.max_casters_per_cascade
+            || assets.lights.len() > limits.max_point_lights
+        {
+            return self.reconfigure(self.camera, assets);
         }
         let mut active = Preparation::new(self.working_set.frames_in_flight());
         active.add_working_set(self.working_set.working_set())?;
+        let upload = meshes
+            .iter()
+            .try_fold(0u64, |bytes, &mesh| -> Result<_, GraphError> {
+                Ok(bytes.saturating_add(assets.meshes.geometry(mesh)?.byte_len()))
+            })?
+            .min(self.drawing.mesh_upload_budget());
         assets
             .meshes
             .reserve_selection(&mut active, meshes.into_iter())?;
         assets.meshes.reserve_poses(&mut active, assets.objects)?;
-        active.reserve_buffer(crate::pbr::MaterialUniform::DESC, uniforms.len())?;
+        active.reserve_buffer(crate::pbr::MaterialUniform::DESC, uniforms)?;
         assets.meshes.collect_gpu(self.drawing.runtime())?;
         assets.materials.collect_gpu(self.drawing.runtime())?;
-        self.drawing.prepare_native_set(active)?;
+        let material_bytes = uniforms
+            .checked_mul(crate::passes::pbr::MATERIAL_BYTES)
+            .ok_or("material upload overflow")?;
+        let transfer = upload.max(material_bytes as u64);
+        active.add_graph_requirements(renderer_core::capacity::GraphRequirements {
+            upload_bytes: usize::try_from(transfer)?,
+            passes: uniforms,
+            resources: uniforms,
+            accesses: uniforms,
+            ..Default::default()
+        })?;
+        self.drawing.prepare_native_set(active, transfer)?;
         self.drawing.prepare_assets(assets)
     }
 

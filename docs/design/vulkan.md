@@ -564,6 +564,9 @@ prefix容量不足は要約の追い出しではなく型付きエラーを返�
 `ResourceClass`はbackend非依存のbuffer/image descriptorと同時保持数であり、登録済み入力とは別に
 記録・GPU・exportが保持し得る未登録instance数を含める。変更前に既存のframe/result/export metadataを返却する。
 登録bufferのrange snapshotとcloneはpoolを引き続き使用し、画像寸法やProgramの変更後も有効である。
+共通 Runtime の `prepare_fitted_working_set` はロード時に同じ Device・Queue で Graph、staging、descriptor、登録表の容量を増やせる。
+実行枠の並行数を維持し、既存 buffer のスナップショットが借りている枠は拡張後の pool でも所有する。最終 clone の返却時にその記憶域を解放しない。
+新しい容量と作業集合を公開する前に実行・結果・export の所有者の返却を確認する。native 準備の失敗時は元の上限と登録内容で描画を継続できる。
 直接Vulkan APIからrange pool自体の枠数・1枠の範囲数を変更する場合は、そのpoolのtokenを先に返す。
 poolを毎回交換する案では古いtokenの最後の返却で通常frameにheap解放が発生し得るため、同じ容量ではanchorを維持する。
 入力やdraw/pass構成は準備済み上限内で毎frame変更でき、固定planの再生を条件にしない。

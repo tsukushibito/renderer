@@ -91,7 +91,8 @@ enum RuntimeInner {
     )
 )]
 impl Runtime {
-    /// Logical capacities fixed when this runtime was created.
+    /// Current logical capacities. Explicit fitted preparation can raise the
+    /// recording limits while preserving the configured queue concurrency.
     pub fn limits(&self) -> RuntimeLimits {
         self.limits
     }

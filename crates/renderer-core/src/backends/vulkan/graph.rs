@@ -441,6 +441,93 @@ impl VulkanRuntime {
         )
     }
 
+    pub(crate) fn grow_graph_working_set(
+        &mut self,
+        capacity: FrameCapacity,
+        settings: crate::runtime::VulkanConfig,
+        registry_size: usize,
+        working_set: WorkingSet<'_>,
+    ) -> Result<(), RuntimeError> {
+        let previous = self.config;
+        let next = RuntimeConfig {
+            execution_slots: previous.execution_slots,
+            resource_capacity: registry_size,
+            max_shader_bindings: settings.max_shader_bindings,
+            staging_bytes: settings.staging_bytes,
+            staging_ranges: settings.staging_ranges,
+        };
+        Self::validate_config(next)?;
+        if !self.frame_consumers_returned() {
+            return Err(RuntimeError::capacity_with(
+                "return frame owners before expanding a working set",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::WorkingSet,
+                    CapacityRecovery::ReleaseOwners,
+                    None,
+                    None,
+                ),
+            ));
+        }
+        let staging = if next.staging_bytes != previous.staging_bytes
+            || next.staging_ranges != previous.staging_ranges
+        {
+            let create = |role| {
+                SharedStaging::new(
+                    Arc::clone(&self.owner),
+                    role,
+                    next.staging_bytes,
+                    next.staging_ranges,
+                )
+            };
+            Some((create(BufferRole::Upload)?, create(BufferRole::Readback)?))
+        } else {
+            None
+        };
+        if registry_size > previous.resource_capacity {
+            let reserve_error = |e| RuntimeError::with_source(RuntimeErrorKind::Native, e);
+            self.entries
+                .try_reserve_exact(registry_size - self.entries.len())
+                .map_err(reserve_error)?;
+            self.vacant
+                .try_reserve_exact(registry_size - self.vacant.len())
+                .map_err(reserve_error)?;
+            self.recycle_pending
+                .try_reserve_exact(registry_size - self.recycle_pending.len())
+                .map_err(reserve_error)?;
+            let available = self
+                .available
+                .with_capacity(registry_size)
+                .map_err(reserve_error)?;
+            self.recycle.grow(registry_size).map_err(reserve_error)?;
+            self.available = available;
+        }
+        // Stage newly added snapshot slots while keeping anchors for live imports.
+        let ranges = self
+            .import_ranges
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_ranges = ranges
+            .expanded_slots(capacity.range_snapshots)
+            .map_err(|_| RuntimeError::invalid("unable to grow import snapshots"))?
+            .map(|expanded| std::mem::replace(ranges, expanded));
+        self.config = next;
+        if let Err(error) = self.prepare_graph_working_set(Some(capacity), working_set) {
+            self.config = previous;
+            if let Some(prior) = prior_ranges {
+                *self
+                    .import_ranges
+                    .get_mut()
+                    .unwrap_or_else(|e| e.into_inner()) = prior;
+            }
+            return Err(error);
+        }
+        if let Some((upload, readback)) = staging {
+            self.upload = upload;
+            self.readback = readback;
+        }
+        Ok(())
+    }
+
     fn prepare_working_set_with(
         &mut self,
         capacity: FrameCapacity,

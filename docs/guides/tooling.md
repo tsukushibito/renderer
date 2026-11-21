@@ -207,6 +207,7 @@ Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受�
 表示待ちの再試行では、すでに受理した画像を提示する。UI だけを描くフレームでは `draw_overlay` から開始できる。
 
 空からモデルを追加するときは、ロードの境界で `renderer.prepare_assets(SceneAssets::new(&mut meshes, &mut materials, scene.objects()))?` を呼ぶ。
+標準 `Renderer` はこの一覧から独立に動かせる個体数と必要なシェーダーを求め、同じデバイス上で必要な分を準備する。読取中の画像が変更を妨げる場合は、その結果を回収して再試行する。ホストが固定した GPU 予算を使う場合は `SceneRenderer::replace_working_set` で上限超過を受け取れる。
 転送が完了したら同じビューで描画できる。準備した個体を動かすフレームは描画入力の変換だけを更新する。
 画面内の端末のように自作のパスを組み込む場合は、`headless_with` または `WindowRenderer::new_with` でパスの資源を予約し、`frame.graph()` に記録する。
 そこで描いた画像ビューはそのフレーム内の Canvas に渡せる。[端末の奥行きと HUD 合成の実行例](../../crates/training-yard/tests/world_panel.rs)
