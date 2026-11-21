@@ -2,7 +2,7 @@ use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use windows_core::Interface;
+use windows_core::{IUnknown, Interface};
 
 use super::bindings::*;
 use super::diagnostics::{D3D12ValidationMonitor, Session};
@@ -28,11 +28,17 @@ struct ProcessState {
     // Strong count reaches zero before Drop starts. This flag prevents creating
     // another native owner in that gap or while final COM Release is running.
     live: bool,
+    host_device_seen: bool,
+    // Multiple runtimes can adopt a single DIRECT queue. Keep their native
+    // Execute/Signal transactions under the same gate, without retaining COM.
+    queue_gates: Vec<(usize, Weak<Mutex<()>>)>,
 }
 static PROCESS: Mutex<ProcessState> = Mutex::new(ProcessState {
     mode: None,
     owner: Weak::new(),
     live: false,
+    host_device_seen: false,
+    queue_gates: Vec::new(),
 });
 
 pub(super) struct DeviceOwner {
@@ -40,7 +46,8 @@ pub(super) struct DeviceOwner {
     pub(super) committed_memory: Arc<Mutex<super::memory::D3D12CommittedMemoryStats>>,
     pub(super) queue: ManuallyDrop<ID3D12CommandQueue>,
     pub(super) raw: ManuallyDrop<ID3D12Device>,
-    pub(super) queue_gate: Mutex<()>,
+    pub(super) queue_gate: Arc<Mutex<()>>,
+    managed_process_slot: bool,
     pub(super) info: D3D12DeviceInfo,
     pub(super) descriptor_steps: [u32; 2],
     pub(super) monitor: D3D12ValidationMonitor,
@@ -84,10 +91,17 @@ impl DeviceOwner {
         // The process guard covers debug setters, Device creation and final
         // native destruction. D3D12CreateDevice is a per-adapter singleton.
         let monitor = D3D12ValidationMonitor::new();
-        let mut session = Session::begin(mode, monitor.clone(), process.mode.is_none())?;
+        let session = Session::begin(
+            mode,
+            monitor.clone(),
+            process.mode.is_none() && !process.host_device_seen,
+            process.host_device_seen,
+        )?;
         // Once a debug setter ran, later attempts must not change its mode even
         // if subsequent native initialization fails.
-        process.mode = Some(mode);
+        if !process.host_device_seen {
+            process.mode = Some(mode);
+        }
         let flags = if mode == D3D12ValidationMode::Required {
             DXGI_CREATE_FACTORY_DEBUG as u32
         } else {
@@ -141,6 +155,100 @@ impl DeviceOwner {
         let (adapter, desc) = selected.ok_or_else(|| {
             D3D12RuntimeError::unsupported("no hardware adapter supports D3D12 feature level 11_0")
         })?;
+        let mut raw = None;
+        // SAFETY: Capability-tested hardware adapter, live output and valid IID.
+        // Failure does not trigger a silent fallback to another adapter.
+        unsafe { D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut raw) }.map_err(
+            |error| D3D12RuntimeError::native("D3D12CreateDevice", "selected adapter", error),
+        )?;
+        let raw: ID3D12Device = raw.ok_or_else(|| {
+            D3D12RuntimeError::classified(
+                D3D12RuntimeErrorKind::Native,
+                "D3D12CreateDevice succeeded without returning a Device",
+            )
+        })?;
+        let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+            ..Default::default()
+        };
+        // SAFETY: Live Device and a valid single-node DIRECT queue descriptor.
+        let queue = unsafe { raw.CreateCommandQueue(&queue_desc) }.map_err(|error| {
+            D3D12RuntimeError::native("CreateCommandQueue", "selected adapter", error)
+        })?;
+        let owner = Self::from_interfaces(
+            raw,
+            queue,
+            &adapter,
+            &desc,
+            (monitor, session),
+            &mut process,
+            true,
+        )?;
+        process.owner = Arc::downgrade(&owner);
+        process.mode = Some(mode);
+        process.live = true;
+        Ok(owner)
+    }
+
+    pub(super) fn adopt_queue(
+        queue: &IUnknown,
+        mode: D3D12ValidationMode,
+    ) -> Result<Arc<Self>, D3D12RuntimeError> {
+        let queue: ID3D12CommandQueue = queue.cast().map_err(|e| {
+            D3D12RuntimeError::native("QueryInterface(ID3D12CommandQueue)", "host", e)
+        })?;
+        let mut process = PROCESS.lock().unwrap_or_else(|e| e.into_inner());
+        // Even a failed import establishes that this process already has a Device.
+        // Global debug setters must never be used on a later owned runtime path.
+        process.host_device_seen = true;
+        // SAFETY: The queue is a retained and queried native COM interface.
+        let queue_desc = unsafe { queue.GetDesc() };
+        if queue_desc.Type != D3D12_COMMAND_LIST_TYPE_DIRECT || queue_desc.NodeMask > 1 {
+            return Err(D3D12RuntimeError::unsupported(
+                "host queue must be DIRECT on node zero",
+            ));
+        }
+        let mut raw: Option<ID3D12Device> = None;
+        // SAFETY: GetDevice takes a correctly typed output and AddRefs the Device.
+        unsafe { queue.GetDevice(&mut raw) }
+            .map_err(|e| D3D12RuntimeError::native("GetDevice", "host queue", e))?;
+        let raw = raw.ok_or_else(|| D3D12RuntimeError::invalid("host queue returned no Device"))?;
+        // SAFETY: Owned device and factory. LUID lookup selects the actual host adapter.
+        let adapter: IDXGIAdapter1 = unsafe {
+            let factory: IDXGIFactory4 = CreateDXGIFactory2(0)
+                .map_err(|e| D3D12RuntimeError::native("CreateDXGIFactory2", "host", e))?;
+            factory.EnumAdapterByLuid(raw.GetAdapterLuid())
+        }
+        .map_err(|e| D3D12RuntimeError::native("EnumAdapterByLuid", "host", e))?;
+        let mut desc = DXGI_ADAPTER_DESC1::default();
+        // SAFETY: Owned adapter, valid descriptor output.
+        unsafe { adapter.GetDesc1(&mut desc) }
+            .ok()
+            .map_err(|e| D3D12RuntimeError::native("GetDesc1", "host adapter", e))?;
+        let monitor = D3D12ValidationMonitor::new();
+        // Observe the host configuration on request. Never call the process-global
+        // EnableDebugLayer or SetEnableGPUBasedValidation on an existing Device.
+        let session = Session::begin(mode, monitor.clone(), false, true)?;
+        Self::from_interfaces(
+            raw,
+            queue,
+            &adapter,
+            &desc,
+            (monitor, session),
+            &mut process,
+            false,
+        )
+    }
+
+    fn from_interfaces(
+        raw: ID3D12Device,
+        queue: ID3D12CommandQueue,
+        adapter: &IDXGIAdapter1,
+        desc: &DXGI_ADAPTER_DESC1,
+        (monitor, mut session): (D3D12ValidationMonitor, Session),
+        process: &mut ProcessState,
+        managed_process_slot: bool,
+    ) -> Result<Arc<Self>, D3D12RuntimeError> {
         let name = String::from_utf16_lossy(
             &desc.Description[..desc
                 .Description
@@ -153,18 +261,7 @@ impl DeviceOwner {
             unsafe { adapter.CheckInterfaceSupport(&IDXGIDevice::IID) }.map_err(|error| {
                 D3D12RuntimeError::native("CheckInterfaceSupport driver version", &name, error)
             })?;
-        let mut raw = None;
-        // SAFETY: Capability-tested hardware adapter, live output and valid IID.
-        // Failure does not trigger a silent fallback to another adapter.
-        unsafe { D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut raw) }
-            .map_err(|error| D3D12RuntimeError::native("D3D12CreateDevice", &name, error))?;
-        let raw: ID3D12Device = raw.ok_or_else(|| {
-            D3D12RuntimeError::classified(
-                D3D12RuntimeErrorKind::Native,
-                "D3D12CreateDevice succeeded without returning a Device",
-            )
-        })?;
-        session.attach(&raw)?;
+        session.attach(&raw, !managed_process_slot || process.host_device_seen)?;
         let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS::default();
         feature(&raw, &name, D3D12_FEATURE_D3D12_OPTIONS, &mut options)?;
         let mut shader_model = D3D12_FEATURE_DATA_SHADER_MODEL {
@@ -190,13 +287,6 @@ impl DeviceOwner {
             ..Default::default()
         };
         feature(&raw, &name, D3D12_FEATURE_FORMAT_SUPPORT, &mut format)?;
-        let queue_desc = D3D12_COMMAND_QUEUE_DESC {
-            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
-            ..Default::default()
-        };
-        // SAFETY: Live Device and a valid single-node DIRECT queue descriptor.
-        let queue = unsafe { raw.CreateCommandQueue(&queue_desc) }
-            .map_err(|error| D3D12RuntimeError::native("CreateCommandQueue", &name, error))?;
         let mut luid = [0; 8];
         luid[..4].copy_from_slice(&desc.AdapterLuid.LowPart.to_le_bytes());
         luid[4..].copy_from_slice(&desc.AdapterLuid.HighPart.to_le_bytes());
@@ -207,12 +297,30 @@ impl DeviceOwner {
                 raw.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER),
             ]
         };
+        let identity: IUnknown = queue
+            .cast()
+            .map_err(|e| D3D12RuntimeError::native("QueryInterface(IUnknown)", &name, e))?;
+        let identity = identity.as_raw() as usize;
+        process
+            .queue_gates
+            .retain(|(_, gate)| gate.strong_count() > 0);
+        let queue_gate = process
+            .queue_gates
+            .iter()
+            .find(|(id, _)| *id == identity)
+            .and_then(|(_, gate)| gate.upgrade())
+            .unwrap_or_else(|| {
+                let gate = Arc::new(Mutex::new(()));
+                process.queue_gates.push((identity, Arc::downgrade(&gate)));
+                gate
+            });
         let owner = Arc::new(Self {
             #[cfg(feature = "memory-profiling")]
             committed_memory: Arc::new(Mutex::new(Default::default())),
             queue: ManuallyDrop::new(queue),
             raw: ManuallyDrop::new(raw),
-            queue_gate: Mutex::new(()),
+            queue_gate,
+            managed_process_slot,
             info: D3D12DeviceInfo {
                 name,
                 vendor_id: desc.VendorId,
@@ -231,8 +339,6 @@ impl DeviceOwner {
             session: Some(session),
             stopped: AtomicBool::new(false),
         });
-        process.owner = Arc::downgrade(&owner);
-        process.live = true;
         Ok(owner)
     }
     pub(super) fn ensure_active(&self) -> Result<(), D3D12RuntimeError> {
@@ -319,6 +425,8 @@ impl Drop for DeviceOwner {
         // and DXGI queue through both Releases, then complete the report.
         #[cfg(feature = "d3d12-diagnostics")]
         drop(self.session.take());
-        process.live = false;
+        if self.managed_process_slot {
+            process.live = false;
+        }
     }
 }

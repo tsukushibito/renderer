@@ -1731,7 +1731,7 @@ B0〜B5の一律blockerにはせず、採用時は能力・正しさ・利益と
 第二APIは**Windows上のD3D12**とする。M3の表示対象をWindowsから始める方針と、
 利用可能なWindows実機上でVulkanと同じGPU・入力を比較できることを優先した本Rendererの判断である。
 これはD3D12の性能優位や、全対象OSで二つのAPIを提供する方針を意味しない。
-LinuxのVulkan経路とCPUのみのビルドを維持し、第二APIの公開境界にもネイティブ型を露出させない。
+LinuxのVulkan経路とCPUのみのビルドを維持する。共通Graphの型はnative APIに依存せず、ホストDevice・テクスチャの受け渡しだけでbackend専用の公開型を使う。[エンジン所有テクスチャの契約](rendergraph.md#エンジン所有テクスチャをgraphへ渡す)
 
 Metalも比較候補とした。Apple向けのAPI・shader検証手段がある一方、
 現在利用できるMac実機・runnerは確認できていないため、最初の第二APIには選ばない。[^metal]
@@ -1825,8 +1825,22 @@ D3D12 Deviceはadapter LUIDごとのsingletonであり、作成済みDeviceへ�
 Device removalを起こし得る。[^d3ddevice][^d3ddebug]
 このruntimeはprocess内の最初の診断設定を固定し、同じ設定の生存runtimeではDevice所有者を共有する。
 設定を切り替える要求はnative設定前に拒否する。複数runtimeのqueue操作も共有所有者で直列化する。
-外部のD3D12 Deviceが既に作成されたprocessで後から診断を有効にする使い方は対象外とし、
-診断を使う場合はアプリ内のD3D12 Device作成より先に初期化する。
+既存エンジンは `Runtime::from_d3d12_queue` にホストの DIRECT queue の `IUnknown` を渡す。
+Renderer は node 0 の queue とその親 Device を COM 参照で保持し、実 adapter の LUID と能力を照会する。
+queue の COM identity が一致する Renderer インスタンスは同じ投入 lock を使う。ホストは共有資源の
+所有権を引き渡してから Graph へ接続し、自分の queue 操作を Renderer の実行と順序づける。
+異なる queue 間の依存はホスト側の fence で保証する。
+[GetDevice](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12devicechild-getdevice)・
+[キューの投入順](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12commandqueue-executecommandlists)
+
+既存 Device の診断設定はホストが Device 作成前に決める。引き受け時の `Required` は
+Debug Layer と GBV の既存の証跡を検査する。グローバル設定とホストの InfoQueue filter を保持し、
+この Runtime が登録した callback は終了時に解除する。確認できない設定は初期化エラーになる。
+Device の診断はフィルターを経由しない callback で収集し、DXGI の診断は DXGI 専用の
+producer から取得する。DXGI producer は同一プロセスで共有される。
+[DXGI の診断 producer](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/dxgi-debug-id)
+
+ホスト Device を受け取った process では、以後の Device 新規作成もグローバル診断 setter を呼ばない。
 
 `development-validation`は`d3d12-diagnostics`も有効にし、native検証の既定を
 `D3D12ValidationMode::Required`にする。追加検証なしの既定は`Disabled`である。

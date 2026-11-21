@@ -34,6 +34,8 @@ mod environment;
 mod exports;
 use exports::{ExportLease, ExportPool};
 mod frames;
+mod interop;
+pub use interop::{VulkanExternalDevice, VulkanImageState};
 mod metrics;
 #[cfg(all(feature = "presentation", windows))]
 mod presentation;
@@ -978,7 +980,12 @@ impl VulkanRuntime {
     /// Invalidate the logical handle immediately. Recorded/pending references
     /// keep the allocation alive, and prevent its acquisition for another owner.
     pub fn delete(&mut self, key: ResourceKey) -> Result<(), RuntimeError> {
-        self.entry(key)?;
+        if matches!(&self.entry(key)?.physical().native, NativeResource::Image(image) if image.is_external())
+        {
+            return Err(RuntimeError::invalid(
+                "release an external image with release_external_image",
+            ));
+        }
         let index = key.index as usize;
         self.entries[index].registered = false;
         // The key can no longer prepare another CPU index consumer. Already
@@ -1240,6 +1247,8 @@ impl VulkanRuntime {
 
     /// Install a successfully staged allocation in a reserved, eligible slot.
     fn install_physical(&mut self, index: usize, physical: Arc<Physical>) -> ResourceKey {
+        let created =
+            !matches!(&physical.native, NativeResource::Image(image) if image.is_external());
         let replace = index < self.entries.len();
         let generation = if replace {
             self.entries[index].generation + 1
@@ -1261,7 +1270,7 @@ impl VulkanRuntime {
         } else {
             self.entries.push(entry);
         }
-        self.resources_created += 1;
+        self.resources_created += usize::from(created);
         ResourceKey {
             owner: self.id,
             index: index as u32,

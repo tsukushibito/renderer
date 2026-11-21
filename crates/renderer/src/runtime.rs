@@ -7,6 +7,8 @@ mod error;
 mod frames;
 mod id;
 mod managed_image;
+#[cfg(all(test, any(feature = "vulkan", all(windows, feature = "d3d12"))))]
+pub(crate) mod native_image_tests;
 mod preparation;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 mod queue;
@@ -248,6 +250,26 @@ impl Runtime {
             RuntimeInner::D3D12(ref mut runtime) => {
                 runtime.set_profiling(enabled).map_err(Into::into)
             }
+        }
+    }
+
+    /// Access Vulkan-specific change-boundary operations.
+    #[cfg(feature = "vulkan")]
+    pub fn as_vulkan_mut(&mut self) -> Option<&mut crate::vulkan::VulkanRuntime> {
+        match &mut self.inner {
+            RuntimeInner::Vulkan(runtime) => Some(runtime),
+            #[cfg(all(feature = "d3d12", windows))]
+            RuntimeInner::D3D12(_) => None,
+        }
+    }
+
+    /// Access D3D12-specific change-boundary operations.
+    #[cfg(all(feature = "d3d12", windows))]
+    pub fn as_d3d12_mut(&mut self) -> Option<&mut crate::d3d12::D3D12Runtime> {
+        match &mut self.inner {
+            #[cfg(feature = "vulkan")]
+            RuntimeInner::Vulkan(_) => None,
+            RuntimeInner::D3D12(runtime) => Some(runtime),
         }
     }
 

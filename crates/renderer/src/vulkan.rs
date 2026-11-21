@@ -12,7 +12,7 @@ pub use crate::backends::vulkan::graph::{
     DeviceInfo, FrameCapacity, FrameCompletion, FrameId, FrameSubmission, MemoryHeapStats,
     MemoryStats, ResourceClass, RuntimeConfig, RuntimeError, RuntimeErrorKind, RuntimeStats,
     StagingMemoryStats, Submission, SubmissionResult, ValidationMonitor, ValidationReport,
-    VulkanRuntime,
+    VulkanExternalDevice, VulkanImageState, VulkanRuntime,
 };
 
 pub use crate::backends::vulkan::ValidationMode;
