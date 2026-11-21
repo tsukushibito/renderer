@@ -20,6 +20,10 @@ Windows build 26200、GeForce RTX 3060、NVIDIA 610.88、Rust 1.99.0 で訓練�
 | Vulkan | `c14918ad2699` | `1622e27695f2` | `6a2a39d3af61` |
 | D3D12 | `baa236b1bc92` | `c6f61b199a1a` | `357783b17ad4` |
 
+同じ street 条件で製品構成に `memory-profiling` を加え、両バイナリ・両 API の各 120 フレームを計測した。全 4 回とも Rust と VMA ホストの確保・再確保・解放、Renderer 発行の native 作成・破棄・メモリとディスクリプターの確保・解放は各 0 件だった。準備済み native オブジェクトのリセットは各 240 回で、画像ハッシュは上表と一致した。起動、ロード、予熱、最終キャプチャは計測区間外。
+
+workspace の外に `renderer` だけを直接依存に持つアプリを置き、空の 3D シーンと赤い HUD を一つの Frame に記録した。厳格構成の Vulkan と D3D12 で 2 × 1 の結果がともに黒と赤の不透明 2 画素になった。バックエンド選択と画像領域には `renderer::core` の再公開型を使用した。
+
 変更のない `4d1e6eb` から受入スクリプトを実行し、全 24 コマンドが成功した。各構成 293 ファイル、計 1,172 ファイルはすべて基準とバイト一致した（基準 ZIP の SHA-256 は `a33b2c846e9144452be41ea4683f0e02d43cff04993ae1feb5f8442aa70f17dc`）。監視映像の提示中、8 枚目の後に実ウィンドウを 384 × 192 から 320 × 160 に変更して以降の 16 枚も提示した。各ビルド構成で訓練場の実機テスト 13 件に加え、Vulkan と D3D12 のホスト所有デバイス・画像の試験が通過した。最小化中は描画を休止し、復帰後の寸法で提示できた。GPU とドライバーの実機範囲は上記の Windows 環境に限る。[ウィンドウ復帰の試験](../../crates/training-yard/tests/window.rs)・[受入手順](../guides/tooling.md#scene-materials)
 
 公開例の `rust_pipeline` を実行し、`toon_views`、`two_views`、`textured_view`、`mixed_post`、`pbr_forward` を両バックエンドで再生した。最後の例はホストの HDR コピー、Bloom、影再利用を含み、中心の SDR は両 API とも [252, 118, 118, 255]、深度は 0.976431、2 枚目で 4 カスケードを再利用した。graphics を外した訓練場の直接依存は `renderer-core` だけとなり、二つの Compute の逆順回収試験も両 API で通過した。workspace の全機能テストは 611 件成功、通常実行で除外した実機等のテストは 166 件。上記の実機試験は別途明示実行した。[公開例](../guides/examples.md)・[core 単独の試験](../../crates/training-yard/tests/core_compute.rs)
