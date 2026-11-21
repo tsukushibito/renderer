@@ -200,7 +200,7 @@ impl Placement {
 
 #[derive(Clone, Copy)]
 pub struct Settings {
-    pub lights: Option<&'static [PointLight]>,
+    pub frame_lights: &'static [&'static [PointLight]],
     pub technique: Technique,
     pub samples: SampleCount,
     pub placement: Placement,
@@ -209,7 +209,9 @@ pub struct Settings {
 
 impl Settings {
     fn point_lights(self) -> &'static [PointLight] {
-        self.lights
+        self.frame_lights
+            .first()
+            .copied()
             .unwrap_or(if self.technique == Technique::ForwardPlus {
                 &POINT_LIGHTS
             } else {
@@ -219,7 +221,7 @@ impl Settings {
 
     pub fn new(samples: SampleCount) -> Self {
         Self {
-            lights: None,
+            frame_lights: &[],
             technique: Technique::Forward,
             samples,
             placement: Placement::Single,
@@ -341,7 +343,12 @@ pub fn prepare(frames_in_flight: NonZeroUsize, settings: Settings) -> Result<Pre
         frames_in_flight,
         max_draws: count,
         max_materials: 1,
-        max_point_lights: settings.point_lights().len(),
+        max_point_lights: settings
+            .frame_lights
+            .iter()
+            .map(|lights| lights.len())
+            .max()
+            .unwrap_or_else(|| settings.point_lights().len()),
         max_casters_per_cascade: count,
         max_transforms: if settings.placement.uses_transforms() {
             count

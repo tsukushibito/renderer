@@ -200,29 +200,21 @@ mod gpu {
                     blend: true,
                 },
             ] {
-                let capture = |lights| {
-                    let settings = Settings {
-                        technique,
-                        placement,
-                        lights: Some(lights),
-                        ..Settings::new(SampleCount::X1)
-                    };
-                    render(api, settings, false, Bloom::Off, &[])
-                        .unwrap()
-                        .pop()
-                        .unwrap()
-                        .output
-                        .sdr
+                let settings = Settings {
+                    technique,
+                    placement,
+                    frame_lights: &[&[], &POINT_LIGHTS, &MANY],
+                    ..Settings::new(SampleCount::X1)
                 };
-                let reference = capture(&POINT_LIGHTS);
-                assert_ne!(
-                    reference,
-                    capture(&[]),
+                // All three submissions are live before any result is consumed.
+                let frames = render(api, settings, false, Bloom::Off, &[]).unwrap();
+                let reference = &frames[1].output.sdr;
+                assert!(
+                    *reference != frames[0].output.sdr,
                     "{technique:?} point light must affect shading"
                 );
-                assert_eq!(
-                    reference,
-                    capture(&MANY),
+                assert!(
+                    *reference == frames[2].output.sdr,
                     "{technique:?} light in second table row"
                 );
             }
