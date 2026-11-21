@@ -69,7 +69,7 @@ fn plan_counts_shared_assets_and_per_view_work_separately() -> PipelineResult<()
             limits.max_casters_per_cascade,
             limits.max_point_lights
         ),
-        (5, 4, 4, 4, 259)
+        (5, 4, 5, 4, 259)
     );
     let before = plan.preparation().graph_requirements();
     let texture = ImageDesc::rgba8(1, 4096);

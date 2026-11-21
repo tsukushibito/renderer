@@ -13,7 +13,9 @@ pub struct InstanceId(u64);
 
 #[derive(Default)]
 pub struct Scene {
-    objects: HashMap<InstanceId, RenderObject>,
+    objects: Vec<RenderObject>,
+    ids: Vec<InstanceId>,
+    indices: HashMap<InstanceId, usize>,
 }
 
 impl Scene {
@@ -23,16 +25,23 @@ impl Scene {
             NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
                 .expect("render instance identity space exhausted"),
         );
-        self.objects.insert(id, object);
+        self.indices.insert(id, self.objects.len());
+        self.ids.push(id);
+        self.objects.push(object);
         id
     }
 
     pub fn remove(&mut self, id: InstanceId) -> Option<RenderObject> {
-        self.objects.remove(&id)
+        let index = self.indices.remove(&id)?;
+        self.ids.swap_remove(index);
+        if let Some(moved) = self.ids.get(index) {
+            self.indices.insert(*moved, index);
+        }
+        Some(self.objects.swap_remove(index))
     }
 
     pub fn instance_mut(&mut self, id: InstanceId) -> Option<&mut RenderObject> {
-        self.objects.get_mut(&id)
+        self.objects.get_mut(*self.indices.get(&id)?)
     }
 
     /// Apply the extracted changes as a unit. On stale input no pose changes.
@@ -42,20 +51,22 @@ impl Scene {
         changes: &[(InstanceId, Transform)],
     ) -> Result<(), InstanceId> {
         for &(id, _) in changes {
-            if !self.objects.contains_key(&id) {
+            if !self.indices.contains_key(&id) {
                 return Err(id);
             }
         }
         for &(id, pose) in changes {
-            self.objects
-                .get_mut(&id)
-                .expect("validated instance")
-                .transform = pose;
+            self.objects[self.indices[&id]].transform = pose;
         }
         Ok(())
     }
 
     pub fn instances(&self) -> impl Iterator<Item = (InstanceId, &RenderObject)> {
-        self.objects.iter().map(|(&id, object)| (id, object))
+        self.ids.iter().copied().zip(&self.objects)
+    }
+
+    /// Borrow the exact storage consumed by the standard drawing path.
+    pub fn objects(&self) -> &[RenderObject] {
+        &self.objects
     }
 }

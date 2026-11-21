@@ -8,6 +8,7 @@ rust-version.workspace = true
 [features]
 default = ["graphics"]
 graphics = ["dep:renderer"]
+presentation = ["graphics", "renderer/presentation", "dep:raw-window-handle"]
 vulkan = ["renderer-core/vulkan", "renderer?/vulkan"]
 d3d12 = ["renderer-core/d3d12", "renderer?/d3d12"]
 development-validation = ["renderer-core/development-validation", "renderer?/development-validation"]
@@ -15,6 +16,12 @@ development-validation = ["renderer-core/development-validation", "renderer?/dev
 [dependencies]
 renderer = { package = "renderer-pipeline", version = "0.1.0", path = "../renderer-pipeline", optional = true }
 renderer-core = { package = "renderer", version = "0.1.0", path = "../renderer" }
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = { version = "0.6", optional = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 
 [[test]]
 name = "host_output"

@@ -153,7 +153,7 @@ impl RendererSetup {
         let mut materials = BTreeSet::new();
         let mut seen_definitions = HashSet::new();
         let mut definitions = Vec::new();
-        let mut transforms = HashSet::new();
+        let mut pbr_objects = 0;
         let mut casters = 0;
         let mut uniforms = 0usize;
         let mut mesh_bytes = 0u64;
@@ -183,10 +183,8 @@ impl RendererSetup {
                     _ => {}
                 }
             }
-            if matches!(instance, MaterialInstance::Pbr(_))
-                && object.transform != Transform::IDENTITY
-            {
-                transforms.insert(object.transform.model_key());
+            if matches!(instance, MaterialInstance::Pbr(_)) {
+                pbr_objects += 1;
             }
             if object.casts_shadow {
                 casters += 1;
@@ -201,7 +199,7 @@ impl RendererSetup {
             frames_in_flight: self.frames_in_flight,
             max_draws: room(assets.objects.len())?,
             max_materials: room(materials.len())?,
-            max_transforms: room(transforms.len())?,
+            max_transforms: room(pbr_objects)?,
             max_casters_per_cascade: room(casters)?,
             max_point_lights: assets
                 .lights
