@@ -64,6 +64,43 @@ fn subrectangle_requires_prior_mip_contents_and_preserves_its_producer() {
     );
 }
 
+#[test]
+fn compressed_regions_accept_terminal_blocks_and_reject_split_interior_blocks() {
+    let desc =
+        ImageDesc::texture_2d(20, 12, renderer::ImageFormat::Bc1RgbaUnorm).with_mip_levels(2);
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let mut graph = pool.begin().unwrap();
+    let image = graph.image("BC atlas", desc).unwrap();
+    let mip = ImageRegion::mip(desc, 1).unwrap(); // Ten by six texels, three by two blocks.
+    graph
+        .upload_image_region("full mip", image, mip, &[1; 48])
+        .unwrap();
+    let edge = ImageRegion {
+        mip_level: 1,
+        origin: [8, 4],
+        extent: [2, 2],
+    };
+    graph
+        .upload_image_region("terminal block", image, edge, &[0xA5; 8])
+        .unwrap();
+    for origin in [[0, 0], [6, 4], [u32::MAX, 4]] {
+        assert_eq!(
+            graph
+                .upload_image_region(
+                    "invalid BC region",
+                    image,
+                    ImageRegion { origin, ..edge },
+                    &[0; 8]
+                )
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::InvalidInput,
+        );
+    }
+    graph.export_image_mips(image, 1..2).unwrap();
+    assert!(graph.compile().is_ok());
+}
+
 #[cfg(feature = "vulkan")]
 #[test]
 #[ignore = "requires a real Vulkan GPU and the requested validation layers"]
@@ -204,7 +241,7 @@ fn streams_mips_and_copies_atlas_regions(config: renderer::runtime::RuntimeConfi
     let expected = [
         255, 255, 255, 255, 255, 255, 255, 1, 2, 3, 255, 255, 91, 92, 7,
     ];
-    for (rgba, value) in bytes.chunks_exact(4).zip(expected) {
+    for (rgba, value) in bytes.as_chunks::<4>().0.iter().copied().zip(expected) {
         assert_eq!(rgba, [value; 4]);
     }
     drop(result);
