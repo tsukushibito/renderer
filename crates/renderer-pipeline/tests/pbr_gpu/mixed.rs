@@ -11,7 +11,10 @@ use renderer_pipeline::{
     },
     mesh::{MeshCapacity, MeshData, Meshes},
     pbr,
-    pipeline::{RenderObject, RenderPipeline, SceneInput, View},
+    pipeline::{
+        CameraView, RenderObject, SceneInput, StandardConfig, StandardPipeline, ViewId,
+        ViewRenderer,
+    },
     unlit_forward::{self, IDENTITY},
 };
 use std::{error::Error, num::NonZeroUsize, time::Duration};
@@ -87,18 +90,16 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
     })?;
     let green = materials.create_custom(&opaque, &[("color", Value::Color([0., 0.6, 0., 1.]))])?;
     let blue = materials.create_custom(&blend, &[("color", Value::Color([0., 0., 1., 0.5]))])?;
-    let mut scene = RenderPipeline::new(
+    let standard = StandardPipeline::new(
         technique,
-        pbr::Config {
+        StandardConfig {
             extent: [32, 16],
             clear_color: [0.; 4],
             shadows: (technique == pbr::Technique::Deferred).then_some(pbr::ShadowSettings {
                 resolution: 32,
                 ..Default::default()
             }),
-            output: None,
             samples: SampleCount::X1,
-            camera_storage: pbr::CameraStorage::Transient,
         },
         pbr::SceneLimits {
             frames_in_flight: NonZeroUsize::MIN,
@@ -118,7 +119,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
     let glass_mesh = meshes.create(quad(true, Some(0.3))?)?;
     let blue_mesh = meshes.create(quad(false, Some(0.2))?)?;
     let mut prep = Preparation::new(NonZeroUsize::MIN);
-    scene.reserve_views(&mut prep, NonZeroUsize::MIN)?;
+    let mut scene = ViewRenderer::prepare(standard, [32, 16], NonZeroUsize::MIN, None, &mut prep)?;
     meshes.reserve(&mut prep)?;
     let offset_desc = BufferDesc { size: 16 };
     let map_desc = renderer::graph::ImageDesc::rgba8(1, 1);
@@ -134,7 +135,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         },
         prep.working_set(),
     )?;
-    let id = scene.initialize(&mut runtime)?;
+    let id = scene.initialize(&mut runtime)?.unwrap();
     drop(
         runtime
             .wait_for_frame(id, Duration::from_secs(10))?
@@ -195,13 +196,17 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
                 .ok_or("material upload timeout")?,
         );
     }
-    let mut view =
-        View::new_with_shadow_history(input, pbr::Bounds::new([-1., -1., 0.], [1., 1., 1.])?, 1);
-    view.sun = pbr::Sun::new([0., 0., -1.], [0.; 3])?;
+    let view = CameraView {
+        id: ViewId(1),
+        extent: [32, 16],
+        camera: input,
+        bounds: pbr::Bounds::new([-1., -1., 0.], [1., 1., 1.])?,
+        sun: pbr::Sun::new([0., 0., -1.], [0.; 3])?,
+    };
+    scene.register_view(&view)?;
     for index in 0..4 {
         #[cfg(feature = "memory-profiling")]
         let before = renderer::measurement::Snapshot::now();
-        let mut graph = pool.begin()?;
         let draw = |mesh, mat, width, x, z| -> Result<RenderObject> {
             let transform =
                 pbr::Transform::new([[width, 0., 0., x], [0., 1., 0., 0.], [0., 0., 1., z]])?;
@@ -224,19 +229,25 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             draws.swap(0, 3);
         }
         let input = SceneInput::new(&meshes, &materials, &draws);
+        if index <= 1 {
+            scene.prepare_scene(input)?;
+        }
+        let mut recording = scene.begin_frame(&mut pool)?;
         let mut before_forward = None;
-        let mut output = if technique == pbr::Technique::Deferred {
-            scene.draw_hdr_with_gbuffer(&mut graph, &mut view, input, |g, b| {
+        if technique == pbr::Technique::Deferred {
+            recording.draw_view_with_gbuffer(input, &view, |g, b| {
                 before_forward = Some(g.readback_image("PBR depth", b.depth)?);
                 Ok(())
             })?
         } else {
-            scene.draw_hdr(&mut graph, &mut view, input)?
+            recording.draw_view(input, &view)?
         };
+        let output = recording.standard_output(view.id).unwrap();
         if technique == pbr::Technique::Deferred && index >= 2 {
             assert_eq!(output.reused_shadows(), Some([true; 4]));
         }
         let images = output.scene;
+        let graph = recording.graph();
         assert!(images.gbuffer.is_none());
         let final_depth = if before_forward.is_some() {
             Some(graph.readback_image("final depth", images.depth.unwrap())?)
@@ -248,9 +259,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             .shadows
             .map(|maps| graph.readback_image("mixed caster depth", maps[3]))
             .transpose()?;
-        let compiled = graph.compile()?;
-        let pending = runtime.submit(&compiled)?;
-        output.accept(&mut view, &pending)?;
+        let pending = recording.submit(&mut runtime)?;
         if index == 0 {
             materials.update_custom(swatch, &[("albedo", Value::Texture(yellow.clone()))])?;
             materials.update_custom(green, &[("color", Value::Color([0., 0.3, 0., 1.]))])?;
@@ -282,7 +291,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
                 "custom caster wrote no depth"
             );
         }
-        drop((frame, pending, compiled));
+        drop((frame, pending));
         #[cfg(feature = "memory-profiling")]
         if index >= 2 {
             let delta = renderer::measurement::Snapshot::now().since(before);
@@ -325,7 +334,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             );
         }
     }
-    view.clear_history(&mut runtime)?;
+    scene.remove_view(view.id, &mut runtime)?;
     meshes.clear(&mut runtime)?;
     materials.clear(&mut runtime)?;
     for key in [offset.key(), cyan.key(), yellow.key()] {

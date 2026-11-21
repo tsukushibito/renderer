@@ -291,7 +291,7 @@ impl ShadowHistory {
     }
 
     #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
-    fn check_updates(
+    pub(crate) fn check_updates(
         &self,
         graph_id: u64,
         updates: &ShadowUpdates,

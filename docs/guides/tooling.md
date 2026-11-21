@@ -186,39 +186,49 @@ materials.update_pbr(blue_paint, PbrParams::color([0.03, 0.1, 0.8, 1.0]))?;
 アプリケーションがシーン、階層、アニメーションを所有する。描画時には、メッシュと材質のハンドルと
 ワールド変換を持つ `RenderObject` のスライスを渡す。同じスライスを複数のカメラから描画できる。
 
-```rust
-use renderer_pipeline::pipeline::{RenderObject, SceneInput, View};
+同じ `ViewRenderer<P>` で標準・アプリ独自の方式を扱う。
+初期化時に `P` を選び、`ViewRenderer::prepare` に寸法、登録するカメラ数、任意の SDR 出力設定、
+`Preparation` を渡す。標準 Forward の入口は `StandardPipeline::forward(extent, limits)`。
+`meshes.reserve` と後処理の要件を加えて Runtime と GraphPool を作り、`renderer.initialize` が
+初期転送 ID を返した場合はそのフレームを回収する。カメラごとに一意な `ViewId` を付けた
+`CameraView` を `register_view` に渡す。1個のレンダラーは準備した寸法のカメラを扱う。
 
-let objects = [RenderObject::new(floor_mesh, red_paint),
-               RenderObject::new(sign_mesh, marker)];
-let input = SceneInput::new(&meshes, &materials, &objects);
-let result = pipeline.draw_view(&mut graph, &mut view, input, 1.0, None)?;
-let color = result.sdr.raw_image();
+```rust
+let scene = SceneInput::new(&meshes, &materials, &objects);
+// 作成・変更時。各レジストリの prepare_gpu で転送した後に呼ぶ。
+renderer.prepare_scene(scene)?;
+
+// 毎フレーム。GraphPool と Runtime はアプリが共有できる。
+let mut frame = renderer.begin_frame(&mut pool)?;
+let image = frame.draw_view(scene, &camera)?;
+let hdr = bloom.add_passes(frame.graph(), image.color)?;
+let sdr = frame.write_output(hdr, exposure, Some(target))?;
+sdr.display().unwrap().export(frame.graph())?;
+let receipt = frame.submit(&mut runtime)?;
 ```
 
-初期化では `Meshes::create` に `MeshData::pbr` または `MeshData::unlit` を渡す。
-標準 Forward は `RenderPipeline::standard(extent, limits)`、独自 Toon や別の描画方式は
-`RenderPipeline::new(technique, config, limits, definitions)` で作る。
-同じ Graph で描くビュー数を `pipeline.reserve_views` に、メッシュの転送分を `meshes.reserve` に渡して
-Runtime を準備する。`pipeline.initialize` は既定画像を登録する。
-メッシュと材質は作成・変更時に各レジストリの `prepare_gpu` でまとめて転送する。
-転送用 GraphPool はフレーム用と分ける。新旧の登録が重なる更新ではその分も予約する。
+`prepare_scene` は次のフレーム群で使うメッシュ・材質の組合せ一式を置き換える。
+描画時のオブジェクト順、部分集合、ワールド変換は変更できる。資産の版や組合せが変わる場合は再準備する。
+新旧の版が重なる更新では重複分の GPU 容量を予約する。環境マップは登録済み画像を持つ `EnvironmentMaps` を渡す。
 
-`draw_view` の最後の引数に出力先画像を渡すと、最終パスがそこに直接書き込む。
-Bloom などを挟む場合は `draw_hdr` → 独自パス → `write_output` の順で同じ Graph に追加する。
-Deferred の材質面と深度を一緒に読むパスは `draw_hdr_with_gbuffer` のコールバックで追加する。
-後続の Forward 不透明物が深度を書き換える構成では、最終結果の `scene.gbuffer` は `None` となり、
-`scene.depth` には合成後の深度が入る。
+独自方式は `ViewPipeline` を実装する。`reserve` で共有資源とビュー別の作業領域を予約し、
+`check_object` で対応材質・頂点レイアウトを確認する。`record` では準備済み入力から `meshes.import` で
+頂点・インデックス範囲を取り込み、Graph に任意のパスを追加する。戻り値は同寸の単一サンプル、
+シーンリニア Rec.709 RGBA16F と、必要なら単一サンプル D32。G-buffer を読む標準 Deferred のパスは
+`draw_view_with_gbuffer` のコールバックで Forward 合成前に追加する。
+[外部の Toon 実装](../../crates/renderer-pipeline/examples/support/toon_pipeline.rs)と
+[共通の描画ループ](../../crates/renderer-pipeline/examples/support/views.rs)を参照。
 
 半透明物はすべての材質をまとめてビュー奥行きで整列する。基準点はインデックスが参照する頂点の
 境界箱の中心で、モデル変換も反映する。必要なら `RenderObject::sort_center` で変更できる。
 Unlit は頂点色、材質色、オブジェクトの tint を乗算する。
 標準 PBR の頂点は 48 バイト、頂点色 Unlit は 28 バイトで、独自メッシュには頂点属性と境界を指定する。
 
-各カメラには独立した `View` を持たせる。`View::new_with_shadow_history` でカスケードごとの
-キャスター数を予約すると、カメラ・光・キャスターに応じて影を再利用する。投入成功後に
-`result.accept(&mut view, &submission)` で結果を確定する。取り消し時は結果を破棄する。
-リサイズは準備境界で新しい寸法のパイプラインと容量を用意し、履歴を `view.clear_history` で解放する。
+ビュー履歴は方式が所有する。GPU 投入前にフレームを破棄すれば更新候補も破棄される。
+`ViewSubmitError::Rejected` は再構築できる。`Accepted` は投入済みで、
+`renderer.finish_submission()` を再試行して残りの履歴を確定し、表示へ進む。
+独自方式の `accept` はエラー時に再試行に必要な状態を保持する。カメラ削除は `remove_view`、
+リサイズは新しい寸法の要件を用意して `clear` と再初期化を行い、同じ Runtime のアセット登録を共有する。
 古い Graph を投入または破棄してから `meshes.collect` と `materials.collect_gpu` で旧版を回収し、
 終了時は履歴・両レジストリ・パイプラインの登録を解放する。
 

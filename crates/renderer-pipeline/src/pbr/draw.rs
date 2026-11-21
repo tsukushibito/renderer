@@ -51,6 +51,12 @@ impl GraphMaterial {
         self.factors.alpha_mode()
     }
 
+    pub const fn factors(self) -> MaterialUniform {
+        self.factors
+    }
+    pub const fn sampler(self) -> SamplerDescriptor {
+        self.sampler
+    }
     pub const fn textures(self) -> MaterialTextures {
         self.textures
     }

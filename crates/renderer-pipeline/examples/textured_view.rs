@@ -5,13 +5,7 @@ mod views;
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    views::run(
-        views::Example::Textured,
-        |pipeline, graph, cameras, scene, _| {
-            let view = pipeline.draw_view(graph, &mut cameras[0], scene, 1., None)?;
-            Ok([Some(view.sdr), None])
-        },
-    )
+    views::run(views::Example::Textured, views::standard)
 }
 
 #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]

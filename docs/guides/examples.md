@@ -11,7 +11,7 @@ cargo run --locked --release -p renderer-pipeline --features vulkan --example te
 ```
 
 `textured_view` はチェッカーテクスチャを貼った三角形を描き、64×64 から 32×32 へリサイズして、メッシュの更新と赤から緑への材質変更を反映する。
-`two_views` は同じオブジェクトを二つのカメラから一つの Graph に描く。
+`two_views` は同じオブジェクトを二つのカメラから一つの Graph に描く。`toon_views` は同じループを外部実装の Toon 方式で実行する。
 `mixed_post` は PBR、Unlit、独自 Toon、半透明を描き、HDR に Bloom をかけて SDR に変換する。
 各例は GPU の結果を読み戻し、表示領域と色の変化を確認する。Windows の D3D12 ではコマンドの両方の `vulkan` を `d3d12` に置き換える。
 

@@ -1,96 +1,22 @@
+//! Built-in mixed-material implementation of the view contract.
 use super::{history::History, *};
-use crate::{
-    mesh::{MeshHandle, Meshes},
-    passes::output::SdrImage,
-    pbr::ShadowUpdates,
-};
-use renderer::graph::{GraphCapacityKind, ImageHandle};
-
-/// Geometry and material selection, independent of any frame Graph or camera.
-#[derive(Clone, Copy, Debug)]
-pub struct RenderObject {
-    pub mesh: MeshHandle,
-    pub material: MaterialHandle,
-    pub transform: Transform,
-    pub sort_center: Option<[f32; 3]>,
-    pub tint: [f32; 4],
-    pub casts_shadow: bool,
-}
-impl RenderObject {
-    pub fn new(mesh: MeshHandle, material: MaterialHandle) -> Self {
-        Self {
-            mesh,
-            material,
-            transform: Transform::IDENTITY,
-            sort_center: None,
-            casts_shadow: true,
-            tint: [1.; 4],
-        }
-    }
-    #[must_use]
-    pub fn with_transform(mut self, transform: Transform) -> Self {
-        self.transform = transform;
-        self
-    }
-}
-/// Borrow the same object list for any number of cameras.
-#[derive(Clone, Copy)]
-pub struct SceneInput<'a> {
-    pub meshes: &'a Meshes,
-    pub materials: &'a Materials,
-    pub objects: &'a [RenderObject],
-    pub lights: &'a [PointLight],
-    /// Lighting textures imported into the current Graph.
-    pub environment: Option<Environment>,
-}
-impl<'a> SceneInput<'a> {
-    pub fn new(meshes: &'a Meshes, materials: &'a Materials, objects: &'a [RenderObject]) -> Self {
-        Self {
-            meshes,
-            materials,
-            objects,
-            lights: &[],
-            environment: None,
-        }
-    }
-    #[must_use]
-    pub fn with_lights(mut self, lights: &'a [PointLight]) -> Self {
-        self.lights = lights;
-        self
-    }
-}
-
-/// Camera and per-view history. Use a distinct view for each independent camera.
-pub struct View {
-    pub camera: ViewInput,
-    pub sun: Sun,
-    pub bounds: Bounds,
+use crate::pbr::ShadowUpdates;
+use renderer::graph::GraphCapacityKind;
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use renderer::runtime::{FrameId, FrameSubmission, Runtime};
+use std::num::NonZeroUsize;
+/// Standard pipeline storage associated with one registered camera.
+pub struct StandardViewState {
     history: Option<History>,
 }
-impl View {
-    pub fn new(camera: ViewInput, bounds: Bounds) -> Self {
+impl StandardViewState {
+    pub(super) fn new(shadow_capacity: Option<usize>) -> Self {
         Self {
-            camera,
-            bounds,
-            sun: Sun::from_normalized([0., 1., 0.], [1.; 3]).expect("unit direction"),
-            history: None,
+            history: shadow_capacity.map(History::new),
         }
     }
-
-    /// Configure independent shadow reuse at the preparation boundary.
-    #[must_use]
-    pub fn new_with_shadow_history(
-        camera: ViewInput,
-        bounds: Bounds,
-        max_casters_per_cascade: usize,
-    ) -> Self {
-        let mut view = Self::new(camera, bounds);
-        view.history = Some(History::new(max_casters_per_cascade));
-        view
-    }
-
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn clear_history(
+    pub(super) fn clear_history(
         &mut self,
         runtime: &mut renderer::runtime::Runtime,
     ) -> Result<(), pbr::ShadowHistoryError> {
@@ -103,19 +29,33 @@ impl View {
 
 /// Graph-local outputs. Publish shadow history immediately after a successful submission.
 #[must_use]
-pub struct ViewOutput<T = ()> {
+pub struct StandardViewOutput {
     pub scene: SceneImages,
-    pub sdr: T,
     updates: Option<ShadowUpdates>,
 }
-impl<T> ViewOutput<T> {
+impl StandardViewOutput {
     pub fn reused_shadows(&self) -> Option<[bool; pbr::CASCADE_COUNT]> {
         self.updates.as_ref().map(ShadowUpdates::reused)
     }
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn accept(
+    pub(super) fn check_submission(
+        &self,
+        view: &StandardViewState,
+        graph_id: u64,
+    ) -> Result<(), pbr::ShadowHistoryError> {
+        if let Some(update) = &self.updates {
+            view.history
+                .as_ref()
+                .ok_or(pbr::ShadowHistoryError::ForeignUpdates)?
+                .maps
+                .check_updates(graph_id, update)?;
+        }
+        Ok(())
+    }
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub(super) fn accept(
         &mut self,
-        view: &mut View,
+        view: &mut StandardViewState,
         receipt: &renderer::runtime::FrameSubmission,
     ) -> Result<(), pbr::ShadowHistoryError> {
         if let Some(updates) = &mut self.updates {
@@ -130,7 +70,35 @@ impl<T> ViewOutput<T> {
     }
 }
 
-impl RenderPipeline {
+impl StandardPipeline {
+    pub(super) fn check_object(
+        &self,
+        input: SceneInput<'_>,
+        obj: &RenderObject,
+    ) -> Result<(), GraphError> {
+        let instance = input.materials.get(obj.material)?;
+        if let MaterialInstance::Custom(material) = instance
+            && !self.definitions.contains(material.definition())
+        {
+            return Err(GraphError::invalid_input(
+                "custom material definition was not prepared",
+            ));
+        }
+        let program = match instance {
+            MaterialInstance::Pbr(material) if material.is_resident() => {
+                crate::passes::pbr::opaque_program()
+            }
+            MaterialInstance::Pbr(_) => {
+                return Err(GraphError::invalid_input(
+                    "prepare updated PBR materials before drawing",
+                ));
+            }
+            MaterialInstance::Unlit(_) => self.unlit.clone(),
+            MaterialInstance::Custom(material) => material.definition().forward().clone(),
+        };
+        input.meshes.check_layout(obj.mesh, &program)
+    }
+
     /// Upload the shared default textures once for this Runtime.
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn initialize(
@@ -159,8 +127,8 @@ impl RenderPipeline {
     }
 
     /// Standard Forward view without MSAA or shadows.
-    pub fn standard(extent: [u32; 2], limits: SceneLimits) -> Result<Self, GraphError> {
-        Self::new(Technique::Forward, Config::display(extent), limits, &[])
+    pub fn forward(extent: [u32; 2], limits: SceneLimits) -> Result<Self, GraphError> {
+        Self::new(Technique::Forward, StandardConfig::new(extent), limits, &[])
     }
 
     /// Include the per-view working set once per simultaneous view in a Graph.
@@ -181,37 +149,14 @@ impl RenderPipeline {
         }
         preparation.add_alternatives(&[&aggregate])
     }
-    pub fn draw_hdr(
+    pub(super) fn draw_objects(
         &mut self,
         graph: &mut Graph,
-        view: &mut View,
-        input: SceneInput<'_>,
-    ) -> Result<ViewOutput, GraphError> {
-        self.draw_objects(
-            graph,
-            view,
-            input,
-            None::<fn(&mut Graph, pbr::GBuffer) -> Result<(), GraphError>>,
-        )
-    }
-
-    /// Read geometry depth and material planes at the same Deferred stage.
-    pub fn draw_hdr_with_gbuffer(
-        &mut self,
-        graph: &mut Graph,
-        view: &mut View,
-        input: SceneInput<'_>,
-        consume: impl FnOnce(&mut Graph, pbr::GBuffer) -> Result<(), GraphError>,
-    ) -> Result<ViewOutput, GraphError> {
-        self.draw_objects(graph, view, input, Some(consume))
-    }
-    fn draw_objects(
-        &mut self,
-        graph: &mut Graph,
-        view: &mut View,
+        view: &mut StandardViewState,
+        camera: &CameraView,
         input: SceneInput<'_>,
         consume: Option<impl FnOnce(&mut Graph, pbr::GBuffer) -> Result<(), GraphError>>,
-    ) -> Result<ViewOutput, GraphError> {
+    ) -> Result<StandardViewOutput, GraphError> {
         if input.objects.len() > self.limits.max_draws {
             return Err(GraphError::capacity_error(
                 GraphCapacityKind::Draws,
@@ -230,30 +175,17 @@ impl RenderPipeline {
             })?
             .import(graph)?;
         let prepared = self.prepare_view(
-            view.camera,
-            view.sun,
-            view.bounds,
+            camera.camera,
+            camera.sun,
+            camera.bounds,
             match input.environment {
-                Some(env) => env,
+                Some(env) => env.import(graph)?,
                 None => defaults.environment()?,
             },
         )?;
         self.connected.clear();
         for obj in input.objects {
-            let instance = input.materials.get(obj.material)?;
-            let program = match instance {
-                MaterialInstance::Pbr(material) if material.is_resident() => {
-                    crate::passes::pbr::opaque_program()
-                }
-                MaterialInstance::Pbr(_) => {
-                    return Err(GraphError::invalid_input(
-                        "prepare updated PBR materials before drawing",
-                    ));
-                }
-                MaterialInstance::Unlit(_) => self.unlit.clone(),
-                MaterialInstance::Custom(material) => material.definition().forward().clone(),
-            };
-            let mesh = input.meshes.connect(graph, obj.mesh, &program)?;
+            let mesh = input.meshes.import(graph, obj.mesh)?;
             self.connected.push(Draw {
                 transform: (obj.transform != Transform::IDENTITY).then_some(obj.transform),
                 sort_center: obj.sort_center.unwrap_or_else(|| mesh.bounds.center()),
@@ -285,31 +217,107 @@ impl RenderPipeline {
             None => self.draw_connected_hdr(graph, input.materials, frame),
         };
         self.connected = connected;
-        Ok(ViewOutput {
+        Ok(StandardViewOutput {
             scene: scene?,
-            sdr: (),
             updates: shadow.map(|s| s.export(graph)).transpose()?,
         })
     }
+}
 
-    /// Draw to the configured SDR output. The final pass writes directly into the supplied
-    /// target, or allocates a Graph image when no target is supplied.
-    pub fn draw_view(
+impl ViewPipeline for StandardPipeline {
+    type State = StandardViewState;
+    type Update = StandardViewOutput;
+
+    fn reserve(
+        &self,
+        preparation: &mut Preparation,
+        extent: [u32; 2],
+        views: NonZeroUsize,
+    ) -> Result<(), GraphError> {
+        if self.config.extent != extent {
+            return Err(GraphError::invalid_input(
+                "standard pipeline extent differs from renderer",
+            ));
+        }
+        self.reserve_views(preparation, views)
+    }
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    fn initialize(&mut self, runtime: &mut Runtime) -> PipelineResult<Option<FrameId>> {
+        Ok(Some(StandardPipeline::initialize(self, runtime)?))
+    }
+    fn check_object(&self, scene: SceneInput<'_>, object: &RenderObject) -> Result<(), GraphError> {
+        StandardPipeline::check_object(self, scene, object)
+    }
+    fn create_view(&self, _: &CameraView) -> PipelineResult<StandardViewState> {
+        Ok(StandardViewState::new(
+            self.config
+                .shadows
+                .map(|_| self.limits.max_casters_per_cascade),
+        ))
+    }
+    fn record(
         &mut self,
         graph: &mut Graph,
-        view: &mut View,
-        input: SceneInput<'_>,
-        exposure: f32,
-        target: Option<ImageHandle>,
-    ) -> Result<ViewOutput<SdrImage>, GraphError> {
-        let (output, exposure) = self.recipe.common().checked_output(exposure)?;
-        let result = self.draw_hdr(graph, view, input)?;
-        let source = graph.image_view(result.scene.hdr, 0, 0)?;
-        let sdr = output.append_to(graph, source, exposure, target)?.sdr;
-        Ok(ViewOutput {
-            scene: result.scene,
-            sdr,
-            updates: result.updates,
-        })
+        state: &mut StandardViewState,
+        camera: &CameraView,
+        scene: PreparedScene<'_, Self>,
+    ) -> Result<(ViewImages, StandardViewOutput), GraphError> {
+        self.record_camera(
+            graph,
+            state,
+            camera,
+            scene.input(),
+            None::<fn(&mut Graph, crate::pbr::GBuffer) -> Result<(), GraphError>>,
+        )
+    }
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    fn check_submission(
+        &self,
+        state: &StandardViewState,
+        update: &StandardViewOutput,
+        graph_id: u64,
+    ) -> PipelineResult<()> {
+        Ok(update.check_submission(state, graph_id)?)
+    }
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    fn accept(
+        &mut self,
+        view: &mut StandardViewState,
+        update: &mut StandardViewOutput,
+        submission: &FrameSubmission,
+    ) -> PipelineResult<()> {
+        Ok(update.accept(view, submission)?)
+    }
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    fn release_view(
+        &mut self,
+        view: &mut StandardViewState,
+        runtime: &mut Runtime,
+    ) -> PipelineResult<()> {
+        Ok(view.clear_history(runtime)?)
+    }
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    fn release(&mut self, runtime: &mut Runtime) -> PipelineResult<()> {
+        Ok(self.clear(runtime)?)
+    }
+}
+
+impl StandardPipeline {
+    pub(super) fn record_camera(
+        &mut self,
+        graph: &mut Graph,
+        state: &mut StandardViewState,
+        camera: &CameraView,
+        scene: SceneInput<'_>,
+        consume: Option<impl FnOnce(&mut Graph, crate::pbr::GBuffer) -> Result<(), GraphError>>,
+    ) -> Result<(ViewImages, StandardViewOutput), GraphError> {
+        let update = self.draw_objects(graph, state, camera, scene, consume)?;
+        Ok((
+            ViewImages {
+                color: update.scene.hdr,
+                depth: update.scene.depth,
+            },
+            update,
+        ))
     }
 }

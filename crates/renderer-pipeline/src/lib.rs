@@ -7,15 +7,16 @@
 //! preparation, scheduling and execution.
 //!
 //! Use [`material::Materials`] to create shareable PBR, vertex-color Unlit or
-//! custom materials. Submit their handles together through [`pipeline::RenderPipeline`],
+//! custom materials. Submit their handles together through [`pipeline::StandardPipeline`],
 //! which classifies draws and sorts transparent geometry across shader families.
 //!
 //! Keep your application scene above this layer. Register geometry with
 //! [`mesh::Meshes`], prepare changed meshes and materials, then pass the same
-//! [`pipeline::SceneInput`] to [`pipeline::RenderPipeline::draw_view`] for
-//! each camera. Use [`pipeline::RenderPipeline::draw_hdr`] to insert your
+//! [`pipeline::SceneInput`] to [`pipeline::ViewFrame::draw_view`] for
+//! each camera. Use [`pipeline::ViewFrame::graph`] to insert your
 //! own post-processing before SDR output. The executable examples are
-//! `textured_view`, `two_views`, and `mixed_post`.
+//! `textured_view`, `two_views`, `toon_views`, and `mixed_post`. Implement
+//! [`pipeline::ViewPipeline`] to use the same [`pipeline::ViewRenderer`] with a custom technique.
 //!
 //! # Choosing a PBR recipe
 //!

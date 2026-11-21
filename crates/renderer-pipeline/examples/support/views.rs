@@ -1,22 +1,22 @@
 //! Shared cold setup and the three public view workflows.
 #[path = "toon.rs"]
-mod toon;
+pub(crate) mod toon;
+#[path = "validation.rs"]
+pub(crate) mod validation;
 use renderer::{
     capacity::Preparation,
-    graph::{Graph, GraphCapacity, GraphError, GraphPool, ImageDesc},
+    graph::{GraphCapacity, GraphPool, ImageDesc},
     runtime::{Runtime, RuntimeConfig, RuntimeLimits},
 };
 use renderer_pipeline::{
-    material::{AlphaMode, Materials, PbrParams, UnlitParams, Value},
+    material::{AlphaMode, MaterialDefinition, Materials, PbrParams, UnlitParams, Value},
     mesh::{MeshCapacity, MeshData, Meshes},
-    passes::{
-        bloom::{Bloom, PreparedBloom},
-        output::SdrImage,
+    passes::{bloom::Bloom, output::SdrOutput},
+    pbr::{Bounds, PbrVertex, Projection, SceneLimits, Sun, Technique, Transform, ViewInput},
+    pipeline::{
+        CameraView, RenderObject, SceneInput, StandardConfig, StandardPipeline, ViewId,
+        ViewPipeline, ViewRenderer,
     },
-    pbr::{
-        Bounds, Config, PbrVertex, Projection, SceneLimits, Sun, Technique, Transform, ViewInput,
-    },
-    pipeline::{RenderObject, RenderPipeline, SceneInput, View},
     unlit_forward::{IDENTITY, Vertex},
 };
 use std::{error::Error, num::NonZeroUsize, time::Duration};
@@ -30,15 +30,23 @@ pub enum Example {
     MixedPost,
 }
 
-pub fn run(
+#[allow(dead_code)]
+pub fn standard(
+    extent: [u32; 2],
+    limits: SceneLimits,
+    definitions: &[MaterialDefinition],
+) -> Result<StandardPipeline, Box<dyn Error>> {
+    Ok(StandardPipeline::new(
+        Technique::Forward,
+        StandardConfig::new(extent),
+        limits,
+        definitions,
+    )?)
+}
+#[allow(dead_code)]
+pub fn run<P: ViewPipeline>(
     example: Example,
-    draw: impl Fn(
-        &mut RenderPipeline,
-        &mut Graph,
-        &mut [View],
-        SceneInput<'_>,
-        &PreparedBloom,
-    ) -> Result<[Option<SdrImage>; 2], GraphError>,
+    make: impl Fn([u32; 2], SceneLimits, &[MaterialDefinition]) -> Result<P, Box<dyn Error>>,
 ) -> Result<(), Box<dyn Error>> {
     let api = match std::env::args().nth(1).as_deref() {
         #[cfg(feature = "vulkan")]
@@ -47,6 +55,13 @@ pub fn run(
         Some("d3d12") => RuntimeConfig::D3D12(Default::default()),
         _ => return Err("pass the enabled GPU backend: vulkan or d3d12".into()),
     };
+    run_on(api, example, make)
+}
+pub fn run_on<P: ViewPipeline>(
+    api: RuntimeConfig,
+    example: Example,
+    make: impl Fn([u32; 2], SceneLimits, &[MaterialDefinition]) -> Result<P, Box<dyn Error>>,
+) -> Result<(), Box<dyn Error>> {
     let mut extent = [64, 64];
     let count = if example == Example::TwoViews { 2 } else { 1 };
     let limits = SceneLimits {
@@ -72,7 +87,20 @@ pub fn run(
             .unwrap()
         })
     };
-    let model = meshes.create(MeshData::pbr(&vertices(1.), &[0, 2, 1])?)?;
+    let geometry = |scale| {
+        if example == Example::TwoViews {
+            MeshData::unlit(
+                &points.map(|p| Vertex {
+                    position: [p[0] * scale, p[1] * scale, p[2]],
+                    color: [1.; 4],
+                }),
+                &[0, 2, 1],
+            )
+        } else {
+            MeshData::pbr(&vertices(scale), &[0, 2, 1])
+        }
+    };
+    let model = meshes.create(geometry(1.)?)?;
     let mut materials = Materials::default();
     let mut definitions = Vec::new();
     let mut extra = Vec::new();
@@ -96,24 +124,27 @@ pub fn run(
             extra.push(RenderObject::new(mesh, material).with_transform(t));
         }
     }
-    let mut pipeline = RenderPipeline::new(
-        Technique::Forward,
-        Config::display(extent),
-        limits,
-        &definitions,
-    )?;
+    let prepare = |extent| -> Result<_, Box<dyn Error>> {
+        let mut budget = Preparation::new(NonZeroUsize::MIN);
+        let renderer = ViewRenderer::prepare(
+            make(extent, limits, &definitions)?,
+            extent,
+            NonZeroUsize::new(count).unwrap(),
+            Some(SdrOutput::display(false)),
+            &mut budget,
+        )?;
+        Ok((renderer, budget))
+    };
+    let (mut pipeline, first) = prepare(extent)?;
     let mut preparation = Preparation::new(NonZeroUsize::MIN);
-    // The textured example exercises an extent change at the asset-update boundary.
-    let mut resized = if example == Example::Textured {
-        Some(RenderPipeline::standard([32, 32], limits)?)
+    let mut resized = if example != Example::MixedPost {
+        let (next, second) = prepare([32, 32])?;
+        preparation.add_alternatives(&[&first, &second])?;
+        Some(next)
     } else {
+        preparation.add_alternatives(&[&first])?;
         None
     };
-    if let Some(next) = &resized {
-        preparation.add_alternatives(&[pipeline.preparation(), next.preparation()])?;
-    } else {
-        pipeline.reserve_views(&mut preparation, NonZeroUsize::new(count).unwrap())?;
-    }
     meshes.reserve(&mut preparation)?;
     let texture_desc = ImageDesc::rgba8_srgb(2, 2);
     preparation.reserve_image(texture_desc, 1)?;
@@ -141,7 +172,9 @@ pub fn run(
         );
         Ok(())
     };
-    wait(&mut runtime, id)?;
+    if let Some(id) = id {
+        wait(&mut runtime, id)?;
+    }
     let mut startup = GraphPool::new(capacity, 1)?;
     let mut graph = startup.begin()?;
     let checker = graph.image("checker", texture_desc)?;
@@ -163,7 +196,12 @@ pub fn run(
         params.textures.base_color = Some(texture.clone());
         params
     };
-    let material = materials.create_pbr(paint([1., 0.2, 0.1, 1.]))?;
+    let red = [1., 0.2, 0.1, 1.];
+    let material = if example == Example::TwoViews {
+        materials.create_unlit(UnlitParams { color: red })?
+    } else {
+        materials.create_pbr(paint(red))?
+    };
     let mut objects = vec![RenderObject::new(model, material)];
     objects.extend(extra);
     if example == Example::MixedPost {
@@ -192,44 +230,97 @@ pub fn run(
             [1., 2.],
             Projection::Orthographic,
         )?;
-        let mut view = View::new(camera, Bounds::new([-1., -1., 0.], [1., 1., 1.])?);
-        view.sun = Sun::new([0., 0., -1.], [2.; 3])?;
+        let view = CameraView {
+            id: ViewId(index as u64),
+            extent,
+            camera,
+            bounds: Bounds::new([-1., -1., 0.], [1., 1., 1.])?,
+            sun: Sun::new([0., 0., -1.], [2.; 3])?,
+        };
+        pipeline.register_view(&view)?;
         views.push(view);
     }
     let mut pool = GraphPool::new(capacity, 1)?;
     let mut previous = [None; 2];
-    for step in 0..2 {
+    for step in 0..3 {
+        #[cfg(test)]
         if step == 1 {
-            if let Some(next) = resized.take() {
-                extent = [32, 32];
-                pipeline.clear(&mut runtime)?;
-                pipeline = next;
-                let id = pipeline.initialize(&mut runtime)?;
-                wait(&mut runtime, id)?;
-                // The old frame has returned, so its mesh registration can be
-                // collected before reserving the same buffer class again.
-                meshes.update(model, MeshData::pbr(&vertices(0.75), &[0, 2, 1])?)?;
-                meshes.collect(&mut runtime)?;
-                let id = meshes
-                    .prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)?
-                    .expect("changed mesh version");
+            let mut stale = pipeline.begin_frame(&mut pool)?;
+            assert!(
+                stale
+                    .draw_view(SceneInput::new(&meshes, &materials, &objects), &views[0])
+                    .is_err()
+            );
+        }
+        if step == 1
+            && let Some(next) = resized.take()
+        {
+            extent = [32, 32];
+            pipeline.clear(&mut runtime)?;
+            pipeline = next;
+            if let Some(id) = pipeline.initialize(&mut runtime)? {
                 wait(&mut runtime, id)?;
             }
-            materials.update_pbr(material, paint([0.15, 1., 0.25, 1.]))?;
-        }
-        if let Some(id) = materials.prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)? {
+            for camera in &mut views {
+                camera.extent = extent;
+                pipeline.register_view(camera)?;
+            }
+            // The old frame has returned, so its mesh registration can be
+            // collected before reserving the same buffer class again.
+            meshes.collect(&mut runtime)?;
+            let id = meshes
+                .prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)?
+                .expect("changed mesh version");
             wait(&mut runtime, id)?;
         }
-        let mut graph = pool.begin()?;
-        let input = SceneInput::new(&meshes, &materials, &objects);
-        let outputs = draw(&mut pipeline, &mut graph, &mut views, input, &bloom)?;
+        if step < 2 {
+            if let Some(id) =
+                materials.prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)?
+            {
+                wait(&mut runtime, id)?;
+            }
+            pipeline.prepare_scene(SceneInput::new(&meshes, &materials, &objects))?;
+        }
+        let scene = SceneInput::new(&meshes, &materials, &objects);
+        #[cfg(all(test, feature = "memory-profiling"))]
+        let before = renderer::measurement::Snapshot::now();
+        let mut frame = pipeline.begin_frame(&mut pool)?;
         let mut reads = [None; 2];
-        for (output, slot) in outputs.into_iter().zip(&mut reads) {
-            if let Some(color) = output {
-                *slot = Some(graph.readback_image("view pixels", color.raw_image())?);
+        for (camera, slot) in views.iter().zip(&mut reads) {
+            let hdr = frame.draw_view(scene, camera)?.color;
+            let hdr = bloom.add_passes(frame.graph(), hdr)?;
+            let target = if example == Example::TwoViews {
+                Some(
+                    frame
+                        .graph()
+                        .image("camera target", ImageDesc::rgba8(extent[0], extent[1]))?,
+                )
+            } else {
+                None
+            };
+            let color = frame.write_output(hdr, 1., target)?;
+            if let Some(target) = target {
+                assert_eq!(target, color.raw_image());
+            }
+            *slot = Some(
+                frame
+                    .graph()
+                    .readback_image("view pixels", color.raw_image())?,
+            );
+        }
+        if step == 0 {
+            // Already recorded operands keep the old versions through submission.
+            if resized.is_some() {
+                meshes.update(model, geometry(0.75)?)?;
+            }
+            let green = [0.15, 1., 0.25, 1.];
+            if example == Example::TwoViews {
+                materials.update_unlit(material, UnlitParams { color: green })?;
+            } else {
+                materials.update_pbr(material, paint(green))?;
             }
         }
-        let sent = runtime.submit(&graph.compile()?)?;
+        let sent = frame.submit(&mut runtime)?;
         let mut frame = runtime
             .wait_for_frame(sent.id(), Duration::from_secs(15))?
             .ok_or("frame timed out")?;
@@ -245,14 +336,24 @@ pub fn run(
                 .iter()
                 .filter(|rgba| rgba[..3] != [0; 3])
                 .count();
-            if coverage == 0 || previous[i] == Some([color[0], color[1], color[2]]) {
+            if coverage == 0
+                || (step == 1 && previous[i] == Some([color[0], color[1], color[2]]))
+                || (step == 2 && previous[i] != Some([color[0], color[1], color[2]]))
+            {
                 return Err("expected visible geometry and a changed material color".into());
             }
             previous[i] = Some([color[0], color[1], color[2]]);
+            #[cfg(not(test))]
             println!(
                 "frame {step} view {i}: {coverage} lit pixels, center RGBA {:?}",
                 color
             );
+        }
+        drop((frame, sent));
+        #[cfg(all(test, feature = "memory-profiling"))]
+        if step == 2 {
+            let delta = renderer::measurement::Snapshot::now().since(before);
+            assert!(delta.is_allocation_free(), "{delta:?}");
         }
         materials.collect_gpu(&mut runtime)?;
     }
@@ -260,5 +361,5 @@ pub fn run(
     materials.clear(&mut runtime)?;
     pipeline.clear(&mut runtime)?;
     runtime.delete(texture.key())?;
-    Ok(())
+    validation::check_validation(runtime)
 }

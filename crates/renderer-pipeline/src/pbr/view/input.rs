@@ -47,6 +47,11 @@ pub(super) enum Shape {
 }
 
 impl ViewInput {
+    /// Column-major clip-from-world transform supplied by the application.
+    pub fn clip_from_world(&self) -> [[f32; 4]; 4] {
+        self.matrix
+    }
+
     pub(crate) fn sort_direction(self) -> [f64; 3] {
         self.forward
     }

@@ -158,12 +158,12 @@ impl Meshes {
             .mesh_revision(mesh)
             .map_err(|e| GraphError::invalid_input(e.to_string()))
     }
-    pub(crate) fn connect(
+    /// Check a mesh/program pairing when building or updating the scene.
+    pub fn check_layout(
         &self,
-        graph: &mut Graph,
         mesh: MeshHandle,
         program: &ManagedRasterProgram,
-    ) -> Result<Mesh, GraphError> {
+    ) -> Result<(), GraphError> {
         let asset = self
             .assets
             .get(&mesh)
@@ -176,6 +176,16 @@ impl Meshes {
                 "mesh vertex layout differs from material",
             ));
         }
+        Ok(())
+    }
+
+    /// Import the current resident vertex/index range into this Graph.
+    pub fn import(&self, graph: &mut Graph, mesh: MeshHandle) -> Result<Mesh, GraphError> {
+        let asset = self
+            .assets
+            .get(&mesh)
+            .ok_or_else(|| GraphError::invalid_input("unknown mesh handle"))?;
+        let geometry = self.registry.geometry(mesh).expect("registered mesh");
         let buffers = asset
             .buffers
             .as_ref()

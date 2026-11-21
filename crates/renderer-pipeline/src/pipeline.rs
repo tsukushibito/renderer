@@ -25,7 +25,11 @@ pub use geometry::{GeometryPipeline, Technique};
 mod input;
 mod view;
 pub use input::{Draw, Frame, Mesh};
-pub use view::{RenderObject, SceneInput, View, ViewOutput};
+pub use view::{StandardViewOutput, StandardViewState};
+mod scene;
+pub use scene::{EnvironmentMaps, RenderObject, SceneInput};
+mod contract;
+pub use contract::*;
 
 struct ForwardCommand {
     program: ManagedRasterProgram,
@@ -92,8 +96,29 @@ struct Resolved {
     color: Option<RasterBindings>,
     shadow: Option<RasterBindings>,
 }
+/// Settings for the standard scene-linear HDR view.
+#[derive(Clone, Copy, Debug)]
+pub struct StandardConfig {
+    pub extent: [u32; 2],
+    pub clear_color: [f32; 4],
+    pub shadows: Option<ShadowSettings>,
+    pub samples: SampleCount,
+}
+
+impl StandardConfig {
+    /// Single-sample view with an opaque black background.
+    pub fn new(extent: [u32; 2]) -> Self {
+        Self {
+            extent,
+            clear_color: [0., 0., 0., 1.],
+            shadows: None,
+            samples: SampleCount::X1,
+        }
+    }
+}
+
 /// Prepared drawing techniques and bounded per-view scratch.
-pub struct RenderPipeline {
+pub struct StandardPipeline {
     resources: Option<pbr::DefaultResources>,
     recipe: GeometryPipeline,
     preparation: Preparation,
@@ -112,11 +137,11 @@ pub struct RenderPipeline {
     order: Vec<(f64, usize, [bool; pbr::CASCADE_COUNT])>,
     forward: ForwardDraws,
 }
-impl RenderPipeline {
+impl StandardPipeline {
     /// Prepare once, including all custom definitions that may be used by this scene.
     pub fn new(
         technique: pbr::Technique,
-        config: pbr::Config,
+        config: StandardConfig,
         limits: pbr::SceneLimits,
         definitions: &[MaterialDefinition],
     ) -> Result<Self, GraphError> {
@@ -125,6 +150,14 @@ impl RenderPipeline {
                 "custom materials support Forward 1x indexed draws only",
             ));
         }
+        let config = pbr::Config {
+            extent: config.extent,
+            clear_color: config.clear_color,
+            shadows: config.shadows,
+            samples: config.samples,
+            camera_storage: CameraStorage::Transient,
+            output: None,
+        };
         let recipe = GeometryPipeline::new(technique, config, limits)?;
         let mut preparation = Preparation::new(limits.frames_in_flight);
         preparation.add_alternatives(&[recipe.preparation()])?;
@@ -227,14 +260,6 @@ impl RenderPipeline {
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
         self.recipe.prepare_view(input, sun, bounds, environment)
-    }
-    pub fn write_output(
-        &self,
-        graph: &mut Graph,
-        hdr: renderer::graph::ImageHandle,
-        exposure: f32,
-    ) -> Result<crate::passes::output::OutputImages, GraphError> {
-        self.recipe.write_output(graph, hdr, exposure)
     }
     pub fn draw_connected_hdr(
         &mut self,
@@ -572,3 +597,6 @@ fn product(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
         std::array::from_fn(|row| (0..4).map(|k| a[k][row] * b[col][k]).sum())
     })
 }
+
+mod driver;
+pub use driver::*;

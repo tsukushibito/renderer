@@ -90,7 +90,7 @@ impl Transform {
         })
     }
 
-    pub(crate) fn columns(self) -> [[f32; 4]; 4] {
+    pub fn columns(self) -> [[f32; 4]; 4] {
         std::array::from_fn(|col| {
             [
                 self.model[0][col],

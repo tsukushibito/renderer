@@ -5,7 +5,7 @@ use renderer_pipeline::{
         UnlitParams, Value,
     },
     pbr,
-    pipeline::RenderPipeline,
+    pipeline::{StandardConfig, StandardPipeline},
 };
 
 fn tinted() -> MaterialDefinition {
@@ -111,13 +111,11 @@ fn rejects_incompatible_abis_and_scene_modes_at_preparation() {
         )
         .is_err()
     );
-    let config = pbr::Config {
+    let config = StandardConfig {
         extent: [16; 2],
         clear_color: [0.; 4],
         shadows: None,
-        output: None,
         samples: SampleCount::X4,
-        camera_storage: pbr::CameraStorage::Transient,
     };
     let limits = pbr::SceneLimits {
         frames_in_flight: std::num::NonZeroUsize::MIN,
@@ -126,7 +124,7 @@ fn rejects_incompatible_abis_and_scene_modes_at_preparation() {
         max_transforms: 0,
         max_casters_per_cascade: 0,
     };
-    assert!(RenderPipeline::new(pbr::Technique::Forward, config, limits, &[tinted()]).is_err());
+    assert!(StandardPipeline::new(pbr::Technique::Forward, config, limits, &[tinted()]).is_err());
 }
 
 #[test]

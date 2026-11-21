@@ -102,6 +102,11 @@ pub struct MaterialUniform {
 }
 
 impl MaterialUniform {
+    /// Graph-local buffer containing the encoded PBR factors.
+    pub const fn buffer(self) -> BufferHandle {
+        self.buffer
+    }
+
     /// Buffer class used for material uploads and resident registrations.
     pub const DESC: BufferDesc = BufferDesc { size: SIZE };
 
