@@ -37,6 +37,10 @@ impl PbrVertex {
         }
     }
 
+    pub const fn position(self) -> [f32; 3] {
+        self.position
+    }
+
     /// Encode one little-endian record for [`renderer::geometry::GeometryData`].
     pub fn encode(self) -> [u8; VERTEX_BYTES] {
         let mut bytes = [0; VERTEX_BYTES];

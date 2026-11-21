@@ -39,7 +39,7 @@ impl Default for Programs {
 
 /// Prepared Forward programs, frame capacity and PBR scratch.
 pub struct Prepared {
-    common: PreparedScene,
+    pub(crate) common: PreparedScene,
 }
 
 pub fn prepare(config: Config, limits: SceneLimits) -> Result<Prepared, GraphError> {
@@ -138,14 +138,7 @@ impl Prepared {
         let scene = self.add_scene(graph, frame)?;
         let output =
             output.append_validated(graph, graph.image_view(scene.hdr, 0, 0)?, exposure)?;
-        Ok(FrameImages {
-            hdr: scene.hdr,
-            depth: scene.depth,
-            sdr: output.sdr,
-            shadows: scene.shadows,
-            camera: scene.camera,
-            gbuffer: scene.gbuffer,
-        })
+        Ok(scene.with_sdr(output.sdr))
     }
 
     /// Build the scene and return resolved HDR for further processing.

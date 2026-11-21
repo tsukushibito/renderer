@@ -1,11 +1,7 @@
 use renderer::{
     capacity::Preparation,
-    geometry::GeometryData,
-    graph::{BufferDesc, Graph, GraphCapacity, GraphPool, SampleCount},
-    program::{
-        BlendState, CompareOp, D3D12InlineConstantBinding, D3D12RasterShaders, DepthState,
-        ManagedRasterProgram, RasterShaderStages, ShaderBinaries,
-    },
+    graph::{BufferDesc, GraphCapacity, GraphPool, SampleCount},
+    program::ManagedRasterProgram,
     runtime::{Runtime, RuntimeConfig, RuntimeLimits},
 };
 use renderer_pipeline::{
@@ -13,70 +9,27 @@ use renderer_pipeline::{
         AlphaMode, MaterialDefinition, MaterialFactors, Materials, Parameter, PbrParams,
         UnlitParams, Value,
     },
+    mesh::{MeshCapacity, MeshData, Meshes},
     pbr,
-    scene::{Draw, Frame, Mesh, Scene},
+    pipeline::{RenderObject, RenderPipeline, SceneInput, View},
     unlit_forward::{self, IDENTITY},
 };
 use std::{error::Error, num::NonZeroUsize, time::Duration};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-fn toon(blend: bool) -> Result<MaterialDefinition> {
-    let base = ManagedRasterProgram::mesh_hdr();
-    let mut desc = base.descriptor();
-    let stages = RasterShaderStages {
-        vertex: &include_bytes!("../../../renderer/shaders/mesh.vert.spv")[..],
-        fragment: Some(&include_bytes!("../../shaders/toon.frag.spv")[..]),
-    };
-    let dxil = D3D12RasterShaders {
-        stages: RasterShaderStages {
-            vertex: &include_bytes!("../../../renderer/shaders/dxil/mesh.vert.dxil")[..],
-            fragment: Some(&include_bytes!("../../shaders/dxil/toon.frag.dxil")[..]),
-        },
-        inline_constants: Some(D3D12InlineConstantBinding {
-            register: 0,
-            space: 0,
-        }),
-    };
-    desc.shaders = ShaderBinaries::both(stages, dxil);
-    if blend {
-        desc.blend = BlendState::Alpha;
-        desc.depth = DepthState::Required {
-            compare: CompareOp::Less,
-            write: false,
-            require_load: true,
-        };
-    }
-    // SAFETY: the unchanged mesh vertex stage consumes its original position/color
-    // layout and 80-byte transform/tint. toon.frag reads only TEXCOORD0 and
-    // writes a single color, with no descriptors, side effects or indexing.
-    let program = unsafe { ManagedRasterProgram::from_trusted_owned_descriptor(desc)? };
-    Ok(MaterialDefinition::new(
-        program,
-        (!blend).then(ManagedRasterProgram::depth_only),
-        if blend {
-            AlphaMode::Blend
-        } else {
-            AlphaMode::Opaque
-        },
-        vec![Parameter::Constant {
-            name: "color".into(),
-            word: 16,
-            default: Value::Color([1.; 4]),
-        }],
-    )?)
-}
-fn quad(pbr: bool) -> Result<GeometryData> {
-    let points = [[-1., -1., 0.], [1., -1., 0.], [1., 1., 0.], [-1., 1., 0.]];
+#[path = "../../examples/support/toon.rs"]
+mod toon;
+use toon::toon;
+fn quad(pbr: bool, baked: Option<f32>) -> Result<MeshData> {
+    let points = [[-1., -1., 0.], [1., -1., 0.], [1., 1., 0.], [-1., 1., 0.]]
+        .map(|[x, y, z]| baked.map_or([x, y, z], |depth| [x * 0.25, y, depth]));
     let indices = [0, 1, 2, 2, 3, 0];
     if pbr {
-        let mut bytes = Vec::new();
-        for p in points {
-            bytes
-                .extend(pbr::PbrVertex::new(p, [0., 0., -1.], [1., 0., 0., 1.], [0., 0.])?.encode())
-        }
-        Ok(GeometryData::new(48, &bytes, &indices)?)
+        let vertices = points
+            .map(|p| pbr::PbrVertex::new(p, [0., 0., -1.], [1., 0., 0., 1.], [0.; 2]).unwrap());
+        Ok(MeshData::pbr(&vertices, &indices)?)
     } else {
-        Ok(unlit_forward::mesh_data(
+        Ok(MeshData::unlit(
             &points.map(|position| unlit_forward::Vertex {
                 position,
                 color: [1.; 4],
@@ -84,29 +37,6 @@ fn quad(pbr: bool) -> Result<GeometryData> {
             &indices,
         )?)
     }
-}
-fn upload(graph: &mut Graph, data: &GeometryData) -> Result<Mesh> {
-    let vertices = graph.buffer(
-        "vertices",
-        BufferDesc {
-            size: data.vertex_byte_len(),
-        },
-    )?;
-    let indices = graph.buffer(
-        "indices",
-        BufferDesc {
-            size: data.index_byte_len(),
-        },
-    )?;
-    data.upload_vertices(graph, "vertices", vertices)?;
-    data.upload_indices(graph, "indices", indices)?;
-    Ok(Mesh {
-        vertex_stride: data.vertex_stride(),
-        vertices,
-        indices,
-        first_index: 0,
-        index_count: data.index_count(),
-    })
 }
 fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
     let opaque = toon(false)?;
@@ -157,7 +87,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
     })?;
     let green = materials.create_custom(&opaque, &[("color", Value::Color([0., 0.6, 0., 1.]))])?;
     let blue = materials.create_custom(&blend, &[("color", Value::Color([0., 0., 1., 0.5]))])?;
-    let mut scene = Scene::new(
+    let mut scene = RenderPipeline::new(
         technique,
         pbr::Config {
             extent: [32, 16],
@@ -179,14 +109,17 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         },
         &[opaque, blend, textured.clone()],
     )?;
-    let geometry = [quad(true)?, quad(false)?];
+    let mut meshes = Meshes::new(MeshCapacity {
+        meshes: 4,
+        retired_mesh_versions: 4,
+    })?;
+    let pbr_mesh = meshes.create(quad(true, None)?)?;
+    let mesh = meshes.create(quad(false, None)?)?;
+    let glass_mesh = meshes.create(quad(true, Some(0.3))?)?;
+    let blue_mesh = meshes.create(quad(false, Some(0.2))?)?;
     let mut prep = Preparation::new(NonZeroUsize::MIN);
-    prep.add_alternatives(&[scene.preparation()])?;
-    for mesh in &geometry {
-        for size in [mesh.vertex_byte_len(), mesh.index_byte_len()] {
-            prep.reserve_buffer(BufferDesc { size }, 1)?
-        }
-    }
+    scene.reserve_views(&mut prep, NonZeroUsize::MIN)?;
+    meshes.reserve(&mut prep)?;
     let offset_desc = BufferDesc { size: 16 };
     let map_desc = renderer::graph::ImageDesc::rgba8(1, 1);
     prep.reserve_buffer(offset_desc, 1)?;
@@ -201,7 +134,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         },
         prep.working_set(),
     )?;
-    let (mut resources, id) = scene.defaults().initialize(&mut runtime)?;
+    let id = scene.initialize(&mut runtime)?;
     drop(
         runtime
             .wait_for_frame(id, Duration::from_secs(10))?
@@ -248,39 +181,68 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         [1., 2.],
         pbr::Projection::Orthographic,
     )?;
+    if let Some(id) = meshes.prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)? {
+        drop(
+            runtime
+                .wait_for_frame(id, Duration::from_secs(10))?
+                .ok_or("mesh upload timeout")?,
+        );
+    }
+    if let Some(id) = materials.prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)? {
+        drop(
+            runtime
+                .wait_for_frame(id, Duration::from_secs(10))?
+                .ok_or("material upload timeout")?,
+        );
+    }
+    let mut view =
+        View::new_with_shadow_history(input, pbr::Bounds::new([-1., -1., 0.], [1., 1., 1.])?, 1);
+    view.sun = pbr::Sun::new([0., 0., -1.], [0.; 3])?;
     for index in 0..4 {
         #[cfg(feature = "memory-profiling")]
         let before = renderer::measurement::Snapshot::now();
         let mut graph = pool.begin()?;
-        let defaults = resources.import(&mut graph)?;
-        let view = scene.prepare_view(
-            input,
-            pbr::Sun::new([0., 0., -1.], [0.; 3])?,
-            pbr::Bounds::new([-1., -1., 0.], [1., 1., 1.])?,
-            defaults.environment()?,
-        )?;
-        let pbr_mesh = upload(&mut graph, &geometry[0])?;
-        let mesh = upload(&mut graph, &geometry[1])?;
-        let draw = |mesh, mat, width, x, z| -> Result<Draw> {
+        let draw = |mesh, mat, width, x, z| -> Result<RenderObject> {
             let transform =
                 pbr::Transform::new([[width, 0., 0., x], [0., 1., 0., 0.], [0., 0., 1., z]])?;
-            Ok(Draw {
-                transform: Some(transform),
+            Ok(RenderObject {
+                transform,
                 casts_shadow: mat == green,
-                ..Draw::new(mesh, mat)
+                ..RenderObject::new(mesh, mat)
             })
         };
-        let draws = [
-            draw(mesh, blue, 0.25, 0., 0.2)?,
+        let mut draws = [
+            draw(blue_mesh, blue, 1., 0., 0.)?,
             draw(mesh, unlit, 1., 0., 0.8)?,
             draw(mesh, green, 0.55, 0., 0.4)?,
-            draw(pbr_mesh, glass, 0.25, 0., 0.3)?,
+            draw(glass_mesh, glass, 1., 0., 0.)?,
             draw(pbr_mesh, floor, 1., 0., 0.5)?,
             draw(mesh, unlit, 0.1, -0.7, 0.2)?,
             draw(mesh, swatch, 0.1, 0.8, 0.2)?,
         ];
-        let images =
-            scene.add_scene(&mut graph, &materials, Frame::new(&view, defaults, &draws))?;
+        if index % 2 == 1 {
+            draws.swap(0, 3);
+        }
+        let input = SceneInput::new(&meshes, &materials, &draws);
+        let mut before_forward = None;
+        let mut output = if technique == pbr::Technique::Deferred {
+            scene.draw_hdr_with_gbuffer(&mut graph, &mut view, input, |g, b| {
+                before_forward = Some(g.readback_image("PBR depth", b.depth)?);
+                Ok(())
+            })?
+        } else {
+            scene.draw_hdr(&mut graph, &mut view, input)?
+        };
+        if technique == pbr::Technique::Deferred && index >= 2 {
+            assert_eq!(output.reused_shadows(), Some([true; 4]));
+        }
+        let images = output.scene;
+        assert!(images.gbuffer.is_none());
+        let final_depth = if before_forward.is_some() {
+            Some(graph.readback_image("final depth", images.depth.unwrap())?)
+        } else {
+            None
+        };
         let read = graph.readback_image("mixed hdr", images.hdr)?;
         let shadows = images
             .shadows
@@ -288,6 +250,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             .transpose()?;
         let compiled = graph.compile()?;
         let pending = runtime.submit(&compiled)?;
+        output.accept(&mut view, &pending)?;
         if index == 0 {
             materials.update_custom(swatch, &[("albedo", Value::Texture(yellow.clone()))])?;
             materials.update_custom(green, &[("color", Value::Color([0., 0.3, 0., 1.]))])?;
@@ -296,6 +259,17 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             .wait_for_frame(pending.id(), Duration::from_secs(10))?
             .ok_or("mixed frame timed out")?;
         frame.readback_into(read, &mut bytes)?;
+        if let (Some(a), Some(b)) = (before_forward, final_depth) {
+            let mut raw = [0u8; 32 * 16 * 4];
+            for (read, expected) in [(a, 0.5), (b, 0.4)] {
+                frame.readback_into(read, &mut raw)?;
+                let start = (32 * 8 + 9) * 4;
+                assert!(
+                    (f32::from_le_bytes(raw[start..start + 4].try_into()?) - expected).abs()
+                        < 0.0001
+                );
+            }
+        }
         if let Some(read) = shadows {
             let mut depth = [0; 32 * 32 * 4];
             frame.readback_into(read, &mut depth)?;
@@ -351,11 +325,13 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             );
         }
     }
-    drop(materials);
+    view.clear_history(&mut runtime)?;
+    meshes.clear(&mut runtime)?;
+    materials.clear(&mut runtime)?;
     for key in [offset.key(), cyan.key(), yellow.key()] {
         runtime.delete(key)?;
     }
-    resources.clear(&mut runtime)?;
+    scene.clear(&mut runtime)?;
     super::runtime::check_validation(runtime)
 }
 #[cfg(feature = "vulkan")]
@@ -375,4 +351,82 @@ fn d3d12_mixed_materials() -> Result<()> {
         check(RuntimeConfig::D3D12(Default::default()), t)?
     }
     Ok(())
+}
+
+/// A full material set shares one upload submission. Updating one entry must
+/// fit a Graph with space for exactly one factors buffer and upload pass.
+fn residency(config: RuntimeConfig) -> Result<()> {
+    let mut materials = Materials::default();
+    let mut handles = Vec::new();
+    for i in 0..100 {
+        handles.push(materials.create_pbr(PbrParams::color([i as f32 / 100., 0., 0., 1.]))?);
+    }
+    let desc = pbr::MaterialUniform::DESC;
+    let mut prep = Preparation::new(NonZeroUsize::MIN);
+    prep.reserve_buffer(desc, 101)?;
+    let mut runtime = Runtime::new(
+        config,
+        RuntimeLimits {
+            resource_capacity: 101,
+            frames: 1,
+            results: 1,
+            ..Default::default()
+        },
+        prep.working_set(),
+    )?;
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1)?;
+    let id = materials
+        .prepare_gpu(&mut runtime, &mut pool)?
+        .expect("initial upload");
+    drop(
+        runtime
+            .wait_for_frame(id, Duration::from_secs(15))?
+            .ok_or("upload timed out")?,
+    );
+    assert!(materials.prepare_gpu(&mut runtime, &mut pool)?.is_none());
+    let mut single = GraphPool::new(
+        GraphCapacity {
+            resources: 1,
+            passes: 1,
+            upload_bytes: desc.size as usize,
+            ..Default::default()
+        },
+        1,
+    )?;
+    let keep = materials.snapshot(handles[25])?;
+    materials.update_pbr(handles[25], PbrParams::color([0., 1., 0., 1.]))?;
+    let id = materials
+        .prepare_gpu(&mut runtime, &mut single)?
+        .expect("changed factors upload");
+    materials.collect_gpu(&mut runtime)?;
+    drop(
+        runtime
+            .wait_for_frame(id, Duration::from_secs(15))?
+            .ok_or("update timed out")?,
+    );
+    assert!(materials.prepare_gpu(&mut runtime, &mut single)?.is_none());
+    drop(keep);
+    materials.collect_gpu(&mut runtime)?;
+    materials.clear(&mut runtime)?;
+    super::runtime::check_validation(runtime)
+}
+
+#[cfg(feature = "vulkan")]
+#[test]
+#[ignore = "requires real Vulkan GPU"]
+fn vulkan_material_residency() -> Result<()> {
+    residency(RuntimeConfig::Vulkan(renderer::runtime::VulkanConfig {
+        staging_ranges: 128,
+        ..Default::default()
+    }))
+}
+
+#[cfg(all(windows, feature = "d3d12"))]
+#[test]
+#[ignore = "requires real D3D12 GPU"]
+fn d3d12_material_residency() -> Result<()> {
+    residency(RuntimeConfig::D3D12(renderer::runtime::D3D12Config {
+        buffer_count: 128,
+        ..Default::default()
+    }))
 }

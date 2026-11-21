@@ -183,30 +183,44 @@ let blue_paint = materials.duplicate(red_paint)?;
 materials.update_pbr(blue_paint, PbrParams::color([0.03, 0.1, 0.8, 1.0]))?;
 ```
 
-独自 Toon の場合はコンパイル済みプログラムを渡し、公開パラメータを一度宣言する。
-次のプログラムは先頭 16 ワードで列優先の clip-from-model 行列を、続く 4 ワードで線形 RGBA を受け取る。
+アプリケーションがシーン、階層、アニメーションを所有する。描画時には、メッシュと材質のハンドルと
+ワールド変換を持つ `RenderObject` のスライスを渡す。同じスライスを複数のカメラから描画できる。
 
 ```rust
-use renderer_pipeline::material::{AlphaMode, MaterialDefinition, Parameter, Value};
-use renderer_pipeline::scene::{Draw, Frame, Scene};
+use renderer_pipeline::pipeline::{RenderObject, SceneInput, View};
 
-let toon = MaterialDefinition::new(toon_program, None, AlphaMode::Opaque, vec![
-    Parameter::Constant { name: "color".into(), word: 16, default: Value::Color([1.0; 4]) },
-])?;
-let clothing = materials.create_custom(&toon, &[("color", Value::Color([0.2, 0.6, 1.0, 1.0]))])?;
-let mut scene = Scene::new(technique, config, limits, &[toon])?;
-
-// 初期化時に scene.preparation() で作業領域を準備し、scene.defaults().initialize() で既定画像を作る。
-// 各フレームでメッシュを Graph に接続し、その Graph のビューと既定画像を使う。
-let draws = [Draw::new(floor_mesh, red_paint), Draw::new(sign_mesh, marker),
-             Draw::new(character_mesh, clothing)];
-let hdr = scene.add_scene(&mut graph, &materials, Frame::new(&view, defaults, &draws))?.hdr;
+let objects = [RenderObject::new(floor_mesh, red_paint),
+               RenderObject::new(sign_mesh, marker)];
+let input = SceneInput::new(&meshes, &materials, &objects);
+let result = pipeline.draw_view(&mut graph, &mut view, input, 1.0, None)?;
+let color = result.sdr.raw_image();
 ```
 
-`Draw::new` はワールド空間の頂点を受け取る。モデル空間の頂点では `draw.transform` を指定する。
-Unlit は頂点色とマテリアル色と `draw.tint` を掛け合わせる。モデル内の原点と中心が離れた半透明メッシュは
-`draw.sort_center` にローカル中心を設定する。pipeline はビュー方向の奥行きで全種類の半透明物をまとめて整列する。
-メッシュの頂点レイアウトは使用するプログラムに合わせる。標準 PBR は 48 バイト、頂点色 Unlit は 28 バイト。
+初期化では `Meshes::create` に `MeshData::pbr` または `MeshData::unlit` を渡す。
+標準 Forward は `RenderPipeline::standard(extent, limits)`、独自 Toon や別の描画方式は
+`RenderPipeline::new(technique, config, limits, definitions)` で作る。
+同じ Graph で描くビュー数を `pipeline.reserve_views` に、メッシュの転送分を `meshes.reserve` に渡して
+Runtime を準備する。`pipeline.initialize` は既定画像を登録する。
+メッシュと材質は作成・変更時に各レジストリの `prepare_gpu` でまとめて転送する。
+転送用 GraphPool はフレーム用と分ける。新旧の登録が重なる更新ではその分も予約する。
+
+`draw_view` の最後の引数に出力先画像を渡すと、最終パスがそこに直接書き込む。
+Bloom などを挟む場合は `draw_hdr` → 独自パス → `write_output` の順で同じ Graph に追加する。
+Deferred の材質面と深度を一緒に読むパスは `draw_hdr_with_gbuffer` のコールバックで追加する。
+後続の Forward 不透明物が深度を書き換える構成では、最終結果の `scene.gbuffer` は `None` となり、
+`scene.depth` には合成後の深度が入る。
+
+半透明物はすべての材質をまとめてビュー奥行きで整列する。基準点はインデックスが参照する頂点の
+境界箱の中心で、モデル変換も反映する。必要なら `RenderObject::sort_center` で変更できる。
+Unlit は頂点色、材質色、オブジェクトの tint を乗算する。
+標準 PBR の頂点は 48 バイト、頂点色 Unlit は 28 バイトで、独自メッシュには頂点属性と境界を指定する。
+
+各カメラには独立した `View` を持たせる。`View::new_with_shadow_history` でカスケードごとの
+キャスター数を予約すると、カメラ・光・キャスターに応じて影を再利用する。投入成功後に
+`result.accept(&mut view, &submission)` で結果を確定する。取り消し時は結果を破棄する。
+リサイズは準備境界で新しい寸法のパイプラインと容量を用意し、履歴を `view.clear_history` で解放する。
+古い Graph を投入または破棄してから `meshes.collect` と `materials.collect_gpu` で旧版を回収し、
+終了時は履歴・両レジストリ・パイプラインの登録を解放する。
 
 独自プログラムの描画条件は 1× の indexed Forward。Deferred のビューでは照明計算後に共通の深度へ描く。
 影を描く定義には同じ頂点・マテリアル入力を受け取る深度プログラムを指定する。テクスチャとサンプラーは
@@ -223,10 +237,10 @@ GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resid
 材質係数をフレーム間で共有するときは `ResidentMaterialUniform::import` で係数を接続し、
 当該Graphのテクスチャ・サンプラーと合わせて `pbr::GraphMaterial` を組み立てる。
 
-`renderer_pipeline::pbr::Prepared::new(technique, config, scene_limits)`でForward、Forward+、Deferredから選ぶ。
+`renderer_pipeline::pipeline::GeometryPipeline::new(technique, config, scene_limits)`でForward、Forward+、Deferredから選ぶ。
 描画寸法・出力条件と、同時フレーム・材質・描画・各カスケードのキャスターの上限を渡す。
 `Technique`のメソッドで使用できるサンプル数や点光源、深度、G-bufferの有無を確認できる。
-`add_scene_and_sdr_output`と`add_scene`は共通のフレーム入力を使い、Forward+では点光源のスライスを受け取る。
+`add_scene_and_sdr_output`と`draw_hdr`は共通のフレーム入力を使い、Forward+では点光源のスライスを受け取る。
 ForwardとDeferredには空のスライスを渡す。点光源を渡すとGraphへの追記前にエラーになる。
 
 準備済みレシピと必要な既定画像の要求を`Preparation`へ集約し、`Runtime`と`GraphPool`を作る。
@@ -234,10 +248,10 @@ ForwardとDeferredには空のスライスを渡す。点光源を渡すとGraph
 
 ```rust
 use renderer::capacity::Preparation;
-use renderer_pipeline::pbr::{Defaults, Prepared, Technique};
+use renderer_pipeline::{pbr::{Defaults, Technique}, pipeline::GeometryPipeline};
 
 let mut preparation = Preparation::new(scene_limits.frames_in_flight);
-let recipe = Prepared::new(Technique::Forward, config, scene_limits)?;
+let recipe = GeometryPipeline::new(Technique::Forward, config, scene_limits)?;
 let requests = recipe.preparation();
 preparation.add_requirements(requests.graph_requirements(), requests.working_set())?;
 let defaults = Defaults::for_recipe(config).prepare(&mut preparation)?;
@@ -263,8 +277,8 @@ Graph内の材質、不透明・半透明・影を落とす描画の各スライ
 `add_scene_and_sdr_output(graph, frame, lights, exposure)`は指定した露出でSDR出力まで追加し、
 HDR・SDRと利用できるシーン深度、G-bufferを返す。
 深度は1×で単一サンプルD32、4×では`None`となる。G-bufferはDeferredで得られる。4カスケードのシャドウマップは双方で単一サンプルD32を使う。
-HDRを加工したい場合は`add_scene`で照明済みのHDRを受け取り、同じGraphに独自パスを追加して、
-その出力を`add_output`へ渡す。`output: None`で準備すればHDR専用になり、標準の出力画像とProgramを予約しない。
+HDRを加工したい場合は`draw_hdr`で照明済みのHDRを受け取り、同じGraphに独自パスを追加して、
+その出力を`write_output`へ渡す。`output: None`で準備すればHDR専用になり、標準の出力画像とProgramを予約しない。
 出力未準備や不正な露出は`add_scene_and_sdr_output`がGraphへの追記前に拒否する。
 表示用の線形SDRはexportして受理済みフレームから表示し、保存用のsRGBはreadbackする。
 Graphへのレシピ追加が途中で失敗した場合は、そのフレームのGraphを破棄して作り直す。
@@ -276,8 +290,8 @@ Graphへのレシピ追加が途中で失敗した場合は、そのフレーム
 #### 標準 Bloom を追加する
 
 `passes::bloom::Bloom::Tent`または`Bloom::Box`の`prepare`に、容量を集約する`Preparation`とシーンHDRの`ImageDesc`を渡す。
-シェーダー、一時画像、Graph宣言の容量がこの準備で登録される。フレーム内では`add_scene`で得たHDRを
-`PreparedBloom::add_passes`に渡し、同寸の結果を`add_output`へつなぐ。入出力は露出・トーンマッピング前の
+シェーダー、一時画像、Graph宣言の容量がこの準備で登録される。フレーム内では`draw_hdr`で得たHDRを
+`PreparedBloom::add_passes`に渡し、同寸の結果を`write_output`へつなぐ。入出力は露出・トーンマッピング前の
 単一サンプル・単一サブリソースのシーンリニアRec.709 RGBA16Fとする。`Bloom::Off`では入力画像をそのまま返す。
 同じ部品を独自のシーン描画にも接続できる。
 

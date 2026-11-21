@@ -7,7 +7,7 @@ use renderer::{
 
 use crate::{passes::output::OutputImages, pbr_deferred, pbr_forward, pbr_forward_plus};
 
-use super::{
+use crate::pbr::{
     Bounds, Config, Environment, Frame, FrameImages, PointLight, PreparedView, SceneImages,
     SceneLimits, Sun, ViewInput,
 };
@@ -45,13 +45,13 @@ impl Technique {
 
 /// A standard PBR recipe with a common frame API. Construct it from a
 /// [`Technique`], or supply a specialized Forward recipe via its variant.
-pub enum Prepared {
+pub enum GeometryPipeline {
     Forward(pbr_forward::Prepared),
     ForwardPlus(pbr_forward_plus::Prepared),
     Deferred(pbr_deferred::Prepared),
 }
 
-impl Prepared {
+impl GeometryPipeline {
     pub fn new(
         technique: Technique,
         config: Config,
@@ -66,6 +66,14 @@ impl Prepared {
         }
     }
 
+    pub(crate) fn common(&self) -> &crate::pbr::scene::PreparedScene {
+        match self {
+            Self::Forward(recipe) => &recipe.common,
+            Self::ForwardPlus(recipe) => &recipe.common,
+            Self::Deferred(recipe) => &recipe.common,
+        }
+    }
+
     pub const fn technique(&self) -> Technique {
         match self {
             Self::Forward(_) => Technique::Forward,
@@ -75,11 +83,7 @@ impl Prepared {
     }
 
     pub fn preparation(&self) -> &Preparation {
-        match self {
-            Self::Forward(recipe) => recipe.preparation(),
-            Self::ForwardPlus(recipe) => recipe.preparation(),
-            Self::Deferred(recipe) => recipe.preparation(),
-        }
+        self.common().preparation()
     }
 
     pub fn prepare_view(
@@ -89,16 +93,12 @@ impl Prepared {
         bounds: Bounds,
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
-        match self {
-            Self::Forward(recipe) => recipe.prepare_view(view, sun, bounds, environment),
-            Self::ForwardPlus(recipe) => recipe.prepare_view(view, sun, bounds, environment),
-            Self::Deferred(recipe) => recipe.prepare_view(view, sun, bounds, environment),
-        }
+        self.common().prepare_view(view, sun, bounds, environment)
     }
 
     /// Declare the scene and return linear HDR for further processing. Point
     /// lights require Forward+ and are checked before declaring any work.
-    pub fn add_scene(
+    pub fn draw_hdr(
         &mut self,
         graph: &mut Graph,
         frame: Frame<'_>,
@@ -114,17 +114,13 @@ impl Prepared {
 
     /// Declare the standard output stage after scene rendering and any
     /// application HDR passes.
-    pub fn add_output(
+    pub fn write_output(
         &self,
         graph: &mut Graph,
         hdr: ImageHandle,
         exposure: f32,
     ) -> Result<OutputImages, GraphError> {
-        match self {
-            Self::Forward(recipe) => recipe.add_output(graph, hdr, exposure),
-            Self::ForwardPlus(recipe) => recipe.add_output(graph, hdr, exposure),
-            Self::Deferred(recipe) => recipe.add_output(graph, hdr, exposure),
-        }
+        self.common().add_output(graph, hdr, exposure)
     }
 
     /// Declare scene drawing and the standard output stage. Discard the

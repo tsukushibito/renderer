@@ -5,7 +5,7 @@ use renderer_pipeline::{
         UnlitParams, Value,
     },
     pbr,
-    scene::Scene,
+    pipeline::RenderPipeline,
 };
 
 fn tinted() -> MaterialDefinition {
@@ -126,7 +126,7 @@ fn rejects_incompatible_abis_and_scene_modes_at_preparation() {
         max_transforms: 0,
         max_casters_per_cascade: 0,
     };
-    assert!(Scene::new(pbr::Technique::Forward, config, limits, &[tinted()]).is_err());
+    assert!(RenderPipeline::new(pbr::Technique::Forward, config, limits, &[tinted()]).is_err());
 }
 
 #[test]

@@ -19,12 +19,12 @@ use renderer_pipeline::{
     pbr::{
         Bounds, CASCADE_COUNT, CameraStorage, Config, DefaultResources, DefaultViews, Defaults,
         Draw, Frame, FrameShadows, GraphMaterial, IndexedDraw, MaterialFactors, PbrVertex,
-        PointLight, Prepared, PreparedDefaults, Projection, SceneLimits, ShadowHistory,
-        ShadowSettings, ShadowUpdates, Sun, ViewInput,
+        PointLight, PreparedDefaults, Projection, SceneLimits, ShadowHistory, ShadowSettings,
+        ShadowUpdates, Sun, ViewInput,
     },
 };
 
-pub use renderer_pipeline::pbr::Technique;
+pub use renderer_pipeline::{pbr::Technique, pipeline::GeometryPipeline as Prepared};
 
 pub const EXTENT: [u32; 2] = [64, 48];
 pub const SHADOW_RESOLUTION: u32 = 64;
@@ -452,7 +452,7 @@ pub fn build_graph(
     };
     let (sdr, scene_depth, shadow_images) = if post.copy_hdr || post.bloom.is_some() {
         let exposure = 1.0;
-        let scene = prepared.add_scene(&mut graph, frame, lights)?;
+        let scene = prepared.draw_hdr(&mut graph, frame, lights)?;
         let mut hdr = scene.hdr;
         if post.copy_hdr {
             let target = graph.image("copied HDR", hdr_desc())?;
@@ -463,7 +463,7 @@ pub fn build_graph(
             hdr = bloom.add_passes(&mut graph, hdr)?;
         }
         (
-            prepared.add_output(&mut graph, hdr, exposure)?.sdr,
+            prepared.write_output(&mut graph, hdr, exposure)?.sdr,
             scene.depth,
             scene.shadows,
         )

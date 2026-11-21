@@ -517,7 +517,7 @@ pub(crate) struct RasterScene<'a> {
     pub(crate) camera: BufferHandle,
     pub(crate) lighting: [Binding; 9],
     pub(crate) has_transparency: bool,
-    forward_draws: Option<&'a crate::scene::ForwardDraws>,
+    forward_draws: Option<&'a crate::pipeline::ForwardDraws>,
     opaque: &'a Batch,
     transparent: &'a Batch,
     programs: &'a ScenePrograms,

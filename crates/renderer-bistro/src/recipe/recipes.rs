@@ -1,5 +1,6 @@
 //! Prepared recipe choices for Bistro and its diagnostic views.
 
+use renderer_pipeline::pipeline;
 use std::num::NonZeroUsize;
 
 use renderer::{
@@ -31,7 +32,7 @@ pub(super) struct Prepared {
 }
 
 enum Recipe {
-    Standard(Box<pbr::Prepared>),
+    Standard(Box<pipeline::GeometryPipeline>),
     Reference(Box<Reference>),
 }
 
@@ -83,7 +84,7 @@ impl Prepared {
                         .as_ref()
                         .and_then(|assets| assets.programs.as_ref())
                     {
-                        pbr::Prepared::Forward(pbr_forward::prepare_with_programs(
+                        pipeline::GeometryPipeline::Forward(pbr_forward::prepare_with_programs(
                             config,
                             limits,
                             pbr_forward::Programs {
@@ -93,14 +94,14 @@ impl Prepared {
                             },
                         )?)
                     } else {
-                        pbr::Prepared::new(pbr::Technique::Forward, config, limits)?
+                        pipeline::GeometryPipeline::new(pbr::Technique::Forward, config, limits)?
                     }
                 }
                 PipelineMode::ForwardPlus => {
-                    pbr::Prepared::new(pbr::Technique::ForwardPlus, config, limits)?
+                    pipeline::GeometryPipeline::new(pbr::Technique::ForwardPlus, config, limits)?
                 }
                 PipelineMode::Deferred => {
-                    pbr::Prepared::new(pbr::Technique::Deferred, config, limits)?
+                    pipeline::GeometryPipeline::new(pbr::Technique::Deferred, config, limits)?
                 }
                 PipelineMode::ForwardReference => unreachable!("the comparison has its own recipe"),
             };
@@ -170,7 +171,7 @@ impl Prepared {
         self.defaults
     }
 
-    pub fn standard(&mut self) -> (&mut pbr::Prepared, &PreparedBloom) {
+    pub fn standard(&mut self) -> (&mut pipeline::GeometryPipeline, &PreparedBloom) {
         match &mut self.recipe {
             Recipe::Standard(recipe) => (recipe, &self.bloom),
             Recipe::Reference(_) => unreachable!("expected a public recipe"),

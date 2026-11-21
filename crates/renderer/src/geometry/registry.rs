@@ -232,6 +232,12 @@ impl MeshRegistry {
                         || Arc::ptr_eq(bytes, &version.data.indices)
                 })
     }
+    /// Borrow the current immutable geometry at an asset preparation boundary.
+    pub fn geometry(&self, handle: MeshHandle) -> Result<&GeometryData, MeshError> {
+        self.check_owner(handle.owner)?;
+        Ok(&lookup(&self.meshes, handle.index, handle.generation)?.data)
+    }
+
     pub fn mesh_revision(&self, handle: MeshHandle) -> Result<u64, MeshError> {
         self.check_owner(handle.owner)?;
         Ok(lookup(&self.meshes, handle.index, handle.generation)?.revision)

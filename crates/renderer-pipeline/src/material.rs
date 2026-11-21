@@ -1,6 +1,8 @@
 //! Persistent surface materials shared by mesh draws. Create and edit them
 //! outside graph construction. Cloning a snapshot retains that exact revision.
 mod definition;
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+mod residency;
 use crate::pbr::{self, DefaultViews, MaterialUniform};
 pub use crate::pbr::{MaterialFactors, MaterialTextures};
 pub use definition::{CustomMaterial, MaterialDefinition, Parameter, Value};
@@ -64,9 +66,16 @@ pub struct PbrMaterial {
 #[derive(Clone, Debug)]
 enum PbrSource {
     Inline([u8; crate::passes::pbr::MATERIAL_BYTES]),
-    Imported(renderer::graph::ImportBuffer),
+    Imported(Arc<renderer::graph::ImportBuffer>),
 }
 impl PbrMaterial {
+    pub(crate) fn is_resident(&self) -> bool {
+        matches!(self.source, PbrSource::Imported(_))
+    }
+    pub(crate) fn external_shadow_input(&self) -> bool {
+        self.alpha == AlphaMode::Mask && self.textures.base_color.is_some()
+    }
+
     fn new(params: PbrParams) -> Result<Self, GraphError> {
         let encoded = params.factors.encode()?;
         Self::from_source(
@@ -104,7 +113,7 @@ impl PbrMaterial {
         textures: MaterialTextures<ImportImage>,
     ) -> Result<Self, GraphError> {
         Self::from_source(
-            PbrSource::Imported(uniform.snapshot()?.clone()),
+            PbrSource::Imported(Arc::new(uniform.snapshot()?.clone())),
             uniform.alpha_mode(),
             MaterialTextures {
                 base_color: Some(textures.base_color),
@@ -185,7 +194,15 @@ impl MaterialInstance {
 /// Handles are unique across registries, including after removal.
 #[derive(Default)]
 pub struct Materials {
+    revisions: HashMap<MaterialHandle, u64>,
     entries: HashMap<MaterialHandle, Arc<MaterialInstance>>,
+    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+    dirty: std::collections::BTreeSet<MaterialHandle>,
+    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+    owned_uniforms: Vec<(
+        std::sync::Weak<renderer::graph::ImportBuffer>,
+        pbr::ResidentMaterialUniform,
+    )>,
 }
 impl Materials {
     fn insert(&mut self, instance: Arc<MaterialInstance>) -> MaterialHandle {
@@ -194,8 +211,26 @@ impl Materials {
             NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
                 .expect("material handle space exhausted"),
         );
+        #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+        if matches!(instance.as_ref(), MaterialInstance::Pbr(p) if !p.is_resident()) {
+            self.dirty.insert(handle);
+        }
         self.entries.insert(handle, instance);
+        self.revisions.insert(handle, 1);
         handle
+    }
+    pub(crate) fn revision(&self, handle: MaterialHandle) -> Result<u64, GraphError> {
+        self.revisions
+            .get(&handle)
+            .copied()
+            .ok_or_else(invalid_handle)
+    }
+    fn bump_revision(&mut self, handle: MaterialHandle) {
+        let rev = self
+            .revisions
+            .get_mut(&handle)
+            .expect("registered material");
+        *rev = rev.checked_add(1).expect("material revisions exhausted");
     }
     pub fn create_pbr(&mut self, params: PbrParams) -> Result<MaterialHandle, GraphError> {
         Ok(self.insert(Arc::new(MaterialInstance::Pbr(PbrMaterial::new(params)?))))
@@ -212,7 +247,14 @@ impl Materials {
         if !matches!(slot.as_ref(), MaterialInstance::Pbr(_)) {
             return Err(GraphError::invalid_input("expected PBR material"));
         }
+        #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+        if pbr.is_resident() {
+            self.dirty.remove(&handle);
+        } else {
+            self.dirty.insert(handle);
+        }
         *slot = Arc::new(MaterialInstance::Pbr(pbr));
+        self.bump_revision(handle);
         Ok(())
     }
     pub fn create_unlit(&mut self, params: UnlitParams) -> Result<MaterialHandle, GraphError> {
@@ -243,6 +285,9 @@ impl Materials {
         Ok(self.insert(self.snapshot(handle)?))
     }
     pub fn remove(&mut self, handle: MaterialHandle) -> Result<(), GraphError> {
+        #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+        self.dirty.remove(&handle);
+        self.revisions.remove(&handle);
         self.entries
             .remove(&handle)
             .map(|_| ())
@@ -266,6 +311,7 @@ impl Materials {
         }
         check_color(params.color)?;
         *slot = Arc::new(MaterialInstance::Unlit(params));
+        self.bump_revision(handle);
         Ok(())
     }
     pub fn update_custom(
@@ -280,6 +326,7 @@ impl Materials {
         let mut next = old.clone();
         next.apply(values)?;
         *slot = Arc::new(MaterialInstance::Custom(next));
+        self.bump_revision(handle);
         Ok(())
     }
 }

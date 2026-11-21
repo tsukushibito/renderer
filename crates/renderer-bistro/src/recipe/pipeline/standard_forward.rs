@@ -303,9 +303,9 @@ pub(super) fn build(
         .local_lights
         .as_ref()
         .map_or(&[][..], |preset| &preset[..]);
-    let images = recipe.add_scene(&mut graph, frame, lights)?;
+    let images = recipe.draw_hdr(&mut graph, frame, lights)?;
     let processed = bloom.add_passes(&mut graph, images.hdr)?;
-    let output = recipe.add_output(&mut graph, processed, 2.0)?;
+    let output = recipe.write_output(&mut graph, processed, 2.0)?;
     let updates = history_frame
         .map(|frame| frame.export(&mut graph))
         .transpose()?;

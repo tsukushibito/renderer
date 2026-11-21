@@ -410,9 +410,22 @@ impl PreparedOutput {
         source: ImageView,
         exposure: Exposure,
     ) -> Result<OutputImages, GraphError> {
+        self.append_to(graph, source, exposure, None)
+    }
+
+    pub(crate) fn append_to(
+        &self,
+        graph: &mut Graph,
+        source: ImageView,
+        exposure: Exposure,
+        target: Option<ImageHandle>,
+    ) -> Result<OutputImages, GraphError> {
         let display_linear = graph.image(DISPLAY_LINEAR, self.display_linear)?;
         tone_map(graph, TONE_MAP, source, display_linear, exposure)?;
-        let sdr = graph.image(SDR_COLOR, self.sdr)?;
+        let sdr = match target {
+            Some(image) => image,
+            None => graph.image(SDR_COLOR, self.sdr)?,
+        };
         let linear_view = graph.image_view(display_linear, 0, 0)?;
         let sdr = write_sdr(graph, WRITE_SDR, linear_view, sdr, self.output)?;
         Ok(OutputImages {

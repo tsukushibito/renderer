@@ -1,7 +1,7 @@
 //! Draw mixed materials into one scene-linear HDR view.
 pub use crate::pbr::{
     Bounds, CameraStorage, Config, Environment, PointLight, PreparedView, Projection, SceneImages,
-    SceneLimits, ShadowSettings, Sun, Technique, Transform, ViewInput,
+    SceneLimits, ShadowSettings, Sun, Transform, ViewInput,
 };
 use crate::{
     material::{MaterialDefinition, MaterialHandle, MaterialInstance, Materials},
@@ -19,8 +19,13 @@ use std::{
     ops::Range,
 };
 
+mod geometry;
+mod history;
+pub use geometry::{GeometryPipeline, Technique};
 mod input;
+mod view;
 pub use input::{Draw, Frame, Mesh};
+pub use view::{RenderObject, SceneInput, View, ViewOutput};
 
 struct ForwardCommand {
     program: ManagedRasterProgram,
@@ -87,8 +92,10 @@ struct Resolved {
     color: Option<RasterBindings>,
     shadow: Option<RasterBindings>,
 }
-pub struct Scene {
-    recipe: pbr::Prepared,
+/// Prepared drawing techniques and bounded per-view scratch.
+pub struct RenderPipeline {
+    resources: Option<pbr::DefaultResources>,
+    recipe: GeometryPipeline,
     preparation: Preparation,
     defaults: pbr::PreparedDefaults,
     config: pbr::Config,
@@ -99,12 +106,13 @@ pub struct Scene {
     materials: Vec<pbr::GraphMaterial>,
     opaque: Vec<pbr::Draw>,
     transparent: Vec<pbr::Draw>,
-    casters: Vec<pbr::Draw>,
+    casters: [Vec<pbr::Draw>; pbr::CASCADE_COUNT],
     transforms: Vec<Transform>,
-    order: Vec<(f64, usize)>,
+    connected: Vec<Draw>,
+    order: Vec<(f64, usize, [bool; pbr::CASCADE_COUNT])>,
     forward: ForwardDraws,
 }
-impl Scene {
+impl RenderPipeline {
     /// Prepare once, including all custom definitions that may be used by this scene.
     pub fn new(
         technique: pbr::Technique,
@@ -117,7 +125,7 @@ impl Scene {
                 "custom materials support Forward 1x indexed draws only",
             ));
         }
-        let recipe = pbr::Prepared::new(technique, config, limits)?;
+        let recipe = GeometryPipeline::new(technique, config, limits)?;
         let mut preparation = Preparation::new(limits.frames_in_flight);
         preparation.add_alternatives(&[recipe.preparation()])?;
         let defaults = pbr::Defaults::for_recipe(config).prepare(&mut preparation)?;
@@ -150,14 +158,19 @@ impl Scene {
         let count = |n: usize, k| n.checked_mul(k).ok_or_else(overflow);
         let bindings = definitions
             .iter()
-            .map(|d| d.forward().bindings().len())
+            .map(|d| {
+                d.forward()
+                    .bindings()
+                    .len()
+                    .max(d.shadow().map_or(0, |p| p.bindings().len()))
+            })
             .max()
             .unwrap_or(0);
-        let resources = count(mats, 1 + bindings.max(4))?;
+        let resources = count(mats, 1 + (2 * bindings).max(4))?;
         preparation.reserve_buffer(pbr::MaterialUniform::DESC, mats)?;
         preparation.add_requirements(
             GraphRequirements {
-                resources,
+                resources: resources.checked_add(count(max, 2)?).ok_or_else(overflow)?,
                 passes: mats,
                 accesses: count(draws, bindings)?
                     .checked_add(mats)
@@ -165,7 +178,9 @@ impl Scene {
                 bindings: count(mats, 2 * bindings)?,
                 raster_constant_words: count(draws, 32)?,
                 upload_bytes: count(mats, crate::passes::pbr::MATERIAL_BYTES)?,
-                name_bytes: count(resources, 40)?,
+                name_bytes: count(resources, 40)?
+                    .checked_add(count(max, 25)?)
+                    .ok_or_else(overflow)?,
                 ..Default::default()
             },
             WorkingSet {
@@ -174,6 +189,7 @@ impl Scene {
             },
         )?;
         Ok(Self {
+            resources: None,
             recipe,
             preparation,
             defaults,
@@ -185,8 +201,9 @@ impl Scene {
             materials: Vec::with_capacity(mats),
             opaque: Vec::with_capacity(max),
             transparent: Vec::with_capacity(max),
-            casters: Vec::with_capacity(shadow_max),
+            casters: std::array::from_fn(|_| Vec::with_capacity(shadow_max)),
             transforms: Vec::with_capacity(limits.max_transforms),
+            connected: Vec::with_capacity(max),
             order: Vec::with_capacity(max),
             forward: ForwardDraws {
                 opaque: Vec::with_capacity(max),
@@ -211,19 +228,57 @@ impl Scene {
     ) -> Result<PreparedView, GraphError> {
         self.recipe.prepare_view(input, sun, bounds, environment)
     }
-    pub fn add_output(
+    pub fn write_output(
         &self,
         graph: &mut Graph,
         hdr: renderer::graph::ImageHandle,
         exposure: f32,
     ) -> Result<crate::passes::output::OutputImages, GraphError> {
-        self.recipe.add_output(graph, hdr, exposure)
+        self.recipe.write_output(graph, hdr, exposure)
     }
-    pub fn add_scene(
+    pub fn draw_connected_hdr(
         &mut self,
         graph: &mut Graph,
         materials: &Materials,
         frame: Frame<'_>,
+    ) -> Result<SceneImages, GraphError> {
+        self.declare(graph, materials, frame, |recipe, graph, frame, lights| {
+            recipe.draw_hdr(graph, frame, lights)
+        })
+    }
+
+    /// Read coherent Deferred material planes and depth before Forward opaque draws.
+    pub fn draw_connected_hdr_with_gbuffer(
+        &mut self,
+        graph: &mut Graph,
+        materials: &Materials,
+        frame: Frame<'_>,
+        consume: impl FnOnce(&mut Graph, pbr::GBuffer) -> Result<(), GraphError>,
+    ) -> Result<SceneImages, GraphError> {
+        if self.recipe.technique() != Technique::Deferred || !frame.lights.is_empty() {
+            return Err(GraphError::invalid_input(
+                "G-buffer access requires Deferred with no point lights",
+            ));
+        }
+        self.declare(graph, materials, frame, |recipe, graph, frame, _| {
+            let GeometryPipeline::Deferred(recipe) = recipe else {
+                unreachable!()
+            };
+            recipe.add_scene_with_gbuffer(graph, frame, consume)
+        })
+    }
+
+    fn declare(
+        &mut self,
+        graph: &mut Graph,
+        materials: &Materials,
+        frame: Frame<'_>,
+        append: impl FnOnce(
+            &mut GeometryPipeline,
+            &mut Graph,
+            pbr::Frame<'_>,
+            &[PointLight],
+        ) -> Result<SceneImages, GraphError>,
     ) -> Result<SceneImages, GraphError> {
         let Frame {
             view,
@@ -231,17 +286,26 @@ impl Scene {
             draws,
             lights,
             camera,
+            shadow_history,
         } = frame;
+        let render_shadow: [bool; pbr::CASCADE_COUNT] = std::array::from_fn(|i| {
+            self.config.shadows.is_some()
+                && shadow_history.is_none_or(|history| !history.is_reused(i))
+        });
         if draws.len() > self.limits.max_draws {
-            return Err(GraphError::invalid_input(
-                "mixed scene draw capacity exceeded",
+            return Err(GraphError::capacity_error(
+                renderer::graph::GraphCapacityKind::Draws,
+                self.limits.max_draws,
+                Some(draws.len()),
             ));
         }
         self.cache.clear();
         self.materials.clear();
         self.opaque.clear();
         self.transparent.clear();
-        self.casters.clear();
+        for casters in &mut self.casters {
+            casters.clear();
+        }
         self.transforms.clear();
         self.order.clear();
         self.forward.opaque.clear();
@@ -252,18 +316,42 @@ impl Scene {
         for (i, draw) in draws.iter().enumerate() {
             let instance = materials.get(draw.material)?;
             let blend = instance.alpha_mode() == AlphaMode::Blend;
-            if blend {
+            let casts_shadow = draw.casts_shadow
+                && match instance {
+                    MaterialInstance::Pbr(_) => !blend,
+                    MaterialInstance::Custom(m) => m.definition().shadow().is_some(),
+                    MaterialInstance::Unlit(_) => true,
+                };
+            let bounds = draw.world_bounds(instance);
+            let visible = bounds.is_none_or(|b| view.visible(b));
+            let cascades = std::array::from_fn(|i| {
+                render_shadow[i]
+                    && casts_shadow
+                    && bounds.is_none_or(|b| view.cascade_overlaps(i, b) != Some(false))
+            });
+            if !visible && !cascades.contains(&true) {
+                continue;
+            }
+            if blend && visible {
                 let depth = draw.view_depth(view)?;
-                self.order.push((depth, i));
+                self.order.push((depth, i, cascades));
             } else {
-                self.record(graph, view, defaults, draw, instance)?;
+                self.record(graph, view, defaults, draw, instance, visible, cascades)?;
             }
         }
         self.order
             .sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
         for index in 0..self.order.len() {
             let draw = &draws[self.order[index].1];
-            self.record(graph, view, defaults, draw, materials.get(draw.material)?)?;
+            self.record(
+                graph,
+                view,
+                defaults,
+                draw,
+                materials.get(draw.material)?,
+                true,
+                self.order[index].2,
+            )?;
         }
         self.forward.pbr_blends = self.transparent.len();
         let mut frame = pbr::Frame::new(
@@ -271,14 +359,30 @@ impl Scene {
             &self.materials,
             &self.opaque,
             &self.transparent,
-            &self.casters,
+            &[],
             defaults,
         )?;
+        if self.config.shadows.is_some() {
+            frame.shadows = pbr::FrameShadows::Cascades(std::array::from_fn(|i| {
+                let casters = self.casters[i].as_slice();
+                shadow_history.map_or(
+                    pbr::ShadowSource::Render {
+                        target: None,
+                        casters,
+                    },
+                    |h| h.source(i, casters),
+                )
+            }));
+        }
         frame.forward_draws = Some(&self.forward);
         frame.transforms = &self.transforms;
         frame.camera_target = camera;
-        self.recipe.add_scene(graph, frame, lights)
+        append(&mut self.recipe, graph, frame, lights)
     }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "record one classified draw and its view visibility"
+    )]
     fn record(
         &mut self,
         graph: &mut Graph,
@@ -286,6 +390,8 @@ impl Scene {
         defaults: DefaultViews,
         draw: &Draw,
         instance: &MaterialInstance,
+        visible: bool,
+        cascades: [bool; pbr::CASCADE_COUNT],
     ) -> Result<(), GraphError> {
         let expected = match instance {
             MaterialInstance::Pbr(_) => crate::passes::pbr::VERTEX_BYTES as u32,
@@ -310,8 +416,10 @@ impl Scene {
             };
             let command = if let Some(transform) = draw.transform {
                 if self.transforms.len() >= self.limits.max_transforms {
-                    return Err(GraphError::invalid_input(
-                        "mixed scene transform capacity exceeded",
+                    return Err(GraphError::capacity_error(
+                        renderer::graph::GraphCapacityKind::Draws,
+                        self.limits.max_transforms,
+                        Some(self.transforms.len() + 1),
                     ));
                 }
                 let index = self.transforms.len() as u32;
@@ -321,18 +429,19 @@ impl Scene {
                 pbr::Draw::WorldSpaceIndexed(geometry)
             };
             if blend {
-                self.transparent.push(command)
+                if visible {
+                    self.transparent.push(command);
+                }
             } else {
-                self.opaque.push(command);
-                if draw.casts_shadow && self.config.shadows.is_some() {
-                    if self.casters.len() + self.forward.shadow[0].len()
-                        >= self.limits.max_casters_per_cascade
-                    {
-                        return Err(GraphError::invalid_input(
-                            "mixed scene shadow capacity exceeded",
-                        ));
+                if visible {
+                    self.opaque.push(command);
+                }
+                for (i, enabled) in cascades.into_iter().enumerate() {
+                    if !enabled {
+                        continue;
                     }
-                    self.casters.push(command)
+                    self.check_caster_capacity(i)?;
+                    self.casters[i].push(command);
                 }
             }
             return Ok(());
@@ -352,8 +461,9 @@ impl Scene {
             },
         };
         let unlit_shadow = ManagedRasterProgram::depth_only();
+        let unlit = self.unlit.clone();
         let (program, shadow) = match instance {
-            MaterialInstance::Unlit(_) => (&self.unlit, Some(&unlit_shadow)),
+            MaterialInstance::Unlit(_) => (&unlit, Some(&unlit_shadow)),
             MaterialInstance::Custom(p) => (p.definition().forward(), p.definition().shadow()),
             MaterialInstance::Pbr(_) => unreachable!(),
         };
@@ -368,20 +478,20 @@ impl Scene {
         if draw.casts_shadow
             && let (Some(program), Some(matrices)) = (shadow, view.shadow_matrices())
         {
-            if self.casters.len() + self.forward.shadow[0].len()
-                >= self.limits.max_casters_per_cascade
-            {
-                return Err(GraphError::invalid_input(
-                    "mixed scene shadow capacity exceeded",
-                ));
-            }
-            for (dst, matrix) in self.forward.shadow.iter_mut().zip(matrices) {
-                dst.push(command(
+            for (i, matrix) in matrices.iter().enumerate() {
+                if !cascades[i] {
+                    continue;
+                }
+                self.check_caster_capacity(i)?;
+                self.forward.shadow[i].push(command(
                     program,
                     resolved.shadow,
                     constants(product(*matrix, model))?,
                 ))
             }
+        }
+        if !visible {
+            return Ok(());
         }
         let cmd = command(program, resolved.color, constants(clip)?);
         if blend {
@@ -392,6 +502,18 @@ impl Scene {
 
         Ok(())
     }
+    fn check_caster_capacity(&self, cascade: usize) -> Result<(), GraphError> {
+        let required = self.casters[cascade].len() + self.forward.shadow[cascade].len() + 1;
+        if required > self.limits.max_casters_per_cascade {
+            return Err(GraphError::capacity_error(
+                renderer::graph::GraphCapacityKind::Draws,
+                self.limits.max_casters_per_cascade,
+                Some(required),
+            ));
+        }
+        Ok(())
+    }
+
     fn resolve(
         &mut self,
         graph: &mut Graph,
@@ -400,8 +522,10 @@ impl Scene {
         instance: &MaterialInstance,
     ) -> Result<Resolved, GraphError> {
         if self.cache.len() == self.limits.max_materials && !self.cache.contains_key(&handle) {
-            return Err(GraphError::invalid_input(
-                "mixed scene material capacity exceeded",
+            return Err(GraphError::capacity_error(
+                renderer::graph::GraphCapacityKind::Bindings,
+                self.limits.max_materials,
+                Some(self.cache.len() + 1),
             ));
         }
         let resolved = match self.cache.entry(handle) {

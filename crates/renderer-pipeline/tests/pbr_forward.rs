@@ -1,3 +1,4 @@
+use renderer_pipeline::pipeline;
 use std::num::NonZeroUsize;
 
 use renderer::capacity::{GraphRequirements, Preparation, ResourceClass};
@@ -268,7 +269,7 @@ fn standard_techniques_share_output_and_reject_unsupported_lights() {
         pbr::Technique::ForwardPlus,
         pbr::Technique::Deferred,
     ] {
-        let mut prepared = pbr::Prepared::new(technique, config(), limits()).unwrap();
+        let mut prepared = pipeline::GeometryPipeline::new(technique, config(), limits()).unwrap();
         let mut graph = pool.begin().unwrap();
         let (view, material, draw) = inputs(&recipe(), &mut graph);
         let materials = [material.with_sampler(SamplerDescriptor::NearestClamp)];
@@ -278,9 +279,7 @@ fn standard_techniques_share_output_and_reject_unsupported_lights() {
         let supported_lights = if technique.supports_point_lights() {
             lights.as_slice()
         } else {
-            let error = prepared
-                .add_scene(&mut graph, frame(), &lights)
-                .unwrap_err();
+            let error = prepared.draw_hdr(&mut graph, frame(), &lights).unwrap_err();
             assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
             &[]
         };

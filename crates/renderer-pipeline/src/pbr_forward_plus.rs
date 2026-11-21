@@ -38,7 +38,7 @@ const TILE_MASKS: &str = "tile light masks";
 
 /// Prepared Forward+ programs, frame capacities and PBR scratch.
 pub struct Prepared {
-    common: PreparedScene,
+    pub(crate) common: PreparedScene,
     mask_desc: ImageDesc,
     fallback_programs: ScenePrograms,
 }
@@ -190,14 +190,7 @@ impl Prepared {
         let scene = self.add_scene(graph, frame, lights)?;
         let output =
             output.append_validated(graph, graph.image_view(scene.hdr, 0, 0)?, exposure)?;
-        Ok(FrameImages {
-            hdr: scene.hdr,
-            depth: scene.depth,
-            sdr: output.sdr,
-            shadows: scene.shadows,
-            camera: scene.camera,
-            gbuffer: scene.gbuffer,
-        })
+        Ok(scene.with_sdr(output.sdr))
     }
 }
 

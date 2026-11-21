@@ -31,7 +31,7 @@ pub use passes::GBuffer;
 
 /// Prepared Deferred programs, frame capacities and PBR scratch.
 pub struct Prepared {
-    common: PreparedScene,
+    pub(crate) common: PreparedScene,
 }
 
 /// Prepare a 1× Deferred scene with a three-plane RGBA16F G-buffer and D32
@@ -82,6 +82,17 @@ impl Prepared {
         graph: &mut Graph,
         frame: Frame<'_>,
     ) -> Result<SceneImages, GraphError> {
+        self.add_scene_with_gbuffer(graph, frame, |_, _| Ok(()))
+    }
+
+    /// Append a G-buffer consumer after lighting and before Forward composition.
+    /// A caller that needs geometry depth later can copy it in this callback.
+    pub fn add_scene_with_gbuffer(
+        &mut self,
+        graph: &mut Graph,
+        frame: Frame<'_>,
+        consume: impl FnOnce(&mut Graph, GBuffer) -> Result<(), GraphError>,
+    ) -> Result<SceneImages, GraphError> {
         let config = self.common.config();
         let [width, height] = config.extent;
         let view_projection = *frame.view.matrix();
@@ -107,6 +118,7 @@ impl Prepared {
                     },
                     |pass, _| scene.draw_pbr_opaque(pass),
                 )?;
+                consume(graph, views)?;
                 if scene.has_transparency || scene.has_forward_opaque() {
                     graph.raster(
                         if scene.has_forward_opaque() {
@@ -133,7 +145,7 @@ impl Prepared {
                         },
                     )?;
                 }
-                gbuffer = Some(views);
+                gbuffer = (!scene.has_forward_opaque()).then_some(views);
                 Ok((hdr, Some(depth)))
             },
         )?;
@@ -161,13 +173,6 @@ impl Prepared {
         let scene = self.add_scene(graph, frame)?;
         let output =
             output.append_validated(graph, graph.image_view(scene.hdr, 0, 0)?, exposure)?;
-        Ok(FrameImages {
-            hdr: scene.hdr,
-            depth: scene.depth,
-            sdr: output.sdr,
-            shadows: scene.shadows,
-            camera: scene.camera,
-            gbuffer: scene.gbuffer,
-        })
+        Ok(scene.with_sdr(output.sdr))
     }
 }

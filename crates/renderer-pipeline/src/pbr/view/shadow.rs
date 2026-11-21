@@ -38,6 +38,11 @@ impl Bounds {
         self.max
     }
 
+    /// Midpoint of the finite AABB, including bounds near the limits of f32.
+    pub fn center(self) -> [f32; 3] {
+        std::array::from_fn(|i| self.min[i].midpoint(self.max[i]))
+    }
+
     fn corners(self) -> [[f64; 3]; 8] {
         std::array::from_fn(|index| {
             std::array::from_fn(|axis| {

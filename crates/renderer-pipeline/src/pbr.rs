@@ -7,13 +7,13 @@ mod history;
 pub(crate) mod instances;
 mod material;
 pub(crate) mod raster;
-mod recipe;
 pub(crate) mod scene;
 mod unshadowed;
 mod vertex;
 mod view;
 
 pub use crate::material::AlphaMode;
+pub use crate::pipeline::Technique;
 pub use culling::{CascadeClip, Frustum, ViewCulling};
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub use defaults::DefaultResourceError;
@@ -24,7 +24,6 @@ pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::{MAX_TRANSFORMS, Transform};
 pub use material::{MaterialFactors, MaterialUniform, ResidentMaterialUniform};
-pub use recipe::{Prepared, Technique};
 pub use unshadowed::UnshadowedView;
 pub use vertex::PbrVertex;
 pub use view::{Bounds, Projection, ShadowSettings, Sun, ViewInput};
@@ -68,6 +67,20 @@ pub struct Config {
     pub output: Option<SdrOutput>,
     pub samples: SampleCount,
     pub camera_storage: CameraStorage,
+}
+
+impl Config {
+    /// Standard single-sample view for a display target.
+    pub fn display(extent: [u32; 2]) -> Self {
+        Self {
+            extent,
+            clear_color: [0., 0., 0., 1.],
+            shadows: None,
+            output: Some(SdrOutput::display(false)),
+            samples: SampleCount::X1,
+            camera_storage: CameraStorage::Transient,
+        }
+    }
 }
 
 /// Upper bounds for frame construction. The scene draw count combines opaque
@@ -211,7 +224,7 @@ pub enum FrameShadows<'a> {
 }
 
 pub struct Frame<'a> {
-    pub(crate) forward_draws: Option<&'a crate::scene::ForwardDraws>,
+    pub(crate) forward_draws: Option<&'a crate::pipeline::ForwardDraws>,
     pub view: &'a PreparedView,
     pub materials: &'a [GraphMaterial],
     /// Draws with Opaque or Mask materials in submission order.
@@ -322,7 +335,7 @@ pub struct SceneImages {
     pub depth: Option<ImageHandle>,
     pub shadows: Option<[ImageHandle; CASCADE_COUNT]>,
     pub camera: BufferHandle,
-    /// Material planes when using the Deferred technique.
+    /// Coherent Deferred planes and geometry depth when no later Forward opaque pass writes depth.
     pub gbuffer: Option<GBuffer>,
 }
 
@@ -334,6 +347,19 @@ pub struct FrameImages {
     pub sdr: crate::passes::output::SdrImage,
     pub shadows: Option<[ImageHandle; CASCADE_COUNT]>,
     pub camera: BufferHandle,
-    /// Material planes when using the Deferred technique.
+    /// Coherent Deferred planes and geometry depth when no later Forward opaque pass writes depth.
     pub gbuffer: Option<GBuffer>,
+}
+
+impl SceneImages {
+    pub(crate) fn with_sdr(self, sdr: crate::passes::output::SdrImage) -> FrameImages {
+        FrameImages {
+            hdr: self.hdr,
+            depth: self.depth,
+            shadows: self.shadows,
+            camera: self.camera,
+            gbuffer: self.gbuffer,
+            sdr,
+        }
+    }
 }
