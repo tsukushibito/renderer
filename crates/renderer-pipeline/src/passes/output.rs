@@ -1,5 +1,8 @@
 //! Tone mapping and SDR output passes and recipe.
 
+#[allow(unsafe_code)]
+mod programs;
+
 use renderer::ImageFormat;
 use renderer::capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet};
 use renderer::graph::{
@@ -62,12 +65,8 @@ impl SdrOutput {
 
     /// The 1× pipeline request used by [`write_sdr`] for this selection.
     pub const fn pipeline(self) -> RasterPipelineRequest {
-        let program = match self.encoding {
-            SdrEncoding::Linear => ManagedRasterProgram::sdr_linear(self.fxaa),
-            SdrEncoding::Srgb => ManagedRasterProgram::sdr_srgb(self.fxaa),
-        };
         RasterPipelineRequest {
-            program,
+            program: programs::sdr(self),
             sample_count: SampleCount::X1,
         }
     }
@@ -76,7 +75,7 @@ impl SdrOutput {
 /// The 1× pipeline request used by [`tone_map_neutral`] for any exposure.
 pub const fn tone_map_neutral_pipeline() -> RasterPipelineRequest {
     RasterPipelineRequest {
-        program: ManagedRasterProgram::tone_map_neutral(),
+        program: programs::tone_map_neutral(),
         sample_count: SampleCount::X1,
     }
 }

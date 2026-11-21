@@ -977,7 +977,8 @@ export、readback、compile、submit、presentと、その結果の所有は呼�
 
 両出力パスは`RasterPass::draw_fullscreen`を使う。頂点入力のないtrusted Programが3頂点を生成し、Graphは頂点・インデックスbufferへの依存を追加しない。
 標準出力とDeferredの照明パスは、`renderer::program::fullscreen_triangle_shaders`を通じて同じ管理下の頂点shaderを使う。
-fragment shaderのABIとアクセス範囲の保証は、それぞれのProgramのtrusted取込で成立する。
+標準出力のfragment shader、ABI、露出・FXAA・SDRの選択は `renderer-pipeline::passes::output` が所有する。
+独自の出力方式も同じ頂点shaderと `draw_fullscreen` を利用し、自分のProgramのtrusted取込でABIとアクセス範囲を保証する。
 `tone_map_neutral_pipeline()`と`SdrOutput::pipeline()`を使って実行前に対応するProgramを準備する。
 ウィンドウには`SdrEncoding::Linear`で書いた画像を渡し、PresenterがsRGB変換を行う。オフスクリーンのSDRデータには`SdrEncoding::Srgb`を選ぶ。
 Bloomなど露出前の効果はscene-linear画像に接続し、トーンマッピングとSDR変換の間にも任意のGraph処理を組み込める。

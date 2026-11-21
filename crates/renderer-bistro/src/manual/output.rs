@@ -6,28 +6,8 @@ use renderer::graph::{
 };
 use renderer::program::{ManagedRasterProgram, SamplerDescriptor};
 
-#[derive(Clone, Copy, Debug)]
-pub(super) enum SdrEncoding {
-    // The Presenter encodes to sRGB when writing the swapchain image.
-    Linear,
-    // Capture stores sRGB bytes directly.
-    Srgb,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct SdrOutput {
-    pub encoding: SdrEncoding,
-    pub fxaa: bool,
-}
-
-impl SdrOutput {
-    pub(super) fn program(self) -> ManagedRasterProgram {
-        match self.encoding {
-            SdrEncoding::Linear => ManagedRasterProgram::sdr_linear(self.fxaa),
-            SdrEncoding::Srgb => ManagedRasterProgram::sdr_srgb(self.fxaa),
-        }
-    }
-}
+use renderer_pipeline::passes::output::tone_map_neutral_pipeline;
+pub(super) use renderer_pipeline::passes::output::{SdrEncoding, SdrOutput};
 
 pub(super) fn tone_map_neutral(
     graph: &mut Graph,
@@ -40,7 +20,7 @@ pub(super) fn tone_map_neutral(
         "fixed exposure and PBR Neutral",
         scene_hdr,
         display_linear,
-        ManagedRasterProgram::tone_map_neutral(),
+        tone_map_neutral_pipeline().program,
         SamplerDescriptor::NearestClamp,
         RasterConstants::new(&[EXPOSURE.to_bits()])?,
     )
@@ -63,7 +43,7 @@ pub(super) fn write_sdr(
         name,
         display_linear,
         target,
-        output.program(),
+        output.pipeline().program,
         sampler,
         RasterConstants::default(),
     )

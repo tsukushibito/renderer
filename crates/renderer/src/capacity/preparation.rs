@@ -438,7 +438,7 @@ mod tests {
                 count: 1,
             },
         ];
-        let raster = [ManagedRasterProgram::sdr_linear(false).into()];
+        let raster = [ManagedRasterProgram::mesh().into()];
         let bounds = GraphRequirements {
             passes: 2,
             ..GraphRequirements::default()
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(preparation.working_set().raster.len(), 1);
         assert_eq!(preparation.graph_requirements(), bounds);
 
-        let unread_program = [ManagedRasterProgram::sdr_srgb(false).into()];
+        let unread_program = [ManagedRasterProgram::mesh_hdr().into()];
         assert!(
             preparation
                 .add_requirements(
