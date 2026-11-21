@@ -6,7 +6,7 @@
 mod error;
 mod frames;
 mod id;
-#[cfg(test)]
+#[cfg(all(test, any(feature = "vulkan", all(windows, feature = "d3d12"))))]
 pub(crate) mod native_image_tests;
 mod preparation;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
