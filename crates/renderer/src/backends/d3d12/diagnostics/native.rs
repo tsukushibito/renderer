@@ -124,10 +124,12 @@ unsafe extern "system" fn receive_message(
 pub(in super::super) struct Session {
     monitor: D3D12ValidationMonitor,
     global: Option<IDXGIInfoQueue>,
+    producer: DXGI_DEBUG_ID,
     global_start: u64,
     global_denied: u64,
     global_discarded: u64,
     token: Option<usize>,
+    host_callback: Option<(ID3D12InfoQueue1, u32)>,
     enabled: bool,
 }
 impl Session {
@@ -135,15 +137,26 @@ impl Session {
         mode: D3D12ValidationMode,
         monitor: D3D12ValidationMonitor,
         first: bool,
+        host_device: bool,
     ) -> Result<Self, D3D12RuntimeError> {
+        // The adopted Device callback captures D3D12 messages with IGNORE_FILTERS.
+        // Its host-owned INFO storage may legitimately filter D3D12 messages.
+        // Read DXGI's own producer separately, retaining its complete diagnostics.
+        let producer = if host_device {
+            DXGI_DEBUG_DXGI
+        } else {
+            DXGI_DEBUG_ALL
+        };
         if mode == D3D12ValidationMode::Disabled {
             return Ok(Self {
                 monitor,
                 global: None,
+                producer,
                 global_start: 0,
                 global_denied: 0,
                 global_discarded: 0,
                 token: None,
+                host_callback: None,
                 enabled: false,
             });
         }
@@ -175,24 +188,27 @@ impl Session {
         // a later runtime reports only diagnostics emitted during its own life.
         let (global_start, global_denied, global_discarded) = unsafe {
             (
-                global.GetNumStoredMessages(DXGI_DEBUG_ALL),
-                global.GetNumMessagesDeniedByStorageFilter(DXGI_DEBUG_ALL),
-                global.GetNumMessagesDiscardedByMessageCountLimit(DXGI_DEBUG_ALL),
+                global.GetNumStoredMessages(producer),
+                global.GetNumMessagesDeniedByStorageFilter(producer),
+                global.GetNumMessagesDiscardedByMessageCountLimit(producer),
             )
         };
         Ok(Self {
             monitor,
             global: Some(global),
+            producer,
             global_start,
             global_denied,
             global_discarded,
             token: None,
+            host_callback: None,
             enabled: true,
         })
     }
     pub(in super::super) fn attach(
         &mut self,
         device: &ID3D12Device,
+        host_owned: bool,
     ) -> Result<(), D3D12RuntimeError> {
         if !self.enabled {
             return Ok(());
@@ -211,7 +227,7 @@ impl Session {
                 error,
             )
         })?;
-        inspect_filter(&info)?;
+        inspect_filter(&info, host_owned)?;
         let mut settings = D3D12_DEBUG_DEVICE_GPU_BASED_VALIDATION_SETTINGS::default();
         // SAFETY: Documented matching parameter enum, output type and byte size.
         unsafe {
@@ -268,14 +284,20 @@ impl Session {
             ));
         }
         self.token = Some(token);
+        if host_owned {
+            // A host Device usually outlives this session. Keep enough state
+            // to unregister on both successful teardown and partial failure.
+            self.host_callback = Some((info.clone(), cookie));
+        }
         // Register before scanning startup storage so an internal native thread
         // cannot emit an unobserved message between the two. The overlap may
         // duplicate a diagnostic; strict zero-warning acceptance is unaffected.
         // Never clear messages to obtain a clean result.
         let mut gbv = false;
-        // SAFETY: Live unfiltered queue and bounded, aligned temporary storage.
+        // SAFETY: Read entries accessible through the live queue's retrieval
+        // filter with bounded, aligned temporary storage.
         unsafe {
-            for index in 0..info.GetNumStoredMessages() {
+            for index in 0..info.GetNumStoredMessagesAllowedByRetrievalFilter() {
                 let mut size = 0;
                 info.GetMessage(index, None, &mut size)
                     .ok()
@@ -295,11 +317,13 @@ impl Session {
                 if message.ID == D3D12_MESSAGE_ID_CREATEDEVICE_DEBUG_LAYER_STARTUP_OPTIONS {
                     gbv |= text.contains("GPU-Based Validation is enabled (disabled by default).");
                 }
-                self.monitor
-                    .state
-                    .push("D3D12", message.Severity, message.ID, || text.into_owned());
+                if !host_owned {
+                    self.monitor
+                        .state
+                        .push("D3D12", message.Severity, message.ID, || text.into_owned());
+                }
             }
-            if info.GetNumMessagesDiscardedByMessageCountLimit() != 0 {
+            if !host_owned && info.GetNumMessagesDiscardedByMessageCountLimit() != 0 {
                 return Err(D3D12RuntimeError::unsupported(
                     "D3D12 diagnostic storage discarded startup messages",
                 ));
@@ -331,7 +355,7 @@ fn check_size<T>(size: usize) -> Result<(), D3D12RuntimeError> {
     Ok(())
 }
 
-fn inspect_filter(info: &ID3D12InfoQueue1) -> Result<(), D3D12RuntimeError> {
+fn inspect_filter(info: &ID3D12InfoQueue1, host_owned: bool) -> Result<(), D3D12RuntimeError> {
     // SAFETY: Live queue; pointer lists returned by GetStorageFilter remain
     // within the aligned owned storage until inspected. No lists are retained.
     unsafe {
@@ -373,8 +397,10 @@ fn inspect_filter(info: &ID3D12InfoQueue1) -> Result<(), D3D12RuntimeError> {
                 ));
             }
         }
-        info.ClearStorageFilter();
-        info.ClearRetrievalFilter();
+        if !host_owned {
+            info.ClearStorageFilter();
+            info.ClearRetrievalFilter();
+        }
     }
     Ok(())
 }
@@ -390,19 +416,19 @@ impl Drop for Session {
             // observes destruction diagnostics without keeping the Device alive.
             let outcome = unsafe {
                 (|| -> Result<(), D3D12RuntimeError> {
-                    if global.GetNumMessagesDeniedByStorageFilter(DXGI_DEBUG_ALL)
+                    if global.GetNumMessagesDeniedByStorageFilter(self.producer)
                         != self.global_denied
-                        || global.GetNumMessagesDiscardedByMessageCountLimit(DXGI_DEBUG_ALL)
+                        || global.GetNumMessagesDiscardedByMessageCountLimit(self.producer)
                             != self.global_discarded
                     {
                         return Err(D3D12RuntimeError::unsupported(
                             "DXGI diagnostic messages were filtered or discarded",
                         ));
                     }
-                    for index in self.global_start..global.GetNumStoredMessages(DXGI_DEBUG_ALL) {
+                    for index in self.global_start..global.GetNumStoredMessages(self.producer) {
                         let mut size = 0;
                         global
-                            .GetMessage(DXGI_DEBUG_ALL, index, None, &mut size)
+                            .GetMessage(self.producer, index, None, &mut size)
                             .ok()
                             .map_err(|error| {
                                 D3D12RuntimeError::native(
@@ -415,7 +441,7 @@ impl Drop for Session {
                         let mut storage = vec![0usize; size.div_ceil(size_of::<usize>())];
                         let pointer = storage.as_mut_ptr().cast::<DXGI_INFO_QUEUE_MESSAGE>();
                         global
-                            .GetMessage(DXGI_DEBUG_ALL, index, Some(pointer), &mut size)
+                            .GetMessage(self.producer, index, Some(pointer), &mut size)
                             .ok()
                             .map_err(|error| {
                                 D3D12RuntimeError::native(
@@ -443,6 +469,12 @@ impl Drop for Session {
                     .push("DXGI", D3D12_MESSAGE_SEVERITY_ERROR, 0, || {
                         error.to_string()
                     });
+            }
+        }
+        if let Some((queue, cookie)) = self.host_callback.take() {
+            // SAFETY: This cookie is from our successful registration on queue.
+            if unsafe { queue.UnregisterMessageCallback(cookie) }.is_err() {
+                self.monitor.state.fail();
             }
         }
         if let Some(token) = self.token.take() {

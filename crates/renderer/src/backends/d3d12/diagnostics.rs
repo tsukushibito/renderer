@@ -61,6 +61,7 @@ impl Session {
         mode: D3D12ValidationMode,
         _monitor: D3D12ValidationMonitor,
         _first: bool,
+        _host_device: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         if mode == D3D12ValidationMode::Required {
             return Err(D3D12RuntimeError::unsupported(
@@ -69,7 +70,11 @@ impl Session {
         }
         Ok(Self)
     }
-    pub(super) fn attach(&mut self, _device: &ID3D12Device) -> Result<(), D3D12RuntimeError> {
+    pub(super) fn attach(
+        &mut self,
+        _device: &ID3D12Device,
+        _host_owned: bool,
+    ) -> Result<(), D3D12RuntimeError> {
         Ok(())
     }
 }
