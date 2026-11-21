@@ -9,7 +9,7 @@
 use crate::shared::memory;
 #[cfg(feature = "tracy")]
 use crate::shared::trace;
-use crate::shared::{asset, camera, deferred, ibl, instancing, program, shadow};
+use crate::shared::{asset, camera, deferred, ibl, instancing, lighting, program, shadow};
 #[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
 use renderer_example_support::clock;
 #[cfg(all(
@@ -38,7 +38,6 @@ mod run;
 ))]
 mod window;
 
-mod forward_lighting;
 mod output;
 use renderer_pipeline::passes::bloom;
 

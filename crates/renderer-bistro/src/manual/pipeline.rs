@@ -4,7 +4,7 @@ use super::{
     Error, Options, PipelineMode, SubmissionMode,
     asset::Scene,
     camera::{Camera, Frustum},
-    deferred, forward_lighting, ibl, instancing,
+    deferred, ibl, instancing, lighting,
     output::{tone_map_neutral, write_sdr},
     program::{self, forward_plus},
     shadow,
@@ -40,6 +40,7 @@ pub(super) struct Budget {
     pub ranges: usize,
     pipeline: PipelineMode,
     fixture: bool,
+    extent: [u32; 2],
     packed: Option<Arc<indirect::Layout>>,
     indirect: bool,
 }
@@ -67,10 +68,9 @@ impl Budget {
     pub fn frame_buffers(options: &Options) -> impl Iterator<Item = (u64, usize)> {
         let bytes = match options.pipeline {
             PipelineMode::Deferred => Some(program::deferred::DEFERRED_RECONSTRUCTION_BYTES as u64),
-            PipelineMode::ForwardPlus | PipelineMode::ForwardReference => {
-                Some(forward_plus::LIGHT_BUFFER_BYTES)
+            PipelineMode::ForwardPlus | PipelineMode::ForwardReference | PipelineMode::Forward => {
+                None
             }
-            PipelineMode::Forward => None,
         };
         bytes.map(|size| (size, options.inflight)).into_iter()
     }
@@ -140,8 +140,12 @@ impl Budget {
         };
         let hdr = ImageDesc::rgba16_float(options.width, options.height);
         add(hdr, options.inflight * 2);
+        if options.pipeline.uses_local_lights() {
+            add(lighting::layout().image_desc(), options.inflight);
+        }
         if options.pipeline == PipelineMode::ForwardPlus {
-            let desc = forward_plus::tile_mask_desc(options.width, options.height)
+            let desc = lighting::layout()
+                .tile_mask_desc(options.width, options.height)
                 .expect("Forward+ extent validated at preparation");
             add(desc, options.inflight);
         }
@@ -364,13 +368,15 @@ impl Budget {
             name_bytes: resources * 32 + 2048,
             upload_bytes: program::CAMERA_BYTES
                 + deferred * program::deferred::DEFERRED_RECONSTRUCTION_BYTES
-                + local_lights * forward_plus::LIGHT_BUFFER_BYTES as usize,
+                + local_lights * lighting::layout().byte_len(),
             edges: accesses * 4,
             segments: accesses * 2,
             readers: accesses * 4,
         };
         // Reserve the conservative D3D12 row/placement-aligned copy footprint,
         // not merely packed asset bytes. Vulkan can use the same bounded budget.
+        let frame_upload_bytes = graph.upload_bytes
+            + usize::from(options.pipeline.uses_local_lights()) * lighting::upload_padding();
         let upload_bytes = scene
             .images
             .iter()
@@ -403,17 +409,10 @@ impl Budget {
                     .max()
                     .unwrap_or(0),
             )
-            .max(if tiled_lights == 0 {
-                max_buffer_bytes as usize
-            } else {
-                // The tile-list class is large, but its contents are written by
-                // compute. Geometry streams above still size cold CPU uploads.
-                forward_plus::LIGHT_BUFFER_BYTES as usize
-            })
+            .max(max_buffer_bytes as usize)
+            .max(frame_upload_bytes)
             .max(packed.as_ref().filter(|_| indirect).map_or(0, |layout| {
-                layout.template_upload_bytes()
-                    + program::CAMERA_BYTES
-                    + local_lights * forward_plus::LIGHT_BUFFER_BYTES as usize
+                layout.template_upload_bytes() + frame_upload_bytes
             }))
             .max(4096)
             .checked_add(4096)
@@ -453,6 +452,7 @@ impl Budget {
             ranges: resources * (options.inflight + 3) + 32,
             pipeline: options.pipeline,
             fixture: options.fixture,
+            extent: [options.width, options.height],
             packed,
             indirect,
         })
@@ -492,7 +492,7 @@ pub(super) struct Resident {
     primitive_bounds: Vec<shadow::Bounds>,
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
-    local_lights: Option<forward_lighting::LightBytes>,
+    local_lights: Option<lighting::LightTable>,
     packed: Option<indirect::Resident>,
     // Only small general Uniform uploads retain byte provenance. Geometry uses
     // typed immutable bounds and releases all upload CPU streams before frames.
@@ -583,6 +583,18 @@ pub(super) fn upload_buffer(
 }
 
 impl Resident {
+    #[cfg(all(windows, feature = "presentation"))]
+    pub fn resize_lights(&mut self, options: &Options) -> Result<(), Error> {
+        if self.local_lights.is_some() {
+            self.local_lights = Some(lighting::LightTable::new(
+                options.fixture,
+                [options.width, options.height],
+                options.pipeline == PipelineMode::ForwardPlus,
+            )?);
+        }
+        Ok(())
+    }
+
     pub fn instance_placements(
         &self,
         scene: &Scene,
@@ -743,7 +755,13 @@ impl Resident {
         let local_lights = budget
             .pipeline
             .uses_local_lights()
-            .then(|| forward_lighting::preset(budget.fixture))
+            .then(|| {
+                lighting::LightTable::new(
+                    budget.fixture,
+                    budget.extent,
+                    budget.pipeline == PipelineMode::ForwardPlus,
+                )
+            })
             .transpose()?;
         let mut images = Vec::with_capacity(scene.images.len());
         for (index, image) in scene.images.iter().enumerate() {
@@ -1071,14 +1089,8 @@ pub(super) fn build(
         uniform
     };
     let mut local_light_bindings = [None; 2];
-    if let Some(preset) = &resident.local_lights {
-        let (lights, tiles) = forward_lighting::append(
-            &mut graph,
-            [options.width, options.height],
-            uniform,
-            preset,
-            options.pipeline == PipelineMode::ForwardPlus,
-        )?;
+    if let Some(table) = &resident.local_lights {
+        let (lights, tiles) = table.append(&mut graph, uniform)?;
         for (slot, binding) in local_light_bindings
             .iter_mut()
             .zip(forward_plus::raster_bindings(lights, tiles))
@@ -1464,6 +1476,7 @@ pub(super) fn build(
         deferred::append(
             &mut graph,
             deferred::Inputs {
+                point_lights: None,
                 hdr: color_view,
                 depth: depth_view,
                 clear: scene_clear,

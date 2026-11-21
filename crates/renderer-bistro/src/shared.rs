@@ -12,6 +12,7 @@ pub(crate) mod camera;
 pub(crate) mod deferred;
 pub(crate) mod ibl;
 pub(crate) mod instancing;
+pub(crate) mod lighting;
 pub(crate) mod memory;
 pub(crate) mod program;
 pub(crate) mod shadow;
