@@ -61,6 +61,7 @@ impl Session {
         mode: D3D12ValidationMode,
         _monitor: D3D12ValidationMonitor,
         _first: bool,
+        _host_device: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         if mode == D3D12ValidationMode::Required {
             return Err(D3D12RuntimeError::unsupported(

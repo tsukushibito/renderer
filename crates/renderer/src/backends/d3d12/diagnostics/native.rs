@@ -124,6 +124,7 @@ unsafe extern "system" fn receive_message(
 pub(in super::super) struct Session {
     monitor: D3D12ValidationMonitor,
     global: Option<IDXGIInfoQueue>,
+    producer: DXGI_DEBUG_ID,
     global_start: u64,
     global_denied: u64,
     global_discarded: u64,
@@ -136,11 +137,21 @@ impl Session {
         mode: D3D12ValidationMode,
         monitor: D3D12ValidationMonitor,
         first: bool,
+        host_device: bool,
     ) -> Result<Self, D3D12RuntimeError> {
+        // The adopted Device callback captures D3D12 messages with IGNORE_FILTERS.
+        // Its host-owned INFO storage may legitimately filter D3D12 messages.
+        // Read DXGI's own producer separately, retaining its complete diagnostics.
+        let producer = if host_device {
+            DXGI_DEBUG_DXGI
+        } else {
+            DXGI_DEBUG_ALL
+        };
         if mode == D3D12ValidationMode::Disabled {
             return Ok(Self {
                 monitor,
                 global: None,
+                producer,
                 global_start: 0,
                 global_denied: 0,
                 global_discarded: 0,
@@ -177,14 +188,15 @@ impl Session {
         // a later runtime reports only diagnostics emitted during its own life.
         let (global_start, global_denied, global_discarded) = unsafe {
             (
-                global.GetNumStoredMessages(DXGI_DEBUG_ALL),
-                global.GetNumMessagesDeniedByStorageFilter(DXGI_DEBUG_ALL),
-                global.GetNumMessagesDiscardedByMessageCountLimit(DXGI_DEBUG_ALL),
+                global.GetNumStoredMessages(producer),
+                global.GetNumMessagesDeniedByStorageFilter(producer),
+                global.GetNumMessagesDiscardedByMessageCountLimit(producer),
             )
         };
         Ok(Self {
             monitor,
             global: Some(global),
+            producer,
             global_start,
             global_denied,
             global_discarded,
@@ -282,9 +294,10 @@ impl Session {
         // duplicate a diagnostic; strict zero-warning acceptance is unaffected.
         // Never clear messages to obtain a clean result.
         let mut gbv = false;
-        // SAFETY: Live unfiltered queue and bounded, aligned temporary storage.
+        // SAFETY: Read entries accessible through the live queue's retrieval
+        // filter with bounded, aligned temporary storage.
         unsafe {
-            for index in 0..info.GetNumStoredMessages() {
+            for index in 0..info.GetNumStoredMessagesAllowedByRetrievalFilter() {
                 let mut size = 0;
                 info.GetMessage(index, None, &mut size)
                     .ok()
@@ -310,7 +323,7 @@ impl Session {
                         .push("D3D12", message.Severity, message.ID, || text.into_owned());
                 }
             }
-            if info.GetNumMessagesDiscardedByMessageCountLimit() != 0 {
+            if !host_owned && info.GetNumMessagesDiscardedByMessageCountLimit() != 0 {
                 return Err(D3D12RuntimeError::unsupported(
                     "D3D12 diagnostic storage discarded startup messages",
                 ));
@@ -403,19 +416,19 @@ impl Drop for Session {
             // observes destruction diagnostics without keeping the Device alive.
             let outcome = unsafe {
                 (|| -> Result<(), D3D12RuntimeError> {
-                    if global.GetNumMessagesDeniedByStorageFilter(DXGI_DEBUG_ALL)
+                    if global.GetNumMessagesDeniedByStorageFilter(self.producer)
                         != self.global_denied
-                        || global.GetNumMessagesDiscardedByMessageCountLimit(DXGI_DEBUG_ALL)
+                        || global.GetNumMessagesDiscardedByMessageCountLimit(self.producer)
                             != self.global_discarded
                     {
                         return Err(D3D12RuntimeError::unsupported(
                             "DXGI diagnostic messages were filtered or discarded",
                         ));
                     }
-                    for index in self.global_start..global.GetNumStoredMessages(DXGI_DEBUG_ALL) {
+                    for index in self.global_start..global.GetNumStoredMessages(self.producer) {
                         let mut size = 0;
                         global
-                            .GetMessage(DXGI_DEBUG_ALL, index, None, &mut size)
+                            .GetMessage(self.producer, index, None, &mut size)
                             .ok()
                             .map_err(|error| {
                                 D3D12RuntimeError::native(
@@ -428,7 +441,7 @@ impl Drop for Session {
                         let mut storage = vec![0usize; size.div_ceil(size_of::<usize>())];
                         let pointer = storage.as_mut_ptr().cast::<DXGI_INFO_QUEUE_MESSAGE>();
                         global
-                            .GetMessage(DXGI_DEBUG_ALL, index, Some(pointer), &mut size)
+                            .GetMessage(self.producer, index, Some(pointer), &mut size)
                             .ok()
                             .map_err(|error| {
                                 D3D12RuntimeError::native(

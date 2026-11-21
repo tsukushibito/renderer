@@ -1754,6 +1754,8 @@ pub const DXGI_ALPHA_MODE_UNSPECIFIED: DXGI_ALPHA_MODE = 0;
 pub const DXGI_CREATE_FACTORY_DEBUG: i32 = 1;
 pub const DXGI_DEBUG_ALL: windows_core::GUID =
     windows_core::GUID::from_u128(0xe48ae283_da80_490b_87e6_43e9a9cfda08);
+pub const DXGI_DEBUG_DXGI: windows_core::GUID =
+    windows_core::GUID::from_u128(0x25cddaa4_b1c6_47e1_ac3e_98875b5a2e2a);
 pub type DXGI_DEBUG_ID = windows_core::GUID;
 pub const DXGI_ERROR_DEVICE_HUNG: windows_core::HRESULT =
     windows_core::HRESULT(0x887A0006_u32 as _);
@@ -3618,6 +3620,13 @@ impl ID3D12InfoQueue {
             )
         }
     }
+    pub unsafe fn GetNumStoredMessagesAllowedByRetrievalFilter(&self) -> u64 {
+        unsafe {
+            (windows_core::Interface::vtable(self).GetNumStoredMessagesAllowedByRetrievalFilter)(
+                windows_core::Interface::as_raw(self),
+            )
+        }
+    }
     pub unsafe fn GetNumMessagesDiscardedByMessageCountLimit(&self) -> u64 {
         unsafe {
             (windows_core::Interface::vtable(self).GetNumMessagesDiscardedByMessageCountLimit)(
@@ -3669,7 +3678,8 @@ pub struct ID3D12InfoQueue_Vtbl {
     pub GetNumMessagesDeniedByStorageFilter:
         unsafe extern "system" fn(*mut core::ffi::c_void) -> u64,
     pub GetNumStoredMessages: unsafe extern "system" fn(*mut core::ffi::c_void) -> u64,
-    GetNumStoredMessagesAllowedByRetrievalFilter: usize,
+    pub GetNumStoredMessagesAllowedByRetrievalFilter:
+        unsafe extern "system" fn(*mut core::ffi::c_void) -> u64,
     pub GetNumMessagesDiscardedByMessageCountLimit:
         unsafe extern "system" fn(*mut core::ffi::c_void) -> u64,
     GetMessageCountLimit: usize,

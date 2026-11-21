@@ -95,10 +95,13 @@ impl DeviceOwner {
             mode,
             monitor.clone(),
             process.mode.is_none() && !process.host_device_seen,
+            process.host_device_seen,
         )?;
         // Once a debug setter ran, later attempts must not change its mode even
         // if subsequent native initialization fails.
-        process.mode = Some(mode);
+        if !process.host_device_seen {
+            process.mode = Some(mode);
+        }
         let flags = if mode == D3D12ValidationMode::Required {
             DXGI_CREATE_FACTORY_DEBUG as u32
         } else {
@@ -182,6 +185,7 @@ impl DeviceOwner {
             true,
         )?;
         process.owner = Arc::downgrade(&owner);
+        process.mode = Some(mode);
         process.live = true;
         Ok(owner)
     }
@@ -224,7 +228,7 @@ impl DeviceOwner {
         let monitor = D3D12ValidationMonitor::new();
         // Observe the host configuration on request. Never call the process-global
         // EnableDebugLayer or SetEnableGPUBasedValidation on an existing Device.
-        let session = Session::begin(mode, monitor.clone(), false)?;
+        let session = Session::begin(mode, monitor.clone(), false, true)?;
         Self::from_interfaces(
             raw,
             queue,

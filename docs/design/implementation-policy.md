@@ -1833,6 +1833,10 @@ queue の COM identity が一致する Renderer インスタンスは同じ投�
 既存 Device の診断設定はホストが Device 作成前に決める。引き受け時の `Required` は
 Debug Layer と GBV の既存の証跡を検査する。グローバル設定とホストの InfoQueue filter を保持し、
 この Runtime が登録した callback は終了時に解除する。確認できない設定は初期化エラーになる。
+Device の診断はフィルターを経由しない callback で収集し、DXGI の診断は DXGI 専用の
+producer から取得する。DXGI producer は同一プロセスで共有される。
+[DXGI の診断 producer](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/dxgi-debug-id)
+
 ホスト Device を受け取った process では、以後の Device 新規作成もグローバル診断 setter を呼ばない。
 
 `development-validation`は`d3d12-diagnostics`も有効にし、native検証の既定を
