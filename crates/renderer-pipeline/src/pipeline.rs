@@ -28,6 +28,8 @@ pub use input::{Draw, Frame, Mesh};
 pub use view::{StandardViewOutput, StandardViewState};
 mod scene;
 pub use scene::{EnvironmentMaps, MeshIndexRange, RenderObject, SceneInput};
+mod scene_pairs;
+pub use scene_pairs::{FrameScene, PipelineId};
 mod contract;
 pub use contract::*;
 
@@ -256,7 +258,7 @@ impl StandardPipeline {
         &self,
         input: ViewInput,
         sun: Sun,
-        bounds: Bounds,
+        bounds: impl Into<Option<Bounds>>,
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
         self.recipe.prepare_view(input, sun, bounds, environment)

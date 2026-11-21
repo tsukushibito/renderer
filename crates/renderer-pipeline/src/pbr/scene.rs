@@ -245,13 +245,13 @@ impl PreparedScene {
         &self,
         view: ViewInput,
         sun: Sun,
-        bounds: Bounds,
+        bounds: impl Into<Option<Bounds>>,
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
         PreparedView::prepare(
             view,
             sun,
-            bounds,
+            bounds.into(),
             environment,
             self.config.extent,
             self.config.shadows,

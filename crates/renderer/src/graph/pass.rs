@@ -424,11 +424,14 @@ pub(crate) enum Operation {
     },
     UploadImage {
         dst: usize,
+        region: Option<super::ImageRegion>,
         data: UploadSource,
     },
     CopyImage {
         src: usize,
         dst: usize,
+        source: super::ImageRegion,
+        destination: super::ImageRegion,
     },
     ReadbackBuffer {
         src: usize,

@@ -15,6 +15,8 @@ use std::{cell::Cell, num::NonZeroUsize, rc::Rc, time::Duration};
 struct HistoryProbe {
     publications: Rc<[Cell<u32>; 2]>,
     interrupt: bool,
+    fail_create: Rc<Cell<bool>>,
+    fail_release: Rc<Cell<bool>>,
 }
 impl ViewPipeline for HistoryProbe {
     type State = usize;
@@ -31,17 +33,29 @@ impl ViewPipeline for HistoryProbe {
         Ok(())
     }
     fn create_view(&self, c: &CameraView) -> PipelineResult<usize> {
+        if self.fail_create.replace(false) {
+            return Err("injected state creation failure".into());
+        }
         Ok(c.id.0 as usize)
+    }
+    fn release_view(&mut self, _: &mut usize, _: &mut Runtime) -> PipelineResult<()> {
+        if self.fail_release.replace(false) {
+            return Err("injected state release failure".into());
+        }
+        Ok(())
     }
     fn record(
         &mut self,
         g: &mut Graph,
         _: &mut usize,
-        _: &CameraView,
+        camera: &CameraView,
         _: PreparedScene<'_, Self>,
     ) -> Result<(ViewImages, u64), GraphError> {
-        let color = g.image("color", ImageDesc::rgba16_float(1, 1))?;
-        g.upload_image("pixel", color, &[0; 8])?;
+        let color = g.image(
+            "color",
+            ImageDesc::rgba16_float(camera.extent[0], camera.extent[1]),
+        )?;
+        g.upload_image("pixel", color, &[0; 16][..8 * camera.extent[0] as usize])?;
         Ok((ViewImages { color, depth: None }, g.graph_id()))
     }
     fn accept(
@@ -60,15 +74,32 @@ impl ViewPipeline for HistoryProbe {
     }
 }
 pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
+    let fail_create = Rc::new(Cell::new(false));
+    let fail_release = Rc::new(Cell::new(false));
     let calls = Rc::new([Cell::new(0), Cell::new(0)]);
     let mut prep = Preparation::new(NonZeroUsize::MIN);
-    let mut driver = ViewRenderer::prepare(
+    let mut driver = ViewRenderer::new();
+    let group = driver.prepare_pipeline(
         HistoryProbe {
             publications: calls.clone(),
+            fail_create: fail_create.clone(),
+            fail_release: fail_release.clone(),
             interrupt: true,
         },
         [1, 1],
-        NonZeroUsize::new(2).unwrap(),
+        NonZeroUsize::MIN,
+        None,
+        &mut prep,
+    )?;
+    let second = driver.prepare_pipeline(
+        HistoryProbe {
+            publications: calls.clone(),
+            fail_create: fail_create.clone(),
+            fail_release: fail_release.clone(),
+            interrupt: false,
+        },
+        [2, 1],
+        NonZeroUsize::MIN,
         None,
         &mut prep,
     )?;
@@ -81,7 +112,8 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
         },
         prep.working_set(),
     )?;
-    driver.initialize(&mut rt)?;
+    driver.initialize_pipeline(group, &mut rt)?;
+    driver.initialize_pipeline(second, &mut rt)?;
     let mut pool = GraphPool::new(cap, 2)?;
     let a = CameraView {
         id: ViewId(0),
@@ -93,12 +125,14 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
             [1., 2.],
             Projection::Orthographic,
         )?,
-        bounds: Bounds::new([-1.; 3], [1.; 3])?,
-        sun: Sun::new([0., 1., 0.], [1.; 3])?,
     };
-    let b = CameraView { id: ViewId(1), ..a };
-    driver.register_view(&a)?;
-    driver.register_view(&b)?;
+    let b = CameraView {
+        id: ViewId(1),
+        extent: [2, 1],
+        ..a
+    };
+    driver.register_view(group, &a)?;
+    driver.register_view(second, &b)?;
     let meshes = Meshes::new(MeshCapacity {
         meshes: 1,
         retired_mesh_versions: 1,
@@ -106,11 +140,12 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
     let materials = Materials::default();
     let scene = SceneInput::new(&meshes, &materials, &[]);
     let mut cancelled = driver.begin_frame(&mut pool)?;
-    cancelled.draw_view(scene, &a)?;
+    cancelled.draw_view(cancelled.bind_scene(group, scene)?, &a)?;
     drop(cancelled);
     let mut frame = driver.begin_frame(&mut pool)?;
-    frame.draw_view(scene, &a)?;
-    let color = frame.draw_view(scene, &b)?.color;
+    let bound = frame.bind_scene(group, scene)?;
+    frame.draw_view(bound, &a)?;
+    let color = frame.draw_view(frame.bind_scene(second, scene)?, &b)?.color;
     frame.graph().export_image(color)?;
     let Err(ViewSubmitError::Accepted { frame: id, .. }) = frame.submit(&mut rt) else {
         panic!("publication should require recovery")
@@ -128,7 +163,7 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
     );
     rt.delete(stale.key())?;
     let mut rejected = driver.begin_frame(&mut pool)?;
-    rejected.draw_view(scene, &a)?;
+    rejected.draw_view(rejected.bind_scene(group, scene)?, &a)?;
     let handle = rejected.graph().import_image("old color", &stale)?;
     rejected.graph().readback_image("stale read", handle)?;
     assert!(matches!(
@@ -136,6 +171,24 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
         Err(ViewSubmitError::Rejected(_))
     ));
     assert_eq!((calls[0].get(), calls[1].get()), (1, 1));
+    driver.remove_view(b.id, &mut rt)?;
+    let moved = CameraView {
+        extent: b.extent,
+        ..a
+    };
+    fail_create.set(true);
+    assert!(driver.reconfigure_view(second, &moved, &mut rt).is_err());
+    // Creation failed before the original registration/history was touched.
+    let mut frame = driver.begin_frame(&mut pool)?;
+    frame.draw_view(frame.bind_scene(group, scene)?, &a)?;
+    drop(frame);
+    fail_release.set(true);
+    assert!(driver.reconfigure_view(second, &moved, &mut rt).is_err());
+    assert!(driver.begin_frame(&mut pool).is_err());
+    driver.reconfigure_view(second, &moved, &mut rt)?;
+    let mut frame = driver.begin_frame(&mut pool)?;
+    frame.draw_view(frame.bind_scene(second, scene)?, &moved)?;
+    drop(frame);
     driver.remove_view(a.id, &mut rt)?;
     driver.clear(&mut rt)?;
     super::validation::check_validation(rt)

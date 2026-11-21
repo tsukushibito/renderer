@@ -119,7 +119,8 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
     let glass_mesh = meshes.create(quad(true, Some(0.3))?)?;
     let blue_mesh = meshes.create(quad(false, Some(0.2))?)?;
     let mut prep = Preparation::new(NonZeroUsize::MIN);
-    let mut scene = ViewRenderer::prepare(standard, [32, 16], NonZeroUsize::MIN, None, &mut prep)?;
+    let mut scene = ViewRenderer::new();
+    let group = scene.prepare_pipeline(standard, [32, 16], NonZeroUsize::MIN, None, &mut prep)?;
     meshes.reserve(&mut prep)?;
     let offset_desc = BufferDesc { size: 16 };
     let map_desc = renderer::graph::ImageDesc::rgba8(1, 1);
@@ -135,7 +136,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         },
         prep.working_set(),
     )?;
-    let id = scene.initialize(&mut runtime)?.unwrap();
+    let id = scene.initialize_pipeline(group, &mut runtime)?.unwrap();
     drop(
         runtime
             .wait_for_frame(id, Duration::from_secs(10))?
@@ -200,10 +201,8 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         id: ViewId(1),
         extent: [32, 16],
         camera: input,
-        bounds: pbr::Bounds::new([-1., -1., 0.], [1., 1., 1.])?,
-        sun: pbr::Sun::new([0., 0., -1.], [0.; 3])?,
     };
-    scene.register_view(&view)?;
+    scene.register_view(group, &view)?;
     for index in 0..4 {
         #[cfg(feature = "memory-profiling")]
         let before = renderer::measurement::Snapshot::now();
@@ -228,11 +227,14 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         if index % 2 == 1 {
             draws.swap(0, 3);
         }
-        let input = SceneInput::new(&meshes, &materials, &draws);
+        let input = SceneInput::new(&meshes, &materials, &draws)
+            .with_bounds(pbr::Bounds::new([-1., -1., 0.], [1., 1., 1.])?)
+            .with_sun(pbr::Sun::new([0., 0., -1.], [0.; 3])?);
         if index <= 1 {
-            scene.prepare_scene(input)?;
+            scene.prepare_scene(group, input)?;
         }
         let mut recording = scene.begin_frame(&mut pool)?;
+        let input = recording.bind_scene(group, input)?;
         let mut before_forward = None;
         if technique == pbr::Technique::Deferred {
             recording.draw_view_with_gbuffer(input, &view, |g, b| {
@@ -334,8 +336,6 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             );
         }
     }
-    scene.remove_view(view.id, &mut runtime)?;
-    scene.clear(&mut runtime)?;
     if technique == pbr::Technique::Forward {
         let floor_quad = RenderObject::new(pbr_mesh, floor).with_transform(pbr::Transform::new([
             [0.5, 0., 0., 0.],
@@ -344,6 +344,8 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         ])?);
         let floor_rgb = &bytes[(32 * 8 + 1) * 8..][..6];
         draw_after_resize(
+            &mut scene,
+            group,
             &mut runtime,
             &mut pool,
             SceneInput::new(&meshes, &materials, &[floor_quad]),
@@ -351,6 +353,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             floor_rgb,
         )?;
     }
+    scene.clear(&mut runtime)?;
     meshes.release_gpu(&mut runtime)?;
     materials.clear(&mut runtime)?;
     for key in [offset.key(), cyan.key(), yellow.key()] {
@@ -362,6 +365,8 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
 /// The new extent is absent from the initial working set. Reuse the mesh and
 /// resident material registrations without refreshing or uploading either.
 fn draw_after_resize(
+    scene: &mut ViewRenderer,
+    old_group: renderer_pipeline::pipeline::PipelineId,
     runtime: &mut Runtime,
     pool: &mut GraphPool,
     input: SceneInput<'_>,
@@ -381,7 +386,7 @@ fn draw_after_resize(
         max_transforms: 1,
     };
     let mut prep = Preparation::new(n);
-    let mut scene = ViewRenderer::prepare(
+    let next = scene.prepare_pipeline(
         StandardPipeline::forward(view.extent, limits)?,
         view.extent,
         n,
@@ -389,15 +394,18 @@ fn draw_after_resize(
         &mut prep,
     )?;
     runtime.prepare_working_set(prep.working_set())?;
-    if let Some(id) = scene.initialize(runtime)? {
+    scene.reconfigure_view(next, &view, runtime)?;
+    scene.remove_pipeline(old_group, runtime)?;
+    if let Some(id) = scene.initialize_pipeline(next, runtime)? {
         runtime
             .wait_for_frame(id, Duration::from_secs(10))?
             .ok_or("resize setup timed out")?;
     }
-    scene.register_view(&view)?;
-    scene.prepare_scene(input)?;
+    scene.prepare_scene(next, input)?;
     let mut frame = scene.begin_frame(pool)?;
-    let hdr = frame.draw_view(input, &view)?.color;
+    let hdr = frame
+        .draw_view(frame.bind_scene(next, input)?, &view)?
+        .color;
     let read = frame.graph().readback_image("resized HDR", hdr)?;
     let pending = frame.submit(runtime)?;
     let mut completed = runtime
@@ -408,7 +416,7 @@ fn draw_after_resize(
     assert_eq!(&pixels[(23 * 6 + 11) * 8..][..6], floor_rgb);
     assert_eq!(&pixels[..6], &[0; 6]);
     drop((completed, pending));
-    scene.clear(runtime)
+    Ok(())
 }
 #[cfg(feature = "vulkan")]
 #[test]

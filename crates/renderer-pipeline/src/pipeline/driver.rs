@@ -1,22 +1,26 @@
-//! Record interchangeable camera pipelines into an application Graph pool.
+//! Record cameras of different techniques and resolutions into one application Graph.
+mod group;
+use self::group::{Group, PreparedGroup};
 use super::{
-    CameraView, PipelineResult, PreparedScene, SceneInput, StandardPipeline, StandardViewOutput,
-    ViewId, ViewImages, ViewPipeline,
+    CameraView, FrameScene, PipelineId, PipelineResult, PreparedScene, SceneInput,
+    StandardPipeline, StandardViewOutput, ViewId, ViewImages, ViewPipeline,
 };
 use crate::passes::output::{PreparedOutput, SdrImage, SdrOutput};
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::runtime::{FrameId, FrameSubmission, Runtime};
 use renderer::{
     capacity::Preparation,
-    graph::{Graph, GraphError, GraphPool, ImageDesc, ImageHandle},
+    graph::{CompiledGraph, Graph, GraphError, GraphPool, ImageDesc, ImageHandle},
+    runtime::{FrameId, FrameSubmission, Runtime},
 };
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use std::error::Error;
-use std::{collections::HashMap, num::NonZeroUsize};
+use std::{
+    any::Any,
+    collections::HashMap,
+    error::Error,
+    num::NonZeroUsize,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
-/// A rejected frame can be rebuilt. An accepted frame must resume publication
-/// with ViewRenderer::finish_submission before recording more work.
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+/// Rejected work can be rebuilt. Resume publication of already accepted work
+/// with [`ViewRenderer::finish_submission`].
 #[derive(Debug)]
 pub enum ViewSubmitError {
     Rejected(Box<dyn Error>),
@@ -25,7 +29,6 @@ pub enum ViewSubmitError {
         source: Box<dyn Error>,
     },
 }
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 impl std::fmt::Display for ViewSubmitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -37,7 +40,6 @@ impl std::fmt::Display for ViewSubmitError {
         }
     }
 }
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 impl Error for ViewSubmitError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(match self {
@@ -47,44 +49,38 @@ impl Error for ViewSubmitError {
     }
 }
 
-struct RegisteredView<S> {
-    state: S,
-    recorded_graph: Option<u64>,
-}
-
-/// Per-pipeline registrations and bounded submission bookkeeping.
-pub struct ViewRenderer<P: ViewPipeline> {
-    pipeline: P,
-    extent: [u32; 2],
-    limit: usize,
+struct Pipeline {
+    group: Box<dyn Group>,
+    requirements: Preparation,
     output: Option<PreparedOutput>,
-    views: HashMap<ViewId, RegisteredView<P::State>>,
-    pending: Vec<(ViewId, P::Update)>,
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    accepted: Option<FrameSubmission>,
-    initialized: bool,
-    pairs: HashMap<(crate::mesh::MeshHandle, crate::material::MaterialHandle), (u64, u64)>,
 }
 
-impl<P: ViewPipeline> ViewRenderer<P> {
-    fn has_accepted(&self) -> bool {
-        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-        {
-            self.accepted.is_some()
-        }
-        #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
-        {
-            false
-        }
+/// Registered cameras share one frame Graph, GPU submission and history transaction.
+/// Each prepared pipeline supplies its own extent, rendering technique and output.
+#[derive(Default)]
+pub struct ViewRenderer {
+    pipelines: HashMap<PipelineId, Pipeline>,
+    views: HashMap<ViewId, PipelineId>,
+    pending: Vec<ViewId>,
+    accepted: Option<FrameSubmission>,
+    moving: Option<(ViewId, PipelineId)>,
+}
+
+impl ViewRenderer {
+    pub fn new() -> Self {
+        Self::default()
     }
-    /// Add this renderer's complete working set before creating the Runtime.
-    pub fn prepare(
+
+    /// Reserve a group of cameras with the same technique and dimensions.
+    /// Include all simultaneously recorded groups in the same preparation.
+    pub fn prepare_pipeline<P: ViewPipeline + 'static>(
+        &mut self,
         pipeline: P,
         extent: [u32; 2],
         views: NonZeroUsize,
         output: Option<SdrOutput>,
         preparation: &mut Preparation,
-    ) -> Result<Self, GraphError> {
+    ) -> Result<PipelineId, GraphError> {
         if extent.contains(&0) {
             return Err(GraphError::invalid_input("empty camera extent"));
         }
@@ -101,78 +97,151 @@ impl<P: ViewPipeline> ViewRenderer<P> {
             }
         }
         preparation.add_alternatives(&[&requirements])?;
-        Ok(Self {
-            pipeline,
-            extent,
-            limit: views.get(),
-            output: stage,
-            views: HashMap::with_capacity(views.get()),
-            pending: Vec::with_capacity(views.get()),
-            #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-            accepted: None,
-            initialized: !cfg!(any(feature = "vulkan", all(windows, feature = "d3d12"))),
-            pairs: HashMap::new(),
-        })
-    }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn initialize(&mut self, runtime: &mut Runtime) -> PipelineResult<Option<FrameId>> {
-        if self.initialized {
-            return Err("view renderer already initialized".into());
-        }
-        let upload = self.pipeline.initialize(runtime)?;
-        self.initialized = true;
-        Ok(upload)
-    }
-    /// Register all mesh/material pairs usable in subsequent frames. Call after
-    /// uploading changed assets; transforms, visibility and order can vary freely.
-    pub fn prepare_scene(&mut self, scene: SceneInput<'_>) -> Result<(), GraphError> {
-        let mut pairs = HashMap::with_capacity(scene.objects.len());
-        for obj in scene.objects {
-            if let std::collections::hash_map::Entry::Vacant(entry) =
-                pairs.entry((obj.mesh, obj.material))
-            {
-                self.pipeline.check_object(scene, obj)?;
-                entry.insert((
-                    scene.meshes.revision(obj.mesh)?,
-                    scene.materials.revision(obj.material)?,
-                ));
-            }
-        }
-        self.pairs = pairs;
-        Ok(())
-    }
-    pub fn register_view(&mut self, camera: &CameraView) -> PipelineResult<()> {
-        if camera.extent != self.extent
-            || self.views.contains_key(&camera.id)
-            || self.views.len() == self.limit
-        {
-            return Err("camera extent, identity or reserved view capacity mismatch".into());
-        }
-        self.views.insert(
-            camera.id,
-            RegisteredView {
-                state: self.pipeline.create_view(camera)?,
-                recorded_graph: None,
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let id = PipelineId(
+            NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
+                .expect("view pipeline identity exhausted"),
+        );
+        self.pipelines.insert(
+            id,
+            Pipeline {
+                group: Box::new(PreparedGroup::new(pipeline, extent, views.get())),
+                requirements,
+                output: stage,
             },
         );
+        Ok(id)
+    }
+    /// Include a previously configured group when preparing a replacement Runtime working set.
+    pub fn reserve_pipeline(
+        &self,
+        id: PipelineId,
+        preparation: &mut Preparation,
+    ) -> Result<(), GraphError> {
+        preparation.add_alternatives(&[&self.pipeline(id)?.requirements])
+    }
+    fn pipeline(&self, id: PipelineId) -> Result<&Pipeline, GraphError> {
+        self.pipelines
+            .get(&id)
+            .ok_or_else(|| GraphError::invalid_input("unknown view pipeline"))
+    }
+    fn pipeline_mut(&mut self, id: PipelineId) -> Result<&mut Pipeline, GraphError> {
+        self.pipelines
+            .get_mut(&id)
+            .ok_or_else(|| GraphError::invalid_input("unknown view pipeline"))
+    }
+    fn route(&self, view: ViewId) -> Result<PipelineId, GraphError> {
+        self.views
+            .get(&view)
+            .copied()
+            .ok_or_else(|| GraphError::invalid_input("unregistered camera"))
+    }
+    fn check_idle(&self) -> PipelineResult<()> {
+        if self.accepted.is_some() {
+            Err("finish publishing accepted views first".into())
+        } else if self.moving.is_some() {
+            Err("finish reconfiguring the camera before using the view renderer".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Initialize GPU assets for this group once its working set has been prepared.
+    pub fn initialize_pipeline(
+        &mut self,
+        id: PipelineId,
+        runtime: &mut Runtime,
+    ) -> PipelineResult<Option<FrameId>> {
+        self.check_idle()?;
+        self.pipeline_mut(id)?.group.initialize(runtime)
+    }
+    /// Register new or changed mesh/material pairs without invalidating other pairs.
+    pub fn prepare_scene(
+        &mut self,
+        id: PipelineId,
+        changed: SceneInput<'_>,
+    ) -> Result<(), GraphError> {
+        self.pipeline_mut(id)?.group.prepare_scene(changed)
+    }
+    pub fn remove_scene_pair(
+        &mut self,
+        id: PipelineId,
+        mesh: crate::mesh::MeshHandle,
+        material: crate::material::MaterialHandle,
+    ) -> Result<bool, GraphError> {
+        Ok(self.pipeline_mut(id)?.group.remove_pair(mesh, material))
+    }
+    pub fn register_view(
+        &mut self,
+        pipeline: PipelineId,
+        camera: &CameraView,
+    ) -> PipelineResult<()> {
+        self.check_idle()?;
+        if self.views.contains_key(&camera.id) {
+            return Err("camera already registered".into());
+        }
+        self.pipeline_mut(pipeline)?.group.register(camera)?;
+        self.views.insert(camera.id, pipeline);
+        self.pending.reserve(self.views.len());
         Ok(())
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn remove_view(&mut self, id: ViewId, runtime: &mut Runtime) -> PipelineResult<()> {
-        if self.has_accepted() {
-            return Err("finish publishing accepted views first".into());
-        }
-        let state = self.views.get_mut(&id).ok_or("unknown view")?;
-        self.pipeline.release_view(&mut state.state, runtime)?;
+        self.check_idle()?;
+        let group = self.route(id)?;
+        self.pipeline_mut(group)?.group.remove_view(id, runtime)?;
         self.views.remove(&id);
         Ok(())
     }
-    pub fn begin_frame<'a>(&'a mut self, pool: &mut GraphPool) -> PipelineResult<ViewFrame<'a, P>> {
-        if !self.initialized || self.has_accepted() {
-            return Err(
-                "initialize renderer and finish accepted updates before beginning a frame".into(),
-            );
+    /// Move a camera to a prepared extent/technique at a change boundary.
+    /// Create the replacement before releasing the old history. A failed creation
+    /// preserves the original registration. If release fails, retry this operation
+    /// with the same camera and target to finish the move without recreating state.
+    pub fn reconfigure_view(
+        &mut self,
+        id: PipelineId,
+        camera: &CameraView,
+        runtime: &mut Runtime,
+    ) -> PipelineResult<()> {
+        match self.moving {
+            None => {
+                self.check_idle()?;
+                let old = self.route(camera.id)?;
+                if old == id {
+                    return Err(
+                        "prepare a different pipeline configuration before moving the view".into(),
+                    );
+                }
+                self.pipeline_mut(id)?.group.register(camera)?;
+                self.moving = Some((camera.id, id));
+            }
+            Some((view, target)) if (view, target) == (camera.id, id) => (),
+            Some(_) => return Err("finish the previous camera reconfiguration first".into()),
         }
+        self.finish_reconfiguration(runtime)
+    }
+
+    fn finish_reconfiguration(&mut self, runtime: &mut Runtime) -> PipelineResult<()> {
+        if let Some((view, target)) = self.moving {
+            let old = self.route(view)?;
+            self.pipeline_mut(old)?.group.remove_view(view, runtime)?;
+            *self.views.get_mut(&view).expect("registered view") = target;
+            self.moving = None;
+        }
+        Ok(())
+    }
+
+    /// Release the pipeline after moving or removing its last view.
+    pub fn remove_pipeline(&mut self, id: PipelineId, runtime: &mut Runtime) -> PipelineResult<()> {
+        self.check_idle()?;
+        if self.views.values().any(|value| *value == id) {
+            return Err("remove or move registered cameras first".into());
+        }
+        self.pipeline_mut(id)?.group.release(runtime)?;
+        self.pipelines.remove(&id);
+        Ok(())
+    }
+    pub fn begin_frame<'a>(&'a mut self, pool: &mut GraphPool) -> PipelineResult<ViewFrame<'a>> {
+        self.check_idle()?;
         let graph = pool.begin()?;
         let id = graph.graph_id();
         Ok(ViewFrame {
@@ -182,145 +251,132 @@ impl<P: ViewPipeline> ViewRenderer<P> {
             failed: false,
         })
     }
-    /// Continue publication after an accepted submission. Successfully published
-    /// views have already been removed. Never resubmits GPU work.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    /// Retry publication of remaining histories, using the existing GPU receipt.
     pub fn finish_submission(&mut self) -> PipelineResult<FrameSubmission> {
         let receipt = self.accepted.as_ref().ok_or("no accepted submission")?;
-        while let Some((id, update)) = self.pending.last_mut() {
-            self.pipeline.accept(
-                &mut self
-                    .views
-                    .get_mut(id)
-                    .expect("registered pending view")
-                    .state,
-                update,
-                receipt,
-            )?;
+        while let Some(&view) = self.pending.last() {
+            let group = self.views[&view];
+            self.pipelines
+                .get_mut(&group)
+                .expect("registered pipeline")
+                .group
+                .accept(view, receipt)?;
             self.pending.pop();
         }
         Ok(self.accepted.take().expect("accepted receipt"))
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn clear(&mut self, runtime: &mut Runtime) -> PipelineResult<()> {
-        if self.has_accepted() {
-            return Err("finish publishing accepted views first".into());
-        }
+        self.finish_reconfiguration(runtime)?;
+        self.check_idle()?;
         while let Some(id) = self.views.keys().next().copied() {
             self.remove_view(id, runtime)?;
         }
-        self.pipeline.release(runtime)?;
-        self.initialized = false;
+        while let Some(id) = self.pipelines.keys().next().copied() {
+            self.remove_pipeline(id, runtime)?;
+        }
         Ok(())
     }
 }
 
-pub struct ViewFrame<'a, P: ViewPipeline> {
-    renderer: &'a mut ViewRenderer<P>,
+/// A single Graph recording cameras from any registered pipeline.
+pub struct ViewFrame<'a> {
+    renderer: &'a mut ViewRenderer,
     graph: Option<Graph>,
     id: u64,
     failed: bool,
 }
-impl<P: ViewPipeline> ViewFrame<'_, P> {
-    /// Inspect a CPU-only Graph. Provisional view updates are discarded.
-    #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
-    pub fn compile(mut self) -> Result<renderer::graph::CompiledGraph, GraphError> {
-        let graph = self.graph.take().expect("building frame");
-        if self.failed || self.id != graph.graph_id() {
-            return Err(GraphError::invalid_input(
-                "abandon failed or replaced view graph",
-            ));
-        }
-        graph.compile()
-    }
+impl<'a> ViewFrame<'a> {
     pub fn graph(&mut self) -> &mut Graph {
         self.graph.as_mut().expect("building frame")
     }
-    pub fn draw_view(
-        &mut self,
-        scene: SceneInput<'_>,
-        camera: &CameraView,
-    ) -> Result<ViewImages, GraphError> {
-        self.record_with(scene, camera, P::record)
+    /// Validate revisions once for all cameras of this pipeline in this frame.
+    pub fn bind_scene<'s>(
+        &self,
+        id: PipelineId,
+        scene: SceneInput<'s>,
+    ) -> Result<FrameScene<'s>, GraphError> {
+        self.renderer
+            .pipeline(id)?
+            .group
+            .pairs()
+            .bind(scene, self.id, id)
     }
     fn record_with(
         &mut self,
-        scene: SceneInput<'_>,
+        scene: FrameScene<'_>,
         camera: &CameraView,
         record: impl FnOnce(
-            &mut P,
+            &mut dyn Group,
             &mut Graph,
-            &mut P::State,
             &CameraView,
-            PreparedScene<'_, P>,
-        ) -> Result<(ViewImages, P::Update), GraphError>,
+            SceneInput<'_>,
+        ) -> Result<ViewImages, GraphError>,
     ) -> Result<ViewImages, GraphError> {
         if self.failed {
             return Err(GraphError::invalid_input("abandon failed view frame"));
         }
         self.failed = true;
-        let r = &mut self.renderer;
         let graph = self.graph.as_mut().expect("building frame");
-        if graph.graph_id() != self.id || camera.extent != r.extent {
-            return Err(GraphError::invalid_input(
-                "view already recorded or incompatible with frame",
-            ));
+        if graph.graph_id() != self.id {
+            return Err(GraphError::invalid_input("abandon replaced view graph"));
         }
-        let state = r
-            .views
-            .get_mut(&camera.id)
-            .ok_or_else(|| GraphError::invalid_input("unregistered camera"))?;
-        if state.recorded_graph == Some(self.id) {
-            return Err(GraphError::invalid_input(
-                "camera already recorded in this graph",
-            ));
-        }
-        state.recorded_graph = Some(self.id);
-        for object in scene.objects {
-            let revisions = (
-                scene.meshes.revision(object.mesh)?,
-                scene.materials.revision(object.material)?,
-            );
-            if r.pairs.get(&(object.mesh, object.material)) != Some(&revisions) {
-                return Err(GraphError::invalid_input(
-                    "prepare scene after changing an asset or mesh/material pairing",
-                ));
-            }
-        }
-        let (images, update) = record(
-            &mut r.pipeline,
+        let id = self.renderer.route(camera.id)?;
+        let input = scene.resolve(self.id, id)?;
+        let images = record(
+            self.renderer.pipeline_mut(id)?.group.as_mut(),
             graph,
-            &mut state.state,
             camera,
-            PreparedScene {
-                input: scene,
-                pipeline: std::marker::PhantomData,
-            },
+            input,
         )?;
-        let [w, h] = camera.extent;
-        if graph.image_desc(images.color)? != ImageDesc::rgba16_float(w, h)
-            || images
-                .depth
-                .map(|d| graph.image_desc(d))
-                .transpose()?
-                .is_some_and(|d| d != ImageDesc::depth32(w, h))
-        {
-            return Err(GraphError::invalid_input(
-                "incompatible camera color or depth output",
-            ));
-        }
-        r.pending.push((camera.id, update));
+        self.renderer.pending.push(camera.id);
         self.failed = false;
         Ok(images)
     }
+    pub fn draw_view(
+        &mut self,
+        scene: FrameScene<'_>,
+        camera: &CameraView,
+    ) -> Result<ViewImages, GraphError> {
+        self.record_with(scene, camera, |group, graph, camera, input| {
+            group.record(graph, camera, input)
+        })
+    }
+    /// Insert a consumer before the standard Deferred lighting pass.
+    pub fn draw_view_with_gbuffer(
+        &mut self,
+        scene: FrameScene<'_>,
+        camera: &CameraView,
+        consume: impl FnOnce(&mut Graph, crate::pbr::GBuffer) -> Result<(), GraphError>,
+    ) -> Result<ViewImages, GraphError> {
+        self.record_with(scene, camera, |group, graph, camera, input| {
+            let group = (group as &mut dyn Any)
+                .downcast_mut::<PreparedGroup<StandardPipeline>>()
+                .ok_or_else(|| {
+                    GraphError::invalid_input(
+                        "G-buffer access requires the standard Deferred pipeline",
+                    )
+                })?;
+            group.with_gbuffer(graph, camera, input, consume)
+        })
+    }
+    pub fn standard_output(&self, view: ViewId) -> Option<&StandardViewOutput> {
+        let id = self.renderer.route(view).ok()?;
+        let group = self.renderer.pipeline(id).ok()?.group.as_ref() as &dyn Any;
+        group
+            .downcast_ref::<PreparedGroup<StandardPipeline>>()?
+            .output(view)
+    }
     pub fn write_output(
         &mut self,
+        view: ViewId,
         color: ImageHandle,
         exposure: f32,
         target: Option<ImageHandle>,
     ) -> Result<SdrImage, GraphError> {
-        let stage = self
+        let id = self.renderer.route(view)?;
+        let output = self
             .renderer
+            .pipeline(id)?
             .output
             .ok_or_else(|| GraphError::invalid_input("SDR output was not prepared"))?;
         if self.failed {
@@ -329,69 +385,87 @@ impl<P: ViewPipeline> ViewFrame<'_, P> {
         self.failed = true;
         let graph = self.graph();
         let source = graph.image_view(color, 0, 0)?;
-        let output = stage.append_to(
+        let result = output.append_to(
             graph,
             source,
             PreparedOutput::validate_exposure(exposure)?,
             target,
         )?;
         self.failed = false;
-        Ok(output.sdr)
+        Ok(result.sdr)
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn submit(mut self, runtime: &mut Runtime) -> Result<FrameSubmission, ViewSubmitError> {
+    /// Compile for inspection or submission. The plan retains its provisional histories.
+    pub fn compile(mut self) -> Result<CompiledViewFrame<'a>, GraphError> {
         let graph = self.graph.take().expect("building frame");
         if self.failed || self.id != graph.graph_id() {
-            return Err(ViewSubmitError::Rejected(
-                "abandon failed or replaced view graph".into(),
+            return Err(GraphError::invalid_input(
+                "abandon failed or replaced view graph",
             ));
         }
-        for (id, update) in &self.renderer.pending {
-            self.renderer
-                .pipeline
-                .check_submission(&self.renderer.views[id].state, update, self.id)
-                .map_err(ViewSubmitError::Rejected)?;
-        }
-        let plan = graph
-            .compile()
-            .map_err(|e| ViewSubmitError::Rejected(e.into()))?;
-        let receipt = runtime
-            .submit(&plan)
-            .map_err(|e| ViewSubmitError::Rejected(e.into()))?;
-        let frame = receipt.id();
-        self.renderer.accepted = Some(receipt);
-        self.renderer
-            .finish_submission()
-            .map_err(|source| ViewSubmitError::Accepted { frame, source })
-    }
-}
-impl<P: ViewPipeline> Drop for ViewFrame<'_, P> {
-    fn drop(&mut self) {
-        if !self.renderer.has_accepted() {
-            self.renderer.pending.clear();
-        }
-    }
-}
-
-impl ViewFrame<'_, StandardPipeline> {
-    /// Append a consumer at the coherent Deferred geometry stage.
-    pub fn draw_view_with_gbuffer(
-        &mut self,
-        scene: SceneInput<'_>,
-        camera: &CameraView,
-        consume: impl FnOnce(&mut Graph, crate::pbr::GBuffer) -> Result<(), GraphError>,
-    ) -> Result<ViewImages, GraphError> {
-        self.record_with(scene, camera, |p, g, state, camera, scene| {
-            p.record_camera(g, state, camera, scene.input(), Some(consume))
+        Ok(CompiledViewFrame {
+            plan: graph.compile()?,
+            frame: self,
         })
     }
+    pub fn submit(self, runtime: &mut Runtime) -> Result<FrameSubmission, ViewSubmitError> {
+        self.compile()
+            .map_err(|e| ViewSubmitError::Rejected(e.into()))?
+            .submit(runtime)
+    }
+}
+impl Drop for ViewFrame<'_> {
+    fn drop(&mut self) {
+        if self.renderer.accepted.is_none() {
+            for view in self.renderer.pending.drain(..) {
+                let id = self.renderer.views[&view];
+                self.renderer
+                    .pipelines
+                    .get_mut(&id)
+                    .expect("registered pipeline")
+                    .group
+                    .cancel(view);
+            }
+        }
+    }
+}
 
-    /// Standard technique outputs available to subsequent passes in this Graph.
-    pub fn standard_output(&self, id: ViewId) -> Option<&StandardViewOutput> {
-        self.renderer
-            .pending
-            .iter()
-            .find(|(view, _)| *view == id)
-            .map(|(_, update)| update)
+/// CPU-inspectable plan, with one transaction for all recorded view histories.
+/// Dropping the plan without submission discards the provisional updates.
+pub struct CompiledViewFrame<'a> {
+    plan: CompiledGraph,
+    frame: ViewFrame<'a>,
+}
+impl CompiledViewFrame<'_> {
+    pub fn pass_count(&self) -> usize {
+        self.plan.pass_count()
+    }
+    pub fn ordered_pass_names(&self) -> impl Iterator<Item = &str> {
+        self.plan.ordered_pass_names()
+    }
+    #[cfg(feature = "graph-diagnostics")]
+    pub fn dump(&self) -> &str {
+        self.plan.dump()
+    }
+    #[cfg(feature = "graph-diagnostics")]
+    pub fn culled_pass_names(&self) -> impl Iterator<Item = &str> {
+        self.plan.culled_pass_names()
+    }
+    pub fn submit(self, runtime: &mut Runtime) -> Result<FrameSubmission, ViewSubmitError> {
+        let renderer = &mut *self.frame.renderer;
+        for view in &renderer.pending {
+            let id = renderer.views[view];
+            renderer.pipelines[&id]
+                .group
+                .check_submission(*view, self.plan.graph_id())
+                .map_err(ViewSubmitError::Rejected)?;
+        }
+        let receipt = runtime
+            .submit(&self.plan)
+            .map_err(|e| ViewSubmitError::Rejected(e.into()))?;
+        let frame = receipt.id();
+        renderer.accepted = Some(receipt);
+        renderer
+            .finish_submission()
+            .map_err(|source| ViewSubmitError::Accepted { frame, source })
     }
 }

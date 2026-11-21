@@ -17,6 +17,17 @@ pub struct Sun {
 }
 
 impl Sun {
+    pub const OFF: Self = Self {
+        direction: [0., 1., 0.],
+        color: [0.; 3],
+    };
+    pub fn direction(self) -> [f32; 3] {
+        self.direction
+    }
+    pub fn color(self) -> [f32; 3] {
+        self.color
+    }
+
     pub fn new(direction: [f32; 3], color: [f32; 3]) -> Result<Self, GraphError> {
         Self::from_normalized(normalize(direction, "degenerate PBR sun direction")?, color)
     }
@@ -98,7 +109,7 @@ impl ViewData {
 pub(super) fn prepare(
     view: ViewInput,
     sun: Sun,
-    bounds: Bounds,
+    bounds: impl Into<Option<Bounds>>,
     settings: Option<ShadowSettings>,
     environment: [f32; 3],
 ) -> Result<ViewData, GraphError> {
@@ -110,9 +121,15 @@ pub(super) fn prepare(
             "invalid PBR environment parameters",
         ));
     }
-    let shadow = settings
-        .map(|settings| shadow::calculate(view, sun.direction, bounds, settings))
-        .transpose()?;
+    let shadow = match settings {
+        Some(settings) => {
+            let bounds = bounds.into().ok_or_else(|| {
+                GraphError::invalid_input("directional shadows require scene bounds")
+            })?;
+            Some(shadow::calculate(view, sun.direction, bounds, settings)?)
+        }
+        None => None,
+    };
     // The eye and light occupy three vec4s, with near/far in their w words.
     // The fourth vec4 carries IBL sampling parameters and a shadow flag.
     let mut camera_words = [0.0; 16];

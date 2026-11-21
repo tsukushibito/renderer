@@ -511,8 +511,32 @@ pub(super) fn require_multisample(
 }
 
 fn require_image_format(owner: &DeviceOwner, desc: ImageDesc) -> Result<(), D3D12RuntimeError> {
+    if desc.format.is_block_compressed()
+        && !(desc.width.is_multiple_of(4) && desc.height.is_multiple_of(4))
+    {
+        let mut support = D3D12_FEATURE_DATA_D3D12_OPTIONS8::default();
+        // SAFETY: CheckFeatureSupport writes the matching OPTIONS8 structure inline.
+        let status = unsafe {
+            owner.raw.CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS8,
+                std::ptr::from_mut(&mut support).cast(),
+                size_of_val(&support) as u32,
+            )
+        };
+        // Older runtimes report E_INVALIDARG for OPTIONS8 and require aligned mip zero.
+        if let Err(e) = status.ok()
+            && e.code() != windows_core::HRESULT(0x80070057u32 as i32)
+        {
+            return Err(owner.native("CheckFeatureSupport(OPTIONS8)", e));
+        }
+        if !support.UnalignedBlockTexturesSupported.as_bool() {
+            return Err(D3D12RuntimeError::unsupported(
+                "unaligned top-level BC texture requires UnalignedBlockTexturesSupported",
+            ));
+        }
+    }
     if desc.sample_count != SampleCount::X1 {
-        if !desc.is_single_subresource() || desc.format == ImageFormat::Rgba8Srgb {
+        if !desc.is_single_subresource() || !desc.format.supports_attachment() {
             return Err(D3D12RuntimeError::unsupported(
                 "multisampled Graph images require a single linear-color or depth attachment",
             ));
@@ -544,13 +568,6 @@ fn require_image_format(owner: &DeviceOwner, desc: ImageDesc) -> Result<(), D3D1
         return require_multisample(owner, format, desc.sample_count);
     }
     match desc.format {
-        ImageFormat::Rgba8Srgb => require_format(
-            owner,
-            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
-            D3D12_FORMAT_SUPPORT1_TEXTURE2D
-                | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE
-                | D3D12_FORMAT_SUPPORT1_MIP,
-        ),
         ImageFormat::Depth32Float => {
             require_format(
                 owner,
@@ -575,6 +592,11 @@ fn require_image_format(owner: &DeviceOwner, desc: ImageDesc) -> Result<(), D3D1
                 | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE
                 | D3D12_FORMAT_SUPPORT1_RENDER_TARGET
                 | D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW,
+        ),
+        _ => require_format(
+            owner,
+            super::resources::image_format(desc.format),
+            D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE,
         ),
     }
 }
@@ -641,19 +663,23 @@ fn copy_layout(
         let footprint = footprints[mip];
         let width = (desc.width >> mip).max(1);
         let height = (desc.height >> mip).max(1);
-        let expected_row = u64::from(width) * desc.format.texel_bytes();
+        let expected_row = desc.format.packed_row_bytes(width);
+        let block_rows = desc.format.packed_rows(height);
+        let [block_w, block_h] = desc.format.block_extent();
         let accessed_end = u64::from(rows[mip].saturating_sub(1))
             .checked_mul(u64::from(footprint.Footprint.RowPitch))
             .and_then(|stride| footprint.Offset.checked_add(stride))
             .and_then(|start| start.checked_add(row_bytes[mip]));
-        if rows[mip] != height
+        if rows[mip] != block_rows
             || row_bytes[mip] != expected_row
             || u64::from(footprint.Footprint.RowPitch) < expected_row
             || footprint.Footprint.RowPitch % D3D12_TEXTURE_DATA_PITCH_ALIGNMENT as u32 != 0
             || footprint.Offset % D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT as u64 != 0
             || footprint.Offset < previous_end
-            || footprint.Footprint.Width != width
-            || footprint.Footprint.Height != height
+            || footprint.Footprint.Width < width
+            || footprint.Footprint.Height < height
+            || footprint.Footprint.Width.div_ceil(block_w) != width.div_ceil(block_w)
+            || footprint.Footprint.Height.div_ceil(block_h) != block_rows
             || footprint.Footprint.Depth != 1
             || accessed_end.is_none_or(|end| end > total_bytes)
         {
@@ -665,10 +691,10 @@ fn copy_layout(
         layouts.push(MipCopyLayout {
             footprint,
             row_bytes: expected_row as usize,
-            rows: height as usize,
+            rows: block_rows as usize,
             packed_offset,
         });
-        packed_offset += expected_row as usize * height as usize;
+        packed_offset += expected_row as usize * block_rows as usize;
     }
     Ok((layouts, total_bytes))
 }
@@ -861,7 +887,7 @@ impl RasterStorage {
             })?;
             if class.desc.format == ImageFormat::Depth32Float {
                 depth_count += class.count;
-            } else if class.desc.format != ImageFormat::Rgba8Srgb {
+            } else if class.desc.format.supports_attachment() {
                 color_count += class.count;
             }
         }
@@ -967,7 +993,7 @@ impl RasterStorage {
                     }
                     depth_index += 1;
                     (None, Some(handle))
-                } else if class.desc.format == ImageFormat::Rgba8Srgb {
+                } else if !class.desc.format.supports_attachment() {
                     (None, None)
                 } else {
                     let handle = D3D12_CPU_DESCRIPTOR_HANDLE {

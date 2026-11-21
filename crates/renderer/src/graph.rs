@@ -43,6 +43,7 @@ mod builder;
 mod compile;
 mod dispatch;
 mod error;
+mod image_transfer;
 mod indirect;
 mod output;
 mod pass;
@@ -57,6 +58,7 @@ pub use compile::CompiledGraph;
 pub(crate) use dispatch::BindingOperands;
 pub use dispatch::{Binding, BindingResource, RasterBindings};
 pub use error::{GraphCapacityError, GraphCapacityKind, GraphError, GraphErrorKind};
+pub use image_transfer::ImageRegion;
 pub use indirect::{IndexedIndirectArgs, IndexedIndirectTable, IndexedIndirectTemplate};
 pub use output::{FrameGraph, FrameOutputOwnership};
 pub use pass::{

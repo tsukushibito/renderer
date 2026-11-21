@@ -5,7 +5,7 @@ pub(crate) mod toon;
 pub(crate) mod validation;
 use renderer::{
     capacity::Preparation,
-    graph::{GraphCapacity, GraphPool, ImageDesc},
+    graph::{GraphPool, ImageDesc},
     runtime::{Runtime, RuntimeConfig, RuntimeLimits},
 };
 use renderer_pipeline::{
@@ -44,7 +44,7 @@ pub fn standard(
     )?)
 }
 #[allow(dead_code)]
-pub fn run<P: ViewPipeline>(
+pub fn run<P: ViewPipeline + 'static>(
     example: Example,
     make: impl Fn([u32; 2], SceneLimits, &[MaterialDefinition]) -> Result<P, Box<dyn Error>>,
 ) -> Result<(), Box<dyn Error>> {
@@ -57,7 +57,7 @@ pub fn run<P: ViewPipeline>(
     };
     run_on(api, example, make)
 }
-pub fn run_on<P: ViewPipeline>(
+pub fn run_on<P: ViewPipeline + 'static>(
     api: RuntimeConfig,
     example: Example,
     make: impl Fn([u32; 2], SceneLimits, &[MaterialDefinition]) -> Result<P, Box<dyn Error>>,
@@ -124,31 +124,21 @@ pub fn run_on<P: ViewPipeline>(
             extra.push(RenderObject::new(mesh, material).with_transform(t));
         }
     }
-    let prepare = |extent| -> Result<_, Box<dyn Error>> {
+    let mut pipeline = ViewRenderer::new();
+    let prepare = |pipeline: &mut ViewRenderer, extent| -> Result<_, Box<dyn Error>> {
         let mut budget = Preparation::new(NonZeroUsize::MIN);
-        let renderer = ViewRenderer::prepare(
+        let group = pipeline.prepare_pipeline(
             make(extent, limits, &definitions)?,
             extent,
             NonZeroUsize::new(count).unwrap(),
             Some(SdrOutput::display(false)),
             &mut budget,
         )?;
-        Ok((renderer, budget))
+        Ok((group, budget))
     };
-    let (mut pipeline, first) = prepare(extent)?;
-    let mut preparation = Preparation::new(NonZeroUsize::MIN);
-    let mut resized = if example != Example::MixedPost {
-        let (next, second) = prepare([32, 32])?;
-        preparation.add_alternatives(&[&first, &second])?;
-        Some(next)
-    } else {
-        preparation.add_alternatives(&[&first])?;
-        None
-    };
+    let (mut group, mut preparation) = prepare(&mut pipeline, extent)?;
+    let resize = example != Example::MixedPost;
     meshes.reserve(&mut preparation)?;
-    if resized.is_some() {
-        meshes.reserve_replacement(model, &mut preparation)?;
-    }
     let texture_desc = ImageDesc::rgba8_srgb(2, 2);
     preparation.reserve_image(texture_desc, 1)?;
     let bloom = if example == Example::MixedPost {
@@ -157,16 +147,10 @@ pub fn run_on<P: ViewPipeline>(
         Bloom::Off
     };
     let bloom = bloom.prepare(&mut preparation, ImageDesc::rgba16_float(64, 64))?;
-    let capacity = preparation.graph_capacity(GraphCapacity::default())?;
-    let mut runtime = Runtime::new(
-        api,
-        RuntimeLimits {
-            graph: capacity,
-            ..Default::default()
-        },
-        preparation.working_set(),
-    )?;
-    let id = pipeline.initialize(&mut runtime)?;
+    let runtime_limits = preparation.runtime_limits(RuntimeLimits::default())?;
+    let capacity = runtime_limits.graph;
+    let mut runtime = Runtime::new(api, runtime_limits, preparation.working_set())?;
+    let id = pipeline.initialize_pipeline(group, &mut runtime)?;
     let wait = |runtime: &mut Runtime, id| -> Result<(), Box<dyn Error>> {
         drop(
             runtime
@@ -232,10 +216,8 @@ pub fn run_on<P: ViewPipeline>(
             id: ViewId(index as u64),
             extent,
             camera,
-            bounds: Bounds::new([-1., -1., 0.], [1., 1., 1.])?,
-            sun: Sun::new([0., 0., -1.], [2.; 3])?,
         };
-        pipeline.register_view(&view)?;
+        pipeline.register_view(group, &view)?;
         views.push(view);
     }
     let mut pool = GraphPool::new(capacity, 1)?;
@@ -243,25 +225,28 @@ pub fn run_on<P: ViewPipeline>(
     for step in 0..3 {
         #[cfg(test)]
         if step == 1 {
-            let mut stale = pipeline.begin_frame(&mut pool)?;
+            let stale = pipeline.begin_frame(&mut pool)?;
             assert!(
                 stale
-                    .draw_view(SceneInput::new(&meshes, &materials, &objects), &views[0])
+                    .bind_scene(group, SceneInput::new(&meshes, &materials, &objects))
                     .is_err()
             );
         }
-        if step == 1
-            && let Some(next) = resized.take()
-        {
+        if step == 1 && resize {
             extent = [32, 32];
-            pipeline.clear(&mut runtime)?;
-            pipeline = next;
-            if let Some(id) = pipeline.initialize(&mut runtime)? {
-                wait(&mut runtime, id)?;
-            }
+            let (next, mut replacement) = prepare(&mut pipeline, extent)?;
+            meshes.reserve(&mut replacement)?;
+            meshes.reserve_replacement(model, &mut replacement)?;
+            replacement.reserve_image(texture_desc, 1)?;
+            runtime.prepare_working_set(replacement.working_set())?;
             for camera in &mut views {
                 camera.extent = extent;
-                pipeline.register_view(camera)?;
+                pipeline.reconfigure_view(next, camera, &mut runtime)?;
+            }
+            pipeline.remove_pipeline(group, &mut runtime)?;
+            group = next;
+            if let Some(id) = pipeline.initialize_pipeline(group, &mut runtime)? {
+                wait(&mut runtime, id)?;
             }
             let id = meshes
                 .prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)?
@@ -274,12 +259,15 @@ pub fn run_on<P: ViewPipeline>(
             {
                 wait(&mut runtime, id)?;
             }
-            pipeline.prepare_scene(SceneInput::new(&meshes, &materials, &objects))?;
+            pipeline.prepare_scene(group, SceneInput::new(&meshes, &materials, &objects))?;
         }
-        let scene = SceneInput::new(&meshes, &materials, &objects);
+        let scene = SceneInput::new(&meshes, &materials, &objects)
+            .with_sun(Sun::new([0., 0., -1.], [2.; 3])?)
+            .with_bounds(Bounds::new([-1., -1., 0.], [1., 1., 1.])?);
         #[cfg(all(test, feature = "memory-profiling"))]
         let before = renderer::measurement::Snapshot::now();
         let mut frame = pipeline.begin_frame(&mut pool)?;
+        let scene = frame.bind_scene(group, scene)?;
         let mut reads = [None; 2];
         for (camera, slot) in views.iter().zip(&mut reads) {
             let hdr = frame.draw_view(scene, camera)?.color;
@@ -293,7 +281,7 @@ pub fn run_on<P: ViewPipeline>(
             } else {
                 None
             };
-            let color = frame.write_output(hdr, 1., target)?;
+            let color = frame.write_output(camera.id, hdr, 1., target)?;
             if let Some(target) = target {
                 assert_eq!(target, color.raw_image());
             }
@@ -305,7 +293,7 @@ pub fn run_on<P: ViewPipeline>(
         }
         if step == 0 {
             // Already recorded operands keep the old versions through submission.
-            if resized.is_some() {
+            if resize {
                 meshes.update(model, geometry(0.75)?)?;
             }
             let green = [0.15, 1., 0.25, 1.];

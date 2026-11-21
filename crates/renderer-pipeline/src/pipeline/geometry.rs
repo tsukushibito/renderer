@@ -90,7 +90,7 @@ impl GeometryPipeline {
         &self,
         view: ViewInput,
         sun: Sun,
-        bounds: Bounds,
+        bounds: impl Into<Option<Bounds>>,
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
         self.common().prepare_view(view, sun, bounds, environment)

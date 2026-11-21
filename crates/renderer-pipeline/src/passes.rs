@@ -61,7 +61,7 @@ pub(super) fn opaque_program(
         (ImageFormat::Rgba16Float, OpaqueDepth::Prepassed) => {
             ManagedRasterProgram::mesh_hdr_prepassed()
         }
-        (ImageFormat::Depth32Float | ImageFormat::Rgba8Srgb, _) => return None,
+        _ => return None,
     })
 }
 

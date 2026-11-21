@@ -1,4 +1,4 @@
-//! Both drivers consume the very same registered GPU buffers and material handle.
+//! One GPU frame renders two techniques at different extents from shared assets.
 use renderer::{
     capacity::Preparation,
     graph::{GraphCapacity, GraphPool},
@@ -13,27 +13,6 @@ use renderer_pipeline::{
 };
 use std::{num::NonZeroUsize, time::Duration};
 
-fn pixel<P: ViewPipeline>(
-    driver: &mut ViewRenderer<P>,
-    rt: &mut Runtime,
-    pool: &mut GraphPool,
-    scene: SceneInput<'_>,
-    camera: &CameraView,
-) -> PipelineResult<[u8; 4]> {
-    driver.prepare_scene(scene)?;
-    let mut frame = driver.begin_frame(pool)?;
-    let hdr = frame.draw_view(scene, camera)?.color;
-    let sdr = frame.write_output(hdr, 1., None)?;
-    let read = frame.graph().readback_image("result", sdr.raw_image())?;
-    let submitted = frame.submit(rt)?;
-    let mut result = rt
-        .wait_for_frame(submitted.id(), Duration::from_secs(10))?
-        .ok_or("timed out")?;
-    let mut bytes = [0; 8 * 8 * 4];
-    result.readback_into(read, &mut bytes)?;
-    Ok(bytes[144..148].try_into()?)
-}
-
 pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
     let n = NonZeroUsize::MIN;
     let limits = SceneLimits {
@@ -46,16 +25,18 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
     let size = [8, 8];
     let mut prep = Preparation::new(n);
     let output = Some(SdrOutput::display(false));
-    let mut standard = ViewRenderer::prepare(
+    let mut driver = ViewRenderer::new();
+    let standard = driver.prepare_pipeline(
         StandardPipeline::forward(size, limits)?,
         size,
         n,
         output,
         &mut prep,
     )?;
-    let mut toon = ViewRenderer::prepare(
-        super::toon_pipeline::prepare(size, limits, &[])?,
-        size,
+    let minimap_size = [4, 4];
+    let toon = driver.prepare_pipeline(
+        super::toon_pipeline::prepare(minimap_size, limits, &[])?,
+        minimap_size,
         n,
         output,
         &mut prep,
@@ -85,8 +66,6 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
             [1., 2.],
             Projection::Orthographic,
         )?,
-        bounds: Bounds::new([-1.; 3], [1.; 3])?,
-        sun: Sun::new([0., 0., -1.], [1.; 3])?,
     };
     let cap = prep.graph_capacity(GraphCapacity::default())?;
     let mut rt = Runtime::new(
@@ -99,8 +78,8 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
     )?;
     let mut pool = GraphPool::new(cap, 1)?;
     for id in [
-        standard.initialize(&mut rt)?,
-        toon.initialize(&mut rt)?,
+        driver.initialize_pipeline(standard, &mut rt)?,
+        driver.initialize_pipeline(toon, &mut rt)?,
         meshes.prepare_gpu(&mut rt, &mut GraphPool::new(cap, 1)?)?,
     ]
     .into_iter()
@@ -111,15 +90,46 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
                 .ok_or("setup timed out")?,
         );
     }
-    standard.register_view(&camera)?;
-    toon.register_view(&camera)?;
+    let minimap = CameraView {
+        id: ViewId(1),
+        extent: minimap_size,
+        ..camera
+    };
+    driver.register_view(standard, &camera)?;
+    driver.register_view(toon, &minimap)?;
     let scene = SceneInput::new(&meshes, &materials, &objects);
-    let a = pixel(&mut standard, &mut rt, &mut pool, scene, &camera)?;
-    let b = pixel(&mut toon, &mut rt, &mut pool, scene, &camera)?;
+    driver.prepare_scene(standard, scene)?;
+    driver.prepare_scene(toon, scene)?;
+    let mut frame = driver.begin_frame(&mut pool)?;
+    let mut draw = |pipeline, camera: &CameraView| -> PipelineResult<_> {
+        let bound = frame.bind_scene(pipeline, scene)?;
+        let hdr = frame.draw_view(bound, camera)?.color;
+        let sdr = frame.write_output(camera.id, hdr, 1., None)?;
+        Ok(frame.graph().readback_image("result", sdr.raw_image())?)
+    };
+    let main_read = draw(standard, &camera)?;
+    let map_read = draw(toon, &minimap)?;
+    let compiled = frame.compile()?;
+    assert_eq!(
+        compiled
+            .ordered_pass_names()
+            .filter(|name| *name == "result")
+            .count(),
+        2
+    );
+    let receipt = compiled.submit(&mut rt)?;
+    let mut result = rt
+        .wait_for_frame(receipt.id(), Duration::from_secs(10))?
+        .ok_or("timed out")?;
+    let mut a = [0; 8 * 8 * 4];
+    let mut b = [0; 4 * 4 * 4];
+    result.readback_into(main_read, &mut a)?;
+    result.readback_into(map_read, &mut b)?;
+    let (a, b) = (&a[144..148], &b[40..44]);
     assert!(a[0] > a[1] && b[0] > b[1]);
     assert_ne!(a, b);
-    standard.clear(&mut rt)?;
-    toon.clear(&mut rt)?;
+    drop((result, receipt));
+    driver.clear(&mut rt)?;
     meshes.release_gpu(&mut rt)?;
     materials.clear(&mut rt)?;
     super::validation::check_validation(rt)

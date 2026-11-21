@@ -37,6 +37,7 @@ pub struct ViewInput {
     pub(super) forward: [f64; 3],
     pub(super) near_far: [f32; 2],
     pub(super) shape: Shape,
+    projection: Projection,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -52,7 +53,16 @@ impl ViewInput {
         self.matrix
     }
 
-    pub(crate) fn sort_direction(self) -> [f64; 3] {
+    pub fn eye(self) -> [f32; 3] {
+        self.eye
+    }
+    pub fn near_far(self) -> [f32; 2] {
+        self.near_far
+    }
+    pub fn projection(self) -> Projection {
+        self.projection
+    }
+    pub fn forward(self) -> [f64; 3] {
         self.forward
     }
     /// Validate the projection and retain the exact FP32 raster matrix.
@@ -175,6 +185,7 @@ impl ViewInput {
             forward,
             near_far: [near, far],
             shape,
+            projection,
         })
     }
 }

@@ -214,8 +214,8 @@ impl Graph {
         })
     }
     /// Upload every texel of a single-layer color image, including every mip.
-    /// Bytes use tightly packed rows in the format's component order, with
-    /// consecutive mip levels from zero to the smallest selected level.
+    /// Concatenate tightly packed mip levels from mip zero down. Each BC mip
+    /// contains row-major 4×4 blocks, including complete blocks on its edges.
     pub fn upload_image(
         &mut self,
         name: &str,
@@ -249,7 +249,11 @@ impl Graph {
             let data = graph.append_upload(bytes)?;
             let mip_levels = u64::from(graph.image_desc_at(dst)?.mip_levels);
             Ok((
-                Operation::UploadImage { dst, data },
+                Operation::UploadImage {
+                    dst,
+                    region: None,
+                    data,
+                },
                 graph.append_accesses([write(
                     dst,
                     0..mip_levels,
@@ -260,8 +264,8 @@ impl Graph {
         })
     }
 
-    /// Copies a complete RGBA8 or RGBA16F image into a distinct image with the
-    /// same format and extent, without changing its native component bits.
+    /// Copies a complete single-mip color image into a distinct image with the
+    /// same format and extent, preserving the encoded bytes.
     /// The source contents are selected by declaration order and must be initialized.
     pub fn copy_image(
         &mut self,
@@ -272,9 +276,19 @@ impl Graph {
         self.build_pass(name, |graph| {
             let src = graph.image_id(src)?;
             let dst = graph.image_id(dst)?;
-            graph.compatible_image_copy_pair(src, dst)?;
+            let desc = graph.compatible_image_copy_pair(src, dst)?;
+            let full = super::ImageRegion {
+                mip_level: 0,
+                origin: [0; 2],
+                extent: [desc.width, desc.height],
+            };
             Ok((
-                Operation::CopyImage { src, dst },
+                Operation::CopyImage {
+                    src,
+                    dst,
+                    source: full,
+                    destination: full,
+                },
                 graph.append_accesses([
                     read(src, 0..1, AccessPurpose::CopySource),
                     write(dst, 0..1, AccessPurpose::CopyDestination),
@@ -284,7 +298,7 @@ impl Graph {
         })
     }
     /// Read every texel of a single-mip, single-layer image, including D32.
-    /// Results use tightly packed rows in the image's native component format.
+    /// Results use tightly packed texel or BC block rows in the native format.
     pub fn readback_image(
         &mut self,
         name: &str,
@@ -465,7 +479,7 @@ pub(super) fn read(resource: usize, range: Range<u64>, purpose: AccessPurpose) -
         purpose,
     }
 }
-fn write(resource: usize, range: Range<u64>, purpose: AccessPurpose) -> ResourceAccess {
+pub(super) fn write(resource: usize, range: Range<u64>, purpose: AccessPurpose) -> ResourceAccess {
     ResourceAccess {
         stages: purpose.default_stages(),
         resource,
@@ -496,16 +510,18 @@ fn validate_purpose(
         ColorResolve | Indirect => false,
         CopySource | CopyDestination => kind == PassKind::Copy,
         Uniform => kind == PassKind::Compute && matches!(desc, ResourceDesc::Buffer(_)),
-        StorageRead | StorageWrite | StorageReadWrite => kind == PassKind::Compute,
+        StorageRead | StorageWrite | StorageReadWrite => {
+            kind == PassKind::Compute
+                && match desc {
+                    ResourceDesc::Buffer(_) => true,
+                    ResourceDesc::Image(image) => {
+                        image.sample_count == SampleCount::X1 && image.format.supports_storage()
+                    }
+                }
+        }
         Sampled => {
             kind == PassKind::Raster
-                && matches!(
-                    desc,
-                    ResourceDesc::Image(ImageDesc {
-                        format: ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float,
-                        ..
-                    })
-                )
+                && matches!(desc, ResourceDesc::Image(image) if image.sample_count == SampleCount::X1)
         }
         Vertex | Index => kind == PassKind::Raster && matches!(desc, ResourceDesc::Buffer(_)),
         ColorAttachment => {

@@ -19,7 +19,7 @@ use super::provenance::IndexError;
 use super::storage::{StorageLease, StoragePool};
 use super::{NativeResource, Physical, RuntimeError, Snapshot};
 use crate::graph::{
-    AccessPurpose, CompiledGraph, MeshUpload, Operation, ResourceDesc, SampleCount,
+    AccessPurpose, CompiledGraph, ImageRegion, MeshUpload, Operation, ResourceDesc, SampleCount,
 };
 
 #[cfg(feature = "graph-diagnostics")]
@@ -251,10 +251,13 @@ enum PreparedOperation {
     },
     UploadImage {
         dst: usize,
+        region: Option<ImageRegion>,
     },
     CopyImage {
         src: usize,
         dst: usize,
+        source: ImageRegion,
+        destination: ImageRegion,
     },
     ReadbackBuffer {
         src: usize,
@@ -300,8 +303,18 @@ impl PreparedOperation {
                 dst_offset,
                 size,
             },
-            Operation::UploadImage { dst, .. } => Self::UploadImage { dst },
-            Operation::CopyImage { src, dst } => Self::CopyImage { src, dst },
+            Operation::UploadImage { dst, region, .. } => Self::UploadImage { dst, region },
+            Operation::CopyImage {
+                src,
+                dst,
+                source,
+                destination,
+            } => Self::CopyImage {
+                src,
+                dst,
+                source,
+                destination,
+            },
             Operation::ReadbackBuffer { src, offset, size } => {
                 Self::ReadbackBuffer { src, offset, size }
             }
