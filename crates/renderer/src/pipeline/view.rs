@@ -283,6 +283,12 @@ impl ViewPipeline for StandardPipeline {
     ) -> PipelineResult<()> {
         Ok(view.clear_history(runtime)?)
     }
+    fn camera_cut(&mut self, view: &mut StandardViewState) -> PipelineResult<()> {
+        if let Some(history) = &mut view.history {
+            history.maps.invalidate()?;
+        }
+        Ok(())
+    }
     fn release(&mut self, runtime: &mut Runtime) -> PipelineResult<()> {
         Ok(self.clear(runtime)?)
     }

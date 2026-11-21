@@ -98,6 +98,7 @@ try {
         if ($file.Extension -ceq '.hlsli') { $includes[$file.Name] = Hash $canonical }
     }
     $shaders = @(
+        'pick.vert', 'pick.frag', 'selection_outline.frag',
         'pbr.vert', 'pbr.frag', 'toon.frag', 'canvas.frag', 'canvas_fill.frag', 'shadow.vert', 'shadow.frag', 'bloom_extract_downsample.comp',
         'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp',
         'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag',
@@ -164,7 +165,7 @@ try {
         $reflection = [regex]::Replace($dump.Substring(0, $end), '(?m)[ \t]+$', '')
         $reflectionPath = Join-Path $temporaryRoot ($name + '.reflection.txt')
         Write-Text $reflectionPath $reflection
-        $hasInline = $name -cin @('shadow.vert', 'pbr_instancing.vert') -or
+        $hasInline = $name -cin @('shadow.vert', 'pbr_instancing.vert', 'pick.vert') -or
             ($stage -ceq 'vert' -and $name.Contains('_transformed'))
         if (($reflection -match '\bcb7\b') -ne $hasInline) {
             throw "Unexpected inline cbuffer contract in $name reflection"

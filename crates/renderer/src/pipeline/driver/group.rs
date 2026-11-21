@@ -15,6 +15,7 @@ pub(super) trait Group: Any {
     ) -> bool;
     fn pairs(&self) -> &ScenePairs;
     fn register(&mut self, camera: &CameraView) -> PipelineResult<()>;
+    fn camera_cut(&mut self, id: ViewId) -> PipelineResult<()>;
     fn check_room(&self, camera: &CameraView) -> PipelineResult<()>;
     fn remove_view(&mut self, id: ViewId, runtime: &mut Runtime) -> PipelineResult<()>;
     fn record(
@@ -172,6 +173,10 @@ impl<P: ViewPipeline + 'static> Group for PreparedGroup<P> {
         self.pipeline.release_view(&mut slot.state, runtime)?;
         self.views.remove(&id);
         Ok(())
+    }
+    fn camera_cut(&mut self, id: ViewId) -> PipelineResult<()> {
+        let slot = self.views.get_mut(&id).expect("registered view");
+        self.pipeline.camera_cut(&mut slot.state)
     }
     fn record(
         &mut self,

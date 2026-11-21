@@ -113,6 +113,9 @@ impl WindowRenderer {
     pub fn set_camera(&mut self, camera: crate::pbr::ViewInput) {
         self.renderer.set_camera(camera);
     }
+    pub fn cut_camera(&mut self, camera: crate::pbr::ViewInput) -> PipelineResult<()> {
+        self.renderer.cut_camera(camera)
+    }
 
     /// Apply a window size event at a change boundary. Zero size suspends presentation.
     pub fn resize(&mut self, extent: [u32; 2], assets: SceneAssets<'_>) -> PipelineResult<()> {

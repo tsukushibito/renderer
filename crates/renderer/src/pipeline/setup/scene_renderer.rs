@@ -120,6 +120,9 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
             runtime: self.runtime.as_mut().expect("live renderer").borrow_mut(),
         })
     }
+    pub fn camera_cut(&mut self, id: ViewId) -> PipelineResult<()> {
+        self.driver.camera_cut(id)
+    }
 
     /// Record on a host-allocated Graph while the host keeps access to the Runtime
     /// for scheduling and observing its own submissions.

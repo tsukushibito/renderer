@@ -38,7 +38,7 @@ impl ShadowKey {
 }
 
 struct Entry {
-    key: ShadowKey,
+    key: Option<ShadowKey>,
     image: ImportImage,
 }
 
@@ -182,6 +182,16 @@ impl Error for ShadowHistoryError {
 }
 
 impl ShadowHistory {
+    /// Force the next accepted frame to redraw into the existing targets.
+    pub fn invalidate(&mut self) -> Result<(), ShadowHistoryError> {
+        if self.in_progress.load(Ordering::Acquire) {
+            return Err(ShadowHistoryError::FrameInProgress);
+        }
+        for entry in self.entries.iter_mut().flatten() {
+            entry.key = None;
+        }
+        Ok(())
+    }
     /// Select cached images for a prepared standard PBR view.
     pub fn begin_view(
         &self,
@@ -228,7 +238,10 @@ impl ShadowHistory {
         let mut cascades = [None; CASCADE_COUNT];
         for (index, (name, key)) in SHADOW_IMAGES.into_iter().zip(keys).enumerate() {
             let (target, reused) = match &self.entries[index] {
-                Some(entry) => (graph.import_image(name, &entry.image)?, entry.key == key),
+                Some(entry) => (
+                    graph.import_image(name, &entry.image)?,
+                    entry.key == Some(key),
+                ),
                 None => (graph.image(name, desc)?, false),
             };
             cascades[index] = Some(Cascade {
@@ -302,7 +315,7 @@ impl ShadowHistory {
         for (entry, cascade) in incoming.iter_mut().zip(updates.cascades) {
             if !cascade.reused {
                 *entry = Some(Entry {
-                    key: cascade.key,
+                    key: Some(cascade.key),
                     image: submission
                         .export_image(cascade.target)
                         .map_err(ShadowHistoryError::Execution)?,

@@ -1,0 +1,89 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyz         0     NONE   float   xyz
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyzw        0     NONE   float   xyzw
+; SV_Position              0   xyzw        1      POS   float   xyzw
+;
+; shader hash: e19907f75d9b04cca1ca9d45ff206409
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Vertex Shader
+; OutputPositionPresent=1
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 1
+; SigOutputElements: 2
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 1
+; SigOutputVectors[0]: 2
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0
+;
+; Output signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0        nointerpolation
+; SV_Position              0          noperspective
+;
+; Buffer Definitions:
+;
+; cbuffer pick
+; {
+;
+;   struct hostlayout.pick
+;   {
+;
+;       struct hostlayout.struct.PickParameters
+;       {
+;
+;           row_major float4x4 clip_from_world;       ; Offset:    0
+;           float4 model_rows[3];                     ; Offset:   64
+;           uint id;                                  ; Offset:  112
+;
+;       } pick;                                       ; Offset:    0
+;
+;
+;   } pick;                                           ; Offset:    0 Size:   116
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; pick                              cbuffer      NA          NA     CB0            cb7     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 3, outputs: 8
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;   output 4 depends on inputs: { 0, 1, 2 }
+;   output 5 depends on inputs: { 0, 1, 2 }
+;   output 6 depends on inputs: { 0, 1, 2 }
+;   output 7 depends on inputs: { 0, 1, 2 }
+;

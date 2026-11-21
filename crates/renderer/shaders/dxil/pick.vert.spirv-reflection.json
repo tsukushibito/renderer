@@ -1,0 +1,59 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "vert"
+        }
+    ],
+    "types" : {
+        "_5" : {
+            "name" : "type.ConstantBuffer.PickParameters",
+            "members" : [
+                {
+                    "name" : "clip_from_world",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "model_rows",
+                    "type" : "vec4",
+                    "array" : [
+                        3
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 64,
+                    "array_stride" : 16
+                },
+                {
+                    "name" : "id",
+                    "type" : "uint",
+                    "offset" : 112
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec3",
+            "name" : "in.var.TEXCOORD0",
+            "location" : 0
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "out.var.TEXCOORD0",
+            "location" : 0
+        }
+    ],
+    "push_constants" : [
+        {
+            "type" : "_5",
+            "name" : "pick",
+            "push_constant" : true
+        }
+    ]
+}

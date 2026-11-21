@@ -204,6 +204,12 @@ impl ViewRenderer {
         self.views.remove(&id);
         Ok(())
     }
+    /// Invalidate this view's temporal inputs before recording its next frame.
+    pub fn camera_cut(&mut self, id: ViewId) -> PipelineResult<()> {
+        self.check_idle()?;
+        let group = self.pipeline_for_view(id)?;
+        self.pipeline_mut(group)?.group.camera_cut(id)
+    }
     /// Move a camera to a prepared extent/technique at a change boundary.
     /// Create the replacement before releasing the old history. A failed creation
     /// preserves the original registration. If release fails, retry this operation
@@ -356,6 +362,31 @@ impl<'a> ViewFrame<'a> {
     }
     pub fn graph(&mut self) -> &mut Graph {
         self.graph.as_mut().expect("building frame")
+    }
+    /// Record an auxiliary geometry pass using the same posed streams as camera draws.
+    pub fn with_geometry<T>(
+        &mut self,
+        scene: SceneInput<'_>,
+        record: impl FnOnce(&mut Graph, SceneInput<'_>) -> Result<T, GraphError>,
+    ) -> Result<T, GraphError> {
+        let graph = self.graph.as_mut().expect("building frame");
+        if self.failed || graph.graph_id() != self.id {
+            return Err(GraphError::invalid_input(
+                "abandon failed or replaced view frame",
+            ));
+        }
+        self.failed = true;
+        self.renderer
+            .poses
+            .record(graph, scene.meshes, scene.objects)?;
+        // Reborrow the caller's scene for this recording's shorter lifetime.
+        let input = SceneInput {
+            poses: Some(&self.renderer.poses),
+            ..scene
+        };
+        let output = record(graph, input)?;
+        self.failed = false;
+        Ok(output)
     }
     /// Validate revisions once for all cameras of this pipeline in this frame.
     pub fn bind_scene<'s>(

@@ -212,7 +212,7 @@ impl Yard {
     ) -> SceneInput<'a> {
         out.clear();
         self.extract_parts(actor, camera, out);
-        SceneInput::new(&self.meshes, &self.materials, out)
+        SceneInput::new(&self.meshes, &self.materials, out).with_bounds(self.bounds)
     }
 
     fn extract_parts(&self, index: usize, camera: &CameraView, out: &mut Vec<RenderObject>) {
@@ -224,6 +224,25 @@ impl Yard {
                 out.push(replacement.map_or(object, |armor| armor.with_transform(actor.transform)));
             }
         }
+    }
+
+    /// The GPU sees frame-local IDs. Keep this small lookup with an outstanding
+    /// mouse request so reusing an actor slot never redirects the answer.
+    pub(crate) fn pick_targets(&self, camera: &CameraView) -> [Option<(usize, u64, usize)>; 4] {
+        let mut targets = [None; 4];
+        let mut entries = targets.iter_mut();
+        for (i, actor) in self.actors.iter().enumerate() {
+            if let Some(actor) = actor {
+                for (part, _) in actor.draw_parts(camera) {
+                    *entries.next().expect("two parts per training actor") = Some((
+                        i,
+                        if i == 0 { self.occupant } else { 1 },
+                        part.material_slot,
+                    ));
+                }
+            }
+        }
+        targets
     }
 
     fn release_armor(&mut self, armor: RenderObject) -> PipelineResult<()> {

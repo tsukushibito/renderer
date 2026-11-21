@@ -56,6 +56,10 @@ pub trait ViewPipeline {
     /// Validate the mesh/material pairing only. Object transforms and tint may vary per frame.
     fn check_object(&self, scene: SceneInput<'_>, object: &RenderObject) -> Result<(), GraphError>;
     fn create_view(&self, camera: &CameraView) -> PipelineResult<Self::State>;
+    /// Reset temporal reuse after a discontinuity in this camera. Keep prepared storage.
+    fn camera_cut(&mut self, _state: &mut Self::State) -> PipelineResult<()> {
+        Ok(())
+    }
     fn record(
         &mut self,
         graph: &mut Graph,

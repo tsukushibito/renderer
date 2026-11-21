@@ -161,6 +161,12 @@ impl Renderer {
     pub fn set_camera(&mut self, view: crate::pbr::ViewInput) {
         self.camera.camera = view;
     }
+    /// Set a discontinuous camera transform and discard prior temporal reuse.
+    pub fn cut_camera(&mut self, view: crate::pbr::ViewInput) -> PipelineResult<()> {
+        self.drawing.camera_cut(self.camera.id)?;
+        self.set_camera(view);
+        Ok(())
+    }
 
     /// Reconfigure an existing camera at a resolution or scene change boundary.
     /// Return outstanding captures first. Registered geometry stays on the device.

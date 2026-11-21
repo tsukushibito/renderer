@@ -79,6 +79,7 @@ fn indexed_bounds(
     Bounds::new(min, max)
 }
 struct Layout {
+    position_at_start: bool,
     skin: Option<Arc<skin::Skin>>,
     bounds: Bounds,
     attributes: Vec<VertexAttribute>,
@@ -88,6 +89,11 @@ struct Layout {
 impl MeshData {
     fn into_parts(self) -> (GeometryData, Arc<Layout>) {
         let layout = Layout {
+            position_at_start: self.attributes.iter().any(|a| {
+                a.location == 0
+                    && a.offset == 0
+                    && a.format == renderer_core::program::VertexFormat::Float32x3
+            }),
             skin: self.skin,
             bounds: self.bounds,
             attributes: self.attributes,
@@ -308,6 +314,20 @@ impl Meshes {
             ..Default::default()
         })
     }
+    pub(crate) fn position_stride(&self, mesh: MeshHandle) -> Result<u32, GraphError> {
+        let layout = self
+            .assets
+            .get(&mesh)
+            .ok_or_else(|| GraphError::invalid_input("unknown mesh"))?
+            .drawable_layout();
+        if !layout.position_at_start {
+            return Err(GraphError::invalid_input(
+                "picking requires a float3 position at location and offset zero",
+            ));
+        }
+        Ok(layout.vertex_stride)
+    }
+
     /// Check a mesh/program pairing when building or updating the scene.
     pub fn check_layout(
         &self,

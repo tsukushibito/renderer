@@ -1,0 +1,42 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_7" : {
+            "name" : "type.PushConstant.Selection",
+            "members" : [
+                {
+                    "name" : "id",
+                    "type" : "uint",
+                    "offset" : 0
+                }
+            ]
+        }
+    },
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "out.var.SV_Target0",
+            "location" : 0
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "ids",
+            "set" : 0,
+            "binding" : 0
+        }
+    ],
+    "push_constants" : [
+        {
+            "type" : "_7",
+            "name" : "selection",
+            "push_constant" : true
+        }
+    ]
+}
