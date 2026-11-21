@@ -5,6 +5,9 @@
     any(feature = "vulkan", feature = "d3d12")
 ))]
 
+#[path = "support/validation.rs"]
+mod validation;
+
 use raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, WindowHandle};
 use renderer::{
     PresentOutcome, PresentationConfig,
@@ -143,30 +146,7 @@ fn exercise(config: RuntimeConfig, events: &mut EventLoop<()>, host: &mut Host) 
     rt.delete(output.key()).unwrap();
     drop(rt.wait_for_frame(receipt.id(), WAIT).unwrap().unwrap());
     drop(receipt);
-    let strict = cfg!(feature = "development-validation");
-    #[cfg(feature = "vulkan")]
-    if let Some(vulkan) = rt.as_vulkan() {
-        assert_ne!(vulkan.device_info().device_type, "CPU");
-        let monitor = vulkan.validation_monitor();
-        drop(rt);
-        let report = monitor.report();
-        assert!(report.is_clean(), "{report:?}");
-        if strict {
-            assert_eq!(report.core_validation, Some(true));
-            assert_eq!(report.synchronization_validation, Some(true));
-        }
-        return;
-    }
-    #[cfg(feature = "d3d12")]
-    if let Some(d3d12) = rt.as_d3d12() {
-        let monitor = d3d12.validation_monitor();
-        drop(rt);
-        let report = monitor.snapshot();
-        assert!(report.is_clean(), "{report:?}");
-        assert_eq!(report.debug_layer_enabled, strict);
-        assert_eq!(report.gpu_based_validation_enabled, strict);
-        assert!(!strict || report.teardown_checked);
-    }
+    validation::check_after_teardown(rt);
 }
 
 #[test]

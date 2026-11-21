@@ -1,5 +1,8 @@
 #![cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 
+#[path = "support/validation.rs"]
+mod validation;
+
 use std::time::Duration;
 
 use renderer::{
@@ -92,7 +95,7 @@ fn dropped_frame_image_and_persistent_target_have_distinct_registration_lifetime
         drop((receipt, second));
         drop(rt.wait_for_frame(id, wait).unwrap().unwrap());
 
-        check_validation(rt);
+        validation::check_after_teardown(rt);
     }
 }
 
@@ -104,35 +107,6 @@ fn configurations() -> impl Iterator<Item = RuntimeConfig> {
         RuntimeConfig::D3D12(Default::default()),
     ]
     .into_iter()
-}
-
-fn check_validation(rt: Runtime) {
-    #[cfg(feature = "vulkan")]
-    if let Some(vk) = rt.as_vulkan() {
-        let monitor = vk.validation_monitor();
-        drop(rt);
-        let report = monitor.report();
-        assert!(report.is_clean(), "{report:?}");
-        if cfg!(feature = "development-validation") {
-            assert_eq!(report.core_validation, Some(true));
-            assert_eq!(report.synchronization_validation, Some(true));
-        }
-        return;
-    }
-    #[cfg(all(windows, feature = "d3d12"))]
-    if let Some(dx) = rt.as_d3d12() {
-        let monitor = dx.validation_monitor();
-        drop(rt);
-        let report = monitor.snapshot();
-        assert!(report.is_clean(), "{report:?}");
-        if cfg!(feature = "development-validation") {
-            assert!(
-                report.debug_layer_enabled
-                    && report.gpu_based_validation_enabled
-                    && report.teardown_checked
-            );
-        }
-    }
 }
 
 #[test]
@@ -212,6 +186,6 @@ fn uploaded_texture_is_available_to_a_batched_submission_before_waiting() {
         );
         drop(orm_owner);
         rt.collect_released_images().unwrap();
-        check_validation(rt);
+        validation::check_after_teardown(rt);
     }
 }
