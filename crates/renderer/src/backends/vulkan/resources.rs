@@ -162,12 +162,14 @@ pub(super) struct DeviceImage {
     pub(super) supports_linear_filtering: bool,
     pub(super) extent: vk::Extent2D,
     pub(super) format: vk::Format,
+    pub(super) logical_format: crate::ImageFormat,
     pub(super) aspect: vk::ImageAspectFlags,
 }
 
 /// Validated creation parameters for the Device that owns the Graph resources.
 #[derive(Clone, Copy)]
 pub(super) struct ImageCreation {
+    logical_format: crate::ImageFormat,
     width: u32,
     height: u32,
     mip_levels: u32,
@@ -189,6 +191,11 @@ impl DeviceImage {
             .map_err(RuntimeError::device_unavailable)?;
         let (width, height, mip_levels) = (desc.width, desc.height, desc.mip_levels);
         let format = image_format(desc.format);
+        if desc.format.is_block_compressed() && !owner.device.supports_bc() {
+            return Err(RuntimeError::unsupported(
+                "textureCompressionBC is unavailable",
+            ));
+        }
         let samples = sample_count_flags(desc.sample_count);
         let (usage, aspect) = match format {
             vk::Format::R8G8B8A8_UNORM => (
@@ -207,7 +214,7 @@ impl DeviceImage {
                     | vk::ImageUsageFlags::COLOR_ATTACHMENT,
                 vk::ImageAspectFlags::COLOR,
             ),
-            vk::Format::R8G8B8A8_SRGB => (
+            _ if !desc.format.supports_attachment() => (
                 vk::ImageUsageFlags::TRANSFER_SRC
                     | vk::ImageUsageFlags::TRANSFER_DST
                     | vk::ImageUsageFlags::SAMPLED,
@@ -308,6 +315,7 @@ impl DeviceImage {
             ));
         }
         Ok(ImageCreation {
+            logical_format: desc.format,
             width,
             height,
             mip_levels,
@@ -329,6 +337,7 @@ impl DeviceImage {
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
         let ImageCreation {
+            logical_format,
             width,
             height,
             mip_levels,
@@ -371,6 +380,7 @@ impl DeviceImage {
             image,
             view: vk::ImageView::null(),
             sampled_view: vk::ImageView::null(),
+            logical_format,
             mip_views,
             mip_levels,
             supports_linear_filtering,
@@ -530,6 +540,14 @@ pub(super) fn image_format(format: crate::ImageFormat) -> vk::Format {
         crate::ImageFormat::Rgba8Srgb => vk::Format::R8G8B8A8_SRGB,
         crate::ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
         crate::ImageFormat::Depth32Float => vk::Format::D32_SFLOAT,
+        crate::ImageFormat::Rgba32Float => vk::Format::R32G32B32A32_SFLOAT,
+        crate::ImageFormat::Bc1RgbaUnorm => vk::Format::BC1_RGBA_UNORM_BLOCK,
+        crate::ImageFormat::Bc1RgbaSrgb => vk::Format::BC1_RGBA_SRGB_BLOCK,
+        crate::ImageFormat::Bc3RgbaUnorm => vk::Format::BC3_UNORM_BLOCK,
+        crate::ImageFormat::Bc3RgbaSrgb => vk::Format::BC3_SRGB_BLOCK,
+        crate::ImageFormat::Bc5RgUnorm => vk::Format::BC5_UNORM_BLOCK,
+        crate::ImageFormat::Bc7RgbaUnorm => vk::Format::BC7_UNORM_BLOCK,
+        crate::ImageFormat::Bc7RgbaSrgb => vk::Format::BC7_SRGB_BLOCK,
     }
 }
 

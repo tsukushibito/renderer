@@ -72,8 +72,8 @@ pub struct BufferDesc {
 impl ImageFormat {
     pub(crate) const fn aspect(self) -> ImageAspect {
         match self {
-            Self::Rgba8Unorm | Self::Rgba8Srgb | Self::Rgba16Float => ImageAspect::Color,
             Self::Depth32Float => ImageAspect::Depth,
+            _ => ImageAspect::Color,
         }
     }
 }
@@ -106,15 +106,22 @@ pub struct ImageDesc {
 }
 
 impl ImageDesc {
-    pub fn rgba8(width: u32, height: u32) -> Self {
+    /// Single-sample 2D texture with one mip level.
+    pub const fn texture_2d(width: u32, height: u32, format: ImageFormat) -> Self {
         Self {
             width,
             height,
-            format: ImageFormat::Rgba8Unorm,
+            format,
             mip_levels: 1,
             array_layers: 1,
             sample_count: SampleCount::X1,
         }
+    }
+    pub fn rgba8(width: u32, height: u32) -> Self {
+        Self::texture_2d(width, height, ImageFormat::Rgba8Unorm)
+    }
+    pub fn rgba32_float(width: u32, height: u32) -> Self {
+        Self::texture_2d(width, height, ImageFormat::Rgba32Float)
     }
     /// Eight-bit sRGB color for sampling and transfer, with linear alpha.
     pub fn rgba8_srgb(width: u32, height: u32) -> Self {
@@ -158,16 +165,14 @@ impl ImageDesc {
             || (self.sample_count == SampleCount::X4
                 && (self.mip_levels != 1
                     || self.array_layers != 1
-                    || self.format == ImageFormat::Rgba8Srgb))
+                    || !self.format.supports_attachment()))
         {
             return None;
         }
         let mut bytes = 0u64;
         for mip in 0..self.mip_levels {
             let [width, height] = self.mip_extent(mip)?;
-            let level = u64::from(width)
-                .checked_mul(u64::from(height))?
-                .checked_mul(self.format.texel_bytes())?;
+            let level = self.format.packed_byte_len(width, height)?;
             bytes = bytes.checked_add(level)?;
         }
         bytes

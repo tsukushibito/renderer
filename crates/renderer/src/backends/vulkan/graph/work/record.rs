@@ -392,14 +392,13 @@ fn layers(image: &DeviceImage) -> vk::ImageSubresourceLayers {
         .layer_count(1)
 }
 fn mip_bytes(image: &DeviceImage, mip: u32) -> u64 {
-    let texel_bytes = if image.format == vk::Format::R16G16B16A16_SFLOAT {
-        8
-    } else {
-        4
-    };
-    u64::from((image.extent.width >> mip).max(1))
-        * u64::from((image.extent.height >> mip).max(1))
-        * texel_bytes
+    image
+        .logical_format
+        .packed_byte_len(
+            (image.extent.width >> mip).max(1),
+            (image.extent.height >> mip).max(1),
+        )
+        .expect("validated image byte length")
 }
 fn image_copy(image: &DeviceImage, offset: u64, mip: u32) -> vk::BufferImageCopy {
     vk::BufferImageCopy::default()

@@ -141,6 +141,7 @@ struct Candidate {
     info: AdapterInfo,
     features: RequiredFeatures,
     multi_draw_indirect: bool,
+    texture_compression_bc: bool,
     queues: Vec<vk::QueueFamilyProperties>,
     property_failures: Vec<RequirementFailure>,
 }
@@ -150,6 +151,7 @@ struct SelectedDevice {
     info: AdapterInfo,
     queue_family_index: u32,
     multi_draw_indirect: bool,
+    texture_compression_bc: bool,
 }
 
 fn supported_api(api: u32) -> bool {
@@ -196,6 +198,7 @@ impl Candidate {
                 // bounded by the same uint32_t count.
                 queue_family_index: queue_family_index.expect("checked queue family") as u32,
                 multi_draw_indirect: self.multi_draw_indirect,
+                texture_compression_bc: self.texture_compression_bc,
             })
         } else {
             Err(AdapterRejection {
@@ -273,6 +276,7 @@ fn inspect(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Can
     };
     let mut features = RequiredFeatures::default();
     let mut multi_draw_indirect = false;
+    let mut texture_compression_bc = false;
     if supported_api(properties.api_version) {
         let mut driver = vk::PhysicalDeviceDriverProperties::default();
         let mut properties2 = vk::PhysicalDeviceProperties2::default().push_next(&mut driver);
@@ -302,6 +306,7 @@ fn inspect(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Can
         // supported query inputs and remain live for this synchronous call.
         unsafe { instance.get_physical_device_features2(physical_device, &mut features2) };
         multi_draw_indirect = features2.features.multi_draw_indirect == vk::TRUE;
+        texture_compression_bc = features2.features.texture_compression_bc == vk::TRUE;
         features = RequiredFeatures {
             timeline_semaphore: features12.timeline_semaphore == vk::TRUE,
             synchronization2: features13.synchronization2 == vk::TRUE,
@@ -322,6 +327,7 @@ fn inspect(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Can
         info,
         features,
         multi_draw_indirect,
+        texture_compression_bc,
         queues,
         property_failures,
     }
@@ -334,7 +340,7 @@ fn with_create_info<T>(
     queue_family_index: u32,
     create: impl FnOnce(&vk::DeviceCreateInfo<'_>) -> T,
 ) -> T {
-    with_presentation_create_info(queue_family_index, false, false, false, create)
+    with_presentation_create_info(queue_family_index, false, false, false, false, create)
 }
 
 fn with_presentation_create_info<T>(
@@ -342,6 +348,7 @@ fn with_presentation_create_info<T>(
     presentation: bool,
     memory_budget: bool,
     multi_draw_indirect: bool,
+    texture_compression_bc: bool,
     create: impl FnOnce(&vk::DeviceCreateInfo<'_>) -> T,
 ) -> T {
     let priorities = [1.0];
@@ -352,7 +359,9 @@ fn with_presentation_create_info<T>(
     let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
         .synchronization2(true)
         .dynamic_rendering(true);
-    let features = vk::PhysicalDeviceFeatures::default().multi_draw_indirect(multi_draw_indirect);
+    let features = vk::PhysicalDeviceFeatures::default()
+        .multi_draw_indirect(multi_draw_indirect)
+        .texture_compression_bc(texture_compression_bc);
     let mut maintenance =
         vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default().swapchain_maintenance1(true);
     let mut extensions = Vec::new();
@@ -376,7 +385,7 @@ fn with_presentation_create_info<T>(
         .enabled_extension_names(&extension_names)
         .push_next(&mut features12)
         .push_next(&mut features13);
-    if multi_draw_indirect {
+    if multi_draw_indirect || texture_compression_bc {
         create_info = create_info.enabled_features(&features);
     }
     if presentation {
@@ -639,6 +648,10 @@ impl VulkanDevice {
         &self.limits
     }
 
+    pub(super) fn supports_bc(&self) -> bool {
+        self.selected.texture_compression_bc
+    }
+
     pub(super) fn memory_budget_enabled(&self) -> bool {
         self.memory_budget_enabled
     }
@@ -791,6 +804,7 @@ impl VulkanDevice {
             presentation,
             memory_budget_enabled,
             selected.multi_draw_indirect,
+            selected.texture_compression_bc,
             |create_info| {
                 #[cfg(feature = "memory-profiling")]
                 crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
@@ -925,6 +939,7 @@ mod tests {
                 dynamic_rendering: true,
             },
             multi_draw_indirect: false,
+            texture_compression_bc: false,
             queues: vec![vk::QueueFamilyProperties {
                 queue_flags: vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE,
                 queue_count: 1,
@@ -1039,14 +1054,21 @@ mod tests {
         let selected = adapter
             .assess()
             .expect("optional feature does not reject Device");
-        with_presentation_create_info(7, false, false, selected.multi_draw_indirect, |info| {
-            assert!(!info.p_enabled_features.is_null());
-            // SAFETY: The helper keeps explicitly selected core features live.
-            let features = unsafe { &*info.p_enabled_features };
-            assert_eq!(features.multi_draw_indirect, vk::TRUE);
-            assert_eq!(features.draw_indirect_first_instance, vk::FALSE);
-            assert_eq!(features.robust_buffer_access, vk::FALSE);
-        });
+        with_presentation_create_info(
+            7,
+            false,
+            false,
+            selected.multi_draw_indirect,
+            selected.texture_compression_bc,
+            |info| {
+                assert!(!info.p_enabled_features.is_null());
+                // SAFETY: The helper keeps explicitly selected core features live.
+                let features = unsafe { &*info.p_enabled_features };
+                assert_eq!(features.multi_draw_indirect, vk::TRUE);
+                assert_eq!(features.draw_indirect_first_instance, vk::FALSE);
+                assert_eq!(features.robust_buffer_access, vk::FALSE);
+            },
+        );
     }
 
     #[test]
@@ -1098,7 +1120,7 @@ mod tests {
     #[test]
     fn memory_budget_is_optional_and_coexists_with_presentation_extensions() {
         for presentation in [false, true] {
-            with_presentation_create_info(0, presentation, true, false, |info| {
+            with_presentation_create_info(0, presentation, true, false, false, |info| {
                 // SAFETY: The helper retains the extension pointers and C strings.
                 let pointers = unsafe {
                     std::slice::from_raw_parts(
