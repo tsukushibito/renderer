@@ -81,6 +81,25 @@ fn offscreen_pipeline(graph: &mut Graph) {
         .unwrap();
 }
 
+#[test]
+fn texture_upload_batch_can_retry_after_rejection_in_the_same_pool_slot() {
+    let cap = GraphCapacity {
+        resources: 2,
+        passes: 2,
+        accesses: 2,
+        name_bytes: 4,
+        upload_bytes: 8,
+        ..Default::default()
+    };
+    let mut pool = GraphPool::new(cap, 1).unwrap();
+    let mut graph = pool.begin().unwrap();
+    let desc = ImageDesc::rgba8(1, 1);
+    assert!(graph.upload_texture_for_export("x", desc, &[0; 3]).is_err());
+    graph.upload_texture_for_export("a", desc, &[1; 4]).unwrap();
+    graph.upload_texture_for_export("b", desc, &[2; 4]).unwrap();
+    assert_eq!(graph.compile().unwrap().pass_count(), 2);
+}
+
 /// A consumer of the public API can build the whole offscreen pipeline without
 /// enabling Vulkan, loading a native library, or constructing a window.
 #[test]
@@ -216,7 +235,7 @@ fn builder_errors_identify_the_attempt_without_creating_a_pass() {
         aspect: ImageAspect::Color,
     };
     let error = graph
-        .declare_pass(
+        .declare_analysis_pass(
             "unsupported mip",
             PassKind::Compute,
             &[Access {
@@ -283,13 +302,13 @@ fn cycle_witness_excludes_blocked_tail_and_distinguishes_duplicate_names() {
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let mut graph = pool.begin().unwrap();
     let tail = graph
-        .declare_pass("same name", PassKind::Copy, &[], true)
+        .declare_analysis_pass("same name", PassKind::Copy, &[], true)
         .unwrap();
     let a = graph
-        .declare_pass("same name", PassKind::Copy, &[], false)
+        .declare_analysis_pass("same name", PassKind::Copy, &[], false)
         .unwrap();
     let b = graph
-        .declare_pass("same name", PassKind::Copy, &[], false)
+        .declare_analysis_pass("same name", PassKind::Copy, &[], false)
         .unwrap();
     graph.depends_on(tail, a).unwrap();
     graph.depends_on(a, b).unwrap();
@@ -329,16 +348,16 @@ fn interleaved_dependencies_preserve_order_and_capacity_failure_is_transactional
     .unwrap();
     let mut graph = pool.begin().unwrap();
     let tail = graph
-        .declare_pass("tail", PassKind::Copy, &[], true)
+        .declare_analysis_pass("tail", PassKind::Copy, &[], true)
         .unwrap();
     let first = graph
-        .declare_pass("first", PassKind::Copy, &[], false)
+        .declare_analysis_pass("first", PassKind::Copy, &[], false)
         .unwrap();
     let middle = graph
-        .declare_pass("middle", PassKind::Copy, &[], false)
+        .declare_analysis_pass("middle", PassKind::Copy, &[], false)
         .unwrap();
     let last = graph
-        .declare_pass("last", PassKind::Copy, &[], false)
+        .declare_analysis_pass("last", PassKind::Copy, &[], false)
         .unwrap();
     graph.depends_on(tail, middle).unwrap();
     graph.depends_on(last, first).unwrap();
@@ -389,7 +408,7 @@ fn capacity_errors_identify_builder_limits_and_return_slots() {
                 graph.buffer("x", BufferDesc { size: 4 }).unwrap_err()
             }
             GraphCapacityKind::Passes => graph
-                .declare_pass("p", PassKind::Copy, &[], true)
+                .declare_analysis_pass("p", PassKind::Copy, &[], true)
                 .unwrap_err(),
             _ => {
                 let buffer = graph.buffer("b", BufferDesc { size: 4 }).unwrap();
@@ -433,8 +452,12 @@ fn compile_capacity_errors_preserve_analysis_dimension() {
         let mut pool = GraphPool::new(capacity, 1).unwrap();
         let mut graph = pool.begin().unwrap();
         if kind == GraphCapacityKind::Edges {
-            let a = graph.declare_pass("a", PassKind::Copy, &[], false).unwrap();
-            let b = graph.declare_pass("b", PassKind::Copy, &[], true).unwrap();
+            let a = graph
+                .declare_analysis_pass("a", PassKind::Copy, &[], false)
+                .unwrap();
+            let b = graph
+                .declare_analysis_pass("b", PassKind::Copy, &[], true)
+                .unwrap();
             graph.depends_on(b, a).unwrap();
         } else {
             let buffer = graph.buffer("b", BufferDesc { size: 4 }).unwrap();

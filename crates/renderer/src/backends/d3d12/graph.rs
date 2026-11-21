@@ -162,8 +162,7 @@ impl D3D12Submission {
 
     /// Snapshot of accepted scheduled contents; completion is observed separately.
     /// Dropping it does not unregister the resource; use [`D3D12Runtime::delete`].
-    /// Return this snapshot and all clones before changing the working set, then
-    /// use [`D3D12Runtime::refresh_buffer`] with its retained key.
+    /// The snapshot may survive changes to the working set.
     pub fn export_buffer(
         &self,
         handle: crate::graph::BufferHandle,

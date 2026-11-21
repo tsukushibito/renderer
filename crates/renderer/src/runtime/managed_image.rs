@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use super::{ExecutionError, ExecutionErrorKind, FrameSubmission, Runtime, RuntimeInner};
+use super::{ExecutionError, ExecutionErrorKind, FrameSubmission, Runtime};
 use crate::{
     capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind},
     graph::{CompiledGraph, ImageHandle, ImportImage, ResourceDesc, ResourceKey},
@@ -16,7 +16,11 @@ use crate::{
 pub struct ManagedImage {
     image: ImportImage,
     ticket: Option<ReleaseTicket>,
-    #[cfg(all(windows, feature = "presentation"))]
+    #[cfg(all(
+        windows,
+        feature = "presentation",
+        any(feature = "vulkan", feature = "d3d12")
+    ))]
     pub(super) runtime_id: u64,
 }
 
@@ -68,7 +72,11 @@ struct ReleaseState {
 }
 
 pub(super) struct ImageReleases {
-    #[cfg(all(windows, feature = "presentation"))]
+    #[cfg(all(
+        windows,
+        feature = "presentation",
+        any(feature = "vulkan", feature = "d3d12")
+    ))]
     pub(super) runtime_id: u64,
     limit: usize,
     ready: AtomicBool,
@@ -98,7 +106,11 @@ impl ImageReleases {
 }
 
 impl Runtime {
-    pub(super) fn with_inner(inner: RuntimeInner, limit: usize) -> Result<Self, ExecutionError> {
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub(super) fn with_inner(
+        inner: super::RuntimeInner,
+        limit: usize,
+    ) -> Result<Self, ExecutionError> {
         let mut pending = Vec::new();
         pending.try_reserve_exact(limit).map_err(|_| {
             ExecutionError::with_capacity(
@@ -114,7 +126,11 @@ impl Runtime {
         Ok(Self {
             inner,
             image_releases: Arc::new(ImageReleases {
-                #[cfg(all(windows, feature = "presentation"))]
+                #[cfg(all(
+                    windows,
+                    feature = "presentation",
+                    any(feature = "vulkan", feature = "d3d12")
+                ))]
                 runtime_id: crate::graph::next_id(),
                 limit,
                 ready: AtomicBool::new(false),
@@ -160,7 +176,11 @@ impl Runtime {
             ManagedImage {
                 image,
                 ticket,
-                #[cfg(all(windows, feature = "presentation"))]
+                #[cfg(all(
+                    windows,
+                    feature = "presentation",
+                    any(feature = "vulkan", feature = "d3d12")
+                ))]
                 runtime_id: self.image_releases.runtime_id,
             },
         ))

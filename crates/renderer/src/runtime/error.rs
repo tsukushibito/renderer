@@ -37,6 +37,7 @@ enum ExecutionCause {
 
 impl ExecutionError {
     pub fn kind(&self) -> ExecutionErrorKind {
+        #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
         use ExecutionErrorKind as Kind;
         match &self.0 {
             #[cfg(feature = "vulkan")]
@@ -87,7 +88,11 @@ impl ExecutionError {
         Self::local(ExecutionErrorKind::InvalidInput, message, None)
     }
 
-    #[cfg(all(windows, feature = "presentation"))]
+    #[cfg(all(
+        windows,
+        feature = "presentation",
+        any(feature = "vulkan", feature = "d3d12")
+    ))]
     pub(crate) fn wrong_owner(message: &'static str) -> Self {
         Self::local(ExecutionErrorKind::WrongOwner, message, None)
     }

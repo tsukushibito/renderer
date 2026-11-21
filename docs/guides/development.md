@@ -1180,7 +1180,7 @@ importしたvertex/indexとattachment Loadを全画素照合する。D3D12はpre
 `support/general_working_set.rs`は、返却済みの変更境界で登録buffer／画像をdeleteせず、
 resizeとProgram追加を同じ利用側処理で両APIへ実行する。新classから省いた登録画像のstorage read/write、
 以前compileしたread-only plan、index provenance、6-entry上限での反復変更と準備失敗後の内容を照合する。
-export付きsubmission・buffer snapshotの最後のcloneによる交換拒否と、通常返却時の確保／解放ゼロも確認する。
+export付きsubmissionを保持したときの交換拒否、buffer snapshotの最後のcloneを保持したままの交換と通常返却時の確保／解放ゼロも確認する。
 
 ```powershell
 cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation,memory-profiling --test general_resources general_resources_strict -- --exact --ignored --nocapture --test-threads=1

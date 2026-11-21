@@ -2,7 +2,7 @@ use renderer_pipeline::material::{MaterialHandle, MaterialInstance, Materials, P
 use std::num::NonZeroUsize;
 
 use renderer::{
-    capacity::{Preparation, ResourceClass},
+    capacity::Preparation,
     geometry::GeometryData,
     graph::{
         BufferDesc, CompiledGraph, Graph, GraphError, GraphPool, ImageDesc, PassHandle, SampleCount,
@@ -370,17 +370,6 @@ pub fn reserve(
             defaults,
         },
     ))
-}
-
-pub fn resource_count(preparation: &Preparation) -> usize {
-    preparation
-        .working_set()
-        .resources
-        .iter()
-        .map(|class| match *class {
-            ResourceClass::Buffer { count, .. } | ResourceClass::Image { count, .. } => count,
-        })
-        .sum()
 }
 
 pub struct Readbacks {

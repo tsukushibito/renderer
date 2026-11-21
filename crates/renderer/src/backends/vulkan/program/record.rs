@@ -7,7 +7,7 @@ use ash::vk;
 
 use super::super::resources::DeviceImage;
 use super::ShaderPrograms;
-use crate::graph::SampleCount;
+use crate::graph::{RasterRegions, SampleCount};
 
 const _: () = assert!(
     std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64
@@ -81,7 +81,6 @@ impl ShaderPrograms {
                 .device
                 .raw()
                 .cmd_begin_rendering(command, &attachments.info());
-            self.viewport(command, attachments.extent);
         }
     }
 
@@ -193,18 +192,33 @@ impl ShaderPrograms {
         }
     }
 
-    unsafe fn viewport(&self, command: vk::CommandBuffer, extent: vk::Extent2D) {
+    /// # Safety
+    /// The command must be recording and the rectangles must fit its rendering
+    /// attachments. Attachment creation checks device viewport dimensions and bounds.
+    pub(in crate::backends::vulkan) unsafe fn set_raster_regions(
+        &self,
+        command: vk::CommandBuffer,
+        regions: RasterRegions,
+        extent: vk::Extent2D,
+    ) {
+        let (view, clip) = regions.resolve(extent.width, extent.height);
         let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: extent.width as f32,
-            height: extent.height as f32,
+            x: view.x as f32,
+            y: view.y as f32,
+            width: view.width as f32,
+            height: view.height as f32,
             min_depth: 0.0,
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D {
-            offset: vk::Offset2D::default(),
-            extent,
+            offset: vk::Offset2D {
+                x: clip.x as i32,
+                y: clip.y as i32,
+            },
+            extent: vk::Extent2D {
+                width: clip.width,
+                height: clip.height,
+            },
         };
         // SAFETY: Called only inside our rendering scope with queried dimensions
         // and dynamically enabled viewport/scissor state.

@@ -1,12 +1,20 @@
 //! Backend-independent RenderGraph execution and frame ownership.
+//!
+//! These contracts are available to plugins in every build. Enable a GPU backend
+//! on the host application to construct a runtime or obtain a submission receipt.
 
 mod error;
 mod frames;
 mod id;
 mod managed_image;
 mod preparation;
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 mod queue;
-#[cfg(all(feature = "presentation", windows))]
+#[cfg(all(
+    feature = "presentation",
+    windows,
+    any(feature = "vulkan", feature = "d3d12")
+))]
 mod window;
 
 pub use crate::capacity::{ResourceClass, WorkingSet};
@@ -19,9 +27,31 @@ pub use preparation::D3D12Config;
 #[cfg(feature = "vulkan")]
 pub use preparation::VulkanConfig;
 pub use preparation::{RuntimeConfig, RuntimeLimits};
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(crate) use queue::{FrameQueue, Observation};
-#[cfg(all(feature = "presentation", windows))]
+#[cfg(all(
+    feature = "presentation",
+    windows,
+    any(feature = "vulkan", feature = "d3d12")
+))]
 pub use window::{WindowPresenter, WindowReadiness};
+
+/// Include Vulkan-specific adapter items whenever the host enables Vulkan.
+#[cfg(feature = "vulkan")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __renderer_with_vulkan {
+    ($($item:item)*) => { $($item)* };
+}
+#[cfg(not(feature = "vulkan"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __renderer_with_vulkan {
+    ($($item:item)*) => {};
+}
+/// Include Vulkan-specific items using the host's unified Renderer features.
+#[doc(inline)]
+pub use crate::__renderer_with_vulkan as with_vulkan;
 
 use std::time::{Duration, Instant};
 
@@ -47,6 +77,13 @@ enum RuntimeInner {
     D3D12(crate::d3d12::D3D12Runtime),
 }
 
+#[cfg_attr(
+    not(any(feature = "vulkan", all(feature = "d3d12", windows))),
+    expect(
+        unused_variables,
+        reason = "without a backend, the dispatcher has no runtime variants"
+    )
+)]
 impl Runtime {
     /// Accept a compiled Graph once, without waiting for earlier Graphs.
     ///
@@ -63,21 +100,25 @@ impl Runtime {
     }
 
     fn submit_native(&mut self, graph: &CompiledGraph) -> Result<FrameSubmission, ExecutionError> {
-        Ok(match &mut self.inner {
+        match self.inner {
             #[cfg(feature = "vulkan")]
-            RuntimeInner::Vulkan(runtime) => FrameSubmission::from(runtime.submit_frame(graph)?),
+            RuntimeInner::Vulkan(ref mut runtime) => {
+                Ok(FrameSubmission::from(runtime.submit_frame(graph)?))
+            }
             #[cfg(all(feature = "d3d12", windows))]
-            RuntimeInner::D3D12(runtime) => FrameSubmission::from(runtime.submit_frame(graph)?),
-        })
+            RuntimeInner::D3D12(ref mut runtime) => {
+                Ok(FrameSubmission::from(runtime.submit_frame(graph)?))
+            }
+        }
     }
 
     /// Number of accepted frames whose completion has not been retired.
     pub fn pending_frames(&self) -> usize {
-        match &self.inner {
+        match self.inner {
             #[cfg(feature = "vulkan")]
-            RuntimeInner::Vulkan(runtime) => runtime.pending_frames(),
+            RuntimeInner::Vulkan(ref runtime) => runtime.pending_frames(),
             #[cfg(all(feature = "d3d12", windows))]
-            RuntimeInner::D3D12(runtime) => runtime.pending_frames(),
+            RuntimeInner::D3D12(ref runtime) => runtime.pending_frames(),
         }
     }
 
@@ -94,14 +135,16 @@ impl Runtime {
         timeout: Duration,
     ) -> Result<Option<FrameCompletion>, ExecutionError> {
         self.collect_released_images()?;
-        Ok(match &mut self.inner {
+        match self.inner {
             #[cfg(feature = "vulkan")]
-            RuntimeInner::Vulkan(runtime) => {
-                runtime.wait_frame(timeout)?.map(FrameCompletion::from)
+            RuntimeInner::Vulkan(ref mut runtime) => {
+                Ok(runtime.wait_frame(timeout)?.map(FrameCompletion::from))
             }
             #[cfg(all(feature = "d3d12", windows))]
-            RuntimeInner::D3D12(runtime) => runtime.wait_frame(timeout)?.map(FrameCompletion::from),
-        })
+            RuntimeInner::D3D12(ref mut runtime) => {
+                Ok(runtime.wait_frame(timeout)?.map(FrameCompletion::from))
+            }
+        }
     }
 
     /// Return the named pending frame's completion, leaving other results
@@ -113,16 +156,16 @@ impl Runtime {
         timeout: Duration,
     ) -> Result<Option<FrameCompletion>, ExecutionError> {
         self.collect_released_images()?;
-        Ok(match &mut self.inner {
+        match self.inner {
             #[cfg(feature = "vulkan")]
-            RuntimeInner::Vulkan(runtime) => runtime
+            RuntimeInner::Vulkan(ref mut runtime) => Ok(runtime
                 .wait_for_frame(id, timeout)?
-                .map(FrameCompletion::from),
+                .map(FrameCompletion::from)),
             #[cfg(all(feature = "d3d12", windows))]
-            RuntimeInner::D3D12(runtime) => runtime
+            RuntimeInner::D3D12(ref mut runtime) => Ok(runtime
                 .wait_for_frame(id, timeout)?
-                .map(FrameCompletion::from),
-        })
+                .map(FrameCompletion::from)),
+        }
     }
 
     /// Retire Graph frames within a shared wait budget, discarding their CPU
@@ -142,55 +185,77 @@ impl Runtime {
         Ok(true)
     }
 
+    /// Register an uninitialized device buffer from the prepared working set.
+    /// Upload ranges through Graph imports; retain the key until explicit deletion.
+    pub fn register_buffer(
+        &mut self,
+        name: &str,
+        desc: crate::graph::BufferDesc,
+    ) -> Result<ResourceKey, ExecutionError> {
+        match self.inner {
+            #[cfg(feature = "vulkan")]
+            RuntimeInner::Vulkan(ref mut runtime) => {
+                Ok(runtime.register_buffer(name, desc, false)?.key())
+            }
+            #[cfg(all(feature = "d3d12", windows))]
+            RuntimeInner::D3D12(ref mut runtime) => {
+                let _ = name;
+                Ok(runtime.register_buffer(desc)?)
+            }
+        }
+    }
+
     /// Capture the latest accepted scheduled contents for a registered buffer.
     pub fn refresh_buffer(&self, key: ResourceKey) -> Result<ImportBuffer, ExecutionError> {
-        Ok(match &self.inner {
+        match self.inner {
             #[cfg(feature = "vulkan")]
-            RuntimeInner::Vulkan(runtime) => runtime.refresh_buffer(key)?,
+            RuntimeInner::Vulkan(ref runtime) => runtime.refresh_buffer(key).map_err(Into::into),
             #[cfg(all(feature = "d3d12", windows))]
-            RuntimeInner::D3D12(runtime) => runtime.refresh_buffer(key)?,
-        })
+            RuntimeInner::D3D12(ref runtime) => runtime.refresh_buffer(key).map_err(Into::into),
+        }
     }
 
     /// Capture the latest accepted scheduled contents for a registered image.
     pub fn refresh_image(&self, key: ResourceKey) -> Result<ImportImage, ExecutionError> {
-        Ok(match &self.inner {
+        match self.inner {
             #[cfg(feature = "vulkan")]
-            RuntimeInner::Vulkan(runtime) => runtime.refresh_image(key)?,
+            RuntimeInner::Vulkan(ref runtime) => runtime.refresh_image(key).map_err(Into::into),
             #[cfg(all(feature = "d3d12", windows))]
-            RuntimeInner::D3D12(runtime) => runtime.refresh_image(key)?,
-        })
+            RuntimeInner::D3D12(ref runtime) => runtime.refresh_image(key).map_err(Into::into),
+        }
     }
 
     /// Remove a registration while letting accepted GPU work retain its
     /// resources through retirement.
     pub fn delete(&mut self, key: ResourceKey) -> Result<(), ExecutionError> {
-        match &mut self.inner {
+        match self.inner {
             #[cfg(feature = "vulkan")]
-            RuntimeInner::Vulkan(runtime) => runtime.delete(key)?,
+            RuntimeInner::Vulkan(ref mut runtime) => runtime.delete(key).map_err(Into::into),
             #[cfg(all(feature = "d3d12", windows))]
-            RuntimeInner::D3D12(runtime) => runtime.delete(key)?,
+            RuntimeInner::D3D12(ref mut runtime) => runtime.delete(key).map_err(Into::into),
         }
-        Ok(())
     }
 
     /// Change profiling for subsequent Graph submissions. Enabling profiling
     /// may prepare native queries at this explicit configuration boundary.
     pub fn set_profiling(&mut self, enabled: bool) -> Result<(), ExecutionError> {
-        match &mut self.inner {
+        match self.inner {
             #[cfg(feature = "vulkan")]
-            RuntimeInner::Vulkan(runtime) => runtime.set_profiling(enabled)?,
+            RuntimeInner::Vulkan(ref mut runtime) => {
+                runtime.set_profiling(enabled).map_err(Into::into)
+            }
             #[cfg(all(feature = "d3d12", windows))]
-            RuntimeInner::D3D12(runtime) => runtime.set_profiling(enabled)?,
+            RuntimeInner::D3D12(ref mut runtime) => {
+                runtime.set_profiling(enabled).map_err(Into::into)
+            }
         }
-        Ok(())
     }
 
     /// Inspect Vulkan-specific device information, validation, or memory.
     #[cfg(feature = "vulkan")]
     pub fn as_vulkan(&self) -> Option<&crate::vulkan::VulkanRuntime> {
-        match &self.inner {
-            RuntimeInner::Vulkan(runtime) => Some(runtime),
+        match self.inner {
+            RuntimeInner::Vulkan(ref runtime) => Some(runtime),
             #[cfg(all(feature = "d3d12", windows))]
             RuntimeInner::D3D12(_) => None,
         }
@@ -199,10 +264,10 @@ impl Runtime {
     /// Inspect D3D12-specific device information, validation, or memory.
     #[cfg(all(feature = "d3d12", windows))]
     pub fn as_d3d12(&self) -> Option<&crate::d3d12::D3D12Runtime> {
-        match &self.inner {
+        match self.inner {
             #[cfg(feature = "vulkan")]
             RuntimeInner::Vulkan(_) => None,
-            RuntimeInner::D3D12(runtime) => Some(runtime),
+            RuntimeInner::D3D12(ref runtime) => Some(runtime),
         }
     }
 }

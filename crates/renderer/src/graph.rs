@@ -61,11 +61,13 @@ pub use indirect::{IndexedIndirectArgs, IndexedIndirectTable, IndexedIndirectTem
 pub use output::{FrameGraph, FrameOutputOwnership};
 pub use pass::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, ImageAspect, LoadOp, PassKind,
-    RasterAttachments, RasterConstants, RasterDraw, RasterParameters, ResourceHandle, StoreOp,
+    RasterAttachments, RasterConstants, RasterDraw, RasterParameters, RasterRect, ResourceHandle,
+    StoreOp,
 };
 pub(crate) use pass::{
     AttachmentOperand, Dependency, DependencyList, IndirectDrawOperands, LoadAction, MeshUpload,
-    Operation, Pass, RasterBatchOperands, RasterDrawOperands, ResourceAccess, UploadSource,
+    Operation, Pass, RasterBatchOperands, RasterDrawOperands, RasterRegions, ResourceAccess,
+    UploadSource,
 };
 pub use ranges::{ImportRanges, ImportRangesPool};
 pub use raster::RasterPass;

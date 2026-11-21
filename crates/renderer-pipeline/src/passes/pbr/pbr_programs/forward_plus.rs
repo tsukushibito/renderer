@@ -89,11 +89,11 @@ static REFERENCE_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     binding_bytes: &pbr_bytes::<17>(),
     shaders: packaged_shaders!(
         vulkan: (
-            super::PBR_VERTEX_SPIRV,
+            include_bytes!("../../../../shaders/pbr.vert.spv"),
             Some(include_bytes!("../../../../shaders/pbr_all_lights.frag.spv")),
         ),
         d3d12: (
-            super::PBR_VERTEX_DXIL,
+            include_bytes!("../../../../shaders/dxil/pbr.vert.dxil"),
             Some(include_bytes!("../../../../shaders/dxil/pbr_all_lights.frag.dxil")),
         ),
         inline_constants: None,
@@ -110,11 +110,11 @@ pub(in crate::passes::pbr) static TILED_OPAQUE: RasterProgramDescriptor = Raster
     binding_bytes: &pbr_bytes::<18>(),
     shaders: packaged_shaders!(
         vulkan: (
-            super::PBR_VERTEX_SPIRV,
+            include_bytes!("../../../../shaders/pbr.vert.spv"),
             Some(include_bytes!("../../../../shaders/pbr_forward_plus.frag.spv")),
         ),
         d3d12: (
-            super::PBR_VERTEX_DXIL,
+            include_bytes!("../../../../shaders/dxil/pbr.vert.dxil"),
             Some(include_bytes!("../../../../shaders/dxil/pbr_forward_plus.frag.dxil")),
         ),
         inline_constants: None,

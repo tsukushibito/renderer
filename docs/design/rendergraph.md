@@ -288,7 +288,7 @@ owner・範囲を作成境界で確認し、aspectをRGBA8（UNORM/sRGB）/RGBA1
 storage/attachment Viewはcount1を要求する。native sampled実行はcount1の任意mip、または
 base0から全chainまでのViewを扱い、部分的な複数mip範囲は明示的に未対応とする。
 論理解析は`layer * mip_levels + mip`の区間へ写像し、producer・未初期化拒否・RAW/WAR/WAW・cullingを共通解析へ接続する。
-`declare_pass`の画像範囲も同じ各subresourceを扱う。エラーでは最初の未初期化subresourceをmip/layer/aspectへ戻す。
+`declare_analysis_pass`の画像範囲も同じ各subresourceを扱う。エラーでは最初の未初期化subresourceをmip/layer/aspectへ戻す。
 `export_image`は全subresourceの有効内容を要求する。native importのinitialized boolは画像全体を表し、
 全mipの内容が確立した場合にだけ有効なsnapshotとなる。
 
@@ -383,7 +383,7 @@ payloadと通常backpressureのmessageは確保せず、同期・容量検査・
 
 宣言の範囲・用途・初期化は不要パス除去の前に検査する。
 deadなreadも未初期化ならエラーになり、不要な処理で入力ミスを隠さない。
-解析専用の`declare_pass`と実際の操作builderを分け、実行時にliveな解析専用パスを拒否する。
+解析専用の`declare_analysis_pass`と実際の操作builderを分け、実行時にliveな解析専用パスを拒否する。
 native記録中の任意の実行callbackは提供しないので、Graph構築や除去をCPUのゲーム更新の代わりにしない。
 
 公開`upload_buffer`／`upload_image`は`&[u8]`を借り、構築時に準備済みblobへcaptureする。
@@ -498,8 +498,8 @@ native Programを使わないattachment-onlyへ正規化する。一般形のcle
 Programのidentityはshader・ABI・固定状態を含む不変の版を表す。埋め込み版は静的descriptorの同一性を使い、
 ロードした版は取込ごとに再利用しないIDを割り当てる。差し替える際は新しい版を明示準備する。
 runtimeのpipeline／layoutとdescriptor leaseは記録・未投入cancel・実GPU完了まで保持する。
-Program集合を変更する前には、GPU完了だけでなく結果ハンドルをDropし、export／refreshした
-buffer snapshotも返却する。D3D12は最後のreadback消費時にnative readback枠を返すが、
+Program集合を変更する前に実行を完了させ、結果ハンドルとexport付きsubmissionを返却する。
+export／refreshしたbuffer snapshotは同じ登録内容を参照し続ける。D3D12は最後のreadback消費時にnative readback枠を返すが、
 結果ハンドル自体の返却はregistryに保持する小さな共有anchorで追跡し、Vulkanと同じ変更境界にする。
 anchorは再準備でもregistryとともに保持し、通常frameの結果返却でheapを解放しない。
 共通上限は一つのworking set内の64 Program、4 binding group、19 binding、16 vertex属性、128 byteのinline定数であり、
@@ -637,7 +637,7 @@ hazardと容量検査を終えた全辺が`from < to`なら、liveなpassを宣�
 診断用lifetimesは別に求める。いずれもそのframeで構築した入力を解析し直す通常compileの処理で、
 固定Graphのplan cacheや未初期化read・hazard・容量検査の省略ではない。
 
-解析専用の`declare_pass`もsafe入力の保証境界であり、owner・範囲・用途を先に検査してから競合を拒否する。
+解析専用の`declare_analysis_pass`もsafe入力の保証境界であり、owner・範囲・用途を先に検査してから競合を拒否する。
 共有の競合検査は宣言順で最初の衝突pairを選び、read/readや無関係な資源の総当たりをしない。
 Aアクセスに対してO(A log A)の処理とO(A)の予約済みscratchを使い、全readならO(A)でsortを省略する。
 構築境界と追加検証は同じhelperへ不変なaccess iteratorを渡し、判定algorithmを二重保持しない。
@@ -828,9 +828,9 @@ CPU探索と所有取得・返却の比較は[現在の検証](../verification/c
 通常のprepareは登録中・参照中の物理資源、実行枠、結果枠、export metadata、range tokenの不足を
 容量エラーとして返し、増設もGPU待機もしない。`initialized_ranges_per_resource`と`range_snapshots`は
 個別に指定でき、途中のtoken取得失敗でも既に取得した参照を全て返す。
-working set変更はVulkanと同様に全実行・結果・export付きsubmissionとexport／refreshした
-`ImportBuffer`の全clone返却を必要とする。登録資源のdeleteは不要で、key・内容・初期化・provenanceを維持する。
-buffer snapshotは保持したkeyから再取得でき、scalarな`ImportImage`は変更前のものを利用できる。
+working set変更はVulkanと同様に全実行・結果・export付きsubmissionの返却を必要とする。
+登録資源のkey・revision・初期化範囲・provenanceと、発行済みの`ImportBuffer`・`ImportImage`を維持する。
+buffer snapshot用のpoolはregistryとともに存続し、固定の枠数に既存のtokenを含める。内容更新やdeleteによる失効は従来どおりである。
 新classに含めなかった登録画像も各executionのview枠へ含め、native画像を余分に複製しない。
 準備に必要なnative資源・Program・descriptorを別poolに全て作成してから、旧registryの再利用可能な
 未登録indexへ新資源を移し、最後にregistryを新poolへ移す。登録entryは動かさず、未登録indexの世代を
@@ -996,7 +996,8 @@ export、readback、compile、submit、presentと、その結果の所有は呼�
 
 両出力パスは`RasterPass::draw_fullscreen`を使う。頂点入力のないtrusted Programが3頂点を生成し、Graphは頂点・インデックスbufferへの依存を追加しない。
 標準出力とDeferredの照明パスは、`renderer::program::fullscreen_triangle_shaders`を通じて同じ管理下の頂点shaderを使う。
-fragment shaderのABIとアクセス範囲の保証は、それぞれのProgramのtrusted取込で成立する。
+標準出力のfragment shader、ABI、露出・FXAA・SDRの選択は `renderer-pipeline::passes::output` が所有する。
+独自の出力方式も同じ頂点shaderと `draw_fullscreen` を利用し、自分のProgramのtrusted取込でABIとアクセス範囲を保証する。
 `tone_map_neutral_pipeline()`と`SdrOutput::pipeline()`を使って実行前に対応するProgramを準備する。
 ウィンドウには`SdrEncoding::Linear`で書いた画像を渡し、PresenterがsRGB変換を行う。オフスクリーンのSDRデータには`SdrEncoding::Srgb`を選ぶ。
 Bloomなど露出前の効果はscene-linear画像に接続し、トーンマッピングとSDR変換の間にも任意のGraph処理を組み込める。

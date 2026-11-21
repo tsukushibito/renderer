@@ -247,17 +247,18 @@ Expect-Rejected 'DXIL readonly storage image treated as SRV' {
     param($s, $d) [regex]::Replace($d, '(?m)(^;[^\r\n]+\s+)UAV(\s+f32\s+2d\s+\S+\s+u0\s+1\s*$)', '${1}texture${2}')
 }
 Expect-Rejected 'DXIL HDR storage input buffer register' { param($s, $d) $d.Replace('t1', 't0') }
+$outputAssets = Join-Path $PSScriptRoot '../../renderer-pipeline/shaders/output/dxil'
 $verify = { param($s, $d) Assert-SdrOutputAbi $s $d -Exposure }
-$json = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/tone_neutral.frag.spirv-reflection.json') -Raw
-$reflection = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/tone_neutral.frag.reflection.txt') -Raw
+$json = Get-Content -LiteralPath (Join-Path $outputAssets 'tone_neutral.frag.spirv-reflection.json') -Raw
+$reflection = Get-Content -LiteralPath (Join-Path $outputAssets 'tone_neutral.frag.reflection.txt') -Raw
 Assert-SdrOutputAbi ($json | ConvertFrom-Json) $reflection -Exposure
 Expect-Rejected 'Neutral exposure float offset' {
     param($s) $s.types.PSObject.Properties[$s.push_constants[0].type].Value.members[0].offset = 4
 }
 Expect-Rejected 'DXIL Neutral exposure register' { param($s, $d) $d.Replace('cb0', 'cb2') }
 foreach ($program in @('sdr.frag', 'sdr_linear.frag', 'sdr_fxaa.frag', 'sdr_fxaa_linear.frag')) {
-    $outputReflection = Get-Content -LiteralPath (Join-Path $PSScriptRoot ("dxil/$program.spirv-reflection.json")) -Raw
-    $outputDxil = Get-Content -LiteralPath (Join-Path $PSScriptRoot ("dxil/$program.reflection.txt")) -Raw
+    $outputReflection = Get-Content -LiteralPath (Join-Path $outputAssets ("$program.spirv-reflection.json")) -Raw
+    $outputDxil = Get-Content -LiteralPath (Join-Path $outputAssets ("$program.reflection.txt")) -Raw
     Assert-SdrOutputAbi ($outputReflection | ConvertFrom-Json) $outputDxil
 }
 Write-Output 'Managed Compute, indexed indirect, HDR Compute, descriptor-bound Raster and standard output ABI checks passed.'

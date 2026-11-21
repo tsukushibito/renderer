@@ -1999,7 +1999,7 @@ D3D12は既存COMMON復帰を維持し、新たなvendor最適化・未計測の
 一般Raster shader・blend/depthの`.2.8`と二API表示・通常frame時間の`.2.6`は、それぞれの現在の受入記録を参照する。
 
 レビュー修正`renderer-7ft.2.5.1`で、D3D12も登録資源をdeleteせずworking setを変更できるようにした。
-全実行・結果・export付きsubmission／buffer snapshotの返却を確認し、新poolの準備成功後に
+現行の変更境界では全実行・結果・export付きsubmissionの返却を確認し、新poolの準備成功後に
 canonical registryを移す。登録buffer／画像のkey・内容・provenanceを維持し、新classにない登録画像のview枠も補う。
 Graph color画像は初回からRT／UAV対応とし、後から追加したStorage Programも同じ画像を使える。
 この固定用途の性能・memory効率は未比較で、理由と代案は[資源管理の契約](../design/rendergraph.md#d3d12-buffer-lifetime)に記す。
@@ -2009,10 +2009,18 @@ Graph color画像は初回からRT／UAV対応とし、後から追加したStor
 新Storage Programによる旧HDR画像の読み書き、登録indexの描画と全画素を両APIで確認した。
 既存D3D12 native回帰9件（pending寿命、部分作成失敗、provenance容量、graphics/compute/clear等）も成功した。
 過剰容量・不正classの準備失敗後にも旧資源・構成を利用できた。
-完了済みexport metadataと独立したrefresh bufferの最終cloneによる交換拒否、返却後の成功を確認した。
+完了済みexport metadataを保持している間の交換拒否も確認した。
 修正前は交換後の通常返却でRust deallocが4回376 byte発生したが、修正後の6返却窓は
 alloc／alloc_zeroed／realloc／dealloc・VMA host・native作成破棄の全イベントが0だった。
 通常履歴の24測定frameも両APIで確保／解放0を維持した。resize／Program準備自体は明示変更境界であり、このゼロ計測に含めない。
+
+`renderer-yp5`では、Vulkan／D3D12の最適化済みstrict・shipping構成で
+`shared_runtime`、`general_resources`、`pbr_gpu`の`mixed_materials`を実行した。
+登録bufferの同じsnapshotで13×7の画像class追加と準備失敗をまたぐreadbackが一致し、1枠のrange poolが増設されないことを確認した。
+Bistroと同じ常駐資源の利用契約で、32×16から未予約の23×13へ変更して元のmeshとPBR材質を再利用し、中央のHDR値と背景を照合した。
+一般資源の反復リサイズ、登録済み頂点・indexの描画、完了済みexport metadataの交換拒否も両構成で通過した。
+D3D12では交換後に最後のbuffer snapshotを返してもRust確保／再確保／解放・VMA host・native資源イベントは各0だった。
+検証有効時のnative警告・エラーは0。全量Bistroを使うリサイズ時間・VRAMの比較はこの試験の対象外である。
 strictはCore／SyncValとDebug Layer／GBVを確認し、最終native解放後まで問題0。
 release CPUは全feature325件、二API製品301件、D3D12単独の製品188件／追加検証189件が成功した。
 全featureとD3D12単独enabled/disabled・二API製品のClippy、warnings拒否Rustdoc、HTMLの17page／2036linkと

@@ -8,10 +8,15 @@ pub use renderer::geometry::{MeshCapacity, MeshHandle};
 use renderer::{
     capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},
     geometry::{GeometryData, MeshError, MeshRegistry},
-    graph::{BufferDesc, Graph, GraphError, ImportBuffer},
+    graph::{BufferDesc, Graph, GraphError, ImportBuffer, ResourceKey},
     program::{ManagedRasterProgram, VertexAttribute},
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
+mod upload;
+pub use upload::MeshUploadProgress;
+
+const VERTEX_BUFFER: &str = "mesh vertices";
+const INDEX_BUFFER: &str = "mesh indices";
 
 /// One indexed primitive and the vertex interpretation established at import.
 pub struct MeshData {
@@ -66,19 +71,74 @@ fn indexed_bounds(
     }
     Bounds::new(min, max)
 }
-struct Asset {
+struct Layout {
     bounds: Bounds,
     attributes: Vec<VertexAttribute>,
-    buffers: Option<[ImportBuffer; 2]>,
+    vertex_stride: u32,
+    index_count: u32,
+}
+impl MeshData {
+    fn into_parts(self) -> (GeometryData, Arc<Layout>) {
+        let layout = Layout {
+            bounds: self.bounds,
+            attributes: self.attributes,
+            vertex_stride: self.geometry.vertex_stride(),
+            index_count: self.geometry.index_count(),
+        };
+        (self.geometry, Arc::new(layout))
+    }
+}
+struct Resident {
+    layout: Arc<Layout>,
+    revision: u64,
+    buffers: [ImportBuffer; 2],
+}
+#[derive(Default)]
+struct Upload {
+    keys: [Option<ResourceKey>; 2],
+    accepted_bytes: u64,
+}
+struct Asset {
+    layout: Arc<Layout>,
+    revision: u64,
+    active: Option<Resident>,
+    upload: Upload,
+}
+impl Asset {
+    fn drawable_layout(&self) -> &Layout {
+        self.active
+            .as_ref()
+            .map_or(&self.layout, |ready| &ready.layout)
+    }
+
+    fn retire_upload(&mut self, retired: &mut Vec<ResourceKey>) {
+        retired.extend(std::mem::take(&mut self.upload).keys.into_iter().flatten());
+    }
+    fn retire_active(&mut self, retired: &mut Vec<ResourceKey>) {
+        if let Some(active) = self.active.take() {
+            retired.extend(active.buffers.map(|b| b.key()));
+        }
+    }
 }
 
-/// Owns the CPU registry and GPU registrations for one runtime.
+/// Owns mesh identities, CPU geometry and GPU registrations for one runtime.
 pub struct Meshes {
     registry: MeshRegistry,
     assets: HashMap<MeshHandle, Asset>,
-    retired: Vec<ImportBuffer>,
+    retired: Vec<ResourceKey>,
 }
 impl Meshes {
+    /// Budget the two initialized imports for each distinct mesh referenced by
+    /// this frame. Register their resident physical classes with [`Self::reserve`].
+    pub fn reserve_imports(
+        preparation: &mut Preparation,
+        max_meshes: usize,
+    ) -> Result<(), GraphError> {
+        preparation.add_graph_requirements(
+            GraphRequirements::imports(VERTEX_BUFFER, max_meshes, 1)?
+                .checked_add(GraphRequirements::imports(INDEX_BUFFER, max_meshes, 1)?)?,
+        )
+    }
     pub fn new(capacity: MeshCapacity) -> Result<Self, MeshError> {
         Ok(Self {
             registry: MeshRegistry::new(capacity)?,
@@ -87,40 +147,35 @@ impl Meshes {
         })
     }
     pub fn create(&mut self, data: MeshData) -> Result<MeshHandle, MeshError> {
-        let handle = self.registry.create_mesh(data.geometry)?;
+        let (geometry, layout) = data.into_parts();
+        let handle = self.registry.create_mesh(geometry)?;
         self.assets.insert(
             handle,
             Asset {
-                bounds: data.bounds,
-                attributes: data.attributes,
-                buffers: None,
+                layout,
+                revision: 1,
+                active: None,
+                upload: Upload::default(),
             },
         );
         Ok(handle)
     }
+    /// Stage new geometry. The current drawable version remains available until
+    /// the complete replacement is accepted by the GPU queue.
     pub fn update(&mut self, mesh: MeshHandle, data: MeshData) -> Result<(), MeshError> {
-        self.registry.update_mesh(mesh, data.geometry)?;
-        let old = self
-            .assets
-            .insert(
-                mesh,
-                Asset {
-                    bounds: data.bounds,
-                    attributes: data.attributes,
-                    buffers: None,
-                },
-            )
-            .expect("registered mesh");
-        if let Some(buffers) = old.buffers {
-            self.retired.extend(buffers);
-        }
+        let (geometry, layout) = data.into_parts();
+        self.registry.update_mesh(mesh, geometry)?;
+        let asset = self.assets.get_mut(&mesh).expect("registered mesh");
+        asset.retire_upload(&mut self.retired);
+        asset.layout = layout;
+        asset.revision = self.registry.mesh_revision(mesh).expect("registered mesh");
         Ok(())
     }
     pub fn remove(&mut self, mesh: MeshHandle) -> Result<(), MeshError> {
         self.registry.delete_mesh(mesh)?;
-        if let Some(buffers) = self.assets.remove(&mesh).and_then(|asset| asset.buffers) {
-            self.retired.extend(buffers);
-        }
+        let mut asset = self.assets.remove(&mesh).expect("registered mesh");
+        asset.retire_upload(&mut self.retired);
+        asset.retire_active(&mut self.retired);
         Ok(())
     }
     /// Register resident buffer classes once. Budget overlapping versions at updates.
@@ -134,8 +189,6 @@ impl Meshes {
                 passes: 2,
                 accesses: 2,
                 name_bytes: "mesh verticesmesh indicesmesh vertex uploadmesh index upload".len(),
-                upload_bytes: usize::try_from(data.vertex_byte_len() + data.index_byte_len())
-                    .map_err(|_| GraphError::invalid_input("mesh upload size overflow"))?,
                 ..Default::default()
             })?;
             for size in [data.vertex_byte_len(), data.index_byte_len()] {
@@ -154,9 +207,43 @@ impl Meshes {
         )
     }
     pub(crate) fn revision(&self, mesh: MeshHandle) -> Result<u64, GraphError> {
-        self.registry
-            .mesh_revision(mesh)
-            .map_err(|e| GraphError::invalid_input(e.to_string()))
+        let asset = self
+            .assets
+            .get(&mesh)
+            .ok_or_else(|| GraphError::invalid_input("unknown mesh handle"))?;
+        Ok(asset
+            .active
+            .as_ref()
+            .map_or(asset.revision, |ready| ready.revision))
+    }
+    /// Reserve a spare vertex/index pair for staging a replacement of the given
+    /// sizes while previous draws continue to reference the published version.
+    pub fn reserve_replacement(
+        &self,
+        mesh: MeshHandle,
+        preparation: &mut Preparation,
+    ) -> Result<(), GraphError> {
+        let data = self
+            .registry
+            .geometry(mesh)
+            .map_err(|e| GraphError::invalid_input(e.to_string()))?;
+        preparation.add_working_set(WorkingSet {
+            resources: &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: data.vertex_byte_len(),
+                    },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: data.index_byte_len(),
+                    },
+                    count: 1,
+                },
+            ],
+            ..Default::default()
+        })
     }
     /// Check a mesh/program pairing when building or updating the scene.
     pub fn check_layout(
@@ -168,9 +255,9 @@ impl Meshes {
             .assets
             .get(&mesh)
             .ok_or_else(|| GraphError::invalid_input("unknown mesh handle"))?;
-        let geometry = self.registry.geometry(mesh).expect("registered mesh");
-        if asset.attributes != program.descriptor().vertex_attributes
-            || geometry.vertex_stride() != program.vertex_stride()
+        let layout = asset.drawable_layout();
+        if layout.attributes != program.descriptor().vertex_attributes
+            || layout.vertex_stride != program.vertex_stride()
         {
             return Err(GraphError::invalid_input(
                 "mesh vertex layout differs from material",
@@ -185,87 +272,17 @@ impl Meshes {
             .assets
             .get(&mesh)
             .ok_or_else(|| GraphError::invalid_input("unknown mesh handle"))?;
-        let geometry = self.registry.geometry(mesh).expect("registered mesh");
-        let buffers = asset
-            .buffers
+        let active = asset
+            .active
             .as_ref()
             .ok_or_else(|| GraphError::invalid_input("prepare the mesh before drawing"))?;
         Ok(Mesh {
-            bounds: asset.bounds,
-            vertex_stride: geometry.vertex_stride(),
-            vertices: graph.import_buffer("mesh vertices", &buffers[0])?,
-            indices: graph.import_buffer("mesh indices", &buffers[1])?,
+            bounds: active.layout.bounds,
+            vertex_stride: active.layout.vertex_stride,
+            vertices: graph.import_readonly_buffer(VERTEX_BUFFER, &active.buffers[0])?,
+            indices: graph.import_readonly_buffer(INDEX_BUFFER, &active.buffers[1])?,
             first_index: 0,
-            index_count: geometry.index_count(),
+            index_count: active.layout.index_count,
         })
-    }
-}
-
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-impl Meshes {
-    /// Upload all new or changed versions in one submission at an asset boundary.
-    pub fn prepare_gpu(
-        &mut self,
-        runtime: &mut renderer::runtime::Runtime,
-        pool: &mut renderer::graph::GraphPool,
-    ) -> Result<Option<renderer::runtime::FrameId>, crate::pbr::DefaultResourceError> {
-        if self.assets.values().all(|a| a.buffers.is_some()) {
-            return Ok(None);
-        }
-        let mut graph = pool.begin()?;
-        let mut pending = Vec::new();
-        for (&mesh, asset) in &self.assets {
-            if asset.buffers.is_some() {
-                continue;
-            }
-            let data = self.registry.geometry(mesh).expect("registered mesh");
-            let v = graph.buffer(
-                "mesh vertices",
-                BufferDesc {
-                    size: data.vertex_byte_len(),
-                },
-            )?;
-            let i = graph.buffer(
-                "mesh indices",
-                BufferDesc {
-                    size: data.index_byte_len(),
-                },
-            )?;
-            data.upload_vertices(&mut graph, "mesh vertex upload", v)?;
-            data.upload_indices(&mut graph, "mesh index upload", i)?;
-            graph.export_buffer(v)?;
-            graph.export_buffer(i)?;
-            pending.push((mesh, [v, i]));
-        }
-        let sent = runtime.submit(&graph.compile()?)?;
-        for (mesh, handles) in pending {
-            self.assets.get_mut(&mesh).expect("registered mesh").buffers =
-                Some(handles.map(|h| sent.export_buffer(h).expect("accepted mesh export")));
-        }
-        Ok(Some(sent.id()))
-    }
-    /// Release obsolete versions after older Graphs are submitted or discarded.
-    /// Accepted GPU work retains its leases.
-    pub fn collect(
-        &mut self,
-        runtime: &mut renderer::runtime::Runtime,
-    ) -> Result<(), renderer::runtime::ExecutionError> {
-        while let Some(old) = self.retired.last() {
-            runtime.delete(old.key())?;
-            self.retired.pop();
-        }
-        self.registry.collect_retired_meshes();
-        Ok(())
-    }
-    pub fn clear(
-        &mut self,
-        runtime: &mut renderer::runtime::Runtime,
-    ) -> Result<(), renderer::runtime::ExecutionError> {
-        for asset in self.assets.values_mut() {
-            if let Some(buffers) = asset.buffers.take() {
-                self.retired.extend(buffers);
-            }
-        }
-        self.collect(runtime)
     }
 }

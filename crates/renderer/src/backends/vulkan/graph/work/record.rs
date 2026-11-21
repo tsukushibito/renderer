@@ -215,12 +215,21 @@ impl TransferPayload for GraphWork {
                         let programs = self.programs.as_ref().unwrap();
                         let attachments = rendering_attachments(self, colors, *depth);
                         programs.begin_raster(command, &attachments);
+                        let mut regions = None;
                         let mut descriptor_start = pass.raster_descriptors.start;
                         for (batch, &slot) in plan
                             .raster_batches(batches)
                             .iter()
                             .zip(&self.raster_programs[pass.raster_programs.clone()])
                         {
+                            if regions != Some(batch.regions) {
+                                programs.set_raster_regions(
+                                    command,
+                                    batch.regions,
+                                    attachments.extent,
+                                );
+                                regions = Some(batch.regions);
+                            }
                             let draw_operands = plan.raster_draws(&batch.draws);
                             let descriptor_end = descriptor_start + draw_operands.len();
                             let descriptor_sets =

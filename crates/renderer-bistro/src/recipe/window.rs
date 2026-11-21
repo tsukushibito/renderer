@@ -159,7 +159,7 @@ struct State {
     window: Arc<Window>,
     surface: WindowPresenter,
     backend: Runtime,
-    resident: Option<Resident>,
+    resident: Resident,
     pool: GraphPool,
     workspace: Workspace,
     budget: Budget,
@@ -243,7 +243,7 @@ impl State {
             window,
             surface,
             backend,
-            resident: Some(resident),
+            resident,
             pool,
             workspace,
             budget,
@@ -452,14 +452,7 @@ impl State {
             options.validate_lighting_extent()?;
             let budget = &self.budget;
             let prepared = budget.prepare_frame(options, scene, conditions.background)?;
-            self.resident = Some(
-                self.resident
-                    .take()
-                    .unwrap()
-                    .reprepare(&mut self.backend, |backend| {
-                        backend::resize(backend, options, budget, &prepared)
-                    })?,
-            );
+            backend::resize(&mut self.backend, options, budget, &prepared)?;
             self.workspace.prepared = prepared;
             if options.reuse_shadows && options.shadows {
                 self.workspace.enable_shadow_reuse();
@@ -487,7 +480,7 @@ impl State {
             }
             let camera = self.camera(conditions, options)?;
             let bytes = uniform(camera, conditions, options)?;
-            let resident = self.resident.as_mut().unwrap();
+            let resident = &mut self.resident;
             let replay = options.window_smoke && self.accepted < REPLAY_STEPS;
             let started = Instant::now();
             let built = pipeline::build(

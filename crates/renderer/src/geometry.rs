@@ -15,6 +15,13 @@ use std::{fmt, ops::Range, sync::Arc};
 
 use crate::graph::{BufferHandle, Graph, GraphError, GraphErrorKind, MeshUpload, PassHandle};
 
+/// Immutable stream selected for a partial geometry upload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeometryStream {
+    Vertices,
+    Indices,
+}
+
 /// Owned encoded vertices and little-endian `u32` triangle indices.
 ///
 /// The immutable index summary covers exactly the full index stream. Use
@@ -173,6 +180,20 @@ impl GeometryData {
         destination: BufferHandle,
     ) -> Result<PassHandle, GraphError> {
         self.upload_graph_slice(graph, name, destination, true, 0..self.indices.len())
+    }
+
+    /// Upload an aligned byte range of a stream at the same offset in its
+    /// full-sized destination. Consecutive index chunks preserve the validated
+    /// index bound once the entire stream has been accepted.
+    pub fn upload_range(
+        &self,
+        graph: &mut Graph,
+        name: &str,
+        dst: BufferHandle,
+        stream: GeometryStream,
+        range: Range<usize>,
+    ) -> Result<PassHandle, GraphError> {
+        self.upload_graph_slice(graph, name, dst, stream == GeometryStream::Indices, range)
     }
 
     /// Upload one aligned slice of an immutable mesh stream. Only this bridge

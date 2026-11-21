@@ -104,9 +104,7 @@ impl Runtime {
                 )?;
                 runtime.set_frame_limit(limits.frames)?;
                 runtime.prepare_graph_working_set(Some(capacity), working_set)?;
-                Ok(Self {
-                    inner: RuntimeInner::Vulkan(runtime),
-                })
+                Self::with_inner(RuntimeInner::Vulkan(runtime), limits.resource_capacity)
             }
             #[cfg(feature = "d3d12")]
             RuntimeConfig::D3D12(_) => Self::new(config, limits, working_set),
@@ -132,7 +130,7 @@ impl Runtime {
                 WindowPresenterInner::D3D12(runtime.create_presenter(window, presentation)?)
             }
         };
-        Ok(WindowPresenter { inner })
+        Ok(WindowPresenter::new(self, inner))
     }
 
     /// Queue an exported linear RGBA8 image for display. Same-queue ordering
