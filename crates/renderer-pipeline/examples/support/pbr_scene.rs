@@ -200,6 +200,7 @@ impl Placement {
 
 #[derive(Clone, Copy)]
 pub struct Settings {
+    pub lights: Option<&'static [PointLight]>,
     pub technique: Technique,
     pub samples: SampleCount,
     pub placement: Placement,
@@ -207,8 +208,18 @@ pub struct Settings {
 }
 
 impl Settings {
+    fn point_lights(self) -> &'static [PointLight] {
+        self.lights
+            .unwrap_or(if self.technique == Technique::ForwardPlus {
+                &POINT_LIGHTS
+            } else {
+                &[]
+            })
+    }
+
     pub fn new(samples: SampleCount) -> Self {
         Self {
+            lights: None,
             technique: Technique::Forward,
             samples,
             placement: Placement::Single,
@@ -217,7 +228,7 @@ impl Settings {
     }
 }
 
-const POINT_LIGHTS: [PointLight; 1] = [PointLight {
+pub const POINT_LIGHTS: [PointLight; 1] = [PointLight {
     position: [0.1, 0.3, 1.5],
     radius: 3.0,
     color: [0.9, 0.6, 0.2],
@@ -330,6 +341,7 @@ pub fn prepare(frames_in_flight: NonZeroUsize, settings: Settings) -> Result<Pre
         frames_in_flight,
         max_draws: count,
         max_materials: 1,
+        max_point_lights: settings.point_lights().len(),
         max_casters_per_cascade: count,
         max_transforms: if settings.placement.uses_transforms() {
             count
@@ -396,9 +408,10 @@ pub fn build_graph(
     triangle: &Triangle,
     defaults: Option<&DefaultResources>,
     post: &PostProcess,
-    placement: Placement,
+    settings: Settings,
     shadow_history: Option<(&ShadowHistory, [u64; CASCADE_COUNT])>,
 ) -> Result<(CompiledGraph, Readbacks, Option<ShadowUpdates>), GraphError> {
+    let placement = settings.placement;
     let mut graph = pool.begin()?;
     let defaults = match defaults {
         Some(defaults) => defaults.import(&mut graph)?,
@@ -445,14 +458,10 @@ pub fn build_graph(
             shadows.source(cascade, opaque)
         }));
     }
-    let lights = if prepared.technique().supports_point_lights() {
-        POINT_LIGHTS.as_slice()
-    } else {
-        &[]
-    };
+    let lights = settings.point_lights();
     let (sdr, scene_depth, shadow_images) = if post.copy_hdr || post.bloom.is_some() {
         let exposure = 1.0;
-        let scene = prepared.draw_hdr(&mut graph, frame, lights)?;
+        let scene = prepared.draw_hdr(&mut graph, frame.with_lights(lights))?;
         let mut hdr = scene.hdr;
         if post.copy_hdr {
             let target = graph.image("copied HDR", hdr_desc())?;
@@ -468,7 +477,8 @@ pub fn build_graph(
             scene.shadows,
         )
     } else {
-        let images = prepared.add_scene_and_sdr_output(&mut graph, frame, lights, 1.0)?;
+        let images =
+            prepared.add_scene_and_sdr_output(&mut graph, frame.with_lights(lights), 1.0)?;
         (images.sdr, images.depth, images.shadows)
     };
     #[cfg(test)]

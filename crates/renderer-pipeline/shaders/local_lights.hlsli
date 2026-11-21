@@ -1,54 +1,50 @@
-#ifndef BISTRO_LOCAL_LIGHTS_HLSLI
-#define BISTRO_LOCAL_LIGHTS_HLSLI
+#ifndef RENDERER_LOCAL_LIGHTS_HLSLI
+#define RENDERER_LOCAL_LIGHTS_HLSLI
 
 static const uint LOCAL_LIGHT_TILE_SIZE = 16u;
-static const uint MAX_LOCAL_LIGHTS = 64u;
 
 struct PointLight {
     float4 position_radius;
     float4 color_intensity;
 };
 
-// Both declarations read a uint4 header followed by 64 two-float4 entries.
-// DXC lowers TextureBuffer to a fixed-size read-only SSBO for Vulkan. D3D12
-// uses a raw buffer so it can bind the same data via the root SRV.
-#ifdef __spirv__
-struct LocalLightsData {
-    uint4 extent_count;
-    PointLight lights[MAX_LOCAL_LIGHTS];
-};
+// Two adjacent RGBA32F texels per record. Slot zero is the view header.
+// The sampled view supplies physical bounds on both APIs, including when
+// a low-level Graph user binds a different initialized image.
+Texture2D<float4> local_lights : register(t2, space0);
 
-TextureBuffer<LocalLightsData> local_lights : register(t2, space0);
+uint header_component(float value) {
+    return value >= 0.0 && value <= 65535.0 ? uint(value) : 0u;
+}
 
 uint4 local_light_header() {
-    return local_lights.extent_count;
+    float4 fields = local_lights.Load(int3(0, 0, 0));
+    return uint4(header_component(fields.x), header_component(fields.y),
+                 header_component(fields.z), header_component(fields.w));
 }
-
-PointLight load_point_light(uint index) {
-    return local_lights.lights[index];
-}
-#else
-ByteAddressBuffer local_lights : register(t2, space0);
-
-uint4 local_light_header() {
-    return local_lights.Load4(0);
-}
-
-PointLight load_point_light(uint index) {
-    uint offset = 16u + index * 32u;
-    PointLight light;
-    light.position_radius = asfloat(local_lights.Load4(offset));
-    light.color_intensity = asfloat(local_lights.Load4(offset + 16u));
-    return light;
-}
-#endif
 
 uint2 local_light_extent() {
-    return clamp(local_light_header().xy, 1u, 65535u);
+    return max(local_light_header().xy, 1u);
 }
 
 uint local_light_count() {
-    return min(local_light_header().z, MAX_LOCAL_LIGHTS);
+    uint2 size;
+    local_lights.GetDimensions(size.x, size.y);
+    uint slots = (size.x / 2u) * size.y;
+    uint4 header = local_light_header();
+    return min(header.z | (header.w << 16u), max(slots, 1u) - 1u);
+}
+
+PointLight load_point_light(uint index) {
+    uint2 size;
+    local_lights.GetDimensions(size.x, size.y);
+    uint columns = max(size.x / 2u, 1u);
+    uint slot = index + 1u;
+    uint2 texel = uint2(2u * (slot % columns), slot / columns);
+    PointLight light;
+    light.position_radius = local_lights.Load(int3(texel, 0));
+    light.color_intensity = local_lights.Load(int3(texel + uint2(1, 0), 0));
+    return light;
 }
 
 #endif

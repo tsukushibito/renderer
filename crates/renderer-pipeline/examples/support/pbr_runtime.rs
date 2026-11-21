@@ -128,7 +128,7 @@ pub fn render(
             &triangle,
             Some(&defaults),
             &post,
-            settings.placement,
+            settings,
             shadow_history,
         )?;
         #[cfg(test)]

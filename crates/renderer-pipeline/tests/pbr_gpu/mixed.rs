@@ -105,6 +105,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             frames_in_flight: NonZeroUsize::MIN,
             max_draws: 7,
             max_materials: 6,
+            max_point_lights: 0,
             max_casters_per_cascade: 1,
             max_transforms: 2,
         },

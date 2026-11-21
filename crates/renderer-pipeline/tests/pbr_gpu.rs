@@ -43,7 +43,7 @@ mod cpu {
                 &triangle,
                 None,
                 &post,
-                Placement::Single,
+                Settings::new(SampleCount::X1),
                 None,
             )
             .unwrap();
@@ -115,7 +115,7 @@ mod cpu {
                 &triangle,
                 None,
                 &post,
-                Placement::Single,
+                settings,
                 None,
             )
             .unwrap();
@@ -151,7 +151,7 @@ mod cpu {
                 &triangle,
                 None,
                 &post,
-                placement,
+                settings,
                 None,
             )
             .unwrap();
@@ -176,6 +176,72 @@ mod gpu {
         runtime::{Api, probe, render},
         scene::{EXTENT, Placement, Settings, Technique, ViewFixture},
     };
+
+    fn late_point_light_matches_single_light(api: Api) {
+        use super::scene::POINT_LIGHTS;
+        use renderer_pipeline::pbr::PointLight;
+        const MANY: [PointLight; 257] = {
+            let mut lights = [PointLight {
+                intensity: 0.0,
+                ..POINT_LIGHTS[0]
+            }; 257];
+            lights[256] = POINT_LIGHTS[0];
+            lights
+        };
+        for technique in [
+            Technique::Forward,
+            Technique::ForwardPlus,
+            Technique::Deferred,
+        ] {
+            for placement in [
+                Placement::Single,
+                Placement::Mirrored {
+                    baked: false,
+                    blend: true,
+                },
+            ] {
+                let capture = |lights| {
+                    let settings = Settings {
+                        technique,
+                        placement,
+                        lights: Some(lights),
+                        ..Settings::new(SampleCount::X1)
+                    };
+                    render(api, settings, false, Bloom::Off, &[])
+                        .unwrap()
+                        .pop()
+                        .unwrap()
+                        .output
+                        .sdr
+                };
+                let reference = capture(&POINT_LIGHTS);
+                assert_ne!(
+                    reference,
+                    capture(&[]),
+                    "{technique:?} point light must affect shading"
+                );
+                assert_eq!(
+                    reference,
+                    capture(&MANY),
+                    "{technique:?} light in second table row"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    #[ignore = "requires a hardware Vulkan adapter and requested native validation"]
+    fn vulkan_late_point_light_matches_single_light() {
+        late_point_light_matches_single_light(Api::Vulkan);
+    }
+
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
+    fn d3d12_late_point_light_matches_single_light() {
+        late_point_light_matches_single_light(Api::D3D12);
+    }
 
     fn compare(api: Api) {
         let mut forward_red = 0;

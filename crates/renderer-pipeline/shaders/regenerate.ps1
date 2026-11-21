@@ -106,7 +106,8 @@ try {
         'pbr_transformed.vert', 'pbr_transformed_small.vert',
         'gbuffer_transformed.vert', 'gbuffer_transformed_small.vert',
         'shadow_transformed.vert', 'shadow_transformed_small.vert',
-        'pbr_transformed.frag', 'pbr_forward_plus_transformed.frag',
+        'pbr_transformed.frag', 'pbr_forward_plus_transformed.frag', 'pbr_all_lights_transformed.frag',
+        'deferred_local_lights.frag',
         'gbuffer_transformed.frag', 'shadow_transformed.frag'
     )
     foreach ($name in $shaders) {
@@ -123,6 +124,8 @@ try {
             'gbuffer_transformed_small.vert' { $shaderSource = 'pbr_transformed.vert'; $defines = @('RENDERER_GBUFFER_VERTEX=1', 'RENDERER_TRANSFORM_RECORDS=64') }
             'shadow_transformed_small.vert' { $shaderSource = 'shadow_transformed.vert'; $defines = @('RENDERER_TRANSFORM_RECORDS=64') }
             'pbr_transformed.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_TRANSFORMED_DIRECTIONS=1') }
+            'pbr_all_lights_transformed.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=1', 'BISTRO_TRANSFORMED_DIRECTIONS=1') }
+            'deferred_local_lights.frag' { $shaderSource = 'deferred_lighting.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=1') }
             'pbr_forward_plus_transformed.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=2', 'BISTRO_TRANSFORMED_DIRECTIONS=1') }
             'gbuffer_transformed.frag' { $shaderSource = 'gbuffer.frag'; $defines = @('BISTRO_TRANSFORMED_DIRECTIONS=1') }
             'shadow_transformed.frag' { $shaderSource = 'shadow.frag'; $defines = @('BISTRO_TRANSFORMED_DIRECTIONS=1') }

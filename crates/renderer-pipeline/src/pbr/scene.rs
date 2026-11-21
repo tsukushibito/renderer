@@ -67,6 +67,89 @@ pub(crate) enum DrawMode {
     Indirect,
 }
 
+struct LocalLights {
+    layout: crate::pbr_forward_plus::PointLightLayout,
+    bytes: Vec<u8>,
+    mask: Option<ImageDesc>,
+    programs: ScenePrograms,
+}
+
+impl LocalLights {
+    fn new(
+        prep: &mut Preparation,
+        config: Config,
+        limits: SceneLimits,
+        technique: TransformTechnique,
+        tier: Option<InstanceTier>,
+    ) -> Result<Self, GraphError> {
+        use crate::passes::pbr::{
+            deferred::gbuffer_program,
+            forward_plus::{CULL_PASS, compute_program, raster_program},
+            shadow_program,
+        };
+        let layout = crate::pbr_forward_plus::PointLightLayout::new(limits.max_point_lights)?;
+        let tiled = matches!(technique, TransformTechnique::ForwardPlus);
+        let deferred = matches!(technique, TransformTechnique::Deferred);
+        let lit = if deferred {
+            TransformTechnique::DeferredLights
+        } else if tiled {
+            TransformTechnique::ForwardPlus
+        } else {
+            TransformTechnique::AllLights
+        };
+        let world = Programs {
+            opaque: if deferred {
+                gbuffer_program()
+            } else {
+                raster_program(tiled, false)
+            },
+            blend: raster_program(tiled, true),
+            shadow: shadow_program(),
+        };
+        let programs = ScenePrograms::new(world, tier.map(|tier| (tier, lit)));
+        let mask = if tiled {
+            Some(layout.tile_mask_desc(config.extent[0], config.extent[1])?)
+        } else {
+            None
+        };
+        let raster = programs.raster_requests(config.samples, false);
+        let compute = tiled.then(compute_program);
+        prep.reserve_image(layout.image_desc(), 1)?;
+        if let Some(desc) = mask {
+            prep.reserve_image(desc, 1)?;
+        }
+        prep.add_requirements(
+            GraphRequirements {
+                resources: 1 + usize::from(tiled),
+                passes: 1 + usize::from(tiled),
+                compute_dispatches: usize::from(tiled),
+                accesses: 1 + 3 * usize::from(tiled),
+                bindings: 3 * usize::from(tiled),
+                name_bytes: "local point lightslocal point light update".len()
+                    + usize::from(tiled) * ("tile light masks".len() + CULL_PASS.len()),
+                upload_bytes: layout.byte_len(),
+                ..Default::default()
+            },
+            WorkingSet {
+                raster: &raster,
+                compute: compute.as_slice(),
+                ..Default::default()
+            },
+        )?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(layout.byte_len())
+            .map_err(|_| GraphError::invalid_input("point-light table allocation failed"))?;
+        bytes.resize(layout.byte_len(), 0);
+        Ok(Self {
+            layout,
+            bytes,
+            mask,
+            programs,
+        })
+    }
+}
+
 /// Immutable recipe settings and scratch reused when declaring frames. The
 /// Graph owns all recorded work, so prepare another frame after construction.
 pub(crate) struct PreparedScene {
@@ -75,6 +158,7 @@ pub(crate) struct PreparedScene {
     preparation: Preparation,
     output: Option<PreparedOutput>,
     programs: ScenePrograms,
+    local_lights: Option<LocalLights>,
     opaque_uses_lighting: bool,
     mode: DrawMode,
     instances: Option<PreparedInstances>,
@@ -98,12 +182,30 @@ impl PreparedScene {
                 "custom PBR Programs support only world-space indexed draws",
             ));
         }
-        let programs = ScenePrograms::new(programs, tier.zip(model_technique));
+        let fallback_technique = model_technique.map(|technique| match technique {
+            TransformTechnique::ForwardPlus => TransformTechnique::Forward,
+            other => other,
+        });
+        let programs = ScenePrograms::new(programs, tier.zip(fallback_technique));
         let [width, height] = config.extent;
         if !config.clear_color.into_iter().all(f32::is_finite) {
             return Err(GraphError::invalid_input("PBR clear color must be finite"));
         }
         let mut preparation = Preparation::new(limits.frames_in_flight);
+        let local_lights = if limits.max_point_lights > 0 {
+            let technique = model_technique.ok_or_else(|| {
+                GraphError::invalid_input("custom Forward shader ABI does not bind point lights")
+            })?;
+            Some(LocalLights::new(
+                &mut preparation,
+                config,
+                limits,
+                technique,
+                tier,
+            )?)
+        } else {
+            None
+        };
         let transient_camera = config.camera_storage == CameraStorage::Transient;
         let upload_camera = config.camera_storage != CameraStorage::PreUploaded;
         if transient_camera {
@@ -138,8 +240,11 @@ impl PreparedScene {
             .transpose()?;
 
         let shadow_draws = checked(casters.checked_mul(CASCADE_COUNT))?;
-        let scene_accesses = std::iter::once(&programs.world)
-            .chain(programs.model.iter())
+        let largest_programs = local_lights
+            .as_ref()
+            .map_or(&programs, |lights| &lights.programs);
+        let scene_accesses = std::iter::once(&largest_programs.world)
+            .chain(largest_programs.model.iter())
             .map(|programs| {
                 programs
                     .opaque
@@ -162,8 +267,8 @@ impl PreparedScene {
         let accesses = checked(limits.max_draws.checked_mul(scene_accesses))?;
         let accesses =
             checked(accesses.checked_add(checked(shadow_draws.checked_mul(shadow_accesses))?))?;
-        let material_bindings: usize = std::iter::once(&programs.world)
-            .chain(programs.model.iter())
+        let material_bindings: usize = std::iter::once(&largest_programs.world)
+            .chain(largest_programs.model.iter())
             .map(|programs| {
                 programs.opaque.bindings().len()
                     + programs.blend.bindings().len()
@@ -212,6 +317,7 @@ impl PreparedScene {
             output,
             programs,
             opaque_uses_lighting,
+            local_lights,
             mode,
             instances,
             opaque: Batch::prepare(limits.max_materials, limits.max_draws, transforms)?,
@@ -258,30 +364,24 @@ impl PreparedScene {
         )
     }
 
-    pub(crate) fn add_scene_using<const N: usize>(
+    pub(crate) fn add_scene_using(
         &mut self,
         graph: &mut Graph,
         frame: Frame<'_>,
-        additional: impl FnOnce(&mut Graph, BufferHandle) -> Result<[Binding; N], GraphError>,
         append_scene: impl FnOnce(
             &mut Graph,
             RasterScene<'_>,
         ) -> Result<(ImageHandle, Option<ImageHandle>), GraphError>,
     ) -> Result<SceneImages, GraphError> {
-        self.add_scene_using_programs(graph, frame, None, additional, append_scene)
-    }
-
-    pub(crate) fn add_scene_using_programs<const N: usize>(
-        &mut self,
-        graph: &mut Graph,
-        frame: Frame<'_>,
-        programs: Option<&ScenePrograms>,
-        additional: impl FnOnce(&mut Graph, BufferHandle) -> Result<[Binding; N], GraphError>,
-        append_scene: impl FnOnce(
-            &mut Graph,
-            RasterScene<'_>,
-        ) -> Result<(ImageHandle, Option<ImageHandle>), GraphError>,
-    ) -> Result<SceneImages, GraphError> {
+        if !frame.lights.is_empty() {
+            let state = self
+                .local_lights
+                .as_mut()
+                .ok_or_else(|| GraphError::invalid_input("point lights were not reserved"))?;
+            state
+                .layout
+                .encode(self.config.extent, frame.lights, &mut state.bytes)?;
+        }
         let transform_end = self.check_frame(graph, &frame)?;
         let camera = match frame.camera_target {
             Some(buffer) => buffer,
@@ -307,13 +407,30 @@ impl PreparedScene {
             }
             _ => unreachable!("shadow inputs were checked before graph mutation"),
         };
-        let programs = programs.unwrap_or(&self.programs);
         let lighting = lighting_bindings(frame.view.environment(), shadow_views);
-        let extra = additional(graph, camera)?;
         let mut extended = [lighting[0]; renderer::program::MAX_RASTER_BINDINGS - 7];
         extended[..lighting.len()].copy_from_slice(&lighting);
-        let count = lighting.len() + N;
-        extended[lighting.len()..count].copy_from_slice(&extra);
+        let mut count = lighting.len();
+        let mut programs = &self.programs;
+        let mut point_lights = None;
+        if !frame.lights.is_empty() {
+            let state = self.local_lights.as_ref().expect("checked at entry");
+            let view = state.layout.upload(graph, &state.bytes)?;
+            let mask = if let Some(desc) = state.mask {
+                let target = graph.image("tile light masks", desc)?;
+                let tiles = graph.image_view(target, 0, 0)?;
+                crate::pbr_forward_plus::append_culling(graph, camera, view, tiles)?;
+                Some(tiles)
+            } else {
+                None
+            };
+            for binding in crate::pbr_forward_plus::raster_bindings(view, mask) {
+                extended[count] = binding;
+                count += 1;
+            }
+            programs = &state.programs;
+            point_lights = Some(view);
+        }
         let opaque_bindings = Bindings::Scene {
             camera,
             lighting: if self.opaque_uses_lighting {
@@ -351,6 +468,7 @@ impl PreparedScene {
             RasterScene {
                 camera,
                 lighting,
+                point_lights,
                 has_transparency: !frame.transparent.is_empty()
                     || frame.forward_draws.is_some_and(|draws| draws.has_blend()),
                 forward_draws: frame.forward_draws,
@@ -516,6 +634,7 @@ impl PreparedScene {
 pub(crate) struct RasterScene<'a> {
     pub(crate) camera: BufferHandle,
     pub(crate) lighting: [Binding; 9],
+    pub(crate) point_lights: Option<ImageView>,
     pub(crate) has_transparency: bool,
     forward_draws: Option<&'a crate::pipeline::ForwardDraws>,
     opaque: &'a Batch,

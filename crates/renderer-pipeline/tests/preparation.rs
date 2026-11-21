@@ -124,7 +124,7 @@ fn deferred_lighting(environment: ImageView, shadow: ImageView) -> [Binding; 9] 
 fn deferred_pass_fits_its_advertised_reservations() {
     let mut preparation = Preparation::new(NonZeroUsize::MIN);
     deferred::reserve(&mut preparation, [4, 3]).unwrap();
-    assert_eq!(preparation.working_set().raster.len(), 2);
+    assert_eq!(preparation.working_set().raster.len(), 3);
     preparation
         .add_graph_requirements(GraphRequirements {
             resources: 4,
@@ -192,6 +192,7 @@ fn deferred_pass_fits_its_advertised_reservations() {
     let planes = deferred::append(
         &mut graph,
         deferred::Inputs {
+            point_lights: Some(environment),
             hdr: hdr_view,
             depth: depth_view,
             clear: [0.0; 4],
@@ -251,6 +252,7 @@ fn deferred_pass_rejects_invalid_targets_before_consuming_graph_capacity() {
         let error = deferred::append(
             &mut graph,
             deferred::Inputs {
+                point_lights: None,
                 hdr,
                 depth,
                 clear: [0.0; 4],
