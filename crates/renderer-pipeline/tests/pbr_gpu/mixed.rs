@@ -335,13 +335,80 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         }
     }
     scene.remove_view(view.id, &mut runtime)?;
+    scene.clear(&mut runtime)?;
+    if technique == pbr::Technique::Forward {
+        let floor_quad = RenderObject::new(pbr_mesh, floor).with_transform(pbr::Transform::new([
+            [0.5, 0., 0., 0.],
+            [0., 0.5, 0., 0.],
+            [0., 0., 1., 0.5],
+        ])?);
+        let floor_rgb = &bytes[(32 * 8 + 1) * 8..][..6];
+        draw_after_resize(
+            &mut runtime,
+            &mut pool,
+            SceneInput::new(&meshes, &materials, &[floor_quad]),
+            view,
+            floor_rgb,
+        )?;
+    }
     meshes.clear(&mut runtime)?;
     materials.clear(&mut runtime)?;
     for key in [offset.key(), cyan.key(), yellow.key()] {
         runtime.delete(key)?;
     }
-    scene.clear(&mut runtime)?;
     super::runtime::check_validation(runtime)
+}
+
+/// The new extent is absent from the initial working set. Reuse the mesh and
+/// resident material registrations without refreshing or uploading either.
+fn draw_after_resize(
+    runtime: &mut Runtime,
+    pool: &mut GraphPool,
+    input: SceneInput<'_>,
+    previous_view: CameraView,
+    floor_rgb: &[u8],
+) -> Result<()> {
+    let view = CameraView {
+        extent: [23, 13],
+        ..previous_view
+    };
+    let n = NonZeroUsize::MIN;
+    let limits = pbr::SceneLimits {
+        frames_in_flight: n,
+        max_draws: 1,
+        max_materials: 1,
+        max_casters_per_cascade: 0,
+        max_transforms: 1,
+    };
+    let mut prep = Preparation::new(n);
+    let mut scene = ViewRenderer::prepare(
+        StandardPipeline::forward(view.extent, limits)?,
+        view.extent,
+        n,
+        None,
+        &mut prep,
+    )?;
+    runtime.prepare_working_set(prep.working_set())?;
+    if let Some(id) = scene.initialize(runtime)? {
+        runtime
+            .wait_for_frame(id, Duration::from_secs(10))?
+            .ok_or("resize setup timed out")?;
+    }
+    scene.register_view(&view)?;
+    scene.prepare_scene(input)?;
+    let mut frame = scene.begin_frame(pool)?;
+    let hdr = frame.draw_view(input, &view)?.color;
+    let read = frame.graph().readback_image("resized HDR", hdr)?;
+    let pending = frame.submit(runtime)?;
+    let mut completed = runtime
+        .wait_for_frame(pending.id(), Duration::from_secs(10))?
+        .ok_or("resized frame timed out")?;
+    let mut pixels = [0; 23 * 13 * 8];
+    completed.readback_into(read, &mut pixels)?;
+    assert_eq!(&pixels[(23 * 6 + 11) * 8..][..6], floor_rgb);
+    assert_eq!(&pixels[..6], &[0; 6]);
+    drop((completed, pending));
+    scene.clear(runtime)
 }
 #[cfg(feature = "vulkan")]
 #[test]
