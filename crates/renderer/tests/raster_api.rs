@@ -214,7 +214,7 @@ fn depth_only_draws_require_depth_and_do_not_restore_discarded_contents() {
 
 fn observe(graph: &mut Graph, name: &str, view: ImageView) {
     graph
-        .declare_pass(
+        .declare_analysis_pass(
             name,
             PassKind::Copy,
             &[Access {

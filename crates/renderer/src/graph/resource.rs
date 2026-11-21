@@ -421,6 +421,32 @@ impl Graph {
             index,
         })
     }
+    /// Create a texture, upload its tightly packed mip chain, and export it in
+    /// this submission. Call repeatedly to batch asset uploads in one Graph.
+    /// The bytes are captured during this call and may immediately be reused.
+    /// A failed upload leaves the Graph ready for another texture.
+    pub fn upload_texture_for_export(
+        &mut self,
+        name: &str,
+        desc: ImageDesc,
+        bytes: &[u8],
+    ) -> Result<ImageHandle, GraphError> {
+        let name_end = self.names.len();
+        let image = self.image(name, desc)?;
+        if let Err(error) = self.upload_image(name, image, bytes) {
+            // upload_image has already returned its unpublished pass storage.
+            // A fresh transient has no import entry or initial ranges.
+            let data = self.data_mut();
+            data.resources.pop();
+            data.exported.pop();
+            data.names.truncate(name_end);
+            return Err(error);
+        }
+        // Successful full-image upload establishes the single-sample contract.
+        self.export(image.index);
+        Ok(image)
+    }
+
     /// Query a local transient or imported buffer's immutable description.
     /// No contents, initialization or GPU-completion guarantee is implied.
     /// Foreign handles, including an earlier checkout of this pool, are rejected.
