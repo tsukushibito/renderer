@@ -443,8 +443,8 @@ impl Registry {
     pub(super) fn result_token(&self) -> Arc<()> {
         Arc::clone(&self.result_returns)
     }
-    /// Change-boundary guarantee, including synchronization with the last
-    /// external token return. No new token can be made after exclusive success.
+    /// The fixed range pool moves with this registry, including leased slots.
+    /// Only submissions and result metadata must retire before replacing frame storage.
     pub(super) fn metadata_is_idle(&mut self) -> bool {
         if Arc::get_mut(&mut self.result_returns).is_none() {
             return false;
@@ -452,7 +452,6 @@ impl Registry {
         self.exports
             .iter_mut()
             .all(|slot| Arc::get_mut(slot).is_some())
-            && self.ranges.is_idle()
     }
     pub(super) fn registered_images(&self) -> Result<Vec<crate::graph::ImageDesc>, Error> {
         let mut images = Vec::new();
@@ -848,8 +847,8 @@ impl ExecutionSlot {
 
 impl D3D12Runtime {
     /// Scheduled contents of accepted work; CPU completion is not implied.
-    /// Return this buffer snapshot and all clones before changing the working set;
-    /// its key and registered contents survive and can be refreshed afterwards.
+    /// The working set may change while this snapshot is retained. Writes or
+    /// deletion of the registered buffer still invalidate its scheduled contents.
     pub fn refresh_buffer(&self, key: ResourceKey) -> Result<ImportBuffer, Error> {
         self.device.ensure_active()?;
         self.pool
