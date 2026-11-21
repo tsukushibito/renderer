@@ -1,6 +1,8 @@
 //! Compose public Renderer Graphs with reusable drawing passes and recipes.
 //!
-//! Start with [`pipeline::RendererSetup::standard`] and [`pipeline::SceneAssets`].
+//! Start with [`Renderer::headless`] and [`pipeline::SceneAssets`]. Record a scene
+//! and optional Canvas layers on a [`Frame`], then request an sRGB capture.
+//! [`pipeline::RendererSetup::standard`] provides explicit pass preparation.
 //! Blocking or incremental setup derives the view, graph and GPU reservations from
 //! the scene. [`pipeline::PreparedSetup`] lets an engine compose additional passes
 //! or attach its own runtime. A [`pipeline::SceneFrame`] can record multiple cameras,
@@ -55,6 +57,9 @@
 /// Shared graph, runtime and native interoperation APIs used by drawing passes.
 pub use renderer_core as core;
 
+pub mod canvas;
+mod frame;
+pub use frame::*;
 pub mod material;
 pub mod mesh;
 pub mod passes;
@@ -63,5 +68,6 @@ pub mod pbr_deferred;
 pub mod pbr_forward;
 pub mod pbr_forward_plus;
 pub mod pipeline;
+pub mod scene;
 mod shader_binaries;
 pub mod unlit_forward;

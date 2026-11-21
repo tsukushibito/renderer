@@ -3,6 +3,7 @@
     feature = "presentation",
     any(feature = "vulkan", feature = "d3d12")
 ))]
+use renderer::WindowRenderer;
 use renderer::{
     material::Materials,
     mesh::{MeshCapacity, Meshes},
@@ -15,7 +16,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use training_yard::window::WindowView;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -80,7 +80,7 @@ fn standalone_empty_scene_presents_consecutive_frames() -> PipelineResult<()> {
             retired_mesh_versions: 1,
         })?;
         let mut materials = Materials::default();
-        let mut view = WindowView::new(
+        let mut view = WindowRenderer::new(
             window,
             config,
             camera,
@@ -89,7 +89,10 @@ fn standalone_empty_scene_presents_consecutive_frames() -> PipelineResult<()> {
         let mut presented = 0;
         while presented < 3 {
             events.pump_app_events(Some(Duration::from_millis(1)), &mut host);
-            match view.draw(SceneInput::new(&meshes, &materials, &[]))? {
+            match view.draw(|frame| {
+                frame.draw_scene(SceneInput::new(&meshes, &materials, &[]), 1.)?;
+                Ok(())
+            })? {
                 PresentOutcome::Presented { .. } => presented += 1,
                 PresentOutcome::NotReady | PresentOutcome::Recreated => {}
                 other => panic!("unexpected presentation outcome: {other:?}"),

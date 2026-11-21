@@ -1,0 +1,55 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_4" : {
+            "name" : "type.PushConstant.Rectangle",
+            "members" : [
+                {
+                    "name" : "origin",
+                    "type" : "vec2",
+                    "offset" : 0
+                },
+                {
+                    "name" : "size",
+                    "type" : "vec2",
+                    "offset" : 8
+                }
+            ]
+        }
+    },
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "out.var.SV_Target0",
+            "location" : 0
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "source",
+            "set" : 0,
+            "binding" : 0
+        }
+    ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "nearest_clamp",
+            "set" : 0,
+            "binding" : 1
+        }
+    ],
+    "push_constants" : [
+        {
+            "type" : "_4",
+            "name" : "rect",
+            "push_constant" : true
+        }
+    ]
+}

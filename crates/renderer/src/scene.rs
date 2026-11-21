@@ -1,6 +1,6 @@
 //! Retained rendering inputs for a game without its own render-object store.
 //! Hosts with extracted objects can pass an iterator of references directly.
-use renderer::{pbr::Transform, pipeline::RenderObject};
+use crate::{pbr::Transform, pipeline::RenderObject};
 use std::{
     collections::HashMap,
     sync::atomic::{AtomicU64, Ordering},

@@ -8,7 +8,7 @@ rust-version.workspace = true
 [features]
 default = ["graphics"]
 graphics = ["dep:renderer"]
-presentation = ["graphics", "renderer/presentation", "dep:raw-window-handle"]
+presentation = ["graphics", "renderer/presentation"]
 vulkan = ["renderer-core/vulkan", "renderer?/vulkan"]
 d3d12 = ["renderer-core/d3d12", "renderer?/d3d12"]
 development-validation = ["renderer-core/development-validation", "renderer?/development-validation"]
@@ -16,9 +16,6 @@ development-validation = ["renderer-core/development-validation", "renderer?/dev
 [dependencies]
 renderer = { version = "0.1.0", path = "../renderer", optional = true }
 renderer-core = { version = "0.1.0", path = "../renderer-core" }
-
-[target.'cfg(windows)'.dependencies]
-raw-window-handle = { version = "0.6", optional = true }
 
 [target.'cfg(windows)'.dev-dependencies]
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }

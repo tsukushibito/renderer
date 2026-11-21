@@ -2,6 +2,8 @@
     feature = "graphics",
     any(feature = "vulkan", all(windows, feature = "d3d12"))
 ))]
+use renderer::Renderer;
+use renderer::scene::Scene;
 use renderer::{
     material::{Materials, PbrParams, Value},
     mesh::{MeshCapacity, MeshData, Meshes},
@@ -11,7 +13,6 @@ use renderer::{
 };
 use renderer_core::runtime::RuntimeConfig;
 use std::time::Duration;
-use training_yard::{capture::CaptureView, scene::Scene};
 
 mod shader {
     include!("../../renderer/examples/support/toon.rs");
@@ -57,16 +58,32 @@ fn exercise(backend: RuntimeConfig) -> PipelineResult<()> {
     let mut scene = Scene::default();
     let actor = scene.spawn(RenderObject::new(pbr, red));
     scene.spawn(RenderObject::new(toon, green));
-    let mut view = CaptureView::new(
+    let mut view = Renderer::headless(
         backend,
         camera,
         SceneAssets::new(&mut meshes, &mut materials, scene.objects()),
     )?;
+    // A UI-only frame uses the same target, without drawing the prepared scene.
+    let mut ui = view.begin_frame()?;
+    ui.draw_overlay(&[renderer::canvas::Layer {
+        paint: renderer::canvas::Paint::Color([0.25, 0., 0., 0.5]),
+        rect: renderer::core::graph::RasterRect::new(0, 0, 2, 1),
+        clip: Some(renderer::core::graph::RasterRect::new(1, 0, 1, 1)),
+    }])?;
+    let ticket = ui.capture()?;
+    let mut ui_pixels = [0; 32 * 16 * 4];
+    assert!(view.read_capture(&ticket, &mut ui_pixels, Duration::from_secs(15))?);
+    assert_eq!(&ui_pixels[..8], &[0, 0, 0, 255, 137, 0, 0, 255]);
     let mut capture = |objects: &[RenderObject]| -> PipelineResult<_> {
-        let pending = view.render(SceneInput::new(&meshes, &materials, objects))?;
+        let mut frame = view.begin_frame()?;
+        frame.draw_scene(SceneInput::new(&meshes, &materials, objects), 1.)?;
+        let pending = frame.capture()?;
         let mut pixels = [0; 32 * 16 * 4];
-        assert!(view.read(&pending, &mut [], Duration::ZERO).is_err());
-        assert!(view.read(&pending, &mut pixels, Duration::from_secs(15))?);
+        assert!(
+            view.read_capture(&pending, &mut [], Duration::ZERO)
+                .is_err()
+        );
+        assert!(view.read_capture(&pending, &mut pixels, Duration::from_secs(15))?);
         Ok(pixels)
     };
     let original = capture(scene.objects())?;

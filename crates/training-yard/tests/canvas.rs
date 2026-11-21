@@ -2,12 +2,12 @@
     feature = "graphics",
     any(feature = "vulkan", all(windows, feature = "d3d12"))
 ))]
+use renderer::canvas::{self, Layer, Paint};
 use renderer_core::{
     graph::{GraphPool, ImageDesc, LoadOp, RasterRect, SampleCount},
     program::RasterPipelineRequest,
     runtime::{ResourceClass, Runtime, RuntimeConfig, WorkingSet},
 };
-use training_yard::canvas::{self, ImageLayer};
 
 fn nested_canvas(config: RuntimeConfig) -> Result<(), Box<dyn std::error::Error>> {
     let icon_desc = ImageDesc::rgba8(1, 1);
@@ -20,7 +20,7 @@ fn nested_canvas(config: RuntimeConfig) -> Result<(), Box<dyn std::error::Error>
             resources: &[icon_desc, preview_desc, screen_desc]
                 .map(|desc| ResourceClass::Image { desc, count: 1 }),
             raster: &[RasterPipelineRequest {
-                program: canvas::program(),
+                program: canvas::programs(renderer_core::ImageFormat::Rgba8Unorm)?[0].clone(),
                 sample_count: SampleCount::X1,
             }],
             compute: &[],
@@ -31,16 +31,16 @@ fn nested_canvas(config: RuntimeConfig) -> Result<(), Box<dyn std::error::Error>
     let icon = graph.image("premultiplied icon", icon_desc)?;
     graph.upload_image("half red", icon, &[128, 0, 0, 128])?;
     let preview = graph.image("transparent UI panel", preview_desc)?;
-    let layer = ImageLayer {
-        source: graph.image_view(icon, 0, 0)?,
+    let layer = Layer {
+        paint: Paint::Image(graph.image_view(icon, 0, 0)?),
         rect: RasterRect::new(0, 0, 2, 1),
         clip: Some(RasterRect::new(1, 0, 1, 1)),
     };
     canvas::record(&mut graph, preview, LoadOp::Clear([0.; 4]), &[layer])?;
     let screen = graph.image("host background", screen_desc)?;
     graph.upload_image("blue", screen, &[0, 0, 255, 255].repeat(4))?;
-    let layer = ImageLayer {
-        source: graph.image_view(preview, 0, 0)?,
+    let layer = Layer {
+        paint: Paint::Image(graph.image_view(preview, 0, 0)?),
         rect: RasterRect::new(1, 0, 2, 1),
         clip: None,
     };

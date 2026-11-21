@@ -1,0 +1,34 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_3" : {
+            "name" : "type.PushConstant.Fill",
+            "members" : [
+                {
+                    "name" : "rgba",
+                    "type" : "vec4",
+                    "offset" : 0
+                }
+            ]
+        }
+    },
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "out.var.SV_Target0",
+            "location" : 0
+        }
+    ],
+    "push_constants" : [
+        {
+            "type" : "_3",
+            "name" : "fill",
+            "push_constant" : true
+        }
+    ]
+}

@@ -1,29 +1,30 @@
-//! Standalone presentation prototype. The application owns its event loop.
-use raw_window_handle::HasWindowHandle;
-use renderer::pipeline::{
-    CameraView, PipelineResult, RendererSetup, SceneAssets, SceneInput, SceneRenderer,
+//! Standard window rendering. The application owns its event loop.
+use super::{Frame, Renderer};
+use crate::{
+    passes::output::SdrOutput,
+    pipeline::{CameraView, PipelineResult, SceneAssets},
 };
+use raw_window_handle::HasWindowHandle;
 use renderer_core::{
     PresentOutcome,
     runtime::{FrameId, Runtime, RuntimeConfig, WindowPresenter, WindowReadiness},
 };
 use std::time::Duration;
 
-pub struct WindowView {
+pub struct WindowRenderer {
     presenter: WindowPresenter,
-    renderer: SceneRenderer,
-    camera: CameraView,
+    renderer: Renderer,
     accepted: Option<FrameId>,
 }
 
-impl WindowView {
+impl WindowRenderer {
     pub fn new(
         window: impl HasWindowHandle + 'static,
         mut backend: RuntimeConfig,
         camera: CameraView,
         assets: SceneAssets<'_>,
     ) -> PipelineResult<Self> {
-        let plan = RendererSetup::standard(camera).prepare(assets)?;
+        let plan = Renderer::prepare(camera, assets, SdrOutput::display(false))?;
         plan.fit_backend(&mut backend)?;
         let (runtime, presenter) = Runtime::for_window(
             backend,
@@ -32,24 +33,29 @@ impl WindowView {
             window,
             Default::default(),
         )?;
-        let renderer = plan.begin_with_runtime(runtime)?.wait()?;
+        let drawing = plan.begin_with_runtime(runtime)?.wait()?;
         Ok(Self {
             presenter,
-            renderer,
-            camera,
+            renderer: Renderer { drawing, camera },
             accepted: None,
         })
     }
 
     /// A pending present retries the accepted image. It does not resubmit the scene.
-    pub fn draw(&mut self, input: SceneInput<'_>) -> PipelineResult<PresentOutcome> {
+    pub fn draw(
+        &mut self,
+        draw: impl FnOnce(&mut Frame<'_>) -> PipelineResult<()>,
+    ) -> PipelineResult<PresentOutcome> {
         self.presenter.poll()?;
         if self.presenter.has_pending_frame() {
-            return Ok(self.presenter.present_frame(self.renderer.runtime())?);
+            return Ok(self
+                .presenter
+                .present_frame(self.renderer.drawing.runtime())?);
         }
         if let Some(id) = self.accepted {
             if self
                 .renderer
+                .drawing
                 .runtime()
                 .wait_for_frame(id, Duration::ZERO)?
                 .is_none()
@@ -61,21 +67,24 @@ impl WindowView {
         match self.presenter.prepare()? {
             WindowReadiness::Pending => return Ok(PresentOutcome::NotReady),
             WindowReadiness::Suspended => return Ok(PresentOutcome::Suspended),
-            WindowReadiness::Ready { extent, .. } if [extent.0, extent.1] != self.camera.extent => {
+            WindowReadiness::Ready { extent, .. }
+                if [extent.0, extent.1] != self.renderer.camera.extent =>
+            {
                 return Ok(PresentOutcome::RecreateRequired);
             }
             WindowReadiness::Ready { .. } => {}
         }
-        let mut frame = self.renderer.begin_frame()?;
-        let color = frame.draw_scene(&self.camera, input)?.color;
-        let output = frame.write_output(self.camera.id, color, 1., None)?;
-        output
-            .display()
-            .expect("display output configured")
-            .export_for_display(frame.graph())?;
-        let mut receipt = frame.submit()?;
+        let mut receipt = {
+            let mut frame = self.renderer.begin_frame()?;
+            draw(&mut frame)?;
+            let image = frame.output(SdrOutput::display(false))?;
+            frame.graph().export_frame_image(image.raw_image())?;
+            frame.recording.submit()?
+        };
         self.accepted = Some(receipt.id());
         self.presenter.queue_frame(&mut receipt)?;
-        Ok(self.presenter.present_frame(self.renderer.runtime())?)
+        Ok(self
+            .presenter
+            .present_frame(self.renderer.drawing.runtime())?)
     }
 }

@@ -5,6 +5,7 @@
     any(feature = "vulkan", all(windows, feature = "d3d12"))
 ))]
 
+use renderer::canvas::{self, Layer, Paint};
 use renderer_core::{
     graph::{
         Attachment, Binding, BindingResource, BufferDesc, Graph, GraphError, GraphPool, ImageDesc,
@@ -13,7 +14,6 @@ use renderer_core::{
     program::{ManagedRasterProgram, SamplerDescriptor},
     runtime::{ResourceClass, Runtime, RuntimeConfig, WorkingSet},
 };
-use training_yard::canvas::{self, ImageLayer};
 
 const VERTICES: BufferDesc = BufferDesc { size: 8 * 28 };
 const INDICES: BufferDesc = BufferDesc { size: 12 * 4 };
@@ -116,7 +116,9 @@ fn compose(config: RuntimeConfig) -> Result<(), Box<dyn std::error::Error>> {
         WorkingSet {
             resources: &[resources.as_slice(), buffers.as_slice()].concat(),
             raster: &[
-                canvas::program().into(),
+                canvas::programs(renderer_core::ImageFormat::Rgba8Unorm)?[0]
+                    .clone()
+                    .into(),
                 ManagedRasterProgram::mesh().into(),
                 ManagedRasterProgram::textured_mesh().into(),
             ],
@@ -133,8 +135,8 @@ fn compose(config: RuntimeConfig) -> Result<(), Box<dyn std::error::Error>> {
         &mut graph,
         panel,
         LoadOp::Clear([0., 0., 1., 1.]),
-        &[ImageLayer {
-            source: icon,
+        &[Layer {
+            paint: Paint::Image(icon),
             rect: RasterRect::new(1, 0, 1, 1),
             clip: None,
         }],
@@ -147,13 +149,13 @@ fn compose(config: RuntimeConfig) -> Result<(), Box<dyn std::error::Error>> {
         screen,
         LoadOp::Clear([0., 0., 0., 1.]),
         &[
-            ImageLayer {
-                source: scene,
+            Layer {
+                paint: Paint::Image(scene),
                 rect: RasterRect::new(1, 0, 8, 4),
                 clip: None,
             },
-            ImageLayer {
-                source: icon,
+            Layer {
+                paint: Paint::Image(icon),
                 rect: RasterRect::new(2, 1, 1, 1),
                 clip: None,
             },

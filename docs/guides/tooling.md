@@ -190,7 +190,23 @@ materials.update_pbr(blue_paint, PbrParams::color([0.03, 0.1, 0.8, 1.0]))?;
 アプリケーションがシーン、階層、アニメーションを所有する。描画時には、メッシュと材質のハンドルと
 ワールド変換を持つ `RenderObject` のスライスを渡す。同じスライスを複数のカメラから描画できる。
 
-標準 Forward はカメラと初期シーンから準備できる。カメラには安定した `ViewId`、寸法、`ViewInput` を渡す。
+標準カメラを画面外で使う場合は `renderer::Renderer::headless` で準備する。シーンと HUD は同じ Frame に記録する。
+画面上の矩形とクリップは出力画素単位、画像と塗りの色は表示リニアの乗算済みアルファで渡す。
+
+```rust,ignore
+let mut renderer = Renderer::headless(backend, camera, assets)?;
+let mut frame = renderer.begin_frame()?;
+frame.draw_scene(scene_input, 1.0)?;
+frame.draw_overlay(&hud_layers)?;
+let capture = frame.capture()?;
+let ready = renderer.read_capture(&capture, &mut rgba, timeout)?;
+```
+
+読み戻すバッファは幅 × 高さ × 4 バイトとし、`ready` が false の場合は同じ取得票で再試行できる。
+Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受け取り、シーンと HUD を記録する。
+表示待ちの再試行では、すでに受理した画像を提示する。UI だけを描くフレームでは `draw_overlay` から開始できる。
+
+個別のパスを準備して標準 Forward を使う場合はカメラと初期シーンから構成する。カメラには安定した `ViewId`、寸法、`ViewInput` を渡す。
 `build` は参照されたメッシュと材質を転送し、初期化に使った投入の完了を回収して返る。
 
 ```rust

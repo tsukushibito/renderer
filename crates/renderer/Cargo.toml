@@ -13,7 +13,7 @@ d3d12 = ["renderer-core/d3d12"]
 development-validation = ["renderer-core/development-validation"]
 vulkan-diagnostics = ["renderer-core/vulkan-diagnostics"]
 d3d12-diagnostics = ["renderer-core/d3d12-diagnostics"]
-presentation = ["renderer-core/presentation"]
+presentation = ["renderer-core/presentation", "dep:raw-window-handle"]
 tracy = ["renderer-core/tracy", "dep:tracy-client"]
 graph-diagnostics = ["renderer-core/graph-diagnostics"]
 memory-profiling = ["renderer-core/memory-profiling"]
@@ -21,6 +21,9 @@ memory-profiling = ["renderer-core/memory-profiling"]
 [dependencies]
 renderer-core = { version = "0.1.0", path = "../renderer-core", default-features = false }
 tracy-client = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = { version = "0.6", optional = true }
 
 [dev-dependencies]
 serde_json = "1.0"

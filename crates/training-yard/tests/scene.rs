@@ -1,4 +1,5 @@
 #![cfg(feature = "graphics")]
+use renderer::scene::Scene;
 use renderer::{
     material::{Materials, PbrParams, UnlitParams},
     mesh::{MeshCapacity, MeshData, Meshes},
@@ -6,7 +7,6 @@ use renderer::{
     pipeline::RenderObject,
     unlit_forward::Vertex,
 };
-use training_yard::scene::Scene;
 
 #[test]
 fn mixed_scene_and_host_extraction_can_borrow_the_same_subset()

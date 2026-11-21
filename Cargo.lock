@@ -1138,6 +1138,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "renderer"
 version = "0.1.0"
 dependencies = [
+ "raw-window-handle",
  "renderer-core",
  "serde_json",
  "sha2",
@@ -1546,7 +1547,6 @@ dependencies = [
 name = "training-yard"
 version = "0.1.0"
 dependencies = [
- "raw-window-handle",
  "renderer",
  "renderer-core",
  "winit",
