@@ -94,7 +94,11 @@ fn texture_upload_batch_can_retry_after_rejection_in_the_same_pool_slot() {
     let mut pool = GraphPool::new(cap, 1).unwrap();
     let mut graph = pool.begin().unwrap();
     let desc = ImageDesc::rgba8(1, 1);
-    assert!(graph.upload_texture_for_export("x", desc, &[0; 3]).is_err());
+    let error = graph
+        .upload_texture_for_export("x", desc, &[0; 3])
+        .unwrap_err();
+    assert!(error.resource().is_none());
+    assert_eq!(error.resource_name(), Some("x"));
     graph.upload_texture_for_export("a", desc, &[1; 4]).unwrap();
     graph.upload_texture_for_export("b", desc, &[2; 4]).unwrap();
     assert_eq!(graph.compile().unwrap().pass_count(), 2);

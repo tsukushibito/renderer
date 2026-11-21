@@ -12,6 +12,7 @@ pub(crate) mod native_image_tests;
 mod preparation;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 mod queue;
+mod texture;
 #[cfg(all(
     feature = "presentation",
     windows,
@@ -31,6 +32,7 @@ pub use preparation::VulkanConfig;
 pub use preparation::{RuntimeConfig, RuntimeLimits};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(crate) use queue::{FrameQueue, Observation};
+pub use texture::TextureUploadError;
 #[cfg(all(
     feature = "presentation",
     windows,

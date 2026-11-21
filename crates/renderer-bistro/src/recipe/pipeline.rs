@@ -6,13 +6,14 @@ use super::{
     Bloom, Error, Options, PipelineMode, SubmissionMode, asset::Scene, camera::Camera, ibl,
     instancing, lighting, program, recipes, shadow,
 };
+use renderer::runtime::ManagedImage;
 use renderer::{
     ImageFormat,
     capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},
     graph::{
         Binding, BindingResource, BufferHandle, Graph, GraphCapacity, GraphError, GraphPool,
-        ImageDesc, ImageHandle, ImageView, ImportBuffer, ImportImage, IndexedIndirectArgs,
-        PassHandle, RasterBindings, RasterConstants, RasterDraw,
+        ImageDesc, ImageHandle, ImageView, ImportBuffer, IndexedIndirectArgs, PassHandle,
+        RasterBindings, RasterConstants, RasterDraw,
     },
     program::{MAX_RASTER_BINDINGS, ManagedRasterProgram, SamplerDescriptor},
 };
@@ -531,8 +532,8 @@ pub(super) struct Resident {
     pub indices: Vec<ImportBuffer>,
     pub materials: Vec<ResidentMaterialUniform>,
     surfaces: standard_forward::SurfaceTable,
-    pub images: Vec<ImportImage>,
-    pub environment: [ImportImage; 3],
+    pub images: Vec<ManagedImage>,
+    pub environment: [ManagedImage; 3],
     pub environment_mips: [u32; 3],
     pub environment_parameters: [f32; 3],
     scene_bounds: shadow::Bounds,
@@ -829,30 +830,27 @@ impl Resident {
             // This is the immutable publication boundary. Read/hash one chain,
             // upload all its subresources, then release CPU pixels before ROI.
             let pixels = image.load_bytes()?;
-            let mut graph = pool.begin()?;
-            let target = graph.image("immutable texture", image_desc(image))?;
-            graph.upload_image("texture import boundary", target, &pixels)?;
-            graph.export_image(target)?;
-            let plan = graph.compile()?;
-            let pending = backend.submit(&plan)?;
-            images.push(pending.export_image(target)?);
-            drop(super::backend::wait_for(backend, pending.id())?);
-            drop((pending, plan, pixels));
+            let (frame, texture) = backend.upload_texture(
+                &mut pool,
+                "material texture",
+                image_desc(image),
+                &pixels,
+            )?;
+            drop(super::backend::wait_for(backend, frame)?);
+            images.push(texture);
             if (index + 1).is_multiple_of(32) {
                 eprintln!("Bistro image upload {}/{}", index + 1, scene.images.len());
             }
         }
-        let mut upload_environment = |image: &ibl::Image| -> Result<ImportImage, Error> {
-            let mut graph = pool.begin()?;
-            let target = graph.image("immutable environment", environment_desc(image))?;
-            graph.upload_image("environment import boundary", target, &image.bytes)?;
-            graph.export_image(target)?;
-            let plan = graph.compile()?;
-            let pending = backend.submit(&plan)?;
-            let imported = pending.export_image(target)?;
-            drop(super::backend::wait_for(backend, pending.id())?);
-            drop((pending, plan));
-            Ok(imported)
+        let mut upload_environment = |image: &ibl::Image| -> Result<ManagedImage, Error> {
+            let (frame, texture) = backend.upload_texture(
+                &mut pool,
+                "environment texture",
+                environment_desc(image),
+                &image.bytes,
+            )?;
+            drop(super::backend::wait_for(backend, frame)?);
+            Ok(texture)
         };
         let environment_images = [
             upload_environment(&environment.diffuse)?,
@@ -1293,7 +1291,7 @@ fn import_environment(
 ) -> Result<[ImageView; 3], GraphError> {
     let mut environment = [None; 3];
     for (index, name) in ["irradiance", "reflection", "brdf"].into_iter().enumerate() {
-        let image = graph.import_image(name, &resident.environment[index])?;
+        let image = graph.import_image(name, resident.environment[index].snapshot())?;
         environment[index] =
             Some(graph.sampled_image_view(image, 0, resident.environment_mips[index])?);
     }
@@ -1646,7 +1644,7 @@ fn import_reference_materials(
     for value in &resident.images {
         workspace
             .images
-            .push(graph.import_image("material image", value)?);
+            .push(graph.import_image("material image", value.snapshot())?);
     }
     Ok(())
 }

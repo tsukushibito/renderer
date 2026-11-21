@@ -185,6 +185,12 @@ impl GraphError {
         self.context_mut().pass_name = Some(name.into());
         self
     }
+    pub(super) fn without_resource_handle(mut self) -> Self {
+        if let Some(context) = &mut self.context {
+            context.resource = None;
+        }
+        self
+    }
     pub(super) fn with_resource_name(mut self, name: &str) -> Self {
         if self.kind == GraphErrorKind::CapacityExhausted {
             return self;

@@ -12,7 +12,8 @@ use super::{
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer_pipeline::pbr::{self, Frame, FrameShadows, IndexedDraw, ShadowSource};
 
-use renderer::graph::{Graph, GraphError, ImportImage};
+use renderer::graph::{Graph, GraphError};
+use renderer::runtime::ManagedImage;
 use renderer_pipeline::material::{
     MaterialHandle, MaterialInstance, MaterialTextures, Materials, PbrMaterial,
 };
@@ -30,7 +31,7 @@ impl SurfaceTable {
     pub(super) fn new(
         scene: &Scene,
         uniforms: &[ResidentMaterialUniform],
-        images: &[ImportImage],
+        images: &[ManagedImage],
     ) -> Result<Self, GraphError> {
         let mut table = Self {
             materials: Materials::default(),
@@ -43,10 +44,10 @@ impl SurfaceTable {
     pub(super) fn refresh(
         &mut self,
         uniforms: &[ResidentMaterialUniform],
-        images: &[ImportImage],
+        images: &[ManagedImage],
     ) -> Result<(), GraphError> {
         for (index, (maps, uniform)) in self.maps.iter().zip(uniforms).enumerate() {
-            let [base_color, normal, orm, emissive] = maps.map(|i| images[i].clone());
+            let [base_color, normal, orm, emissive] = maps.map(|i| images[i].snapshot().clone());
             let material = PbrMaterial::resident(
                 uniform,
                 MaterialTextures {
