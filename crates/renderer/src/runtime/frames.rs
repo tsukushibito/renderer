@@ -7,7 +7,10 @@ use super::{ExecutionError, FrameId};
 
 /// Metadata for one accepted Graph. Dropping it releases the export metadata
 /// while the runtime retains pending GPU work.
-pub struct FrameSubmission(SubmissionInner);
+pub struct FrameSubmission {
+    inner: SubmissionInner,
+    pub(super) frame_image: Option<super::ManagedImage>,
+}
 
 enum SubmissionInner {
     #[cfg(feature = "vulkan")]
@@ -17,8 +20,14 @@ enum SubmissionInner {
 }
 
 impl FrameSubmission {
+    /// Take the image selected by Graph::export_frame_image. Dropping an untaken
+    /// image also schedules release of a frame-created registration.
+    pub fn take_frame_image(&mut self) -> Option<super::ManagedImage> {
+        self.frame_image.take()
+    }
+
     pub fn id(&self) -> FrameId {
-        match &self.0 {
+        match &self.inner {
             #[cfg(feature = "vulkan")]
             SubmissionInner::Vulkan(submission) => submission.id(),
             #[cfg(all(feature = "d3d12", windows))]
@@ -28,7 +37,7 @@ impl FrameSubmission {
 
     /// Identity of the Graph whose work was accepted.
     pub fn graph_id(&self) -> u64 {
-        match &self.0 {
+        match &self.inner {
             #[cfg(feature = "vulkan")]
             SubmissionInner::Vulkan(submission) => submission.graph_id(),
             #[cfg(all(feature = "d3d12", windows))]
@@ -39,7 +48,7 @@ impl FrameSubmission {
     /// Snapshot of accepted scheduled contents. Use the registered key and
     /// Runtime::delete to release the registration when no longer needed.
     pub fn export_buffer(&self, handle: BufferHandle) -> Result<ImportBuffer, ExecutionError> {
-        Ok(match &self.0 {
+        Ok(match &self.inner {
             #[cfg(feature = "vulkan")]
             SubmissionInner::Vulkan(submission) => submission.export_buffer(handle)?,
             #[cfg(all(feature = "d3d12", windows))]
@@ -50,7 +59,7 @@ impl FrameSubmission {
     /// Snapshot of accepted scheduled contents for follow-up Graphs or
     /// presentation on this runtime.
     pub fn export_image(&self, handle: ImageHandle) -> Result<ImportImage, ExecutionError> {
-        Ok(match &self.0 {
+        Ok(match &self.inner {
             #[cfg(feature = "vulkan")]
             SubmissionInner::Vulkan(submission) => submission.export_image(handle)?,
             #[cfg(all(feature = "d3d12", windows))]
@@ -62,14 +71,20 @@ impl FrameSubmission {
 #[cfg(feature = "vulkan")]
 impl From<crate::vulkan::FrameSubmission> for FrameSubmission {
     fn from(submission: crate::vulkan::FrameSubmission) -> Self {
-        Self(SubmissionInner::Vulkan(submission))
+        Self {
+            inner: SubmissionInner::Vulkan(submission),
+            frame_image: None,
+        }
     }
 }
 
 #[cfg(all(feature = "d3d12", windows))]
 impl From<crate::backends::d3d12::QueuedFrameSubmission> for FrameSubmission {
     fn from(submission: crate::backends::d3d12::QueuedFrameSubmission) -> Self {
-        Self(SubmissionInner::D3D12(submission))
+        Self {
+            inner: SubmissionInner::D3D12(submission),
+            frame_image: None,
+        }
     }
 }
 

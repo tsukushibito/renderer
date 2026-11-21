@@ -13,7 +13,7 @@ use super::{
 use renderer::{
     PresentationMetrics, SubmissionMetrics,
     capacity::{CapacityRecovery, RuntimeCapacityKind},
-    graph::{GraphPool, ImportImage, PassHandle},
+    graph::{GraphPool, PassHandle},
     presentation::{PresentOutcome, PresentationConfig},
     runtime::{ExecutionError, FrameId, Runtime, WindowPresenter, WindowReadiness},
 };
@@ -164,7 +164,6 @@ struct State {
     workspace: Workspace,
     budget: Budget,
     frames: VecDeque<Frame>,
-    awaiting_present: Option<ImportImage>,
     frame_phases: [u64; 3],
     pixels: Vec<u8>,
     accepted: usize,
@@ -248,7 +247,6 @@ impl State {
             workspace,
             budget,
             frames: VecDeque::with_capacity(options.inflight),
-            awaiting_present: None,
             frame_phases: [0; 3],
             pixels,
             accepted: 0,
@@ -279,26 +277,20 @@ impl State {
         }
     }
 
-    fn release_presentation_source(&mut self) -> Result<(), Error> {
-        if let Some(image) = self.awaiting_present.take() {
-            self.backend.delete(image.key())?;
+    fn discard_presentation_source(&mut self) {
+        if self.surface.has_pending_frame() {
+            self.discard_replay();
+            self.surface.discard_frame();
         }
-        Ok(())
     }
 
-    fn discard_presentation_source(&mut self) -> Result<(), Error> {
-        if !self.pixels.is_empty()
-            && self.awaiting_present.is_some()
-            && self.accepted < REPLAY_STEPS
-        {
-            // Only the current source can be retried at this ordinal. It is
-            // either the last pending frame or was already read back by poll.
+    fn discard_replay(&mut self) {
+        if !self.pixels.is_empty() && self.accepted < REPLAY_STEPS {
             self.smoke.replay.discard(
                 self.accepted,
                 self.frames.back_mut().map(|frame| &mut frame.replay),
             );
         }
-        self.release_presentation_source()
     }
 
     fn poll(&mut self) -> Result<(), Error> {
@@ -407,7 +399,7 @@ impl State {
                 self.accepted,
                 options.warmup,
                 self.frames.len(),
-                self.awaiting_present.is_some(),
+                self.surface.has_pending_frame(),
                 self.finished,
                 self.desired,
             ).into());
@@ -439,16 +431,18 @@ impl State {
             || self.desired.1 == 0
             || matches!(readiness, WindowReadiness::Suspended)
         {
-            return self.discard_presentation_source();
+            self.discard_presentation_source();
+            return Ok(());
         }
         let WindowReadiness::Ready { extent, .. } = readiness else {
             return Ok(());
         };
         if extent != self.desired {
-            return self.discard_presentation_source();
+            self.discard_presentation_source();
+            return Ok(());
         }
         if extent != (options.width, options.height) {
-            self.discard_presentation_source()?;
+            self.discard_presentation_source();
             if !self.frames.is_empty() || !self.surface.wait_idle(Duration::ZERO)? {
                 return Ok(());
             }
@@ -469,7 +463,7 @@ impl State {
             }
             self.smoke.resized = self.smoke.resize_requested;
         }
-        if self.awaiting_present.is_none() {
+        if !self.surface.has_pending_frame() {
             if !options.window_smoke
                 && self.accepted == options.warmup
                 && self.timings.started.is_none()
@@ -509,7 +503,10 @@ impl State {
             let plan = built.graph.compile()?;
             let compile_ns = ns(started.elapsed());
             let started = Instant::now();
-            let pending = match self.backend.submit(&plan) {
+            let pending = match self
+                .surface
+                .submit_frame(&mut self.backend, &plan, built.output)
+            {
                 Ok(pending) => pending,
                 Err(error) if backpressure(&error) => return Ok(()),
                 Err(error) => return Err(error.into()),
@@ -517,7 +514,6 @@ impl State {
             resident.accept_buffer_updates(&pending, built.updates)?;
             self.workspace
                 .accept_shadow_updates(&pending, built.shadow_updates)?;
-            let image = pending.export_image(built.output)?;
             let id = pending.id();
             drop(pending);
             self.frames.push_back(Frame {
@@ -527,14 +523,10 @@ impl State {
                     .map(|capture| (self.accepted, capture)),
                 survey: self.timings.started.is_some(),
             });
-            self.awaiting_present = Some(image);
             self.frame_phases = [build_ns, compile_ns, ns(started.elapsed())];
         }
         let start = Instant::now();
-        let outcome = match self
-            .backend
-            .present(&mut self.surface, self.awaiting_present.as_ref().unwrap())
-        {
+        let outcome = match self.surface.present_frame(&mut self.backend) {
             Ok(outcome) => outcome,
             Err(error) if backpressure(&error) => PresentOutcome::NotReady,
             Err(error) => return Err(error.into()),
@@ -545,7 +537,6 @@ impl State {
         }
         match outcome {
             PresentOutcome::Presented { .. } => {
-                self.release_presentation_source()?;
                 self.accepted += 1;
                 self.last_progress = Instant::now();
                 if self.smoke.minimized && self.smoke.restore_at.is_none() {
@@ -572,14 +563,14 @@ impl State {
             PresentOutcome::Recreated
             | PresentOutcome::RecreateRequired
             | PresentOutcome::Suspended => {
-                self.discard_presentation_source()?;
+                self.discard_replay();
             }
         }
         Ok(())
     }
 
     fn close(mut self, options: &Options, asset_load_ns: u64, inputs: &Value) -> Result<(), Error> {
-        self.discard_presentation_source()?;
+        self.discard_presentation_source();
         if self.pending_on_exit == 0 {
             self.pending_on_exit = self.frames.len();
         }

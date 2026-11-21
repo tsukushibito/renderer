@@ -24,7 +24,7 @@ mod demo {
         window_scene::{self as scene, Composition},
     };
     use renderer::{
-        graph::{GraphPool, ImportBuffer, ImportImage, PassHandle, ResourceKey},
+        graph::{GraphPool, ImportBuffer, PassHandle, ResourceKey},
         presentation::PresentOutcome,
         profiling::{GpuTiming, PresentationMetrics, SubmissionMetrics},
         runtime::{FrameCompletion, FrameId, Runtime, WindowPresenter, WindowReadiness},
@@ -198,7 +198,7 @@ mod demo {
     }
     struct Frame {
         pending: Option<FrameId>,
-        image: Option<ImportImage>,
+        awaiting_present: bool,
         readback: Option<PassHandle>,
         bytes: usize,
         sample: Option<usize>,
@@ -393,22 +393,19 @@ mod demo {
                         }
                     }
                 }
-                if frame.pending.is_none() && frame.image.is_none() {
+                if frame.pending.is_none() && !frame.awaiting_present {
                     *slot = None;
                 }
             }
             Ok(())
         }
-        fn discard_outputs(&mut self) -> Result<()> {
-            let Some(backend) = &mut self.backend else {
-                return Ok(());
-            };
-            for frame in self.frames.iter_mut().flatten() {
-                if let Some(image) = frame.image.take() {
-                    backend.runtime.delete(image.key())?;
-                }
+        fn discard_outputs(&mut self) {
+            if let Some(backend) = &mut self.backend {
+                backend.presenter.discard_frame();
             }
-            Ok(())
+            for frame in self.frames.iter_mut().flatten() {
+                frame.awaiting_present = false;
+            }
         }
         fn prepare_extent(&mut self, extent: (u32, u32)) -> Result<bool> {
             if self.prepared_extent == Some(extent) && self.buffers.is_some() {
@@ -419,7 +416,7 @@ mod demo {
             } else {
                 None
             };
-            self.discard_outputs()?;
+            self.discard_outputs();
             if self.frames.iter().any(Option::is_some) {
                 return Ok(false);
             }
@@ -523,7 +520,7 @@ mod demo {
             let outstanding = self
                 .frames
                 .iter()
-                .position(|value| value.as_ref().is_some_and(|frame| frame.image.is_some()));
+                .position(|value| value.as_ref().is_some_and(|frame| frame.awaiting_present));
             let slot = if let Some(slot) = outstanding {
                 slot
             } else {
@@ -565,16 +562,20 @@ mod demo {
                     return Err("prepared report sample capacity exhausted".into());
                 }
                 let started = self.options.measure.then(Instant::now);
-                let submission = match self.backend.as_mut().unwrap().runtime.submit(&plan) {
-                    Ok(value) => value,
-                    Err(error) if backend::is_backpressure(&error) => {
-                        self.retry();
-                        return Ok(());
-                    }
-                    Err(error) => return Err(error.into()),
-                };
+                let backend = self.backend.as_mut().unwrap();
+                let submission =
+                    match backend
+                        .presenter
+                        .submit_frame(&mut backend.runtime, &plan, image)
+                    {
+                        Ok(value) => value,
+                        Err(error) if backend::is_backpressure(&error) => {
+                            self.retry();
+                            return Ok(());
+                        }
+                        Err(error) => return Err(error.into()),
+                    };
                 let submit_api = elapsed(started);
-                let image = submission.export_image(image)?;
                 let id = submission.id();
                 drop(submission);
                 let sample = if report {
@@ -594,7 +595,7 @@ mod demo {
                 };
                 self.frames[slot] = Some(Frame {
                     pending: Some(id),
-                    image: Some(image),
+                    awaiting_present: true,
                     readback,
                     bytes: self.readback.len(),
                     sample,
@@ -603,11 +604,10 @@ mod demo {
                 slot
             };
             let frame = self.frames[slot].as_mut().unwrap();
-            let image = frame.image.as_ref().unwrap();
             let started = self.options.measure.then(Instant::now);
             self.present_attempts += 1;
             let backend = self.backend.as_mut().unwrap();
-            let outcome = backend.runtime.present(&mut backend.presenter, image);
+            let outcome = backend.presenter.present_frame(&mut backend.runtime);
             self.present_api += elapsed(started);
             let outcome = match outcome {
                 Ok(value) => value,
@@ -626,24 +626,18 @@ mod demo {
                             self.last_present.map(|last| now.duration_since(last));
                     }
                     self.last_present = Some(now);
-                    self.backend
-                        .as_mut()
-                        .unwrap()
-                        .runtime
-                        .delete(frame.image.take().unwrap().key())?;
+                    frame.awaiting_present = false;
                     self.accepted += 1;
                     if let Some(started) = self.backpressure_since.take() {
                         self.backpressure_time += now.duration_since(started);
                     }
                 }
-                PresentOutcome::Recreated | PresentOutcome::RecreateRequired => {
-                    self.backend
-                        .as_mut()
-                        .unwrap()
-                        .runtime
-                        .delete(frame.image.take().unwrap().key())?;
+                PresentOutcome::Recreated
+                | PresentOutcome::RecreateRequired
+                | PresentOutcome::Suspended => {
+                    frame.awaiting_present = false;
                 }
-                PresentOutcome::NotReady | PresentOutcome::Suspended => self.retry(),
+                PresentOutcome::NotReady => self.retry(),
             }
             Ok(())
         }
@@ -677,7 +671,7 @@ mod demo {
             }
             let started = Instant::now();
             self.pending_at_shutdown = self.backend.as_ref().unwrap().runtime.pending_frames();
-            self.discard_outputs()?;
+            self.discard_outputs();
             let deadline = Instant::now() + SHUTDOWN_BUDGET;
             let backend = self.backend.as_mut().unwrap();
             for slot in &mut self.frames {

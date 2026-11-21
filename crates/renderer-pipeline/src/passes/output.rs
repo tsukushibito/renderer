@@ -7,21 +7,6 @@ use renderer::graph::{
     LoadOp, PassHandle, RasterAttachments, RasterConstants, SampleCount, StoreOp,
 };
 use renderer::program::{ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor};
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::{
-    graph::{ImportImage, ResourceKey},
-    runtime::{ExecutionError, FrameSubmission},
-};
-#[cfg(all(
-    windows,
-    feature = "presentation",
-    any(feature = "vulkan", feature = "d3d12")
-))]
-use renderer::{
-    presentation::PresentOutcome,
-    runtime::{Runtime, WindowPresenter},
-};
-
 const DISPLAY_LINEAR: &str = "display linear";
 const SDR_COLOR: &str = "sdr";
 const TONE_MAP: &str = "tone_map";
@@ -268,8 +253,7 @@ impl SdrImage {
     }
 }
 
-/// Graph-local display-linear SDR. Export it and accept the submission before
-/// passing it to a Presenter.
+/// Graph-local display-linear SDR. Select it for presentation before submission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DisplaySdr(ImageHandle);
 
@@ -279,39 +263,10 @@ impl DisplaySdr {
         self.0
     }
 
-    pub fn export(self, graph: &mut Graph) -> Result<(), GraphError> {
-        graph.export_image(self.0)
-    }
-
-    /// Obtain the snapshot of the display image from its accepted Graph.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn accept(
-        self,
-        submission: &FrameSubmission,
-    ) -> Result<AcceptedDisplaySdr, ExecutionError> {
-        Ok(AcceptedDisplaySdr(submission.export_image(self.0)?))
-    }
-}
-
-/// Accepted display-linear SDR whose registered key can be released through
-/// the Runtime when the caller finishes using it.
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-pub struct AcceptedDisplaySdr(ImportImage);
-
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-impl AcceptedDisplaySdr {
-    pub fn key(&self) -> ResourceKey {
-        self.0.key()
-    }
-
-    /// Queue presentation without a CPU wait for the producing Graph.
-    #[cfg(all(windows, feature = "presentation"))]
-    pub fn present(
-        &self,
-        runtime: &mut Runtime,
-        presenter: &mut WindowPresenter,
-    ) -> Result<PresentOutcome, ExecutionError> {
-        runtime.present(presenter, &self.0)
+    /// Select the frame image for WindowPresenter::queue_frame after submission.
+    /// A transient output is released automatically when discarded or presented.
+    pub fn export_for_display(self, graph: &mut Graph) -> Result<(), GraphError> {
+        graph.export_frame_image(self.0)
     }
 }
 

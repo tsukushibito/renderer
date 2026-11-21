@@ -637,6 +637,19 @@ impl Graph {
         self.export(id);
         Ok(())
     }
+    /// Export one image whose registration the common Runtime manages for this
+    /// frame. Its submission receipt holds the image until taken or dropped.
+    /// An imported target keeps its original registration owner.
+    pub fn export_frame_image(&mut self, image: ImageHandle) -> Result<(), GraphError> {
+        if self.frame_image.is_some_and(|selected| selected != image) {
+            return Err(GraphError::invalid_input(
+                "a frame image is already selected",
+            ));
+        }
+        self.export_image(image)?;
+        self.data_mut().frame_image = Some(image);
+        Ok(())
+    }
     fn export(&mut self, id: usize) {
         if self.exported.len() <= id {
             self.data_mut().exported.resize(id + 1, false);

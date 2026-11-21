@@ -896,6 +896,22 @@ configは同時表示枠`max_frames`、退役世代上限`max_retired_swapchains
 runtimeの`present`へ渡す。同queueへの別submitでsRGB出力へ変換し、Graph完了のCPU waitは挟まない。
 HDR表示、拡大縮小、tone mapping、transparent Windowはこの入口に含めない。
 
+共通の `WindowPresenter::submit_frame(&mut runtime, &compiled, output)` はGraphを一度投入し、
+export済み画像をWindowに預ける。`present_frame(&mut runtime)` が `NotReady` を返したら、
+同じWindowをpollしてから `present_frame` を再試行する。描画の再投入は不要である。
+recipe経由では `DisplaySdr::export_for_display` でGraphに画像を指定し、
+受理したreceiptを `queue_frame` へ渡す。Windowごとの未表示画像は一枚で、
+別の画像への差し替えや表示中止には `discard_frame` を使う。
+
+`Graph::export_frame_image` で指定した画像は、共通の `Runtime::submit` が返すreceiptから
+`take_frame_image` で取得できる。直接投入時は `Runtime::submit_with_image` でも
+同じ `ManagedImage` を取得できる。Graphが新規作成した画像は、その所有者または未消費receiptを
+破棄すると元のRuntimeの次のsubmit、poll、または `collect_released_images` で登録が外れる。
+返却枠は投入前に確保し、上限は `RuntimeLimits::resource_capacity` とする。
+登録をアセット管理側へ移す場合は `into_registered` で受け取り、不要時に `Runtime::delete` を呼ぶ。
+既存画像をimportして描いた場合は、元の呼び出し側が登録の寿命を管理し続ける。
+いずれも表示やGPU実行が受理された後の物理画像は、それぞれの完了までbackendが保持する。
+
 | 共通の`PresentOutcome` | 利用側の扱い |
 |---|---|
 | `Presented { suboptimal }` | 表示要求の受理。source登録を解除できるが、画面への到達やnative資源の退役を意味しない |

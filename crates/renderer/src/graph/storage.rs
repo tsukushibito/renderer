@@ -147,6 +147,7 @@ pub struct GraphStorage {
     pub(crate) resources: Vec<Resource>,
     pub(crate) passes: Vec<Pass>,
     pub(crate) exports: Vec<usize>,
+    pub(crate) frame_image: Option<super::ImageHandle>,
     pub(super) exported: Vec<bool>,
     // One entry per imported resource; reserved for the complete resource limit.
     // Resource indices still follow caller order, never hash-table iteration.
@@ -218,6 +219,7 @@ impl GraphStorage {
             resources: buffer(capacity.resources, GraphCapacityKind::Resources)?,
             passes: buffer(capacity.passes, GraphCapacityKind::Passes)?,
             exports: buffer(capacity.resources, GraphCapacityKind::Resources)?,
+            frame_image: None,
             exported: buffer(capacity.resources, GraphCapacityKind::Resources)?,
             imports,
             accesses: buffer(capacity.accesses, GraphCapacityKind::Accesses)?,
@@ -269,6 +271,7 @@ impl GraphStorage {
         self.passes.clear();
         self.resources.clear();
         self.exports.clear();
+        self.frame_image = None;
         self.exported.clear();
         self.imports.clear();
         self.accesses.clear();

@@ -3,6 +3,7 @@
 mod error;
 mod frames;
 mod id;
+mod managed_image;
 mod preparation;
 mod queue;
 #[cfg(all(feature = "presentation", windows))]
@@ -12,6 +13,7 @@ pub use crate::capacity::{ResourceClass, WorkingSet};
 pub use error::{ExecutionError, ExecutionErrorKind};
 pub use frames::{FrameCompletion, FrameSubmission};
 pub use id::FrameId;
+pub use managed_image::ManagedImage;
 #[cfg(all(feature = "d3d12", windows))]
 pub use preparation::D3D12Config;
 #[cfg(feature = "vulkan")]
@@ -31,6 +33,7 @@ use crate::graph::{CompiledGraph, ImportBuffer, ImportImage, ResourceKey};
 /// frame's metadata leaves pending work in this runtime.
 pub struct Runtime {
     inner: RuntimeInner,
+    image_releases: std::sync::Arc<managed_image::ImageReleases>,
 }
 
 #[allow(
@@ -50,6 +53,16 @@ impl Runtime {
     /// A successful return exposes scheduled exports for same-runtime follow-up
     /// work. CPU readback becomes available only upon observed GPU completion.
     pub fn submit(&mut self, graph: &CompiledGraph) -> Result<FrameSubmission, ExecutionError> {
+        if let Some(image) = graph.frame_image {
+            let (mut receipt, owner) = self.submit_with_image(graph, image)?;
+            receipt.frame_image = Some(owner);
+            return Ok(receipt);
+        }
+        self.collect_released_images()?;
+        self.submit_native(graph)
+    }
+
+    fn submit_native(&mut self, graph: &CompiledGraph) -> Result<FrameSubmission, ExecutionError> {
         Ok(match &mut self.inner {
             #[cfg(feature = "vulkan")]
             RuntimeInner::Vulkan(runtime) => FrameSubmission::from(runtime.submit_frame(graph)?),
@@ -80,6 +93,7 @@ impl Runtime {
         &mut self,
         timeout: Duration,
     ) -> Result<Option<FrameCompletion>, ExecutionError> {
+        self.collect_released_images()?;
         Ok(match &mut self.inner {
             #[cfg(feature = "vulkan")]
             RuntimeInner::Vulkan(runtime) => {
@@ -98,6 +112,7 @@ impl Runtime {
         id: FrameId,
         timeout: Duration,
     ) -> Result<Option<FrameCompletion>, ExecutionError> {
+        self.collect_released_images()?;
         Ok(match &mut self.inner {
             #[cfg(feature = "vulkan")]
             RuntimeInner::Vulkan(runtime) => runtime
@@ -114,6 +129,7 @@ impl Runtime {
     /// results. Returns false on timeout and retains work whose completion is
     /// unproven. Presentation has its own retirement and close operations.
     pub fn drain_frames(&mut self, timeout: Duration) -> Result<bool, ExecutionError> {
+        self.collect_released_images()?;
         let start = Instant::now();
         while self.pending_frames() != 0 {
             if self

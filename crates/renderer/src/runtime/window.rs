@@ -7,6 +7,7 @@ use crate::graph::ImportImage;
 use crate::{PresentOutcome, PresentationConfig, PresentationMetrics};
 
 use super::{ExecutionError, Runtime, RuntimeConfig, RuntimeInner, RuntimeLimits, WorkingSet};
+mod frame;
 
 /// State to use when deciding whether to build a Window's next Graph.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +26,9 @@ pub enum WindowReadiness {
 /// queue. The application owns its event loop and requests resize and VSync.
 pub struct WindowPresenter {
     inner: WindowPresenterInner,
+    pending_image: Option<super::ManagedImage>,
+    runtime_id: u64,
+    closed: bool,
 }
 
 enum WindowPresenterInner {
@@ -58,27 +62,21 @@ impl Runtime {
                     )?;
                 runtime.set_frame_limit(limits.frames)?;
                 runtime.prepare_graph_working_set(Some(capacity), working_set)?;
-                Ok((
-                    Self {
-                        inner: RuntimeInner::Vulkan(runtime),
-                    },
-                    WindowPresenter {
-                        inner: WindowPresenterInner::Vulkan(presenter),
-                    },
-                ))
+                let runtime =
+                    Self::with_inner(RuntimeInner::Vulkan(runtime), limits.resource_capacity)?;
+                let presenter =
+                    WindowPresenter::new(&runtime, WindowPresenterInner::Vulkan(presenter));
+                Ok((runtime, presenter))
             }
             #[cfg(feature = "d3d12")]
             RuntimeConfig::D3D12(settings) => {
                 let runtime = super::preparation::new_d3d12(settings, limits, working_set)?;
                 let presenter = runtime.create_presenter(window, presentation)?;
-                Ok((
-                    Self {
-                        inner: RuntimeInner::D3D12(runtime),
-                    },
-                    WindowPresenter {
-                        inner: WindowPresenterInner::D3D12(presenter),
-                    },
-                ))
+                let runtime =
+                    Self::with_inner(RuntimeInner::D3D12(runtime), limits.resource_capacity)?;
+                let presenter =
+                    WindowPresenter::new(&runtime, WindowPresenterInner::D3D12(presenter));
+                Ok((runtime, presenter))
             }
         }
     }
@@ -108,6 +106,15 @@ impl Runtime {
 }
 
 impl WindowPresenter {
+    fn new(runtime: &Runtime, inner: WindowPresenterInner) -> Self {
+        Self {
+            inner,
+            pending_image: None,
+            runtime_id: runtime.image_releases.runtime_id,
+            closed: false,
+        }
+    }
+
     /// Resolve a changed extent or VSync setting before building a new Graph.
     /// A successful ready response supplies the actual drawable extent.
     pub fn prepare(&mut self) -> Result<WindowReadiness, ExecutionError> {
@@ -197,11 +204,13 @@ impl WindowPresenter {
     /// Close a Window's presentation, preserving outstanding work if the wait
     /// budget expires. Call the runtime's frame completion operations separately.
     pub fn close(&mut self, timeout: Duration) -> Result<bool, ExecutionError> {
-        match &mut self.inner {
+        self.discard_frame();
+        self.closed = match &mut self.inner {
             #[cfg(feature = "vulkan")]
-            WindowPresenterInner::Vulkan(presenter) => Ok(presenter.close(timeout)?),
+            WindowPresenterInner::Vulkan(presenter) => presenter.close(timeout)?,
             #[cfg(feature = "d3d12")]
-            WindowPresenterInner::D3D12(presenter) => Ok(presenter.close(timeout)?),
-        }
+            WindowPresenterInner::D3D12(presenter) => presenter.close(timeout)?,
+        };
+        Ok(self.closed)
     }
 }

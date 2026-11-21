@@ -195,14 +195,13 @@ impl Runtime {
                 )?;
                 runtime.set_frame_limit(limits.frames)?;
                 runtime.prepare_graph_working_set(Some(capacity), working_set)?;
-                Ok(Self {
-                    inner: RuntimeInner::Vulkan(runtime),
-                })
+                Self::with_inner(RuntimeInner::Vulkan(runtime), limits.resource_capacity)
             }
             #[cfg(all(feature = "d3d12", windows))]
-            RuntimeConfig::D3D12(settings) => Ok(Self {
-                inner: RuntimeInner::D3D12(new_d3d12(settings, limits, working_set)?),
-            }),
+            RuntimeConfig::D3D12(settings) => Self::with_inner(
+                RuntimeInner::D3D12(new_d3d12(settings, limits, working_set)?),
+                limits.resource_capacity,
+            ),
         }
     }
 
@@ -217,6 +216,7 @@ impl Runtime {
         &mut self,
         working_set: WorkingSet<'_>,
     ) -> Result<(), ExecutionError> {
+        self.collect_released_images()?;
         match &mut self.inner {
             #[cfg(feature = "vulkan")]
             RuntimeInner::Vulkan(runtime) => {
