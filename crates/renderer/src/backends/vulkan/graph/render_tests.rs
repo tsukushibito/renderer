@@ -8,9 +8,7 @@ use crate::image_transform::{self, Transform};
 
 const WAIT: Duration = Duration::from_secs(10);
 
-#[test]
-#[ignore = "real GPU attachment lowering, cache rejection and culled subresources; run strict and shipping separately"]
-fn vulkan_attachment_subresource_native_boundaries() {
+fn real_gpu_for_profile(test: impl FnOnce(&mut VulkanRuntime)) {
     let strict = cfg!(feature = "vulkan-diagnostics");
     let mut runtime = VulkanRuntime::new_with_validation(
         RuntimeConfig::default(),
@@ -26,8 +24,24 @@ fn vulkan_attachment_subresource_native_boundaries() {
         vk::PhysicalDeviceType::CPU
     );
     let monitor = runtime.validation_monitor();
-    {
-        let runtime = &mut runtime;
+    test(&mut runtime);
+    drop(runtime);
+    let report = monitor.report();
+    assert!(report.is_clean(), "teardown diagnostics: {report:?}");
+    if strict {
+        assert_eq!(report.core_validation, Some(true));
+        assert_eq!(report.synchronization_validation, Some(true));
+    } else {
+        assert_eq!(report.requested, super::super::ValidationMode::Disabled);
+        assert_eq!(report.core_validation, None);
+        assert_eq!(report.synchronization_validation, None);
+    }
+}
+
+#[test]
+#[ignore = "real GPU attachment lowering, cache rejection and culled subresources; run strict and shipping separately"]
+fn vulkan_attachment_subresource_native_boundaries() {
+    real_gpu_for_profile(|runtime| {
         let color_desc = ImageDesc::rgba8(4, 4);
         let depth_desc = ImageDesc::depth32(4, 4);
         prepare_scenario(
@@ -90,61 +104,72 @@ fn vulkan_attachment_subresource_native_boundaries() {
         assert_eq!(runtime.stats().resources_created, before.resources_created);
         assert_eq!(runtime.stats().resources_reused, before.resources_reused);
 
-        for mode in 0..3 {
+        for (color_count, has_depth) in [(1, false), (0, true), (2, false)] {
             let mut graph = Graph::test_new();
             let color = graph.image("color", color_desc).unwrap();
             let second = graph.image("second", color_desc).unwrap();
             let depth = graph.image("depth", depth_desc).unwrap();
-            let colors = [color, second].map(|image| Attachment {
-                view: graph.image_view(image, 0, 0).unwrap(),
-                load: LoadOp::Clear([1.0; 4]),
-                store: StoreOp::Store,
-            });
-            let depth_attachment = Attachment {
-                view: graph.image_view(depth, 0, 0).unwrap(),
-                load: LoadOp::Clear(1.0),
-                store: StoreOp::Store,
-            };
+            let colors =
+                [(color, [1., 0., 0., 1.]), (second, [0., 1., 0., 1.])].map(|(image, clear)| {
+                    Attachment {
+                        view: graph.image_view(image, 0, 0).unwrap(),
+                        load: LoadOp::Clear(clear),
+                        store: StoreOp::Store,
+                    }
+                });
             graph
                 .attachment_pass(
-                    "unsupported shape",
+                    "clear selected attachments",
                     RasterAttachments {
                         color_resolves: &[],
-                        colors: &colors[..[1, 0, 2][mode]],
-                        depth: (mode == 1).then_some(depth_attachment),
+                        colors: &colors[..color_count],
+                        depth: has_depth.then_some(Attachment {
+                            view: graph.image_view(depth, 0, 0).unwrap(),
+                            load: LoadOp::Clear(0.25),
+                            store: StoreOp::Store,
+                        }),
                     },
                 )
                 .unwrap();
-            if mode == 1 {
-                graph.readback_image("depth-only contents", depth).unwrap();
-            } else {
-                graph.readback_image("color-only contents", color).unwrap();
+            let reads: Vec<_> = [(color, [255, 0, 0, 255]), (second, [0, 255, 0, 255])]
+                .into_iter()
+                .take(color_count)
+                .map(|(image, expected)| {
+                    (
+                        graph.readback_image("color bytes", image).unwrap(),
+                        expected,
+                    )
+                })
+                .collect();
+            let depth_read = has_depth.then(|| graph.readback_image("depth bytes", depth).unwrap());
+            let mut submission = runtime.submit(&graph.compile().unwrap()).unwrap();
+            let mut result = submission.wait(WAIT).unwrap().unwrap();
+            for (read, expected) in reads {
+                assert_eq!(result.test_readback(read).unwrap(), expected.repeat(16));
             }
-            let plan = graph.compile().unwrap();
-            if mode == 2 {
+            if let Some(read) = depth_read {
                 assert_eq!(
-                    runtime.submit(&plan).err().unwrap().kind(),
-                    RuntimeErrorKind::Unsupported
+                    result.test_readback(read).unwrap(),
+                    0.25_f32.to_ne_bytes().repeat(16)
                 );
-            } else {
-                let mut pending = runtime.submit(&plan).unwrap();
-                assert!(pending.wait(WAIT).unwrap().is_some());
             }
         }
 
         runtime
             .prepare_raster_programs(&[crate::program::ManagedRasterProgram::mesh()])
             .unwrap();
-        let mut unsupported = Graph::test_new();
-        let (vertices, indices) = add_mesh(&mut unsupported, false);
-        let color = unsupported.image("color-only Raster", color_desc).unwrap();
-        unsupported
+        let mut drawing = Graph::test_new();
+        let (vertices, indices) = add_mesh(&mut drawing, false);
+        let color = drawing
+            .image("color-only Raster", ImageDesc::rgba8(16, 16))
+            .unwrap();
+        drawing
             .raster(
-                "CPU color-only plan",
+                "draw without depth",
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[Attachment {
-                        view: unsupported.image_view(color, 0, 0).unwrap(),
+                        view: drawing.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0; 4]),
                         store: StoreOp::Store,
                     }],
@@ -166,11 +191,11 @@ fn vulkan_attachment_subresource_native_boundaries() {
                 },
             )
             .unwrap();
-        unsupported
-            .readback_image("live CPU-only shape", color)
-            .unwrap();
-        let mut color_only = runtime.submit(&unsupported.compile().unwrap()).unwrap();
-        assert!(color_only.wait(WAIT).unwrap().is_some());
+        let read = drawing.readback_image("color-only pixels", color).unwrap();
+        let mut color_only = runtime.submit(&drawing.compile().unwrap()).unwrap();
+        let mut result = color_only.wait(WAIT).unwrap().unwrap();
+        assert_eq!(result.test_readback(read).unwrap(), expected_mesh([0; 4]));
+        drop((result, color_only));
 
         let mut loaded = Graph::test_new();
         let (vertices, indices) = add_mesh(&mut loaded, false);
@@ -314,18 +339,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
                 .iter()
                 .all(|pixel| *pixel == [255, 0, 0, 255])
         );
-    }
-    drop(runtime);
-    let report = monitor.report();
-    assert!(report.is_clean(), "teardown diagnostics: {report:?}");
-    if strict {
-        assert_eq!(report.core_validation, Some(true));
-        assert_eq!(report.synchronization_validation, Some(true));
-    } else {
-        assert_eq!(report.requested, super::super::ValidationMode::Disabled);
-        assert_eq!(report.core_validation, None);
-        assert_eq!(report.synchronization_validation, None);
-    }
+    });
 }
 
 #[test]
@@ -729,6 +743,9 @@ fn prepare_opaque_scenario(runtime: &mut VulkanRuntime, additional: &[ResourceCl
     ];
     classes.extend_from_slice(additional);
     prepare_scenario(runtime, 10, 14, &classes);
+    runtime
+        .prepare_compute_programs(&[image_transform::program(Transform::Invert)])
+        .unwrap();
 }
 
 #[test]
@@ -736,9 +753,6 @@ fn prepare_opaque_scenario(runtime: &mut VulkanRuntime, additional: &[ResourceCl
 fn vulkan_graph_batch_matches_scalar_draw_order_depth_parameters_and_compute() {
     real_gpu(|runtime| {
         prepare_opaque_scenario(runtime, &[]);
-        runtime
-            .prepare_compute_programs(&[image_transform::program(Transform::Invert)])
-            .unwrap();
         for empty in [false, true] {
             for reverse in [false, true] {
                 let mut reference = None;
@@ -769,9 +783,9 @@ fn vulkan_graph_batch_matches_scalar_draw_order_depth_parameters_and_compute() {
 }
 
 #[test]
-#[ignore = "real-GPU batch late index validation; requires Core/SyncVal"]
+#[ignore = "real-GPU batch late index validation; run strict and shipping separately"]
 fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
-    real_gpu(|runtime| {
+    real_gpu_for_profile(|runtime| {
         prepare_opaque_scenario(
             runtime,
             &[
@@ -790,13 +804,30 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
             ],
         );
         let (plan, _) = opaque_batch_comparison(true, false, false, true);
+        let last_accepted = runtime.serial;
         let error = match runtime.submit(&plan) {
             Ok(_) => panic!("later draw indices must be checked"),
             Err(error) => error,
         };
-        assert_eq!(error.kind(), RuntimeErrorKind::InvalidInput);
+        assert_eq!(error.kind(), RuntimeErrorKind::InvalidInput, "{error}");
         assert!(error.to_string().contains("index 9"));
         assert!(error.to_string().contains("draw 1"));
+
+        assert_eq!(runtime.serial, last_accepted);
+        assert_eq!(runtime.stats().registered_resources, 0);
+
+        let mut seed = Graph::test_new();
+        let seed_indices = seed
+            .buffer("resident indices", BufferDesc { size: 12 })
+            .unwrap();
+        let seed_bytes = index_bytes(&[2, 1, 0]);
+        seed.upload_buffer("original indices", seed_indices, 0, &seed_bytes)
+            .unwrap();
+        seed.export_buffer(seed_indices).unwrap();
+        let mut sent = runtime.submit(&seed.compile().unwrap()).unwrap();
+        let original = sent.export_buffer(seed_indices).unwrap();
+        drop(sent.wait(WAIT).unwrap().unwrap());
+        drop(sent);
 
         // One index buffer can be legal for the first draw but illegal for the
         // next draw's smaller vertex extent. Reuse must include those bounds.
@@ -805,9 +836,7 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
             .buffer("three vertices", BufferDesc { size: 84 })
             .unwrap();
         let short = graph.buffer("one vertex", BufferDesc { size: 28 }).unwrap();
-        let indices = graph
-            .buffer("shared indices", BufferDesc { size: 12 })
-            .unwrap();
+        let indices = graph.import_buffer("shared indices", &original).unwrap();
         graph
             .upload_buffer("full upload", full, 0, &[0; 84])
             .unwrap();
@@ -855,6 +884,7 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
             )
             .unwrap();
         graph.readback_image("read", color).unwrap();
+        let last_accepted = runtime.serial;
         let error = match runtime.submit(&graph.compile().unwrap()) {
             Ok(_) => panic!("each draw needs its own vertex bounds"),
             Err(error) => error,
@@ -862,10 +892,28 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidInput);
         assert!(error.to_string().contains("vertex count 1"));
         assert!(error.to_string().contains("draw 1"));
+        assert_eq!(runtime.serial, last_accepted);
+        assert_eq!(runtime.stats().registered_resources, 1);
+        assert_eq!(runtime.refresh_buffer(original.key()).unwrap(), original);
+        let mut check = Graph::test_new();
+        let buffer = check.import_buffer("unchanged indices", &original).unwrap();
+        let read = check
+            .readback_buffer("original bytes", buffer, 0, 12)
+            .unwrap();
+        let mut submitted = runtime.submit(&check.compile().unwrap()).unwrap();
+        let mut result = submitted.wait(WAIT).unwrap().unwrap();
+        assert_eq!(result.test_readback(read).unwrap(), seed_bytes);
+        drop((result, submitted));
+        runtime.delete(original.key()).unwrap();
+
         let (plan, pass) = opaque_batch_comparison(true, false, false, false);
         let mut submission = runtime.submit(&plan).unwrap();
         let mut result = submission.wait(WAIT).unwrap().unwrap();
-        assert_eq!(result.test_readback(pass).unwrap().len(), 64 * 64 * 4);
+        let bytes = result.test_readback(pass).unwrap();
+        assert_eq!(bytes.len(), 64 * 64 * 4);
+        assert_eq!(&bytes[..4], &[255; 4]);
+        let center = (32 * 64 + 32) * 4;
+        assert_eq!(&bytes[center..center + 4], &[0, 255, 255, 255]);
     });
 }
 
