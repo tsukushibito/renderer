@@ -45,9 +45,12 @@ impl RuntimeConfig {
                     .checked_mul(frames as u64)
                     .ok_or_else(overflow)?;
                 let ranges = req.passes.checked_mul(frames).ok_or_else(overflow)?;
+                // A shared operand range uses separate native sets in passes with
+                // and without depth. Each recorded draw uses at most one variant.
+                let raster_sets = req.draws.min(req.bindings.saturating_mul(2));
                 let sets = req
                     .compute_dispatches
-                    .checked_add(req.draws.min(req.bindings))
+                    .checked_add(raster_sets)
                     .ok_or_else(overflow)?;
                 let sets = u32::try_from(sets).map_err(|_| overflow())?;
                 settings.max_shader_bindings = settings.max_shader_bindings.max(sets);
@@ -486,6 +489,25 @@ impl D3D12Classes {
 mod tests {
     #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     use super::*;
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    fn fitted_descriptor_pool_accounts_for_shared_depth_variants() {
+        use crate::capacity::{GraphRequirements, Preparation};
+        let mut prep = Preparation::new(std::num::NonZeroUsize::MIN);
+        prep.add_graph_requirements(GraphRequirements {
+            draws: 200,
+            bindings: 80,
+            compute_dispatches: 3,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut config = RuntimeConfig::Vulkan(VulkanConfig::default());
+        config.fit_preparation(&prep, 0, 0).unwrap();
+        assert!(
+            matches!(config, RuntimeConfig::Vulkan(settings) if settings.max_shader_bindings >= 163)
+        );
+    }
 
     #[cfg(feature = "vulkan")]
     #[test]

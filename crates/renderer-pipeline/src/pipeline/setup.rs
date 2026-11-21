@@ -155,6 +155,7 @@ impl RendererSetup {
         let mut definitions = Vec::new();
         let mut transforms = HashSet::new();
         let mut casters = 0;
+        let mut uniforms = 0usize;
         let mut mesh_bytes = 0u64;
         for object in assets.objects {
             let geometry = assets.meshes.geometry(object.mesh)?;
@@ -171,11 +172,16 @@ impl RendererSetup {
                     .ok_or("geometry size overflow")?;
             }
             let instance = assets.materials.get(object.material)?;
-            if materials.insert(object.material)
-                && let MaterialInstance::Custom(m) = instance
-                && seen_definitions.insert(m.definition().clone())
-            {
-                definitions.push(m.definition().clone());
+            if materials.insert(object.material) {
+                match instance {
+                    MaterialInstance::Pbr(p) if !p.is_resident() => uniforms += 1,
+                    MaterialInstance::Custom(m)
+                        if seen_definitions.insert(m.definition().clone()) =>
+                    {
+                        definitions.push(m.definition().clone());
+                    }
+                    _ => {}
+                }
             }
             if matches!(instance, MaterialInstance::Pbr(_))
                 && object.transform != Transform::IDENTITY
@@ -224,7 +230,6 @@ impl RendererSetup {
         assets
             .meshes
             .reserve_selection(&mut preparation, meshes.iter().copied())?;
-        let uniforms = materials.iter().filter(|h| matches!(assets.materials.get(**h), Ok(MaterialInstance::Pbr(p)) if !p.is_resident())).count();
         preparation.add_requirements(
             GraphRequirements {
                 resources: uniforms,
