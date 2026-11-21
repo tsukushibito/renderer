@@ -29,7 +29,7 @@ mod standard_fixture;
 use renderer::graph::{
     Attachment, Binding, BindingResource, BufferDesc, CompiledGraph, Graph, GraphCapacity,
     GraphPool, ImageDesc, ImageHandle, LoadOp, PassHandle, RasterAttachments, RasterDraw,
-    RasterParameters, StoreOp,
+    RasterParameters, RasterRect, StoreOp,
 };
 use renderer::program::{ManagedRasterProgram, SamplerDescriptor};
 use renderer::{
@@ -382,6 +382,43 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
                 [0, 255, 0, 255]
             } else {
                 [0, 0, 255, 255]
+            }
+        }),
+    ));
+
+    graph
+        .raster(
+            "UI panels",
+            RasterAttachments {
+                colors: &[color_attachment(&graph, order, LoadOp::Clear([0.0; 4]))],
+                color_resolves: &[],
+                depth: None,
+            },
+            |raster| {
+                let program = ManagedRasterProgram::mesh();
+                let red = placed(quad, false, 0.5, [1.0, 0.0, 0.0, 1.0]);
+                let green = placed(quad, false, 0.5, [0.0, 1.0, 0.0, 1.0]);
+                raster.set_viewport(Some(RasterRect::new(1, 1, 2, 2)))?;
+                raster.draw(&program, [red])?;
+                raster.set_viewport(None)?;
+                raster.set_scissor(Some(RasterRect::new(2, 0, 1, 2)))?;
+                raster.draw(&program, [green])?;
+                raster.set_scissor(Some(RasterRect::new(0, 0, 0, 4)))?;
+                raster.draw(&program, [red])
+            },
+        )
+        .unwrap();
+    expected.push(observe(
+        &mut graph,
+        order,
+        "viewport and scissor",
+        pixels(|x, y| {
+            if x == 2 && y < 2 {
+                [0, 255, 0, 255]
+            } else if (1..3).contains(&x) && (1..3).contains(&y) {
+                [255, 0, 0, 255]
+            } else {
+                [0; 4]
             }
         }),
     ));

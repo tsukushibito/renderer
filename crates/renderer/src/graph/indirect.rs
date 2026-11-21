@@ -268,6 +268,7 @@ mod tests {
         let output = graph.image("color", ImageDesc::rgba8(2, 2)).unwrap();
         let view = graph.image_view(output, 0, 0).unwrap();
         let constants = RasterParameters::default().into();
+        let clip = crate::graph::RasterRect::new(0, 1, 2, 1);
         let pass = graph
             .raster(
                 "draw",
@@ -280,7 +281,10 @@ mod tests {
                     color_resolves: &[],
                     depth: None,
                 },
-                |raster| raster.draw_indirect(&ManagedRasterProgram::mesh(), args, None, constants),
+                |raster| {
+                    raster.set_scissor(Some(clip))?;
+                    raster.draw_indirect(&ManagedRasterProgram::mesh(), args, None, constants)
+                },
             )
             .unwrap();
         graph.readback_image("color pixels", output).unwrap();
@@ -301,6 +305,7 @@ mod tests {
             panic!("one indirect batch");
         };
         let indirect = batch.indirect.unwrap();
+        assert_eq!(batch.regions.scissor, Some(clip));
         assert_eq!(indirect.command_count, 65);
         assert_eq!(indirect.buffer, args.buffer.index);
         assert_eq!(
