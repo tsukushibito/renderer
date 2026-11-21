@@ -28,6 +28,8 @@ pub use input::{Draw, Frame, Mesh};
 pub use view::{StandardViewOutput, StandardViewState};
 mod scene;
 pub use scene::{EnvironmentMaps, RenderObject, SceneInput};
+mod scene_pairs;
+pub use scene_pairs::{FrameScene, PipelineId};
 mod contract;
 pub use contract::*;
 
