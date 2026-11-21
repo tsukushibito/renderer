@@ -2854,10 +2854,29 @@ impl core::ops::Deref for ID3D12DeviceChild {
     }
 }
 windows_core::imp::interface_hierarchy!(ID3D12DeviceChild, windows_core::IUnknown, ID3D12Object);
+impl ID3D12DeviceChild {
+    pub unsafe fn GetDevice<T>(&self, result__: *mut Option<T>) -> windows_core::Result<()>
+    where
+        T: windows_core::Interface,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).GetDevice)(
+                windows_core::Interface::as_raw(self),
+                &T::IID,
+                result__ as *mut _ as *mut _,
+            )
+            .ok()
+        }
+    }
+}
 #[repr(C)]
 pub struct ID3D12DeviceChild_Vtbl {
     pub base__: ID3D12Object_Vtbl,
-    GetDevice: usize,
+    pub GetDevice: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *const windows_core::GUID,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
 }
 impl windows_core::RuntimeName for ID3D12DeviceChild {}
 windows_core::imp::define_interface!(
