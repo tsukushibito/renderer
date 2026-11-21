@@ -1,11 +1,16 @@
 //! A Win32 window and its host-provided ownership lease.
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle, Win32WindowHandle};
-use std::{io, num::NonZeroIsize};
+use std::{collections::BTreeSet, io, num::NonZeroIsize, sync::Mutex};
 use windows_sys::Win32::{
     Foundation::RECT,
     UI::WindowsAndMessaging::{GWLP_HINSTANCE, GetClientRect, GetWindowLongPtrW},
 };
+
+// Vulkan and DXGI both bind presentation to the native window. In particular,
+// a Vulkan swapchain's window must not become associated with another API.
+// Acquire only at attachment and release after native teardown.
+static ATTACHED_WINDOWS: Mutex<BTreeSet<NonZeroIsize>> = Mutex::new(BTreeSet::new());
 
 pub(crate) struct HostWindow {
     _owner: Box<dyn HasWindowHandle>,
@@ -35,10 +40,26 @@ impl HostWindow {
         }
         // Win32 defines client.left and client.top as zero.
         let extent = (client.right.max(0) as u32, client.bottom.max(0) as u32);
+        if !ATTACHED_WINDOWS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(handle.hwnd)
+        {
+            return Err(io::Error::other("this window already has a presenter"));
+        }
         Ok(Self {
             _owner: owner,
             handle,
             extent,
         })
+    }
+}
+
+impl Drop for HostWindow {
+    fn drop(&mut self) {
+        ATTACHED_WINDOWS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.handle.hwnd);
     }
 }
