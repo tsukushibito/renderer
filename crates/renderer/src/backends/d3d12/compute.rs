@@ -23,7 +23,7 @@ pub(super) fn require_storage_format(
         ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
         _ => {
             return Err(D3D12RuntimeError::unsupported(
-                "depth and sRGB storage images are unsupported",
+                "storage images require Rgba8Unorm or Rgba16Float",
             ));
         }
     };

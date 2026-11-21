@@ -411,6 +411,14 @@ impl RasterPipeline {
         }
         let mut formats = [DXGI_FORMAT_UNKNOWN; MAX_RASTER_COLOR_ATTACHMENTS];
         for (destination, format) in formats.iter_mut().zip(managed.color_outputs()) {
+            if !matches!(
+                format,
+                crate::ImageFormat::Rgba8Unorm | crate::ImageFormat::Rgba16Float
+            ) {
+                return Err(D3D12RuntimeError::unsupported(
+                    "color attachments require Rgba8Unorm or Rgba16Float",
+                ));
+            }
             *destination = super::resources::image_format(*format);
             require_format(
                 owner,

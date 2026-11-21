@@ -1048,9 +1048,10 @@ mod tests {
     }
 
     #[test]
-    fn only_supported_core_indirect_feature_is_enabled() {
+    fn optional_core_features_are_enabled_when_supported() {
         let mut adapter = candidate(1, vk::PhysicalDeviceType::DISCRETE_GPU);
         adapter.multi_draw_indirect = true;
+        adapter.texture_compression_bc = true;
         let selected = adapter
             .assess()
             .expect("optional feature does not reject Device");
@@ -1065,6 +1066,7 @@ mod tests {
                 // SAFETY: The helper keeps explicitly selected core features live.
                 let features = unsafe { &*info.p_enabled_features };
                 assert_eq!(features.multi_draw_indirect, vk::TRUE);
+                assert_eq!(features.texture_compression_bc, vk::TRUE);
                 assert_eq!(features.draw_indirect_first_instance, vk::FALSE);
                 assert_eq!(features.robust_buffer_access, vk::FALSE);
             },
