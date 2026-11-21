@@ -12,9 +12,7 @@ use renderer::{
     program::{ManagedRasterProgram, VertexAttribute},
 };
 use std::{collections::HashMap, sync::Arc};
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 mod upload;
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub use upload::MeshUploadProgress;
 
 const VERTEX_BUFFER: &str = "mesh vertices";
@@ -95,10 +93,6 @@ struct Resident {
     revision: u64,
     buffers: [ImportBuffer; 2],
 }
-#[cfg_attr(
-    not(any(feature = "vulkan", all(windows, feature = "d3d12"))),
-    allow(dead_code)
-)]
 #[derive(Default)]
 struct Upload {
     keys: [Option<ResourceKey>; 2],

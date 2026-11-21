@@ -70,14 +70,6 @@ pub(super) const NO_PARAMETERS: RasterParameterLayout = RasterParameterLayout {
     size: 0,
     stages: ShaderStages::EMPTY,
 };
-#[cfg(feature = "vulkan")]
-pub(super) static PBR_VERTEX_SPIRV: &[u8] = include_bytes!("../../../shaders/pbr.vert.spv");
-#[cfg(feature = "vulkan")]
-pub(super) static PBR_FRAGMENT_SPIRV: &[u8] = include_bytes!("../../../shaders/pbr.frag.spv");
-#[cfg(all(windows, feature = "d3d12"))]
-pub(super) static PBR_VERTEX_DXIL: &[u8] = include_bytes!("../../../shaders/dxil/pbr.vert.dxil");
-#[cfg(all(windows, feature = "d3d12"))]
-pub(super) static PBR_FRAGMENT_DXIL: &[u8] = include_bytes!("../../../shaders/dxil/pbr.frag.dxil");
 const PBR_ATTRIBUTES: &[VertexAttribute] = &[
     VertexAttribute {
         location: 0,
@@ -162,8 +154,14 @@ pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         require_load: false,
     },
     shaders: packaged_shaders!(
-        vulkan: (PBR_VERTEX_SPIRV, Some(PBR_FRAGMENT_SPIRV)),
-        d3d12: (PBR_VERTEX_DXIL, Some(PBR_FRAGMENT_DXIL)),
+        vulkan: (
+            include_bytes!("../../../shaders/pbr.vert.spv"),
+            Some(include_bytes!("../../../shaders/pbr.frag.spv")),
+        ),
+        d3d12: (
+            include_bytes!("../../../shaders/dxil/pbr.vert.dxil"),
+            Some(include_bytes!("../../../shaders/dxil/pbr.frag.dxil")),
+        ),
         inline_constants: None,
     ),
 };
@@ -263,11 +261,11 @@ static INSTANCING: RasterProgramDescriptor = RasterProgramDescriptor {
     shaders: packaged_shaders!(
         vulkan: (
             include_bytes!("../../../shaders/pbr_instancing.vert.spv"),
-            Some(PBR_FRAGMENT_SPIRV),
+            Some(include_bytes!("../../../shaders/pbr.frag.spv")),
         ),
         d3d12: (
             include_bytes!("../../../shaders/dxil/pbr_instancing.vert.dxil"),
-            Some(PBR_FRAGMENT_DXIL),
+            Some(include_bytes!("../../../shaders/dxil/pbr.frag.dxil")),
         ),
         inline_constants: Some(renderer::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
     ),

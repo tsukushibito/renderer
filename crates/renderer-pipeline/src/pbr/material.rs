@@ -1,6 +1,5 @@
 //! Typed uploads for the standard PBR material ABI.
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::{
     graph::ResourceKey,
     runtime::{ExecutionError, FrameSubmission, Runtime},
@@ -193,7 +192,6 @@ impl MaterialUniform {
     }
 
     /// Acquire the export from the matching accepted submission.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn accept(
         self,
         submission: &FrameSubmission,
@@ -268,7 +266,6 @@ impl MaterialUniform {
 #[derive(Debug)]
 #[must_use = "release the registration when the material is no longer needed"]
 pub struct ResidentMaterialUniform {
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     key: ResourceKey,
     snapshot: Option<ImportBuffer>,
     alpha_mode: AlphaMode,
@@ -292,7 +289,6 @@ impl ResidentMaterialUniform {
 
     /// Unregister the material. Previously accepted work keeps its leases.
     /// On failure, the registration remains available for a retry.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn release(&mut self, runtime: &mut Runtime) -> Result<(), ExecutionError> {
         runtime.delete(self.key)?;
         self.snapshot = None;

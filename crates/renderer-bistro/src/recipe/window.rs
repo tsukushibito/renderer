@@ -531,12 +531,8 @@ impl State {
             self.frame_phases = [build_ns, compile_ns, ns(started.elapsed())];
         }
         let start = Instant::now();
-        let outcome = match self
-            .awaiting_present
-            .as_ref()
-            .unwrap()
-            .present(&mut self.backend, &mut self.surface)
-        {
+        let image = self.awaiting_present.as_ref().unwrap();
+        let outcome = match self.backend.present(&mut self.surface, image.image()) {
             Ok(outcome) => outcome,
             Err(error) if backpressure(&error) => PresentOutcome::NotReady,
             Err(error) => return Err(error.into()),
