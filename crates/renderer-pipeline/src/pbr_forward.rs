@@ -153,22 +153,17 @@ impl Prepared {
             samples,
             ..
         } = self.common.config();
-        self.common.add_scene_using(
-            graph,
-            frame,
-            |_, _| Ok([]),
-            |graph, scene| {
-                add_scene_passes(
-                    graph,
-                    extent,
-                    clear_color,
-                    samples,
-                    scene.has_transparency,
-                    |pass| scene.draw_opaque(pass),
-                    |pass| scene.draw_transparent(pass),
-                )
-            },
-        )
+        self.common.add_scene_using(graph, frame, |graph, scene| {
+            add_scene_passes(
+                graph,
+                extent,
+                clear_color,
+                samples,
+                scene.has_transparency,
+                |pass| scene.draw_opaque(pass),
+                |pass| scene.draw_transparent(pass),
+            )
+        })
     }
 
     /// Tone map and encode the scene's HDR result or a compatible custom HDR

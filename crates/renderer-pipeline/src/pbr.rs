@@ -91,6 +91,8 @@ pub struct SceneLimits {
     pub frames_in_flight: NonZeroUsize,
     pub max_draws: usize,
     pub max_materials: usize,
+    /// Maximum point lights per view. Zero reserves no light data or programs.
+    pub max_point_lights: usize,
     pub max_casters_per_cascade: usize,
     /// Maximum model transforms across all draws in one view (u32 addressing).
     /// Zero reserves no table. Larger tables use bounded descriptor pages.
@@ -226,6 +228,7 @@ pub enum FrameShadows<'a> {
 pub struct Frame<'a> {
     pub(crate) forward_draws: Option<&'a crate::pipeline::ForwardDraws>,
     pub view: &'a PreparedView,
+    pub lights: &'a [PointLight],
     pub materials: &'a [GraphMaterial],
     /// Draws with Opaque or Mask materials in submission order.
     pub opaque: &'a [Draw],
@@ -240,6 +243,13 @@ pub struct Frame<'a> {
 }
 
 impl<'a> Frame<'a> {
+    /// Supply the same point lights to any of the standard PBR techniques.
+    #[must_use]
+    pub fn with_lights(mut self, lights: &'a [PointLight]) -> Self {
+        self.lights = lights;
+        self
+    }
+
     /// Select shadow input from the prepared view. Enabled shadows use a
     /// common caster list. Disabled shadows use the shared default depth.
     pub fn new(
@@ -307,6 +317,7 @@ impl<'a> Frame<'a> {
             transparent,
             shadows,
             camera_target: None,
+            lights: &[],
             transforms: &[],
             forward_draws: None,
         }

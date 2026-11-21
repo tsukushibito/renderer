@@ -10,7 +10,7 @@
 ; Name                 Index   Mask Register SysValue  Format   Used
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; no parameters
-; shader hash: 0d5d6093934edc17aa39cff301ce5841
+; shader hash: c1e07cbaa590cb3cca325720b5e13797
 ;
 ; Pipeline Runtime Information:
 ;
@@ -52,6 +52,6 @@
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
 ; CullCamera                        cbuffer      NA          NA     CB0            cb0     1
-; local_lights                      texture    byte         r/o      T0             t2     1
+; local_lights                      texture     f32          2d      T0             t2     1
 ; tile_masks                            UAV     f32          2d      U0             u3     1
 ;

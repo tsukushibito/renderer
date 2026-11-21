@@ -164,9 +164,6 @@ impl StandardPipeline {
                 Some(input.objects.len()),
             ));
         }
-        if !input.lights.is_empty() && !self.recipe.technique().supports_point_lights() {
-            return Err(GraphError::invalid_input("point lights require Forward+"));
-        }
         let defaults = self
             .resources
             .as_ref()

@@ -56,7 +56,12 @@ pub fn prepare(config: Config, limits: SceneLimits) -> Result<Prepared, GraphErr
         DrawMode::Indirect,
         Some(TransformTechnique::Deferred),
     )?;
-    passes::reserve_passes(common.preparation_mut(), config.extent, true)?;
+    passes::reserve_passes(
+        common.preparation_mut(),
+        config.extent,
+        true,
+        limits.max_point_lights > 0,
+    )?;
     Ok(Prepared { common })
 }
 
@@ -97,58 +102,54 @@ impl Prepared {
         let [width, height] = config.extent;
         let view_projection = *frame.view.matrix();
         let mut gbuffer = None;
-        let scene = self.common.add_scene_using(
-            graph,
-            frame,
-            |_, _| Ok([]),
-            |graph, scene| {
-                let hdr = graph.image("hdr", ImageDesc::rgba16_float(width, height))?;
-                let depth = graph.image("depth", ImageDesc::depth32(width, height))?;
-                let hdr_view = graph.image_view(hdr, 0, 0)?;
-                let depth_view = graph.image_view(depth, 0, 0)?;
-                let views = passes::append(
-                    graph,
-                    passes::Inputs {
-                        hdr: hdr_view,
-                        depth: depth_view,
-                        clear: config.clear_color,
-                        camera: scene.camera,
-                        view_projection,
-                        lighting: scene.lighting,
+        let scene = self.common.add_scene_using(graph, frame, |graph, scene| {
+            let hdr = graph.image("hdr", ImageDesc::rgba16_float(width, height))?;
+            let depth = graph.image("depth", ImageDesc::depth32(width, height))?;
+            let hdr_view = graph.image_view(hdr, 0, 0)?;
+            let depth_view = graph.image_view(depth, 0, 0)?;
+            let views = passes::append(
+                graph,
+                passes::Inputs {
+                    hdr: hdr_view,
+                    depth: depth_view,
+                    clear: config.clear_color,
+                    camera: scene.camera,
+                    view_projection,
+                    lighting: scene.lighting,
+                    point_lights: scene.point_lights,
+                },
+                |pass, _| scene.draw_pbr_opaque(pass),
+            )?;
+            consume(graph, views)?;
+            if scene.has_transparency || scene.has_forward_opaque() {
+                graph.raster(
+                    if scene.has_forward_opaque() {
+                        "scene_forward"
+                    } else {
+                        "scene_transparent"
                     },
-                    |pass, _| scene.draw_pbr_opaque(pass),
+                    RasterAttachments {
+                        color_resolves: &[],
+                        colors: &[Attachment {
+                            view: hdr_view,
+                            load: LoadOp::Load,
+                            store: StoreOp::Store,
+                        }],
+                        depth: Some(Attachment {
+                            view: depth_view,
+                            load: LoadOp::Load,
+                            store: StoreOp::Store,
+                        }),
+                    },
+                    |pass| {
+                        scene.draw_forward_opaque(pass)?;
+                        scene.draw_transparent(pass)
+                    },
                 )?;
-                consume(graph, views)?;
-                if scene.has_transparency || scene.has_forward_opaque() {
-                    graph.raster(
-                        if scene.has_forward_opaque() {
-                            "scene_forward"
-                        } else {
-                            "scene_transparent"
-                        },
-                        RasterAttachments {
-                            color_resolves: &[],
-                            colors: &[Attachment {
-                                view: hdr_view,
-                                load: LoadOp::Load,
-                                store: StoreOp::Store,
-                            }],
-                            depth: Some(Attachment {
-                                view: depth_view,
-                                load: LoadOp::Load,
-                                store: StoreOp::Store,
-                            }),
-                        },
-                        |pass| {
-                            scene.draw_forward_opaque(pass)?;
-                            scene.draw_transparent(pass)
-                        },
-                    )?;
-                }
-                gbuffer = (!scene.has_forward_opaque()).then_some(views);
-                Ok((hdr, Some(depth)))
-            },
-        )?;
+            }
+            gbuffer = (!scene.has_forward_opaque()).then_some(views);
+            Ok((hdr, Some(depth)))
+        })?;
         Ok(SceneImages { gbuffer, ..scene })
     }
 

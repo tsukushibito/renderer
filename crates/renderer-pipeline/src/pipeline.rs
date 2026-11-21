@@ -269,9 +269,7 @@ impl StandardPipeline {
         materials: &Materials,
         frame: Frame<'_>,
     ) -> Result<SceneImages, GraphError> {
-        self.declare(graph, materials, frame, |recipe, graph, frame, lights| {
-            recipe.draw_hdr(graph, frame, lights)
-        })
+        self.declare(graph, materials, frame, GeometryPipeline::draw_hdr)
     }
 
     /// Read coherent Deferred material planes and depth before Forward opaque draws.
@@ -282,12 +280,12 @@ impl StandardPipeline {
         frame: Frame<'_>,
         consume: impl FnOnce(&mut Graph, pbr::GBuffer) -> Result<(), GraphError>,
     ) -> Result<SceneImages, GraphError> {
-        if self.recipe.technique() != Technique::Deferred || !frame.lights.is_empty() {
+        if self.recipe.technique() != Technique::Deferred {
             return Err(GraphError::invalid_input(
-                "G-buffer access requires Deferred with no point lights",
+                "G-buffer access requires Deferred",
             ));
         }
-        self.declare(graph, materials, frame, |recipe, graph, frame, _| {
+        self.declare(graph, materials, frame, |recipe, graph, frame| {
             let GeometryPipeline::Deferred(recipe) = recipe else {
                 unreachable!()
             };
@@ -304,7 +302,6 @@ impl StandardPipeline {
             &mut GeometryPipeline,
             &mut Graph,
             pbr::Frame<'_>,
-            &[PointLight],
         ) -> Result<SceneImages, GraphError>,
     ) -> Result<SceneImages, GraphError> {
         let Frame {
@@ -405,7 +402,7 @@ impl StandardPipeline {
         frame.forward_draws = Some(&self.forward);
         frame.transforms = &self.transforms;
         frame.camera_target = camera;
-        append(&mut self.recipe, graph, frame, lights)
+        append(&mut self.recipe, graph, frame.with_lights(lights))
     }
     #[allow(
         clippy::too_many_arguments,

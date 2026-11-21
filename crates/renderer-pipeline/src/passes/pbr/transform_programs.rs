@@ -14,12 +14,18 @@ use crate::pbr::{
 };
 
 use super::packaged_shaders;
-use super::pbr_programs::{BLEND, OPAQUE, SHADOW, deferred::GBUFFER, forward_plus::TILED_OPAQUE};
+use super::pbr_programs::{
+    BLEND, OPAQUE, SHADOW,
+    deferred::GBUFFER,
+    forward_plus::{REFERENCE_OPAQUE, TILED_OPAQUE},
+};
 
 #[derive(Clone, Copy)]
 pub(crate) enum TransformTechnique {
     Forward,
     ForwardPlus,
+    AllLights,
+    DeferredLights,
     Deferred,
 }
 
@@ -81,6 +87,19 @@ macro_rules! tier_programs {
                 depth: BLEND.depth,
                 ..FORWARD
             };
+            pub(super) static ALL_LIGHTS: RasterProgramDescriptor = descriptor!(
+                REFERENCE_OPAQUE,
+                18,
+                $tier,
+                $vertex,
+                "pbr_all_lights_transformed",
+                4
+            );
+            pub(super) static ALL_LIGHTS_BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
+                blend: BLEND.blend,
+                depth: BLEND.depth,
+                ..ALL_LIGHTS
+            };
             pub(super) static FORWARD_PLUS: RasterProgramDescriptor = descriptor!(
                 TILED_OPAQUE,
                 19,
@@ -124,6 +143,14 @@ pub(crate) fn transformed_programs(tier: InstanceTier, technique: TransformTechn
             TransformTechnique::Forward => {
                 (&small::FORWARD, &small::FORWARD_BLEND, &small::CASCADE)
             }
+            TransformTechnique::AllLights => (
+                &small::ALL_LIGHTS,
+                &small::ALL_LIGHTS_BLEND,
+                &small::CASCADE,
+            ),
+            TransformTechnique::DeferredLights => {
+                (&small::DEFERRED, &small::ALL_LIGHTS_BLEND, &small::CASCADE)
+            }
             TransformTechnique::ForwardPlus => (
                 &small::FORWARD_PLUS,
                 &small::FORWARD_PLUS_BLEND,
@@ -135,6 +162,12 @@ pub(crate) fn transformed_programs(tier: InstanceTier, technique: TransformTechn
         },
         InstanceTier::Full => match technique {
             TransformTechnique::Forward => (&full::FORWARD, &full::FORWARD_BLEND, &full::CASCADE),
+            TransformTechnique::AllLights => {
+                (&full::ALL_LIGHTS, &full::ALL_LIGHTS_BLEND, &full::CASCADE)
+            }
+            TransformTechnique::DeferredLights => {
+                (&full::DEFERRED, &full::ALL_LIGHTS_BLEND, &full::CASCADE)
+            }
             TransformTechnique::ForwardPlus => (
                 &full::FORWARD_PLUS,
                 &full::FORWARD_PLUS_BLEND,

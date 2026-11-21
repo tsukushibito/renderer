@@ -113,6 +113,38 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
     depth: renderer::program::DepthState::Disabled,
 };
 
+static LOCAL_LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
+    bindings: &{
+        let mut slots = [image(0, 2); 17];
+        let mut i = 0;
+        while i < LIGHTING.bindings.len() {
+            slots[i] = LIGHTING.bindings[i];
+            i += 1;
+        }
+        slots
+    },
+    binding_bytes: &{
+        let mut bytes = [0; 17];
+        bytes[0] = CAMERA_BYTES as u64;
+        bytes[1] = DEFERRED_RECONSTRUCTION_BYTES as u64;
+        bytes
+    },
+    shaders: fullscreen_triangle_shaders(
+        packaged_shaders!(
+            include_bytes!("../../../../shaders/deferred_local_lights.frag.spv"),
+            include_bytes!("../../../../shaders/dxil/deferred_local_lights.frag.dxil"),
+        ),
+        None,
+    ),
+    ..LIGHTING
+};
+
+pub const fn deferred_local_lighting_program() -> ManagedRasterProgram {
+    // SAFETY: Same fullscreen and G-buffer contract as LIGHTING, with one
+    // additional read-only image. GetDimensions bounds all point-light reads.
+    unsafe { ManagedRasterProgram::from_trusted_descriptor(&LOCAL_LIGHTING) }
+}
+
 pub const fn gbuffer_program() -> ManagedRasterProgram {
     // SAFETY: Validated VS/FS use the declared 48-byte stream and only the
     // camera and material UBOs and four selected material images. Gradients
@@ -242,6 +274,14 @@ mod tests {
             ShaderStages::FRAGMENT,
             include_str!("../../../../shaders/dxil/deferred_lighting.frag.spirv-reflection.json"),
             include_str!("../../../../shaders/dxil/deferred_lighting.frag.reflection.txt"),
+        );
+        check_reflection(
+            deferred_local_lighting_program(),
+            ShaderStages::FRAGMENT,
+            include_str!(
+                "../../../../shaders/dxil/deferred_local_lights.frag.spirv-reflection.json"
+            ),
+            include_str!("../../../../shaders/dxil/deferred_local_lights.frag.reflection.txt"),
         );
     }
 }

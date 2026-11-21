@@ -41,6 +41,7 @@ thread_local! {
 fn selected() -> SelectedDevice {
     SelectedDevice {
         multi_draw_indirect: false,
+        texture_compression_bc: false,
         physical_device: vk::PhysicalDevice::from_raw(3),
         info: AdapterInfo {
             name: "ownership test device".to_owned(),
