@@ -887,6 +887,7 @@ vendor依存の高速化や高度なパス統合は採用しておらず、性�
 同じ Device・queue・登録簿を使う二つ目以降の出力は `Runtime::create_presenter` で追加する。
 最初のウィンドウより前に資源を準備するときは `Runtime::new_with_presentation` を使う。Vulkan では
 全ウィンドウで共有する表示用実行枠をここで予約し、D3D12 は各 Presenter の作成時に枠を用意する。
+同じ HWND を他の描画 API と同時に使用せず、別の Presenter に渡す場合は元の Presenter を破棄する。
 各 Presenter を個別に poll する。共通 API の `prepare` は旧世代の退役待ちを `WindowReadiness::Pending` で返す。
 `ExecutionErrorKind::SurfaceLost` を受け取った場合は当該 Presenter を閉じ、新しいウィンドウを既存 Runtime に接続する。
 configは同時表示枠`max_frames`、退役世代上限`max_retired_swapchains`、

@@ -9,7 +9,10 @@ use raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, WindowHan
 use renderer::{
     PresentOutcome, PresentationConfig,
     graph::{GraphPool, ImageDesc, ImportImage},
-    runtime::{ResourceClass, Runtime, RuntimeConfig, RuntimeLimits, WindowPresenter, WorkingSet},
+    runtime::{
+        ExecutionErrorKind, ResourceClass, Runtime, RuntimeConfig, RuntimeLimits, WindowPresenter,
+        WorkingSet,
+    },
 };
 use std::{
     num::NonZeroUsize,
@@ -120,12 +123,20 @@ fn exercise(config: RuntimeConfig, events: &mut EventLoop<()>, host: &mut Host) 
     let initial_owners = Rc::strong_count(&left);
     let mut first = rt.create_presenter(Rc::clone(&left), presentation).unwrap();
     let mut second = rt.create_presenter(Rc::clone(right), presentation).unwrap();
+    let Err(duplicate) = rt.create_presenter(Rc::clone(&left), presentation) else {
+        panic!("a native window cannot own a second live presenter");
+    };
+    assert_eq!(duplicate.kind(), ExecutionErrorKind::InvalidInput);
     assert_eq!(Rc::strong_count(&left), initial_owners + 1);
     present(&mut rt, &mut first, &output, events, host);
     present(&mut rt, &mut second, &output, events, host);
     assert!(first.close(WAIT).unwrap());
     drop(first);
     assert_eq!(Rc::strong_count(&left), initial_owners);
+    let mut replacement = rt.create_presenter(Rc::clone(&left), presentation).unwrap();
+    present(&mut rt, &mut replacement, &output, events, host);
+    assert!(replacement.close(WAIT).unwrap());
+    drop(replacement);
     present(&mut rt, &mut second, &output, events, host);
     assert!(second.close(WAIT).unwrap());
     drop(second);

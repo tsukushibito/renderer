@@ -676,6 +676,8 @@ Surface は host window と Instance を保持し、各 Swapchain 世代が Surf
 クライアント領域から初期寸法を得て、必要なら HWND から HINSTANCE を取得する。ウィンドウのイベントとリサイズ通知はホストが所有する。
 Presenter は呼び出し元スレッドに属し、`Rc` のエンジンウィンドウや `Arc<winit::window::Window>` を受け取れる。
 表示機能の製品依存は Windows の `raw-window-handle` と Win32 照会に限定する。通常フレームでホストのハンドルを再取得しない。
+Renderer 内では Vulkan・DXGI 共通の HWND 登録を初期化・破棄時だけ更新し、一つのウィンドウへの重複接続を拒否する。
+[ネイティブウィンドウと Swapchain の関連付け](https://docs.vulkan.org/refpages/latest/refpages/source/vkCreateSwapchainKHR.html)
 
 `Presenter::prepare`で再作成を進め、`extent`に合うGraph出力を作る。
 Graphのlinear RGBA8_UNORM出力を`present`へ渡し、BGRA8_SRGBまたはRGBA8_SRGB、
