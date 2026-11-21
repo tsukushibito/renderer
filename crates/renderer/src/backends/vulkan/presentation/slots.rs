@@ -96,14 +96,14 @@ impl Drop for Slot {
 }
 pub(in crate::backends::vulkan) struct SlotRecord {
     slot: Arc<Slot>,
-    present: Option<Arc<Swapchain>>,
+    present: Option<Rc<Swapchain>>,
     spare_binding: Option<Binding>,
 }
 
 /// Holds a successful acquire immediately, including across a logging unwind.
 /// Exceptional cancellation may wait; the normal frame path never does.
 pub(in crate::backends::vulkan) struct Acquired {
-    chain: Arc<Swapchain>,
+    chain: Rc<Swapchain>,
     slot: Arc<Slot>,
     image: u32,
     handled: bool,
@@ -118,7 +118,7 @@ impl Acquired {
     /// with no other owner consuming that signal or presenting/releasing it.
     /// The Slot must have been idle and exclusively prepared for this acquire.
     pub(in crate::backends::vulkan) unsafe fn new(
-        chain: Arc<Swapchain>,
+        chain: Rc<Swapchain>,
         slot: Arc<Slot>,
         image: u32,
     ) -> Self {
@@ -214,7 +214,7 @@ impl Drop for Acquired {
             // Completion could not be proved. Preserve native semaphores,
             // Swapchain, Window, Device/Allocator and Instance as one chain.
             std::mem::forget(Arc::clone(&self.slot));
-            std::mem::forget(Arc::clone(&self.chain));
+            std::mem::forget(Rc::clone(&self.chain));
         }
     }
 }
@@ -363,7 +363,7 @@ impl SlotRecord {
         // enforced above. Source/program obligations are forwarded unchanged.
         unsafe { slot.prepare(source) }
     }
-    pub(in crate::backends::vulkan) fn present_enqueued(&mut self, chain: Arc<Swapchain>) {
+    pub(in crate::backends::vulkan) fn present_enqueued(&mut self, chain: Rc<Swapchain>) {
         self.present = Some(chain);
     }
     pub(in crate::backends::vulkan) fn idle(&self) -> bool {

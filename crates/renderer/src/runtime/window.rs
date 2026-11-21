@@ -1,12 +1,11 @@
-use std::sync::Arc;
-use std::time::Duration;
-
-use winit::window::Window;
+use raw_window_handle::HasWindowHandle;
+use std::{num::NonZeroUsize, time::Duration};
 
 use crate::graph::ImportImage;
 use crate::{PresentOutcome, PresentationConfig, PresentationMetrics};
 
 use super::{ExecutionError, Runtime, RuntimeConfig, RuntimeInner, RuntimeLimits, WorkingSet};
+mod frame;
 
 /// State to use when deciding whether to build a Window's next Graph.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +24,9 @@ pub enum WindowReadiness {
 /// queue. The application owns its event loop and requests resize and VSync.
 pub struct WindowPresenter {
     inner: WindowPresenterInner,
+    pending_image: Option<super::ManagedImage>,
+    runtime_id: u64,
+    closed: bool,
 }
 
 enum WindowPresenterInner {
@@ -36,12 +38,15 @@ enum WindowPresenterInner {
 
 impl Runtime {
     /// Create a runtime, its prepared Graph working set, and a presenter for
-    /// the Window. Presentation slots are additional to the Graph frame limit.
+    /// the window. Move in a host window owner (for example an Arc to a winit
+    /// window, or an Rc around an engine window implementing HasWindowHandle).
+    /// The presenter retains that owner on the calling thread through native teardown.
+    /// Presentation execution slots are additional to the Graph frame limit.
     pub fn for_window(
         config: RuntimeConfig,
         limits: RuntimeLimits,
         working_set: WorkingSet<'_>,
-        window: Arc<Window>,
+        window: impl HasWindowHandle + 'static,
         presentation: PresentationConfig,
     ) -> Result<(Self, WindowPresenter), ExecutionError> {
         limits.validate()?;
@@ -58,29 +63,74 @@ impl Runtime {
                     )?;
                 runtime.set_frame_limit(limits.frames)?;
                 runtime.prepare_graph_working_set(Some(capacity), working_set)?;
-                Ok((
-                    Self {
-                        inner: RuntimeInner::Vulkan(runtime),
-                    },
-                    WindowPresenter {
-                        inner: WindowPresenterInner::Vulkan(presenter),
-                    },
-                ))
+                let runtime =
+                    Self::with_inner(RuntimeInner::Vulkan(runtime), limits.resource_capacity)?;
+                let presenter =
+                    WindowPresenter::new(&runtime, WindowPresenterInner::Vulkan(presenter));
+                Ok((runtime, presenter))
             }
             #[cfg(feature = "d3d12")]
             RuntimeConfig::D3D12(settings) => {
                 let runtime = super::preparation::new_d3d12(settings, limits, working_set)?;
                 let presenter = runtime.create_presenter(window, presentation)?;
-                Ok((
-                    Self {
-                        inner: RuntimeInner::D3D12(runtime),
-                    },
-                    WindowPresenter {
-                        inner: WindowPresenterInner::D3D12(presenter),
-                    },
-                ))
+                let runtime =
+                    Self::with_inner(RuntimeInner::D3D12(runtime), limits.resource_capacity)?;
+                let presenter =
+                    WindowPresenter::new(&runtime, WindowPresenterInner::D3D12(presenter));
+                Ok((runtime, presenter))
             }
         }
+    }
+
+    /// Prepare a runtime for host windows that will be attached later. Reserve
+    /// the total number of additional Vulkan presentation executions across
+    /// those windows. D3D12 reserves slots separately when each window attaches.
+    pub fn new_with_presentation(
+        config: RuntimeConfig,
+        limits: RuntimeLimits,
+        working_set: WorkingSet<'_>,
+        presentation_slots: NonZeroUsize,
+    ) -> Result<Self, ExecutionError> {
+        #[cfg(not(feature = "vulkan"))]
+        let _ = presentation_slots;
+        match config {
+            #[cfg(feature = "vulkan")]
+            RuntimeConfig::Vulkan(settings) => {
+                limits.validate()?;
+                let capacity = limits.vulkan_capacity()?;
+                let mut runtime = crate::vulkan::VulkanRuntime::new_with_presentation(
+                    limits.vulkan_config(settings, presentation_slots.get())?,
+                    settings.validation,
+                )?;
+                runtime.set_frame_limit(limits.frames)?;
+                runtime.prepare_graph_working_set(Some(capacity), working_set)?;
+                Self::with_inner(RuntimeInner::Vulkan(runtime), limits.resource_capacity)
+            }
+            #[cfg(feature = "d3d12")]
+            RuntimeConfig::D3D12(_) => Self::new(config, limits, working_set),
+        }
+    }
+
+    /// Attach an independent window to the same runtime and resource registry.
+    /// Create the Vulkan runtime with `for_window` or `new_with_presentation`. Its queue
+    /// must support the new surface. Presenters share the execution slots.
+    /// Poll each presenter when several windows have work in flight.
+    pub fn create_presenter(
+        &self,
+        window: impl HasWindowHandle + 'static,
+        presentation: PresentationConfig,
+    ) -> Result<WindowPresenter, ExecutionError> {
+        let inner = match &self.inner {
+            #[cfg(feature = "vulkan")]
+            RuntimeInner::Vulkan(runtime) => {
+                WindowPresenterInner::Vulkan(runtime.create_presenter(window, presentation)?)
+            }
+            #[cfg(feature = "d3d12")]
+            RuntimeInner::D3D12(runtime) => {
+                WindowPresenterInner::D3D12(runtime.create_presenter(window, presentation)?)
+            }
+        };
+        Ok(WindowPresenter::new(self, inner))
     }
 
     /// Queue an exported linear RGBA8 image for display. Same-queue ordering
@@ -108,12 +158,32 @@ impl Runtime {
 }
 
 impl WindowPresenter {
+    fn new(runtime: &Runtime, inner: WindowPresenterInner) -> Self {
+        Self {
+            inner,
+            pending_image: None,
+            runtime_id: runtime.image_releases.runtime_id,
+            closed: false,
+        }
+    }
+
     /// Resolve a changed extent or VSync setting before building a new Graph.
     /// A successful ready response supplies the actual drawable extent.
     pub fn prepare(&mut self) -> Result<WindowReadiness, ExecutionError> {
         let (outcome, extent) = match &mut self.inner {
             #[cfg(feature = "vulkan")]
-            WindowPresenterInner::Vulkan(presenter) => (presenter.prepare()?, presenter.extent()),
+            WindowPresenterInner::Vulkan(presenter) => match presenter.prepare() {
+                Ok(outcome) => (outcome, presenter.extent()),
+                Err(error)
+                    if error.capacity().is_some_and(|shortage| {
+                        shortage.resource == crate::capacity::RuntimeCapacityKind::RetiredSwapchains
+                            && shortage.recovery == crate::capacity::CapacityRecovery::Poll
+                    }) =>
+                {
+                    return Ok(WindowReadiness::Pending);
+                }
+                Err(error) => return Err(error.into()),
+            },
             #[cfg(feature = "d3d12")]
             WindowPresenterInner::D3D12(presenter) => (presenter.prepare()?, presenter.extent()),
         };
@@ -197,11 +267,13 @@ impl WindowPresenter {
     /// Close a Window's presentation, preserving outstanding work if the wait
     /// budget expires. Call the runtime's frame completion operations separately.
     pub fn close(&mut self, timeout: Duration) -> Result<bool, ExecutionError> {
-        match &mut self.inner {
+        self.discard_frame();
+        self.closed = match &mut self.inner {
             #[cfg(feature = "vulkan")]
-            WindowPresenterInner::Vulkan(presenter) => Ok(presenter.close(timeout)?),
+            WindowPresenterInner::Vulkan(presenter) => presenter.close(timeout)?,
             #[cfg(feature = "d3d12")]
-            WindowPresenterInner::D3D12(presenter) => Ok(presenter.close(timeout)?),
-        }
+            WindowPresenterInner::D3D12(presenter) => presenter.close(timeout)?,
+        };
+        Ok(self.closed)
     }
 }

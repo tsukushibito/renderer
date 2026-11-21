@@ -11,14 +11,14 @@ pub(in crate::backends::vulkan) struct SourceScope {
 
 pub(in crate::backends::vulkan) struct PresentCommands {
     owner: Arc<MemoryOwner>,
-    chain: Arc<Swapchain>,
+    chain: Rc<Swapchain>,
     slot: Arc<Slot>,
     image: u32,
 }
 impl PresentCommands {
     pub(in crate::backends::vulkan) fn new(
         owner: Arc<MemoryOwner>,
-        chain: Arc<Swapchain>,
+        chain: Rc<Swapchain>,
         slot: Arc<Slot>,
         image: u32,
     ) -> Self {

@@ -1,10 +1,9 @@
 //! Window/Instance ownership for the deliberately limited Windows WSI path.
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
+use crate::presentation::HostWindow;
 use ash::vk;
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use winit::window::Window;
 
 use super::super::diagnostics::DiagnosticsHandle;
 use super::super::error::RuntimeError;
@@ -15,32 +14,32 @@ pub(in crate::backends::vulkan) struct WindowSurface {
     pub(in crate::backends::vulkan) loader: ash::khr::surface::Instance,
     pub(in crate::backends::vulkan) handle: vk::SurfaceKHR,
     // The native Surface is destroyed before this last Window owner is dropped.
-    _window: Arc<Window>,
+    _window: HostWindow,
 }
 
 impl WindowSurface {
-    pub(in crate::backends::vulkan) fn new(
-        window: Arc<Window>,
+    pub(in crate::backends::vulkan) fn instance(
         diagnostics: DiagnosticsHandle,
         validation: ValidationMode,
-    ) -> Result<Arc<Self>, RuntimeError> {
+    ) -> Result<Arc<VulkanInstance>, RuntimeError> {
         let extensions = [
             ash::khr::surface::NAME,
             ash::khr::win32_surface::NAME,
             ash::khr::get_surface_capabilities2::NAME,
             ash::ext::surface_maintenance1::NAME,
         ];
-        let instance = Arc::new(VulkanInstance::with_extensions(
+        Ok(Arc::new(VulkanInstance::with_extensions(
             diagnostics,
             validation,
             &extensions,
-        )?);
-        let handle = window.window_handle().map_err(|error| {
-            RuntimeError::invalid(format!("Windows window handle unavailable: {error}"))
-        })?;
-        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-            return Err(RuntimeError::unsupported("Win32 window handle is required"));
-        };
+        )?))
+    }
+
+    pub(in crate::backends::vulkan) fn new(
+        window: HostWindow,
+        instance: Arc<VulkanInstance>,
+    ) -> Result<Rc<Self>, RuntimeError> {
+        let handle = window.handle;
         let hinstance = handle
             .hinstance
             .ok_or_else(|| RuntimeError::invalid("Windows instance handle unavailable"))?;
@@ -50,14 +49,14 @@ impl WindowSurface {
             .hwnd(handle.hwnd.get());
         #[cfg(feature = "memory-profiling")]
         crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
-        // SAFETY: winit supplied the live HWND and its HINSTANCE. The owning
+        // SAFETY: The retained host supplied the live HWND and its HINSTANCE. The owning
         // value retains the Window and Instance until after Surface destruction;
         // the Win32 Surface extension was checked and enabled above.
         let surface = unsafe { platform.create_win32_surface(&info, None) }.map_err(|result| {
             RuntimeError::native("vkCreateWin32SurfaceKHR", "pre-device", result)
         })?;
         let loader = ash::khr::surface::Instance::new(instance.entry(), instance.raw());
-        Ok(Arc::new(Self {
+        Ok(Rc::new(Self {
             instance,
             loader,
             handle: surface,

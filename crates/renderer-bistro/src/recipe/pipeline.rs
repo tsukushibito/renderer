@@ -1742,8 +1742,11 @@ fn finish_frame(
             0,
         )
     });
-    if let Some(display) = output.display() {
-        display.export(&mut graph)?;
+    if options.windowed {
+        output
+            .display()
+            .ok_or("window requires display-linear output")?
+            .export_for_display(&mut graph)?;
     } else {
         // The headless benchmark also tracks when this registration retires.
         graph.export_image(output.raw_image())?;

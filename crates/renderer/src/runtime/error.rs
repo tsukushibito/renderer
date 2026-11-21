@@ -11,6 +11,8 @@ pub enum ExecutionErrorKind {
     CapacityExhausted,
     WrongOwner,
     StaleResource,
+    /// The host can close this presenter and attach a fresh window to the runtime.
+    SurfaceLost,
     DeviceLost,
     DeviceUnavailable,
     Native,
@@ -47,6 +49,7 @@ impl ExecutionError {
                     Native::CapacityExhausted => Kind::CapacityExhausted,
                     Native::WrongOwner => Kind::WrongOwner,
                     Native::StaleResource => Kind::StaleResource,
+                    Native::SurfaceLost => Kind::SurfaceLost,
                     Native::DeviceLost => Kind::DeviceLost,
                     Native::DeviceUnavailable => Kind::DeviceUnavailable,
                     Native::Native => Kind::Native,
@@ -87,15 +90,13 @@ impl ExecutionError {
 
     #[cfg(all(
         windows,
-        feature = "vulkan",
-        feature = "d3d12",
-        feature = "presentation"
+        feature = "presentation",
+        any(feature = "vulkan", feature = "d3d12")
     ))]
     pub(crate) fn wrong_owner(message: &'static str) -> Self {
         Self::local(ExecutionErrorKind::WrongOwner, message, None)
     }
 
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub(crate) fn with_capacity(message: &'static str, details: RuntimeCapacityError) -> Self {
         Self::local(
             ExecutionErrorKind::CapacityExhausted,
