@@ -93,6 +93,11 @@ bufferは半開byte範囲を指定する。
 
 ### エンジン所有テクスチャをGraphへ渡す
 
+GPU を初期化済みのエンジンは、既存のデバイスとキューから Runtime を作成できる。
+Vulkan は `Runtime::from_vulkan_device` に実際に有効化した機能とキューのロックを渡し、
+D3D12 は `Runtime::from_d3d12_queue` に DIRECT キューを渡す。どちらも Runtime の作成前に確保した画像を登録できる。
+[Vulkan のデバイス採用と寿命](vulkan.md#host-textures)、[D3D12 のキューと診断設定](implementation-policy.md#d3d12-runtime)
+
 1. `Runtime::as_vulkan_mut` または `as_d3d12_mut` で選択中のbackendを取得する。`external_device()` はnative Deviceを保持するownerを返す。エンジンはこのDevice上で作成したテクスチャを渡す。入力テクスチャと最終描画先で同じ手順を使える。
 2. ホスト側の先行アクセスを完了させ、キューと画像状態を合わせて `unsafe register_external_image` を呼ぶ。成功から返却までは、ホストの別queue・CPU・aliasを含めてRendererに排他的アクセスを渡す。登録時に予算を消費する。複数frameで利用する画像は登録を維持する。
 3. 戻り値を `Graph::import_image` に渡す。次のGraphで最新の書き込みを使うときは同じkeyで `Runtime::refresh_image` を呼ぶ。登録時の確認やview作成は通常のフレーム投入経路に持ち込まない。
