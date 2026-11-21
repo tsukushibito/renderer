@@ -8,7 +8,7 @@ use crate::program::{ManagedProgram, RasterPipelineRequest};
 
 mod preparation;
 
-pub use preparation::{GraphRequirements, Preparation};
+pub use preparation::{GraphRequirements, Preparation, RasterPassBudget};
 
 /// A resource class and its globally reserved instance count. The count
 /// already includes the caller's needed concurrency across all frames.

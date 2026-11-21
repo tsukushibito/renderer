@@ -13,6 +13,9 @@ use renderer::{
 };
 use std::collections::HashMap;
 
+const VERTEX_BUFFER: &str = "mesh vertices";
+const INDEX_BUFFER: &str = "mesh indices";
+
 /// One indexed primitive and the vertex interpretation established at import.
 pub struct MeshData {
     geometry: GeometryData,
@@ -79,6 +82,17 @@ pub struct Meshes {
     retired: Vec<ImportBuffer>,
 }
 impl Meshes {
+    /// Budget the two initialized imports for each distinct mesh referenced by
+    /// this frame. Register their resident physical classes with [`Self::reserve`].
+    pub fn reserve_imports(
+        preparation: &mut Preparation,
+        max_meshes: usize,
+    ) -> Result<(), GraphError> {
+        preparation.add_graph_requirements(
+            GraphRequirements::imports(VERTEX_BUFFER, max_meshes, 1)?
+                .checked_add(GraphRequirements::imports(INDEX_BUFFER, max_meshes, 1)?)?,
+        )
+    }
     pub fn new(capacity: MeshCapacity) -> Result<Self, MeshError> {
         Ok(Self {
             registry: MeshRegistry::new(capacity)?,
@@ -193,8 +207,8 @@ impl Meshes {
         Ok(Mesh {
             bounds: asset.bounds,
             vertex_stride: geometry.vertex_stride(),
-            vertices: graph.import_buffer("mesh vertices", &buffers[0])?,
-            indices: graph.import_buffer("mesh indices", &buffers[1])?,
+            vertices: graph.import_buffer(VERTEX_BUFFER, &buffers[0])?,
+            indices: graph.import_buffer(INDEX_BUFFER, &buffers[1])?,
             first_index: 0,
             index_count: geometry.index_count(),
         })
