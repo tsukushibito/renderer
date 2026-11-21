@@ -10,13 +10,13 @@ use super::super::{
     device::DeviceOwner,
     frame::{ExecutionSlot, FrameWork, ReadbackImage, ReadbackMeta},
     raster::{INLINE_ROOT, IndexedIndirectSignature, RasterPipeline},
-    raster_storage::{PassScopes, RasterStorage},
+    raster_storage::{GraphImage, MipCopyLayout, PassScopes, RasterStorage},
 };
 use super::transition;
 use crate::{
     graph::{
-        AccessPurpose, BindingOperands, CompiledGraph, LoadAction, Operation, RasterBatchOperands,
-        ResourceDesc, SampleCount,
+        AccessPurpose, BindingOperands, CompiledGraph, ImageRegion, LoadAction, Operation,
+        RasterBatchOperands, ResourceDesc, SampleCount,
     },
     program::{BindingType, MAX_RASTER_COLOR_ATTACHMENTS, ManagedRasterProgram, ShaderStages},
 };
@@ -259,11 +259,46 @@ impl Drop for TextureLocation {
     }
 }
 
+/// Placement and pitch are based only on the uploaded block rows. Whole-image
+/// native footprints are cached when creating the image working set.
+fn region_layout(image: &GraphImage, region: ImageRegion) -> MipCopyLayout {
+    let [w, h] = region.extent;
+    let format = image.desc.format;
+    let row_bytes = format.packed_row_bytes(w);
+    let rows = format.packed_rows(h);
+    let mut footprint = image.mips[region.mip_level as usize].footprint;
+    let [bw, bh] = format.block_extent();
+    footprint.Offset = 0;
+    footprint.Footprint.Width = w.next_multiple_of(bw);
+    footprint.Footprint.Height = h.next_multiple_of(bh);
+    // A subrectangle fits the already-created native mip and its cached native pitch.
+    footprint.Footprint.RowPitch =
+        row_bytes.next_multiple_of(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT as u64) as u32;
+    MipCopyLayout {
+        footprint,
+        rows: rows as usize,
+        row_bytes: row_bytes as usize,
+        packed_offset: 0,
+    }
+}
+
+fn layout_bytes(layout: &MipCopyLayout) -> u64 {
+    (layout.rows as u64 - 1) * u64::from(layout.footprint.Footprint.RowPitch)
+        + layout.row_bytes as u64
+}
+
+pub(super) fn upload_bytes(image: &GraphImage, region: Option<ImageRegion>) -> u64 {
+    region.map_or(image.total_bytes, |r| {
+        layout_bytes(&region_layout(image, r))
+    })
+}
+
 pub(super) fn upload_image(
     slot: &mut ExecutionSlot,
     owner: &DeviceOwner,
     graph: &CompiledGraph,
     dst: usize,
+    region: Option<ImageRegion>,
     operation: &Operation,
 ) -> Result<(), D3D12RuntimeError> {
     let bytes = graph.upload_data(operation);
@@ -275,13 +310,25 @@ pub(super) fn upload_image(
         &mut image.state,
         D3D12_RESOURCE_STATE_COPY_DEST,
     );
-    for (mip, layout) in image.mips.iter().enumerate() {
+    let partial;
+    let (layouts, first_mip, [x, y], total_bytes) = if let Some(region) = region {
+        partial = region_layout(image, region);
+        (
+            std::slice::from_ref(&partial),
+            region.mip_level,
+            region.origin,
+            layout_bytes(&partial),
+        )
+    } else {
+        (&image.mips[..], 0, [0, 0], image.total_bytes)
+    };
+    for (index, layout) in layouts.iter().enumerate() {
         let mut footprint = layout.footprint;
         footprint.Offset += base;
         for row in 0..layout.rows {
             let begin = layout.packed_offset + row * layout.row_bytes;
-            // SAFETY: Preflight bounded all cached footprints in the retained
-            // upload arena; immutable Graph guarantees packed mip0..N bytes.
+            // SAFETY: The matching preflight accounted for all pitched block rows
+            // in the exclusive upload arena. Graph construction validated byte length.
             unsafe {
                 slot.upload.write_at(
                     owner,
@@ -291,45 +338,66 @@ pub(super) fn upload_image(
             }?;
         }
         let source = TextureLocation::buffer(slot.upload.raw(), footprint);
-        let destination = TextureLocation::image(image.native.raw(), mip as u32);
-        // SAFETY: Each complete mip copy uses its validated native footprint,
-        // bounded placement and whole-resource COPY_DEST state. Owners remain
-        // pinned until actual completion; no padding bytes are read as texels.
+        let destination = TextureLocation::image(image.native.raw(), first_mip + index as u32);
+        // SAFETY: The entire placed footprint holds this rectangle. Its origin
+        // and padded compression blocks fit the selected mip's physical extent.
+        // Source and destination leases survive completion of the submitted list.
         unsafe {
             slot.list
-                .CopyTextureRegion(&destination.0, 0, 0, 0, &source.0, None)
+                .CopyTextureRegion(&destination.0, x, y, 0, &source.0, None)
         };
     }
-    slot.upload_used = base + image.total_bytes;
+    slot.upload_used = base + total_bytes;
     Ok(())
 }
 
-pub(super) fn copy_image(slot: &mut ExecutionSlot, src: usize, dst: usize) {
+pub(super) fn copy_image(
+    slot: &mut ExecutionSlot,
+    src: usize,
+    dst: usize,
+    source: ImageRegion,
+    destination: ImageRegion,
+) {
     let storage = slot.raster.as_mut().unwrap();
-    let source = slot.resource_map[src];
-    let destination = slot.resource_map[dst];
-    let image = &mut storage.images[source];
+    let image = &mut storage.images[slot.resource_map[src]];
+    let [bw, bh] = image.desc.format.block_extent();
     transition(
         &slot.list,
         image.native.raw(),
         &mut image.state,
         D3D12_RESOURCE_STATE_COPY_SOURCE,
     );
-    let source = TextureLocation::image(image.native.raw(), 0);
-    let image = &mut storage.images[destination];
+    let src = TextureLocation::image(image.native.raw(), source.mip_level);
+    let image = &mut storage.images[slot.resource_map[dst]];
     transition(
         &slot.list,
         image.native.raw(),
         &mut image.state,
         D3D12_RESOURCE_STATE_COPY_DEST,
     );
-    let destination = TextureLocation::image(image.native.raw(), 0);
-    // SAFETY: Graph construction guarantees distinct, equal-format/extent color
-    // images and complete initialized source content. Both single-subresource
-    // native images remain exclusively leased through actual GPU completion.
+    let dst = TextureLocation::image(image.native.raw(), destination.mip_level);
+    let [x, y] = source.origin;
+    let [w, h] = source.extent;
+    let src_box = D3D12_BOX {
+        left: x,
+        top: y,
+        front: 0,
+        right: x + w.next_multiple_of(bw),
+        bottom: y + h.next_multiple_of(bh),
+        back: 1,
+    };
+    // SAFETY: Distinct live color subresources, equal formats, initialized source
+    // and both region bounds were established by the Graph. D3D12 boxes use the
+    // physical block-rounded mip extent for terminal compression blocks.
     unsafe {
-        slot.list
-            .CopyTextureRegion(&destination.0, 0, 0, 0, &source.0, None)
+        slot.list.CopyTextureRegion(
+            &dst.0,
+            destination.origin[0],
+            destination.origin[1],
+            0,
+            &src.0,
+            Some(&src_box),
+        )
     };
 }
 

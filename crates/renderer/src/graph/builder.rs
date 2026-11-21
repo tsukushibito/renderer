@@ -249,7 +249,11 @@ impl Graph {
             let data = graph.append_upload(bytes)?;
             let mip_levels = u64::from(graph.image_desc_at(dst)?.mip_levels);
             Ok((
-                Operation::UploadImage { dst, data },
+                Operation::UploadImage {
+                    dst,
+                    region: None,
+                    data,
+                },
                 graph.append_accesses([write(
                     dst,
                     0..mip_levels,
@@ -272,9 +276,19 @@ impl Graph {
         self.build_pass(name, |graph| {
             let src = graph.image_id(src)?;
             let dst = graph.image_id(dst)?;
-            graph.compatible_image_copy_pair(src, dst)?;
+            let desc = graph.compatible_image_copy_pair(src, dst)?;
+            let full = super::ImageRegion {
+                mip_level: 0,
+                origin: [0; 2],
+                extent: [desc.width, desc.height],
+            };
             Ok((
-                Operation::CopyImage { src, dst },
+                Operation::CopyImage {
+                    src,
+                    dst,
+                    source: full,
+                    destination: full,
+                },
                 graph.append_accesses([
                     read(src, 0..1, AccessPurpose::CopySource),
                     write(dst, 0..1, AccessPurpose::CopyDestination),
@@ -465,7 +479,7 @@ pub(super) fn read(resource: usize, range: Range<u64>, purpose: AccessPurpose) -
         purpose,
     }
 }
-fn write(resource: usize, range: Range<u64>, purpose: AccessPurpose) -> ResourceAccess {
+pub(super) fn write(resource: usize, range: Range<u64>, purpose: AccessPurpose) -> ResourceAccess {
     ResourceAccess {
         stages: purpose.default_stages(),
         resource,

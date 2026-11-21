@@ -155,9 +155,14 @@ impl analysis::Input for Input<'_> {
             })
     }
     fn exports(&self) -> impl Iterator<Item = (usize, Range<u64>)> {
-        self.exports
-            .iter()
-            .map(|&r| (r, 0..self.resources[r].desc.units()))
+        self.exports.iter().flat_map(|&r| {
+            let resource = &self.resources[r];
+            let whole = (resource.export_mips == 0).then(|| 0..resource.desc.units());
+            whole
+                .into_iter()
+                .chain(super::resource::mip_ranges(resource.export_mips))
+                .map(move |range| (r, range))
+        })
     }
 }
 pub(super) fn compile(mut graph: Graph) -> Result<CompiledGraph, GraphError> {

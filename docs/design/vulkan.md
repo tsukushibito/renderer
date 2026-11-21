@@ -208,8 +208,12 @@ usage削減による最適化や、未確認GPUでの対応を主張しない。
 
 B2のmip chain uploadはmip0から順のpacked texel列を受け、各levelのextent・byte offsetを
 `VkBufferImageCopy`へ写像する。全chainのbyte数を照合し、copyした全mipを初期化する。
-画像copy/readbackはmip数1に限定する。画像単位のstate/layoutを保持し、barrierの範囲も全chainとする。
-部分native更新やsubresourceごとの独立状態を実装したという意味ではない。
+矩形転送は選択したmip・texel offset・extentを `VkBufferImageCopy` と `VkImageCopy` へ渡す。
+readbackはmip数1。任意のmipは対応する1-mip画像へ矩形copyして読み戻せる。
+同期は画像単位のstate/layoutを保持し、barrierは全chainを対象とする。内容の有効性はmipごとに追跡する。
+矩形の周囲を保持する場合はそのmipのproducerを要求し、mip全域の上書きは以前のproducerへの依存を増やさない。
+D3D12は矩形のblock行だけを配置する。row pitchを256 byte、開始offsetを512 byteに揃え、`CopyTextureRegion` に位置を渡す。
+[画像転送の仕様](https://docs.vulkan.org/spec/latest/chapters/copies.html)・[D3D12の配置条件](https://learn.microsoft.com/en-us/windows/win32/direct3d12/upload-and-readback-of-texture-data)
 sampled Viewは準備時に全chainと各単一mipを作成し、任意のbaseのcount1、またはbase0の全chainを選べる。
 一部だけの複数mip範囲は未対応として拒否し、Viewを作るnative呼出しを通常frameへ遅延しない。
 Graphは選択範囲の全mipをread footprintへ含め、未初期化levelをfilter設定で隠さない。

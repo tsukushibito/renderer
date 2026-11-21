@@ -67,8 +67,8 @@ Vulkanの経路は、単一Graphics＋Computeキュー、物理aliasingなしを
 |---|---|
 | Raster・attachment操作 | RGBA8_UNORM／RGBA16Fのcolor attachmentを最大8枚、任意のD32 depth。各画像1 mipでextentとsample数を揃える |
 | MSAA | 実Deviceが対応する形式の4× color/depth attachment。colorは同形式・同extentの1×画像へresolveできる |
-| sampled入力・upload | 1×画像でsampled Viewは単一mipまたは全chain。uploadは対応するcolor形式の全chain |
-| storage・copy・readback | 1×・1 mip。copyは同形式・同extentのcolor画像間。readbackは対応するcolor形式とD32 |
+| sampled入力・upload | 1×画像でsampled Viewは単一mipまたは全chain。uploadは対応するcolor形式の全chain・選択したmip・矩形 |
+| storage・copy・readback | 1×。storage/readbackは1 mip。矩形copyは同形式の別color画像の指定mip間。readbackは対応するcolor形式とD32 |
 
 4×画像はattachment用途に限定する。形式ごとのshaderの型・用途と、実Deviceの上限も適用する。
 論理Graphは、以下のより広いmip/layer単位のCPU計画も扱う。
@@ -289,8 +289,8 @@ storage/attachment Viewはcount1を要求する。native sampled実行はcount1�
 base0から全chainまでのViewを扱い、部分的な複数mip範囲は明示的に未対応とする。
 論理解析は`layer * mip_levels + mip`の区間へ写像し、producer・未初期化拒否・RAW/WAR/WAW・cullingを共通解析へ接続する。
 `declare_pass`の画像範囲も同じ各subresourceを扱う。エラーでは最初の未初期化subresourceをmip/layer/aspectへ戻す。
-`export_image`は全subresourceの有効内容を要求する。native importのinitialized boolは画像全体を表し、
-全mipの内容が確立した場合にだけ有効なsnapshotとなる。
+`export_image`は全subresourceの有効内容を要求する。単一layerでは `export_image_mips(image, levels)` で公開するmipを指定・累積できる。
+`ImportImage::is_mip_initialized` が示す初期化済みmipの範囲だけを次のGraphに引き継ぐ。
 
 `Graph::attachment_pass(name, RasterAttachments)`は描画命令を持たないattachment操作を追加する。
 color配列は0個以上、depthは任意だが、全体が空の指定は拒否する。
@@ -325,7 +325,11 @@ whole-image uploadはRGBA8（UNORM/sRGB）/RGBA16Fを扱う。複数mipはmip0�
 nativeのrow pitch・offset alignmentはbackendのstaging配置へ変換する。
 readbackはmip数1のRGBA8/RGBA16F/D32のpacked bytesを扱う。
 texelはRGBA8/D32が4 byte、RGBA16Fが8 byteであり、native allocation sizeの代用にはしない。
-画像copyは同じextentとformatの1×・1 mipのcolor画像を受け入れる。
+`Graph::upload_image_region` と `copy_image_region` は、単一layerのcolor画像を `ImageRegion` のmip・左上座標・寸法で指定する。
+mip全域の書き込みはそのmipを初期化する。矩形は周囲の既存画素を保持するため、初期化済みmipを要求し、前のproducerを生存させる。
+圧縮形式では左上を圧縮ブロックに揃え、右端・下端の不完全ブロックはmipの端だけに許可する。
+転送byte列は各ブロック行を隙間なく並べる。画像間の矩形copyは等しい形式の別画像に同じ寸法で行う。
+同じextentとformatの1×・1 mip画像間の全体コピーは `copy_image` で指定できる。
 `Rgba8Srgb`はsample/transfer用途で、storage/attachmentへは受け付けない。
 linear filteringの実format能力は作成・準備境界で確認する。
 `NearestClamp`はnearest min/mag/mip、clamp、LOD0、`LinearRepeat`はlinear min/mag/mip、

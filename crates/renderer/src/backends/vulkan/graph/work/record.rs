@@ -141,47 +141,55 @@ impl TransferPayload for GraphWork {
                                 .size(*size)],
                         );
                     }
-                    PreparedOperation::UploadImage { dst, .. } => {
+                    PreparedOperation::UploadImage { dst, region } => {
                         let range = &self.uploads[pass.staging.unwrap()];
                         let image = self.resource(*dst).image();
-                        device.raw().cmd_copy_buffer_to_image(
-                            command,
-                            range.transfer_handle(),
-                            image.image,
-                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                            // Packed upload data contains every mip in order.
-                            // Record each region directly without frame allocation.
-                            &[image_copy(image, range.offset(), 0)],
-                        );
-                        let mut offset = range.offset() + mip_bytes(image, 0);
-                        for mip in 1..image.mip_levels {
+                        if let Some(region) = region {
                             device.raw().cmd_copy_buffer_to_image(
                                 command,
                                 range.transfer_handle(),
                                 image.image,
                                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                                &[image_copy(image, offset, mip)],
+                                &[vk::BufferImageCopy::default()
+                                    .buffer_offset(range.offset())
+                                    .image_subresource(layers(image).mip_level(region.mip_level))
+                                    .image_offset(copy_origin(region.origin))
+                                    .image_extent(copy_extent(region.extent))],
                             );
-                            offset += mip_bytes(image, mip);
+                        } else {
+                            let mut offset = range.offset();
+                            for mip in 0..image.mip_levels {
+                                device.raw().cmd_copy_buffer_to_image(
+                                    command,
+                                    range.transfer_handle(),
+                                    image.image,
+                                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                                    &[image_copy(image, offset, mip)],
+                                );
+                                offset += mip_bytes(image, mip);
+                            }
                         }
                     }
-                    PreparedOperation::CopyImage { src, dst } => {
-                        let source = self.resource(*src).image();
-                        let target = self.resource(*dst).image();
+                    PreparedOperation::CopyImage {
+                        src,
+                        dst,
+                        source,
+                        destination,
+                    } => {
+                        let src = self.resource(*src).image();
+                        let dst = self.resource(*dst).image();
                         device.raw().cmd_copy_image(
                             command,
-                            source.image,
+                            src.image,
                             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                            target.image,
+                            dst.image,
                             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                             &[vk::ImageCopy::default()
-                                .src_subresource(layers(source))
-                                .dst_subresource(layers(target))
-                                .extent(vk::Extent3D {
-                                    width: source.extent.width,
-                                    height: source.extent.height,
-                                    depth: 1,
-                                })],
+                                .src_subresource(layers(src).mip_level(source.mip_level))
+                                .src_offset(copy_origin(source.origin))
+                                .dst_subresource(layers(dst).mip_level(destination.mip_level))
+                                .dst_offset(copy_origin(destination.origin))
+                                .extent(copy_extent(source.extent))],
                         );
                     }
                     PreparedOperation::ReadbackImage { src } => {
@@ -384,6 +392,20 @@ fn rendering_attachments(
         colors: native_colors,
         color_count: attachment_operands.len(),
         depth: depth.map(|(_, info)| info),
+    }
+}
+fn copy_origin([x, y]: [u32; 2]) -> vk::Offset3D {
+    vk::Offset3D {
+        x: x as i32,
+        y: y as i32,
+        z: 0,
+    }
+}
+fn copy_extent([width, height]: [u32; 2]) -> vk::Extent3D {
+    vk::Extent3D {
+        width,
+        height,
+        depth: 1,
     }
 }
 fn layers(image: &DeviceImage) -> vk::ImageSubresourceLayers {
