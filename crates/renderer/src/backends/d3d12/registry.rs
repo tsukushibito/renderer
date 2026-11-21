@@ -443,8 +443,8 @@ impl Registry {
     pub(super) fn result_token(&self) -> Arc<()> {
         Arc::clone(&self.result_returns)
     }
-    /// Change-boundary guarantee, including synchronization with the last
-    /// external token return. No new token can be made after exclusive success.
+    /// The fixed range pool moves with this registry, including leased slots.
+    /// Only submissions and result metadata must retire before replacing frame storage.
     pub(super) fn metadata_is_idle(&mut self) -> bool {
         if Arc::get_mut(&mut self.result_returns).is_none() {
             return false;
@@ -452,7 +452,6 @@ impl Registry {
         self.exports
             .iter_mut()
             .all(|slot| Arc::get_mut(slot).is_some())
-            && self.ranges.is_idle()
     }
     pub(super) fn registered_images(&self) -> Result<Vec<crate::graph::ImageDesc>, Error> {
         let mut images = Vec::new();
@@ -498,6 +497,54 @@ impl Registry {
             .filter(|entry| entry.registered && entry.generation == key.generation)
             .ok_or_else(stale)
     }
+    fn register_buffer(&mut self, desc: BufferDesc) -> Result<ResourceKey, Error> {
+        if desc.size == 0 || desc.size > self.capacity.buffer_bytes {
+            return Err(Error::invalid(
+                "buffer size must fit the prepared buffer limit",
+            ));
+        }
+        let desc = ResourceDesc::Buffer(desc);
+        // Registration is an explicit preparation boundary. Pick the smallest
+        // prepared buffer large enough for the new logical size.
+        let index = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.fits(desc) && entry.replaceable())
+            .min_by_key(|(_, entry)| entry.class)
+            .map(|(index, _)| index)
+            .ok_or_else(|| {
+                let leased = self.entries.iter().any(|entry| {
+                    !entry.registered && entry.generation < u32::MAX && entry.fits(desc)
+                });
+                Error::capacity_with(
+                    "no available prepared buffer for registration",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Resources,
+                        if leased {
+                            CapacityRecovery::ReleaseOwners
+                        } else {
+                            CapacityRecovery::Reconfigure
+                        },
+                        None,
+                        None,
+                    ),
+                )
+            })?;
+        let entry = &mut self.entries[index];
+        entry.generation += 1;
+        entry.registered = true;
+        entry.desc = desc;
+        entry.initialized.clear();
+        entry.provenance.clear();
+        self.reuse.remove(index);
+        Ok(ResourceKey {
+            owner: self.owner,
+            index: index as u32,
+            generation: entry.generation,
+        })
+    }
+
     pub(super) fn refresh_buffer(&mut self, key: ResourceKey) -> Result<ImportBuffer, Error> {
         let entry = self.entry(key)?;
         let ResourceDesc::Buffer(desc) = entry.desc else {
@@ -847,9 +894,18 @@ impl ExecutionSlot {
 }
 
 impl D3D12Runtime {
+    pub(crate) fn register_buffer(&mut self, desc: BufferDesc) -> Result<ResourceKey, Error> {
+        self.device.ensure_active()?;
+        self.pool
+            .registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .register_buffer(desc)
+    }
+
     /// Scheduled contents of accepted work; CPU completion is not implied.
-    /// Return this buffer snapshot and all clones before changing the working set;
-    /// its key and registered contents survive and can be refreshed afterwards.
+    /// The working set may change while this snapshot is retained. Writes or
+    /// deletion of the registered buffer still invalidate its scheduled contents.
     pub fn refresh_buffer(&self, key: ResourceKey) -> Result<ImportBuffer, Error> {
         self.device.ensure_active()?;
         self.pool

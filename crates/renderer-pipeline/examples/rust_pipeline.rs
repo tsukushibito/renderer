@@ -3,7 +3,7 @@
 
 use std::num::NonZeroUsize;
 
-use renderer::capacity::{GraphRequirements, Preparation};
+use renderer::capacity::Preparation;
 use renderer::graph::{
     CompiledGraph, Graph, GraphCapacity, GraphError, GraphPool, ImageDesc, ImageHandle,
 };
@@ -41,14 +41,9 @@ fn build(use_effect: bool) -> Result<CompiledGraph, GraphError> {
         0,
     )?;
     // Reserve the optional pass during preparation so frames can select it.
-    preparation.reserve_image(color, 1)?;
-    preparation.add_graph_requirements(GraphRequirements {
-        resources: 1,
-        passes: 2, // optional copy and readback
-        accesses: 3,
-        name_bytes: COPY_TARGET.len() + COPY_PASS.len() + READBACK.len(),
-        ..GraphRequirements::default()
-    })?;
+    preparation.reserve_transient_image(COPY_TARGET, color)?;
+    preparation.reserve_copy(COPY_PASS)?;
+    preparation.reserve_readback(READBACK)?;
     let output =
         PreparedOutput::prepare(&mut preparation, [width, height], SdrOutput::capture(false))?;
 

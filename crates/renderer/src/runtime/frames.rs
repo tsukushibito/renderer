@@ -16,46 +16,61 @@ enum SubmissionInner {
     D3D12(crate::backends::d3d12::QueuedFrameSubmission),
 }
 
+#[cfg_attr(
+    not(any(feature = "vulkan", all(feature = "d3d12", windows))),
+    expect(
+        unused_variables,
+        reason = "without a backend, the dispatcher has no runtime variants"
+    )
+)]
 impl FrameSubmission {
     pub fn id(&self) -> FrameId {
-        match &self.0 {
+        match self.0 {
             #[cfg(feature = "vulkan")]
-            SubmissionInner::Vulkan(submission) => submission.id(),
+            SubmissionInner::Vulkan(ref submission) => submission.id(),
             #[cfg(all(feature = "d3d12", windows))]
-            SubmissionInner::D3D12(submission) => submission.id,
+            SubmissionInner::D3D12(ref submission) => submission.id,
         }
     }
 
     /// Identity of the Graph whose work was accepted.
     pub fn graph_id(&self) -> u64 {
-        match &self.0 {
+        match self.0 {
             #[cfg(feature = "vulkan")]
-            SubmissionInner::Vulkan(submission) => submission.graph_id(),
+            SubmissionInner::Vulkan(ref submission) => submission.graph_id(),
             #[cfg(all(feature = "d3d12", windows))]
-            SubmissionInner::D3D12(submission) => submission.graph_id(),
+            SubmissionInner::D3D12(ref submission) => submission.graph_id(),
         }
     }
 
     /// Snapshot of accepted scheduled contents. Use the registered key and
     /// Runtime::delete to release the registration when no longer needed.
     pub fn export_buffer(&self, handle: BufferHandle) -> Result<ImportBuffer, ExecutionError> {
-        Ok(match &self.0 {
+        match self.0 {
             #[cfg(feature = "vulkan")]
-            SubmissionInner::Vulkan(submission) => submission.export_buffer(handle)?,
+            SubmissionInner::Vulkan(ref submission) => {
+                submission.export_buffer(handle).map_err(Into::into)
+            }
             #[cfg(all(feature = "d3d12", windows))]
-            SubmissionInner::D3D12(submission) => submission.export_buffer(handle)?,
-        })
+            SubmissionInner::D3D12(ref submission) => {
+                submission.export_buffer(handle).map_err(Into::into)
+            }
+        }
     }
 
     /// Snapshot of accepted scheduled contents for follow-up Graphs or
     /// presentation on this runtime.
     pub fn export_image(&self, handle: ImageHandle) -> Result<ImportImage, ExecutionError> {
-        Ok(match &self.0 {
+        match self.0 {
             #[cfg(feature = "vulkan")]
-            SubmissionInner::Vulkan(submission) => submission.export_image(handle)?,
+            SubmissionInner::Vulkan(ref submission) => {
+                submission.export_image(handle).map_err(Into::into)
+            }
             #[cfg(all(feature = "d3d12", windows))]
-            SubmissionInner::D3D12(submission) => submission.export_image(handle)?,
-        })
+            SubmissionInner::D3D12(ref submission) => {
+                submission.export_image(handle).map_err(Into::into)
+            }
+        }
     }
 }
 
@@ -85,33 +100,44 @@ enum CompletionInner {
     D3D12(crate::backends::d3d12::QueuedFrameCompletion),
 }
 
+#[cfg_attr(
+    not(any(feature = "vulkan", all(feature = "d3d12", windows))),
+    expect(
+        unused_variables,
+        reason = "without a backend, the dispatcher has no runtime variants"
+    )
+)]
 impl FrameCompletion {
     pub fn id(&self) -> FrameId {
-        match &self.0 {
+        match self.0 {
             #[cfg(feature = "vulkan")]
-            CompletionInner::Vulkan(completed) => completed.id(),
+            CompletionInner::Vulkan(ref completed) => completed.id(),
             #[cfg(all(feature = "d3d12", windows))]
-            CompletionInner::D3D12(completed) => completed.id,
+            CompletionInner::D3D12(ref completed) => completed.id,
         }
     }
 
     pub fn metrics(&self) -> Option<&SubmissionMetrics> {
-        match &self.0 {
+        match self.0 {
             #[cfg(feature = "vulkan")]
-            CompletionInner::Vulkan(completed) => completed.result.metrics(),
+            CompletionInner::Vulkan(ref completed) => completed.result.metrics(),
             #[cfg(all(feature = "d3d12", windows))]
-            CompletionInner::D3D12(completed) => completed.result.metrics(),
+            CompletionInner::D3D12(ref completed) => completed.result.metrics(),
         }
     }
 
     /// Exact byte length of the unconsumed readback.
     pub fn readback_len(&self, pass: PassHandle) -> Result<usize, ExecutionError> {
-        Ok(match &self.0 {
+        match self.0 {
             #[cfg(feature = "vulkan")]
-            CompletionInner::Vulkan(completed) => completed.result.readback_len(pass)?,
+            CompletionInner::Vulkan(ref completed) => {
+                completed.result.readback_len(pass).map_err(Into::into)
+            }
             #[cfg(all(feature = "d3d12", windows))]
-            CompletionInner::D3D12(completed) => completed.result.readback_len(pass)?,
-        })
+            CompletionInner::D3D12(ref completed) => {
+                completed.result.readback_len(pass).map_err(Into::into)
+            }
+        }
     }
 
     /// Copy an unconsumed readback into caller-owned storage of exactly the
@@ -121,13 +147,18 @@ impl FrameCompletion {
         pass: PassHandle,
         output: &mut [u8],
     ) -> Result<(), ExecutionError> {
-        match &mut self.0 {
+        match self.0 {
             #[cfg(feature = "vulkan")]
-            CompletionInner::Vulkan(completed) => completed.result.readback_into(pass, output)?,
+            CompletionInner::Vulkan(ref mut completed) => completed
+                .result
+                .readback_into(pass, output)
+                .map_err(Into::into),
             #[cfg(all(feature = "d3d12", windows))]
-            CompletionInner::D3D12(completed) => completed.result.readback_into(pass, output)?,
+            CompletionInner::D3D12(ref mut completed) => completed
+                .result
+                .readback_into(pass, output)
+                .map_err(Into::into),
         }
-        Ok(())
     }
 }
 

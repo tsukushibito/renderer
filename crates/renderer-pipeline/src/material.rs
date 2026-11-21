@@ -1,7 +1,6 @@
 //! Persistent surface materials shared by mesh draws. Create and edit them
 //! outside graph construction. Cloning a snapshot retains that exact revision.
 mod definition;
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 mod residency;
 use crate::pbr::{self, DefaultViews, MaterialUniform};
 pub use crate::pbr::{MaterialFactors, MaterialTextures};
@@ -196,9 +195,7 @@ impl MaterialInstance {
 pub struct Materials {
     revisions: HashMap<MaterialHandle, u64>,
     entries: HashMap<MaterialHandle, Arc<MaterialInstance>>,
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     dirty: std::collections::BTreeSet<MaterialHandle>,
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     owned_uniforms: Vec<(
         std::sync::Weak<renderer::graph::ImportBuffer>,
         pbr::ResidentMaterialUniform,
@@ -211,7 +208,6 @@ impl Materials {
             NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
                 .expect("material handle space exhausted"),
         );
-        #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
         if matches!(instance.as_ref(), MaterialInstance::Pbr(p) if !p.is_resident()) {
             self.dirty.insert(handle);
         }
@@ -247,7 +243,6 @@ impl Materials {
         if !matches!(slot.as_ref(), MaterialInstance::Pbr(_)) {
             return Err(GraphError::invalid_input("expected PBR material"));
         }
-        #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
         if pbr.is_resident() {
             self.dirty.remove(&handle);
         } else {
@@ -285,7 +280,6 @@ impl Materials {
         Ok(self.insert(self.snapshot(handle)?))
     }
     pub fn remove(&mut self, handle: MaterialHandle) -> Result<(), GraphError> {
-        #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
         self.dirty.remove(&handle);
         self.revisions.remove(&handle);
         self.entries

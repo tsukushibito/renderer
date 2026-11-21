@@ -75,13 +75,9 @@ pub(super) fn metadata(strict: bool) {
         return_without_allocating(value);
     }
     return_without_allocating(pending);
-    // Only an independently captured refresh token's final clone remains.
-    assert_eq!(
-        dx.prepare_graph_working_set(None, &[], &[], &[])
-            .unwrap_err()
-            .kind(),
-        CapacityExhausted
-    );
+    // Reconfiguration keeps the original range pool anchored, even for a
+    // snapshot of a deleted registration. Its final return stays allocation-free.
+    dx.prepare_graph_working_set(None, &[], &[], &[]).unwrap();
     return_without_allocating(refreshed_clone);
 
     let desc = ImageDesc::rgba8(1, 1);
@@ -147,7 +143,6 @@ fn persistent_resize<B: Backend>(backend: &mut B) {
     let image = graph.import_image("unchanged source", &source).unwrap();
     let old_pass = graph.readback_image("old readonly plan", image).unwrap();
     let readonly = graph.compile().unwrap();
-    drop(offset);
     drop(B::wait(&mut pending));
     drop(pending);
 
@@ -196,7 +191,6 @@ fn persistent_resize<B: Backend>(backend: &mut B) {
         assert_eq!(pixels, fixture::image_bytes(&[[2.0; 4]; fixture::PIXELS]));
         drop((pending, result));
 
-        let offset = backend.fresh_buffer(key);
         let destination_snapshot = backend.fresh(destination.key());
         let mut graph = pool.begin().unwrap();
         let input = graph.import_image("retained source", &source).unwrap();

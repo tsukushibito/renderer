@@ -64,6 +64,11 @@ pub struct ImportRangesPool {
 }
 
 impl ImportRangesPool {
+    #[cfg(feature = "vulkan")]
+    pub(crate) fn has_capacity(&self, ranges_per_slot: usize, slots: usize) -> bool {
+        self.range_capacity == ranges_per_slot && self.slots.len() == slots
+    }
+
     pub fn new(range_capacity: usize, slots: usize) -> Result<Self, GraphError> {
         if slots == 0 {
             return Err(GraphError::capacity_error(

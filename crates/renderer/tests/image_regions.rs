@@ -247,7 +247,10 @@ fn streams_mips_and_copies_atlas_regions(config: renderer::runtime::RuntimeConfi
     drop(result);
     rt.delete(complete.key()).unwrap();
     let mut g = pool.begin().unwrap();
-    let src = g.image("BC atlas", bc_atlas).unwrap();
+    let src = g
+        .upload_texture_for_export("BC atlas", bc_atlas, &[1; 176])
+        .unwrap();
+    g.export_image_mips(src, 1..2).unwrap(); // An existing full export still covers every mip.
     let tail = g.image("BC mip tail", bc_atlas).unwrap();
     let tile = g.image("BC tile", bc_tile).unwrap();
     let block = ImageRegion {
@@ -255,13 +258,6 @@ fn streams_mips_and_copies_atlas_regions(config: renderer::runtime::RuntimeConfi
         origin: [4, 4],
         extent: [4, 4],
     };
-    g.upload_image_region(
-        "allocate BC mip",
-        src,
-        ImageRegion::mip(bc_atlas, 1).unwrap(),
-        &[1; 32],
-    )
-    .unwrap();
     g.upload_image_region("update BC block", src, block, &[74; 8])
         .unwrap();
     g.copy_image_region("copy BC block", src, block, tile, 0, [0, 0])
@@ -275,6 +271,8 @@ fn streams_mips_and_copies_atlas_regions(config: renderer::runtime::RuntimeConfi
     let read = g.readback_image("read BC block", tile).unwrap();
     let sent = rt.submit(&g.compile().unwrap()).unwrap();
     let retained = sent.export_image(tail).unwrap();
+    let uploaded = sent.export_image(src).unwrap();
+    assert!((0..bc_atlas.mip_levels).all(|m| uploaded.is_mip_initialized(m)));
     let id = sent.id();
     drop(sent);
     let mut result = rt.wait_for_frame(id, wait).unwrap().unwrap();
@@ -283,6 +281,7 @@ fn streams_mips_and_copies_atlas_regions(config: renderer::runtime::RuntimeConfi
     assert_eq!(bytes, [74; 8]);
     drop(result);
     rt.delete(retained.key()).unwrap();
+    rt.delete(uploaded.key()).unwrap();
     drop(rt);
     #[cfg(feature = "vulkan")]
     if let Some(vk) = vk {

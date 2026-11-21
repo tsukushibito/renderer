@@ -459,13 +459,11 @@ fn raster_imports<B: Backend>(backend: &mut B, reconfigure: bool) {
     seed.export_buffer(indices).unwrap();
     seed.export_image(color).unwrap();
     let producer = backend.submit(&seed.compile().unwrap()).unwrap();
-    let mut vertices = B::buffer(&producer, vertices);
-    let mut indices = B::buffer(&producer, indices);
+    let vertices = B::buffer(&producer, vertices);
+    let indices = B::buffer(&producer, indices);
     let color = B::image(&producer, color);
     let mut producer = Some(producer);
     if reconfigure {
-        let keys = (vertices.key(), indices.key());
-        drop((vertices, indices));
         drop(B::wait(producer.as_mut().unwrap()));
         drop(producer.take());
         backend
@@ -480,8 +478,6 @@ fn raster_imports<B: Backend>(backend: &mut B, reconfigure: bool) {
                 },
             ])
             .unwrap();
-        vertices = backend.fresh_buffer(keys.0);
-        indices = backend.fresh_buffer(keys.1);
     }
     let mut graph = pool.begin().unwrap();
     let v = graph.import_buffer("vertices", &vertices).unwrap();

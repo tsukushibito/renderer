@@ -153,7 +153,7 @@ try {
     $summary.commands += @{ executable = $hostExecutable; arguments = $shaderArgs }
     $null = Invoke-LoggedNative $hostExecutable $shaderArgs (Join-Path $OutputDirectory 'shader-verification.log')
     $summary.shader_artifacts = @(
-        Get-ChildItem -LiteralPath 'crates/renderer/shaders' -File -Recurse |
+        Get-ChildItem -LiteralPath 'crates/renderer/shaders', 'crates/renderer-pipeline/shaders/output' -File -Recurse |
             Where-Object Extension -in @('.spv', '.hlsl', '.dxil', '.json', '.vert', '.frag', '.comp') |
             Sort-Object FullName | ForEach-Object {
                 @{ path = $_.FullName.Substring($repository.Length + 1).Replace('\', '/');

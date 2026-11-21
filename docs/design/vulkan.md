@@ -528,7 +528,10 @@ Graphの配列上限とwork/result/export枠、import範囲snapshot、CPU proven
 byte provenance区間数の`provenance_segments_per_resource`と独立し、いずれも通常frameで増設しない。
 prefix容量不足は要約の追い出しではなく型付きエラーを返し、同じ内容のA→B→Aで本文を再走査しない。
 `ResourceClass`はbackend非依存のbuffer/image descriptorと同時保持数であり、登録済み入力とは別に
-記録・GPU・exportが保持し得る未登録instance数を含める。変更には既存のframe/result/metadata/range tokenの返却が必要である。
+記録・GPU・exportが保持し得る未登録instance数を含める。変更前に既存のframe/result/export metadataを返却する。
+登録bufferのrange snapshotとcloneはpoolを引き続き使用し、画像寸法やProgramの変更後も有効である。
+直接Vulkan APIからrange pool自体の枠数・1枠の範囲数を変更する場合は、そのpoolのtokenを先に返す。
+poolを毎回交換する案では古いtokenの最後の返却で通常frameにheap解放が発生し得るため、同じ容量ではanchorを維持する。
 入力やdraw/pass構成は準備済み上限内で毎frame変更でき、固定planの再生を条件にしない。
 
 再準備は一時索引で資源の再利用・置換先を決め、必要な物理資源、状態、プールと既定mesh pipelineを段階的に準備する。
