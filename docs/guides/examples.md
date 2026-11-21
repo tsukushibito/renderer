@@ -10,10 +10,16 @@
 cargo run --locked --release -p renderer-pipeline --features vulkan --example textured_view -- vulkan
 ```
 
-`textured_view` はチェッカーテクスチャを貼った三角形を描き、64×64 から 32×32 へリサイズして、メッシュの更新と赤から緑への材質変更を反映する。
-`two_views` は同じオブジェクトを二つのカメラから一つの Graph に描く。`toon_views` は同じループを外部実装の Toon 方式で実行する。
-`mixed_post` は PBR、Unlit、独自 Toon、半透明を描き、HDR に Bloom をかけて SDR に変換する。
-各例は GPU の結果を読み戻し、表示領域と色の変化を確認する。Windows の D3D12 ではコマンドの両方の `vulkan` を `d3d12` に置き換える。
+| 例 | エンジンに取り込める処理 |
+| --- | --- |
+| `textured_view` | チェッカーテクスチャを使う材質の作成、64×64から32×32へのリサイズ、メッシュと材質の更新 |
+| `two_views` | 一度バインドしたシーンを複数のカメラから描画し、別々の画像に出力 |
+| `toon_views` | 外部クレートでも実装できる `ViewPipeline` でメッシュと材質を利用 |
+| `mixed_post` | PBR、Unlit、独自材質、半透明を含むシーンのHDRにBloomとSDR出力を追加 |
+
+コマンドの `--example` の値を表の名前に替えて実行できる。WindowsのD3D12ではfeatureと末尾の引数をともに `d3d12` に替える。
+ヘッドレスの各例は描画結果を読み戻して確認する。エンジン側のイベントループへ組み込む際の起動・更新・解放は[ビューとアセットの手順](tooling.md#scene-materials)、
+実際のフレーム処理は[共通のサンプルコード](../../crates/renderer-pipeline/examples/support/views.rs)を参照。
 
 ## 最初に動かす
 
@@ -34,7 +40,7 @@ cargo run --locked -p renderer-pipeline --no-default-features --example rust_pip
 `pbr_forward`はサンプル内で用意した小さなシーンを、公開レシピでオフスクリーン描画します。
 型付きPBR頂点を使い、テクスチャを省略した材質を太陽光で照らします。
 同じシーンを `--technique forward`（既定）、`forward-plus`、`deferred` で描き分けられます。
-Forward+ では点光源を1灯追加します。Deferred は1×のみ選べます。
+このサンプルのForward+では点光源を1灯追加します。標準レシピは3方式ともビューごとの点光源入力を扱います。Deferredは1×のみ選べます。
 色と1×の深度を読み戻し、`--output`を指定するとSDRをPPMに保存します。
 `--msaa 4`はカラーをリゾルブしてから出力し、`--msaa 1`は既定の1×を選びます。
 `--bloom`は明るい三角形に標準のBloomを適用します。`--reuse-shadows`は連続する2フレームを投入して、
@@ -62,7 +68,9 @@ cargo run --locked -p renderer --no-default-features --features vulkan,developme
 **Windowsで描画する**
 
 `windowed`は標準Graphと独自Graphを切り替えられます。WASDとQ/Eで移動し、右ボタンを押して視点を操作します。
-両APIとも`runtime::Runtime`と`WindowPresenter`で作業セットの準備、フレーム投入、完了確認、表示を行います。
+Windowsでは `Runtime::for_window` に `HasWindowHandle` を実装するウィンドウ所有者を渡し、`WindowPresenter` を受け取ります。
+この例はwinitを使います。エンジン独自のウィンドウとイベントループからも呼べます。
+同じデバイスに追加のウィンドウを接続するときは `Runtime::create_presenter` を使います。
 画面操作と検証手順は[Windows表示](development.md#windows-presentation)を参照してください。
 
 ```powershell
