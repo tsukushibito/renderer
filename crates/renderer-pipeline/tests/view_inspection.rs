@@ -41,14 +41,6 @@ impl ViewPipeline for ClearView {
         g.upload_image("clear", color, &[0; 32])?;
         Ok((ViewImages { color, depth: None }, ()))
     }
-    fn accept(
-        &mut self,
-        _: &mut (),
-        _: &mut (),
-        _: &renderer::runtime::FrameSubmission,
-    ) -> PipelineResult<()> {
-        Ok(())
-    }
 }
 
 #[test]

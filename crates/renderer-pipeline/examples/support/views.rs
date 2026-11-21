@@ -125,7 +125,7 @@ pub fn run_on<P: ViewPipeline + 'static>(
         }
     }
     let mut pipeline = ViewRenderer::new();
-    let mut prepare = |extent| -> Result<_, Box<dyn Error>> {
+    let prepare = |pipeline: &mut ViewRenderer, extent| -> Result<_, Box<dyn Error>> {
         let mut budget = Preparation::new(NonZeroUsize::MIN);
         let group = pipeline.prepare_pipeline(
             make(extent, limits, &definitions)?,
@@ -136,16 +136,8 @@ pub fn run_on<P: ViewPipeline + 'static>(
         )?;
         Ok((group, budget))
     };
-    let (mut group, first) = prepare(extent)?;
-    let mut preparation = Preparation::new(NonZeroUsize::MIN);
-    let mut resized = if example != Example::MixedPost {
-        let (next, second) = prepare([32, 32])?;
-        preparation.add_alternatives(&[&first, &second])?;
-        Some(next)
-    } else {
-        preparation.add_alternatives(&[&first])?;
-        None
-    };
+    let (mut group, mut preparation) = prepare(&mut pipeline, extent)?;
+    let resize = example != Example::MixedPost;
     meshes.reserve(&mut preparation)?;
     let texture_desc = ImageDesc::rgba8_srgb(2, 2);
     preparation.reserve_image(texture_desc, 1)?;
@@ -251,10 +243,12 @@ pub fn run_on<P: ViewPipeline + 'static>(
                     .is_err()
             );
         }
-        if step == 1
-            && let Some(next) = resized.take()
-        {
+        if step == 1 && resize {
             extent = [32, 32];
+            let (next, mut replacement) = prepare(&mut pipeline, extent)?;
+            meshes.reserve(&mut replacement)?;
+            replacement.reserve_image(texture_desc, 1)?;
+            runtime.prepare_working_set(replacement.working_set())?;
             for camera in &mut views {
                 camera.extent = extent;
                 pipeline.reconfigure_view(next, camera, &mut runtime)?;
@@ -312,7 +306,7 @@ pub fn run_on<P: ViewPipeline + 'static>(
         }
         if step == 0 {
             // Already recorded operands keep the old versions through submission.
-            if resized.is_some() {
+            if resize {
                 meshes.update(model, geometry(0.75)?)?;
             }
             let green = [0.15, 1., 0.25, 1.];

@@ -15,6 +15,8 @@ use std::{cell::Cell, num::NonZeroUsize, rc::Rc, time::Duration};
 struct HistoryProbe {
     publications: Rc<[Cell<u32>; 2]>,
     interrupt: bool,
+    fail_create: Rc<Cell<bool>>,
+    fail_release: Rc<Cell<bool>>,
 }
 impl ViewPipeline for HistoryProbe {
     type State = usize;
@@ -31,7 +33,16 @@ impl ViewPipeline for HistoryProbe {
         Ok(())
     }
     fn create_view(&self, c: &CameraView) -> PipelineResult<usize> {
+        if self.fail_create.replace(false) {
+            return Err("injected state creation failure".into());
+        }
         Ok(c.id.0 as usize)
+    }
+    fn release_view(&mut self, _: &mut usize, _: &mut Runtime) -> PipelineResult<()> {
+        if self.fail_release.replace(false) {
+            return Err("injected state release failure".into());
+        }
+        Ok(())
     }
     fn record(
         &mut self,
@@ -63,12 +74,16 @@ impl ViewPipeline for HistoryProbe {
     }
 }
 pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
+    let fail_create = Rc::new(Cell::new(false));
+    let fail_release = Rc::new(Cell::new(false));
     let calls = Rc::new([Cell::new(0), Cell::new(0)]);
     let mut prep = Preparation::new(NonZeroUsize::MIN);
     let mut driver = ViewRenderer::new();
     let group = driver.prepare_pipeline(
         HistoryProbe {
             publications: calls.clone(),
+            fail_create: fail_create.clone(),
+            fail_release: fail_release.clone(),
             interrupt: true,
         },
         [1, 1],
@@ -79,6 +94,8 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
     let second = driver.prepare_pipeline(
         HistoryProbe {
             publications: calls.clone(),
+            fail_create: fail_create.clone(),
+            fail_release: fail_release.clone(),
             interrupt: false,
         },
         [2, 1],
@@ -154,6 +171,24 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
         Err(ViewSubmitError::Rejected(_))
     ));
     assert_eq!((calls[0].get(), calls[1].get()), (1, 1));
+    driver.remove_view(b.id, &mut rt)?;
+    let moved = CameraView {
+        extent: b.extent,
+        ..a
+    };
+    fail_create.set(true);
+    assert!(driver.reconfigure_view(second, &moved, &mut rt).is_err());
+    // Creation failed before the original registration/history was touched.
+    let mut frame = driver.begin_frame(&mut pool)?;
+    frame.draw_view(frame.bind_scene(group, scene)?, &a)?;
+    drop(frame);
+    fail_release.set(true);
+    assert!(driver.reconfigure_view(second, &moved, &mut rt).is_err());
+    assert!(driver.begin_frame(&mut pool).is_err());
+    driver.reconfigure_view(second, &moved, &mut rt)?;
+    let mut frame = driver.begin_frame(&mut pool)?;
+    frame.draw_view(frame.bind_scene(second, scene)?, &moved)?;
+    drop(frame);
     driver.remove_view(a.id, &mut rt)?;
     driver.clear(&mut rt)?;
     super::validation::check_validation(rt)

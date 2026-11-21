@@ -63,6 +63,7 @@ pub struct ViewRenderer {
     views: HashMap<ViewId, PipelineId>,
     pending: Vec<ViewId>,
     accepted: Option<FrameSubmission>,
+    moving: Option<(ViewId, PipelineId)>,
 }
 
 impl ViewRenderer {
@@ -138,6 +139,8 @@ impl ViewRenderer {
     fn check_idle(&self) -> PipelineResult<()> {
         if self.accepted.is_some() {
             Err("finish publishing accepted views first".into())
+        } else if self.moving.is_some() {
+            Err("finish reconfiguring the camera before using the view renderer".into())
         } else {
             Ok(())
         }
@@ -190,22 +193,43 @@ impl ViewRenderer {
         Ok(())
     }
     /// Move a camera to a prepared extent/technique at a change boundary.
-    /// Its old history is released. If creation of the replacement state fails,
-    /// retry registration using the same camera identity.
+    /// Create the replacement before releasing the old history. A failed creation
+    /// preserves the original registration. If release fails, retry this operation
+    /// with the same camera and target to finish the move without recreating state.
     pub fn reconfigure_view(
         &mut self,
         id: PipelineId,
         camera: &CameraView,
         runtime: &mut Runtime,
     ) -> PipelineResult<()> {
-        let old = self.route(camera.id)?;
-        if old == id {
-            return Err("prepare a different pipeline configuration before moving the view".into());
+        match self.moving {
+            None => {
+                self.check_idle()?;
+                let old = self.route(camera.id)?;
+                if old == id {
+                    return Err(
+                        "prepare a different pipeline configuration before moving the view".into(),
+                    );
+                }
+                self.pipeline_mut(id)?.group.register(camera)?;
+                self.moving = Some((camera.id, id));
+            }
+            Some((view, target)) if (view, target) == (camera.id, id) => (),
+            Some(_) => return Err("finish the previous camera reconfiguration first".into()),
         }
-        self.pipeline(id)?.group.check_room(camera)?;
-        self.remove_view(camera.id, runtime)?;
-        self.register_view(id, camera)
+        self.finish_reconfiguration(runtime)
     }
+
+    fn finish_reconfiguration(&mut self, runtime: &mut Runtime) -> PipelineResult<()> {
+        if let Some((view, target)) = self.moving {
+            let old = self.route(view)?;
+            self.pipeline_mut(old)?.group.remove_view(view, runtime)?;
+            *self.views.get_mut(&view).expect("registered view") = target;
+            self.moving = None;
+        }
+        Ok(())
+    }
+
     /// Release the pipeline after moving or removing its last view.
     pub fn remove_pipeline(&mut self, id: PipelineId, runtime: &mut Runtime) -> PipelineResult<()> {
         self.check_idle()?;
@@ -242,6 +266,7 @@ impl ViewRenderer {
         Ok(self.accepted.take().expect("accepted receipt"))
     }
     pub fn clear(&mut self, runtime: &mut Runtime) -> PipelineResult<()> {
+        self.finish_reconfiguration(runtime)?;
         self.check_idle()?;
         while let Some(id) = self.views.keys().next().copied() {
             self.remove_view(id, runtime)?;
@@ -416,6 +441,14 @@ impl CompiledViewFrame<'_> {
     }
     pub fn ordered_pass_names(&self) -> impl Iterator<Item = &str> {
         self.plan.ordered_pass_names()
+    }
+    #[cfg(feature = "graph-diagnostics")]
+    pub fn dump(&self) -> &str {
+        self.plan.dump()
+    }
+    #[cfg(feature = "graph-diagnostics")]
+    pub fn culled_pass_names(&self) -> impl Iterator<Item = &str> {
+        self.plan.culled_pass_names()
     }
     pub fn submit(self, runtime: &mut Runtime) -> Result<FrameSubmission, ViewSubmitError> {
         let renderer = &mut *self.frame.renderer;
