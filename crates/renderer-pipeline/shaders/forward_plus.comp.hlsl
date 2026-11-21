@@ -26,15 +26,17 @@ bool sphere_touches(float4 plane, float3 center, float radius) {
 [numthreads(8, 4, 1)]
 void main(uint3 dispatch_id : SV_DispatchThreadID) {
     // The storage image and Image2d dispatch define the complete write
-    // footprint. The light header can only change which bits are set.
+    // footprint. The light header can only change tile membership.
     uint2 dimensions;
     tile_masks.GetDimensions(dimensions.x, dimensions.y);
     if (any(dispatch_id.xy >= dimensions)) { return; }
 
     uint2 extent = local_light_extent();
-    uint2 tile_xy = uint2(dispatch_id.x / 2u, dispatch_id.y);
+    uint columns = (extent.x + LOCAL_LIGHT_TILE_SIZE - 1u) / LOCAL_LIGHT_TILE_SIZE;
+    uint words = max(dimensions.x / columns, 1u);
+    uint2 tile_xy = uint2(dispatch_id.x / words, dispatch_id.y);
     uint2 first = tile_xy * LOCAL_LIGHT_TILE_SIZE;
-    uint first_light = (dispatch_id.x % 2u) * 32u;
+    uint first_light = (dispatch_id.x % words) * 32u;
     uint mask = 0u;
     if (all(first < extent)) {
         uint2 end = min(first + LOCAL_LIGHT_TILE_SIZE, extent);

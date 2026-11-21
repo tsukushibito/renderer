@@ -16,44 +16,7 @@
         }
     ],
     "types" : {
-        "_5" : {
-            "name" : "PointLight",
-            "members" : [
-                {
-                    "name" : "position_radius",
-                    "type" : "vec4",
-                    "offset" : 0
-                },
-                {
-                    "name" : "color_intensity",
-                    "type" : "vec4",
-                    "offset" : 16
-                }
-            ]
-        },
-        "_4" : {
-            "name" : "type.TextureBuffer.LocalLightsData",
-            "members" : [
-                {
-                    "name" : "extent_count",
-                    "type" : "uvec4",
-                    "offset" : 0
-                },
-                {
-                    "name" : "lights",
-                    "type" : "_5",
-                    "array" : [
-                        64
-                    ],
-                    "array_size_is_literal" : [
-                        true
-                    ],
-                    "offset" : 16,
-                    "array_stride" : 32
-                }
-            ]
-        },
-        "_7" : {
+        "_6" : {
             "name" : "type.CullCamera",
             "members" : [
                 {
@@ -65,6 +28,14 @@
             ]
         }
     },
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "local_lights",
+            "set" : 0,
+            "binding" : 2
+        }
+    ],
     "images" : [
         {
             "type" : "image2D",
@@ -75,19 +46,9 @@
             "format" : "rgba16f"
         }
     ],
-    "ssbos" : [
-        {
-            "type" : "_4",
-            "name" : "local_lights",
-            "readonly" : true,
-            "block_size" : 2064,
-            "set" : 0,
-            "binding" : 2
-        }
-    ],
     "ubos" : [
         {
-            "type" : "_7",
+            "type" : "_6",
             "name" : "type.CullCamera",
             "block_size" : 64,
             "set" : 0,

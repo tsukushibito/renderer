@@ -294,7 +294,7 @@ pub(super) fn build(
         .local_lights
         .as_ref()
         .map_or(&[][..], |preset| &preset[..]);
-    let images = recipe.draw_hdr(&mut graph, frame, lights)?;
+    let images = recipe.draw_hdr(&mut graph, frame.with_lights(lights))?;
     let processed = bloom.add_passes(&mut graph, images.hdr)?;
     let output = recipe.write_output(&mut graph, processed, 2.0)?;
     let updates = history_frame

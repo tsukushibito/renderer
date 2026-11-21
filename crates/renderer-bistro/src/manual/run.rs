@@ -245,7 +245,7 @@ fn identity(
         "environment":environment,"shadows":options.shadows,"aa":options.aa,"bloom":options.bloom.name(),
         "samples":options.sample_count.as_u32(),"pipeline":options.pipeline.name(),
         "local_lights":options.pipeline.uses_local_lights()
-            .then(|| super::forward_lighting::identity(options.fixture)),
+            .then(|| super::lighting::identity(options.fixture)),
         "instances":options.instances.name(),"instance_draws":options.instances.draws(),
         "submission":options.submission.name(),
         "shadow_profile":{"cascades":4,"resolution":shadow.resolution,"distance_m":shadow.distance,

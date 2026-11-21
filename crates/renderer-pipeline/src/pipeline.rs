@@ -135,6 +135,7 @@ pub struct StandardPipeline {
     transparent: Vec<pbr::Draw>,
     casters: [Vec<pbr::Draw>; pbr::CASCADE_COUNT],
     transforms: Vec<Transform>,
+    transform_indices: HashMap<[[u32; 4]; 3], u32>,
     connected: Vec<Draw>,
     order: Vec<(f64, usize, [bool; pbr::CASCADE_COUNT])>,
     forward: ForwardDraws,
@@ -238,6 +239,7 @@ impl StandardPipeline {
             transparent: Vec::with_capacity(max),
             casters: std::array::from_fn(|_| Vec::with_capacity(shadow_max)),
             transforms: Vec::with_capacity(limits.max_transforms),
+            transform_indices: HashMap::with_capacity(limits.max_transforms),
             connected: Vec::with_capacity(max),
             order: Vec::with_capacity(max),
             forward: ForwardDraws {
@@ -269,9 +271,7 @@ impl StandardPipeline {
         materials: &Materials,
         frame: Frame<'_>,
     ) -> Result<SceneImages, GraphError> {
-        self.declare(graph, materials, frame, |recipe, graph, frame, lights| {
-            recipe.draw_hdr(graph, frame, lights)
-        })
+        self.declare(graph, materials, frame, GeometryPipeline::draw_hdr)
     }
 
     /// Read coherent Deferred material planes and depth before Forward opaque draws.
@@ -282,12 +282,12 @@ impl StandardPipeline {
         frame: Frame<'_>,
         consume: impl FnOnce(&mut Graph, pbr::GBuffer) -> Result<(), GraphError>,
     ) -> Result<SceneImages, GraphError> {
-        if self.recipe.technique() != Technique::Deferred || !frame.lights.is_empty() {
+        if self.recipe.technique() != Technique::Deferred {
             return Err(GraphError::invalid_input(
-                "G-buffer access requires Deferred with no point lights",
+                "G-buffer access requires Deferred",
             ));
         }
-        self.declare(graph, materials, frame, |recipe, graph, frame, _| {
+        self.declare(graph, materials, frame, |recipe, graph, frame| {
             let GeometryPipeline::Deferred(recipe) = recipe else {
                 unreachable!()
             };
@@ -304,7 +304,6 @@ impl StandardPipeline {
             &mut GeometryPipeline,
             &mut Graph,
             pbr::Frame<'_>,
-            &[PointLight],
         ) -> Result<SceneImages, GraphError>,
     ) -> Result<SceneImages, GraphError> {
         let Frame {
@@ -334,6 +333,7 @@ impl StandardPipeline {
             casters.clear();
         }
         self.transforms.clear();
+        self.transform_indices.clear();
         self.order.clear();
         self.forward.opaque.clear();
         self.forward.blend.clear();
@@ -404,7 +404,7 @@ impl StandardPipeline {
         frame.forward_draws = Some(&self.forward);
         frame.transforms = &self.transforms;
         frame.camera_target = camera;
-        append(&mut self.recipe, graph, frame, lights)
+        append(&mut self.recipe, graph, frame.with_lights(lights))
     }
     #[allow(
         clippy::too_many_arguments,
@@ -442,15 +442,22 @@ impl StandardPipeline {
                 material,
             };
             let command = if let Some(transform) = draw.transform {
-                if self.transforms.len() >= self.limits.max_transforms {
-                    return Err(GraphError::capacity_error(
-                        renderer::graph::GraphCapacityKind::Draws,
-                        self.limits.max_transforms,
-                        Some(self.transforms.len() + 1),
-                    ));
-                }
-                let index = self.transforms.len() as u32;
-                self.transforms.push(transform);
+                let key = transform.model_key();
+                let index = if let Some(&index) = self.transform_indices.get(&key) {
+                    index
+                } else {
+                    if self.transforms.len() >= self.limits.max_transforms {
+                        return Err(GraphError::capacity_error(
+                            renderer::graph::GraphCapacityKind::Draws,
+                            self.limits.max_transforms,
+                            Some(self.transforms.len() + 1),
+                        ));
+                    }
+                    let index = self.transforms.len() as u32;
+                    self.transform_indices.insert(key, index);
+                    self.transforms.push(transform);
+                    index
+                };
                 pbr::Draw::model(geometry, index)
             } else {
                 pbr::Draw::WorldSpaceIndexed(geometry)

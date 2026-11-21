@@ -49,13 +49,15 @@ float3 local_light_radiance(
     uint2 extent = local_light_extent();
     uint2 pixel = uint2(clamp(pixel_center, 0.0, float2(extent - 1u)));
     uint2 tile_xy = pixel / LOCAL_LIGHT_TILE_SIZE;
-    uint2 texel = uint2(tile_xy.x * 2u, tile_xy.y);
     uint2 dimensions;
     tile_masks.GetDimensions(dimensions.x, dimensions.y);
-    if (texel.x + 1u >= dimensions.x || texel.y >= dimensions.y) { return result; }
+    uint columns = (extent.x + LOCAL_LIGHT_TILE_SIZE - 1u) / LOCAL_LIGHT_TILE_SIZE;
+    uint words = dimensions.x / columns;
+    uint2 texel = uint2(tile_xy.x * words, tile_xy.y);
+    if (texel.y >= dimensions.y) { return result; }
 
     // Visit light IDs in ascending order to preserve accumulation.
-    for (uint half_index = 0u; half_index < 2u; ++half_index) {
+    for (uint half_index = 0u; half_index < min(words, (light_count + 31u) / 32u); ++half_index) {
         uint mask = read_tile_mask(texel + uint2(half_index, 0));
         while (mask != 0u) {
             uint index = half_index * 32u + (uint)firstbitlow(mask);

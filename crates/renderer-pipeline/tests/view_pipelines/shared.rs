@@ -20,6 +20,7 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
         max_draws: 1,
         max_materials: 1,
         max_transforms: 1,
+        max_point_lights: 0,
         max_casters_per_cascade: 0,
     };
     let size = [8, 8];

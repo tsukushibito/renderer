@@ -253,7 +253,6 @@ impl Budget {
         options: &Options,
         background: [f32; 3],
     ) -> Result<Self, Error> {
-        let tiled_lights = usize::from(options.pipeline == PipelineMode::ForwardPlus);
         let packed = if options.submission == SubmissionMode::Direct {
             None
         } else {
@@ -417,6 +416,8 @@ impl Budget {
         };
         // Reserve the conservative D3D12 row/placement-aligned copy footprint,
         // not merely packed asset bytes. Vulkan can use the same bounded budget.
+        let frame_upload_bytes = graph.upload_bytes
+            + usize::from(options.pipeline.uses_local_lights()) * lighting::upload_padding();
         let upload_bytes = scene
             .images
             .iter()
@@ -449,17 +450,11 @@ impl Budget {
                     .max()
                     .unwrap_or(0),
             )
-            .max(if tiled_lights == 0 {
-                max_buffer_bytes as usize
-            } else {
-                // The tile-list class is large, but its contents are written by
-                // compute. Geometry streams above still size cold CPU uploads.
-                pbr_forward_plus::LIGHT_BUFFER_BYTES as usize
-            })
+            .max(max_buffer_bytes as usize)
             // Direct frames also share the staging capacity across uploads.
-            .max(graph.upload_bytes)
+            .max(frame_upload_bytes)
             .max(packed.as_ref().filter(|_| indirect).map_or(0, |layout| {
-                let frame_bytes = layout.template_upload_bytes() + graph.upload_bytes;
+                let frame_bytes = layout.template_upload_bytes() + frame_upload_bytes;
                 layout.aabb_bytes().max(frame_bytes)
             }))
             .max(4096)
@@ -1274,28 +1269,22 @@ fn append_shadows(
 
 #[derive(Clone, Copy)]
 struct FrameLights {
-    lights: BufferHandle,
+    lights: ImageView,
     tiles: Option<ImageView>,
 }
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn frame_lights(
     graph: &mut Graph,
-    resident: &Resident,
-    options: &Options,
+    table: Option<&lighting::LightTable>,
     camera: BufferHandle,
-) -> Result<Option<FrameLights>, Error> {
-    let Some(preset) = &resident.local_lights else {
-        return Ok(None);
-    };
-    let (lights, tiles) = lighting::append_reference(
-        graph,
-        [options.width, options.height],
-        camera,
-        preset,
-        options.pipeline == PipelineMode::ForwardPlus,
-    )?;
-    Ok(Some(FrameLights { lights, tiles }))
+) -> Result<Option<FrameLights>, GraphError> {
+    table
+        .map(|table| {
+            let (lights, tiles) = table.append(graph, camera)?;
+            Ok(FrameLights { lights, tiles })
+        })
+        .transpose()
 }
 
 fn import_environment(
@@ -1465,7 +1454,7 @@ pub(super) fn build(
     graph.upload_buffer("camera update boundary", uniform, 0, &frame_uniform)?;
     graph.export_buffer(uniform)?;
     let (prepared, bloom) = workspace.prepared.select(options).reference();
-    let lighting = frame_lights(&mut graph, resident, options, uniform)?;
+    let lighting = frame_lights(&mut graph, prepared.lights.as_ref(), uniform)?;
     let materials = MaterialBindings {
         uniform,
         factors: &workspace.materials,

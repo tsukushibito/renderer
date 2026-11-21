@@ -69,6 +69,7 @@ pub fn run_on<P: ViewPipeline + 'static>(
         max_draws: 4,
         max_materials: 4,
         max_transforms: 4,
+        max_point_lights: 0,
         max_casters_per_cascade: 0,
     };
     let mut meshes = Meshes::new(MeshCapacity {

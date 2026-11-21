@@ -42,6 +42,7 @@ fn limits() -> SceneLimits {
         frames_in_flight: NonZeroUsize::MIN,
         max_draws: 2,
         max_materials: 2,
+        max_point_lights: 0,
         max_casters_per_cascade: 1,
         max_transforms: 0,
     }
@@ -256,35 +257,36 @@ fn disabled_shadows_omit_maps_and_reject_cascade_inputs() {
 }
 
 #[test]
-fn standard_techniques_share_output_and_reject_unsupported_lights() {
+fn standard_techniques_accept_point_lights_and_share_output() {
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let lights = [pbr::PointLight {
         position: [0.0, 0.0, 1.0],
         radius: 2.0,
         color: [1.0; 3],
         intensity: 1.0,
-    }];
+    }; 65];
     for technique in [
         pbr::Technique::Forward,
         pbr::Technique::ForwardPlus,
         pbr::Technique::Deferred,
     ] {
-        let mut prepared = pipeline::GeometryPipeline::new(technique, config(), limits()).unwrap();
+        let mut prepared = pipeline::GeometryPipeline::new(
+            technique,
+            config(),
+            SceneLimits {
+                max_point_lights: lights.len(),
+                ..limits()
+            },
+        )
+        .unwrap();
         let mut graph = pool.begin().unwrap();
         let (view, material, draw) = inputs(&recipe(), &mut graph);
         let materials = [material.with_sampler(SamplerDescriptor::NearestClamp)];
         let draws = [Draw::WorldSpaceIndexed(draw)];
         let defaults = Defaults::Materials.upload(&mut graph).unwrap();
         let frame = || Frame::new(&view, &materials, &draws, &[], &draws, defaults).unwrap();
-        let supported_lights = if technique.supports_point_lights() {
-            lights.as_slice()
-        } else {
-            let error = prepared.draw_hdr(&mut graph, frame(), &lights).unwrap_err();
-            assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
-            &[]
-        };
         let images = prepared
-            .add_scene_and_sdr_output(&mut graph, frame(), supported_lights, 1.0)
+            .add_scene_and_sdr_output(&mut graph, frame().with_lights(&lights), 1.0)
             .unwrap();
         assert_eq!(images.gbuffer.is_some(), technique.provides_gbuffer());
         assert_eq!(
@@ -304,7 +306,7 @@ fn standard_techniques_share_output_and_reject_unsupported_lights() {
         let names = || graph.ordered_pass_names();
         assert_eq!(
             names().any(|name| name == "Forward+ tile light masks"),
-            technique.supports_point_lights(),
+            technique == pbr::Technique::ForwardPlus,
         );
         assert_eq!(
             names().filter(|name| *name == "pbr camera upload").count(),
@@ -751,7 +753,7 @@ fn transformed_draws_check_ranges_before_appending_to_the_graph() {
     let mut recipe = prepare(
         config(),
         SceneLimits {
-            max_transforms: 1,
+            max_transforms: 1_025,
             ..limits()
         },
     )
@@ -760,10 +762,10 @@ fn transformed_draws_check_ranges_before_appending_to_the_graph() {
     let mut graph = pool.begin().unwrap();
     let (view, material, draw) = inputs(&recipe, &mut graph);
     let materials = [material];
-    let transforms = [Transform::IDENTITY];
+    let transforms = vec![Transform::IDENTITY; 1_025];
     let invalid = [Draw::Instanced {
         geometry: draw,
-        first_transform: 1,
+        first_transform: 1_025,
         instance_count: 1,
     }];
     let mut frame = Frame::with_cascades(&view, &materials, &invalid, &[], &[]);
@@ -776,11 +778,20 @@ fn transformed_draws_check_ranges_before_appending_to_the_graph() {
         GraphErrorKind::InvalidInput
     );
 
-    let instanced = Draw::Instanced {
+    let across_pages = [Draw::Instanced {
         geometry: draw,
-        first_transform: 0,
-        instance_count: 1,
-    };
+        first_transform: 1_023,
+        instance_count: 2,
+    }];
+    assert_eq!(across_pages[0].command_count(), 2);
+    let mut frame = Frame::with_cascades(&view, &materials, &across_pages, &[], &across_pages);
+    frame.transforms = &transforms;
+    let error = recipe.add_scene(&mut graph, frame).unwrap_err();
+    let bounds = error.capacity().unwrap();
+    assert_eq!(bounds.kind, GraphCapacityKind::Draws);
+    assert_eq!(bounds.required, Some(2)); // One caster command was reserved per cascade.
+
+    let instanced = Draw::model(draw, 1_024);
     let opaque = [Draw::WorldSpaceIndexed(draw), instanced];
     let casters = [instanced];
     let mut frame = Frame::with_cascades(&view, &materials, &opaque, &[], &casters);
@@ -802,7 +813,7 @@ fn opaque_indirect_group_uses_one_prepared_model_transform() {
     let mut recipe = prepare(
         config(),
         SceneLimits {
-            max_transforms: 1,
+            max_transforms: 1_025,
             ..limits()
         },
     )
@@ -840,10 +851,10 @@ fn opaque_indirect_group_uses_one_prepared_model_transform() {
     let opaque = [Draw::TransformedIndirect {
         args,
         material: 0,
-        transform: 0,
+        transform: 1_024,
     }];
     let materials = [material];
-    let transforms = [Transform::IDENTITY];
+    let transforms = vec![Transform::IDENTITY; 1_025];
     let mut frame = Frame::with_cascades(&view, &materials, &opaque, &[], &[]);
     frame.transforms = &transforms;
     let scene = recipe.add_scene(&mut graph, frame).unwrap();

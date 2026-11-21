@@ -450,6 +450,7 @@ impl State {
             (options.width, options.height) = extent;
             options.validate_lighting_extent()?;
             backend::resize(&mut self.backend, options, &self.budget)?;
+            self.resident.resize_lights(options)?;
             if options.reuse_shadows && options.shadows {
                 self.workspace.enable_shadow_reuse();
             }
@@ -607,7 +608,7 @@ impl State {
             "bloom": options.bloom.name(), "vsync": options.vsync, "aa": options.aa,
             "samples":options.sample_count.as_u32(), "pipeline":options.pipeline.name(),
             "local_lights":options.pipeline.uses_local_lights()
-                .then(|| super::forward_lighting::identity(options.fixture)),
+                .then(|| super::lighting::identity(options.fixture)),
             "instances": options.instances.name(), "instance_draws": options.instances.draws(),
             "submission": options.submission.name(),
             "packed_opaque": self.budget.packed_counts().map(|(groups, draws)| json!({"groups":groups,"primitives":draws})),

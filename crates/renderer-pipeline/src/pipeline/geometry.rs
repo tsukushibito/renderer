@@ -8,8 +8,8 @@ use renderer::{
 use crate::{passes::output::OutputImages, pbr_deferred, pbr_forward, pbr_forward_plus};
 
 use crate::pbr::{
-    Bounds, Config, Environment, Frame, FrameImages, PointLight, PreparedView, SceneImages,
-    SceneLimits, Sun, ViewInput,
+    Bounds, Config, Environment, Frame, FrameImages, PreparedView, SceneImages, SceneLimits, Sun,
+    ViewInput,
 };
 
 /// Select the standard PBR technique at preparation time.
@@ -27,10 +27,6 @@ impl Technique {
             Self::Forward | Self::ForwardPlus => true,
             Self::Deferred => matches!(samples, SampleCount::X1),
         }
-    }
-
-    pub const fn supports_point_lights(self) -> bool {
-        matches!(self, Self::ForwardPlus)
     }
 
     /// Whether the standard scene output includes a sampleable D32 depth image.
@@ -96,18 +92,14 @@ impl GeometryPipeline {
         self.common().prepare_view(view, sun, bounds, environment)
     }
 
-    /// Declare the scene and return linear HDR for further processing. Point
-    /// lights require Forward+ and are checked before declaring any work.
+    /// Declare the scene and return linear HDR for further processing.
     pub fn draw_hdr(
         &mut self,
         graph: &mut Graph,
         frame: Frame<'_>,
-        lights: &[PointLight],
     ) -> Result<SceneImages, GraphError> {
-        self.check_lights(lights)?;
         match self {
-            Self::Forward(recipe) => recipe.add_scene(graph, frame),
-            Self::ForwardPlus(recipe) => recipe.add_scene(graph, frame, lights),
+            Self::Forward(recipe) | Self::ForwardPlus(recipe) => recipe.add_scene(graph, frame),
             Self::Deferred(recipe) => recipe.add_scene(graph, frame),
         }
     }
@@ -129,25 +121,13 @@ impl GeometryPipeline {
         &mut self,
         graph: &mut Graph,
         frame: Frame<'_>,
-        lights: &[PointLight],
         exposure: f32,
     ) -> Result<FrameImages, GraphError> {
-        self.check_lights(lights)?;
         match self {
-            Self::Forward(recipe) => recipe.add_scene_and_sdr_output(graph, frame, exposure),
-            Self::ForwardPlus(recipe) => {
-                recipe.add_scene_and_sdr_output(graph, frame, lights, exposure)
+            Self::Forward(recipe) | Self::ForwardPlus(recipe) => {
+                recipe.add_scene_and_sdr_output(graph, frame, exposure)
             }
             Self::Deferred(recipe) => recipe.add_scene_and_sdr_output(graph, frame, exposure),
         }
-    }
-
-    fn check_lights(&self, lights: &[PointLight]) -> Result<(), GraphError> {
-        if !lights.is_empty() && !self.technique().supports_point_lights() {
-            return Err(GraphError::invalid_input(
-                "PBR point lights require Forward+",
-            ));
-        }
-        Ok(())
     }
 }

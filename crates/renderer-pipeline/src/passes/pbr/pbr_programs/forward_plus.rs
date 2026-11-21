@@ -3,15 +3,14 @@
 mod culling;
 
 use super::packaged_shaders;
-use renderer::graph::{Binding, BufferHandle, ImageView};
+use renderer::graph::{Binding, ImageView};
 use renderer::program::{
     BindingLayout, BindingType, ManagedRasterProgram, RasterProgramDescriptor, ShaderStages,
 };
 
 use super::{BLEND, OPAQUE};
-use culling::{LIGHTS, TILES, buffer_binding, buffer_slot, tile_binding};
+use culling::{LIGHTS, TILES, buffer_slot, tile_binding};
 
-pub(crate) use culling::CULL_PASS;
 #[allow(
     unused_imports,
     reason = "the raw Bistro tests assert the public tile limit"
@@ -25,43 +24,31 @@ pub use culling::MAX_TILES;
     )
 )]
 pub use culling::compute_program;
-pub use culling::{
-    LIGHT_BUFFER_BYTES, MAX_LIGHTS, PointLight, TILE_SIZE, active_tile_count, append_culling,
-    light_bytes, tile_mask_desc,
-};
+pub(crate) use culling::{CULL_PASS, light_binding};
+pub use culling::{PointLight, PointLightLayout, TILE_SIZE, active_tile_count, append_culling};
 
 #[allow(
     dead_code,
     reason = "the Rust Bistro builds these bindings from the shared shader ABI"
 )]
 pub fn raster_bindings(
-    lights: BufferHandle,
+    lights: ImageView,
     tiles: Option<ImageView>,
 ) -> impl Iterator<Item = Binding> {
     let bindings = match tiles {
         Some(tiles) => tiled_raster_bindings(lights, tiles).map(Some),
-        None => [
-            Some(buffer_binding(LIGHTS, lights, LIGHT_BUFFER_BYTES)),
-            None,
-        ],
+        None => [Some(light_binding(lights)), None],
     };
     bindings.into_iter().flatten()
 }
 
-pub fn tiled_raster_bindings(lights: BufferHandle, tiles: ImageView) -> [Binding; 2] {
-    [
-        buffer_binding(LIGHTS, lights, LIGHT_BUFFER_BYTES),
-        tile_binding(tiles),
-    ]
+pub fn tiled_raster_bindings(lights: ImageView, tiles: ImageView) -> [Binding; 2] {
+    [light_binding(lights), tile_binding(tiles)]
 }
 
 const fn pbr_bindings<const N: usize>() -> [BindingLayout; N] {
-    let mut bindings = [buffer_slot(
-        LIGHTS,
-        BindingType::StorageRead,
-        ShaderStages::FRAGMENT,
-        LIGHT_BUFFER_BYTES,
-    ); N];
+    let mut bindings =
+        [buffer_slot(LIGHTS, BindingType::SampledImage, ShaderStages::FRAGMENT, 0); N];
     let mut index = 0;
     while index < OPAQUE.bindings.len() {
         bindings[index] = OPAQUE.bindings[index];
@@ -80,26 +67,26 @@ const fn pbr_bytes<const N: usize>() -> [u64; N] {
         bytes[index] = OPAQUE.binding_bytes[index];
         index += 1;
     }
-    bytes[16] = LIGHT_BUFFER_BYTES;
     bytes
 }
 
-static REFERENCE_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
-    bindings: &pbr_bindings::<17>(),
-    binding_bytes: &pbr_bytes::<17>(),
-    shaders: packaged_shaders!(
-        vulkan: (
-            include_bytes!("../../../../shaders/pbr.vert.spv"),
-            Some(include_bytes!("../../../../shaders/pbr_all_lights.frag.spv")),
+pub(in crate::passes::pbr) static REFERENCE_OPAQUE: RasterProgramDescriptor =
+    RasterProgramDescriptor {
+        bindings: &pbr_bindings::<17>(),
+        binding_bytes: &pbr_bytes::<17>(),
+        shaders: packaged_shaders!(
+            vulkan: (
+                include_bytes!("../../../../shaders/pbr.vert.spv"),
+                Some(include_bytes!("../../../../shaders/pbr_all_lights.frag.spv")),
+            ),
+            d3d12: (
+                include_bytes!("../../../../shaders/dxil/pbr.vert.dxil"),
+                Some(include_bytes!("../../../../shaders/dxil/pbr_all_lights.frag.dxil")),
+            ),
+            inline_constants: None,
         ),
-        d3d12: (
-            include_bytes!("../../../../shaders/dxil/pbr.vert.dxil"),
-            Some(include_bytes!("../../../../shaders/dxil/pbr_all_lights.frag.dxil")),
-        ),
-        inline_constants: None,
-    ),
-    ..OPAQUE
-};
+        ..OPAQUE
+    };
 static REFERENCE_BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
     blend: BLEND.blend,
     depth: BLEND.depth,
@@ -134,10 +121,9 @@ pub const fn raster_program(tiled: bool, blend: bool) -> ManagedRasterProgram {
         (true, false) => &TILED_OPAQUE,
         (true, true) => &TILED_BLEND,
     };
-    // SAFETY: Original Bistro PBR slots and side effects are unchanged.
-    // The fragment shader bounds image loads by the actual view dimensions.
-    // It confines conversions of arbitrary float pixels to [0, 255] and
-    // bounds all light-buffer indices by the clamped light count.
+    // SAFETY: These PBR fragment variants only add read-only images. The
+    // shaders clamp decoded headers, light indices, mask words and tile
+    // coordinates to the sampled views before loading.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(descriptor) }
 }
 
@@ -162,15 +148,16 @@ mod tests {
             ),
         ] {
             let module: serde_json::Value = serde_json::from_str(spirv).unwrap();
-            let buffers = module["ssbos"].as_array().unwrap();
+            let images = module["separate_images"].as_array().unwrap();
             let program = raster_program(tiled, false);
             let slots = &program.bindings()[OPAQUE.bindings.len()..];
-            assert_eq!(buffers.len(), 1);
-            let light = &buffers[0];
+            let light = images
+                .iter()
+                .find(|image| image["name"] == "local_lights")
+                .unwrap();
             assert_eq!(light["binding"], slots[0].binding);
             assert_eq!(light["set"], slots[0].group);
-            assert_eq!(light["readonly"], true);
-            assert_eq!(light["block_size"], LIGHT_BUFFER_BYTES);
+            assert_eq!(light["type"], "texture2D");
             assert!(dxil.split_whitespace().any(|word| word == "t2"));
             let mask = module["separate_images"]
                 .as_array()

@@ -1,0 +1,207 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_5" : {
+            "name" : "type.ConstantBuffer.CameraData",
+            "members" : [
+                {
+                    "name" : "view_projection",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "eye",
+                    "type" : "vec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "light_direction",
+                    "type" : "vec4",
+                    "offset" : 80
+                },
+                {
+                    "name" : "light_color",
+                    "type" : "vec4",
+                    "offset" : 96
+                },
+                {
+                    "name" : "environment",
+                    "type" : "vec4",
+                    "offset" : 112
+                },
+                {
+                    "name" : "shadow_view_projection",
+                    "type" : "mat4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 128,
+                    "array_stride" : 64,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "shadow_splits",
+                    "type" : "vec4",
+                    "offset" : 384
+                },
+                {
+                    "name" : "shadow_texel_world",
+                    "type" : "vec4",
+                    "offset" : 400
+                },
+                {
+                    "name" : "shadow_depth_scale",
+                    "type" : "vec4",
+                    "offset" : 416
+                },
+                {
+                    "name" : "camera_forward_blend",
+                    "type" : "vec4",
+                    "offset" : 432
+                },
+                {
+                    "name" : "shadow_bias",
+                    "type" : "vec4",
+                    "offset" : 448
+                }
+            ]
+        },
+        "_19" : {
+            "name" : "type.Reconstruction",
+            "members" : [
+                {
+                    "name" : "inverse_view_projection",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                }
+            ]
+        }
+    },
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "out.var.SV_Target0",
+            "location" : 0
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "irradiance_image",
+            "set" : 2,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "reflection_image",
+            "set" : 2,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "brdf_image",
+            "set" : 2,
+            "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "shadow_image0",
+            "set" : 3,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "shadow_image1",
+            "set" : 3,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "shadow_image2",
+            "set" : 3,
+            "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "shadow_image3",
+            "set" : 3,
+            "binding" : 3
+        },
+        {
+            "type" : "texture2D",
+            "name" : "local_lights",
+            "set" : 0,
+            "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "base_metallic_image",
+            "set" : 1,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "normal_roughness_image",
+            "set" : 1,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "emissive_occlusion_image",
+            "set" : 1,
+            "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "depth_image",
+            "set" : 1,
+            "binding" : 3
+        }
+    ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "environment_sampler",
+            "set" : 2,
+            "binding" : 3
+        },
+        {
+            "type" : "sampler",
+            "name" : "shadow_sampler",
+            "set" : 3,
+            "binding" : 4
+        },
+        {
+            "type" : "sampler",
+            "name" : "gbuffer_sampler",
+            "set" : 1,
+            "binding" : 4
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_5",
+            "name" : "type.ConstantBuffer.CameraData",
+            "block_size" : 464,
+            "set" : 0,
+            "binding" : 0
+        },
+        {
+            "type" : "_19",
+            "name" : "type.Reconstruction",
+            "block_size" : 64,
+            "set" : 0,
+            "binding" : 1
+        }
+    ]
+}

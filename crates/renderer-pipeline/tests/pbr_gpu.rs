@@ -43,7 +43,7 @@ mod cpu {
                 &triangle,
                 None,
                 &post,
-                Placement::Single,
+                Settings::new(SampleCount::X1),
                 None,
             )
             .unwrap();
@@ -115,7 +115,7 @@ mod cpu {
                 &triangle,
                 None,
                 &post,
-                Placement::Single,
+                settings,
                 None,
             )
             .unwrap();
@@ -128,6 +128,8 @@ mod cpu {
     fn transformed_scene_declares_all_cascades() {
         for placement in [
             Placement::Individual,
+            Placement::Instanced,
+            Placement::PagedInstanced,
             Placement::Tilted(Some(-40)),
             Placement::Mirrored {
                 baked: false,
@@ -151,7 +153,7 @@ mod cpu {
                 &triangle,
                 None,
                 &post,
-                placement,
+                settings,
                 None,
             )
             .unwrap();
@@ -176,6 +178,74 @@ mod gpu {
         runtime::{Api, probe, render},
         scene::{EXTENT, Placement, Settings, Technique, ViewFixture},
     };
+
+    use super::scene::POINT_LIGHTS;
+    use renderer_pipeline::pbr::PointLight;
+
+    const LATE_POINT_LIGHTS: [PointLight; 257] = {
+        let mut lights = [PointLight {
+            intensity: 0.0,
+            ..POINT_LIGHTS[0]
+        }; 257];
+        lights[256] = POINT_LIGHTS[0];
+        lights
+    };
+
+    fn late_point_light_matches_single_light(api: Api) {
+        for technique in [
+            Technique::Forward,
+            Technique::ForwardPlus,
+            Technique::Deferred,
+        ] {
+            for placement in [
+                Placement::Single,
+                Placement::Mirrored {
+                    baked: false,
+                    blend: true,
+                },
+            ] {
+                let capture = |lights| {
+                    let settings = Settings {
+                        technique,
+                        placement,
+                        lights: Some(lights),
+                        ..Settings::new(SampleCount::X1)
+                    };
+                    render(api, settings, false, Bloom::Off, &[])
+                        .unwrap()
+                        .pop()
+                        .unwrap()
+                        .output
+                        .sdr
+                };
+                let reference = capture(&POINT_LIGHTS);
+                assert_ne!(
+                    reference,
+                    capture(&[]),
+                    "{technique:?} point light must affect shading"
+                );
+                assert_eq!(
+                    reference,
+                    capture(&LATE_POINT_LIGHTS),
+                    "{technique:?} light in second table row"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    #[ignore = "requires a hardware Vulkan adapter and requested native validation"]
+    fn vulkan_late_point_light_matches_single_light() {
+        late_point_light_matches_single_light(Api::Vulkan);
+    }
+
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
+    fn d3d12_late_point_light_matches_single_light() {
+        late_point_light_matches_single_light(Api::D3D12);
+    }
 
     fn compare(api: Api) {
         let mut forward_red = 0;
@@ -325,17 +395,29 @@ mod gpu {
     }
 
     fn transformed_instances_match_individual_draws(api: Api) {
-        let render = |placement| {
+        let capture = |technique, placement| {
             let settings = Settings {
+                technique,
                 placement,
+                lights: Some(&LATE_POINT_LIGHTS),
                 ..Settings::new(SampleCount::X1)
             };
             render(api, settings, false, Bloom::Off, &[]).unwrap()
         };
-        let individual = render(Placement::Individual);
-        let instanced = render(Placement::Instanced);
+        let individual = capture(Technique::Forward, Placement::Individual);
+        let instanced = capture(Technique::Forward, Placement::Instanced);
         let output = &instanced[0].output;
         assert_eq!(individual[0].output, *output);
+        assert_eq!(
+            capture(Technique::Forward, Placement::PagedInstanced)[0].output,
+            *output
+        );
+
+        for technique in [Technique::ForwardPlus, Technique::Deferred] {
+            let reference = capture(technique, Placement::Individual);
+            let paged = capture(technique, Placement::PagedInstanced);
+            assert_eq!(paged[0].output, reference[0].output, "{technique:?}");
+        }
 
         // Both objects must contribute distinct covered pixels.
         let depth = output.depth.as_ref().unwrap();

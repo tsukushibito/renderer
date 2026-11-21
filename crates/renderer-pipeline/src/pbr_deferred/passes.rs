@@ -38,6 +38,8 @@ pub struct Inputs {
     pub camera: BufferHandle,
     pub view_projection: [[f32; 4]; 4],
     pub lighting: [Binding; 9],
+    /// Optional graph-local table encoded by [PointLightLayout](crate::pbr_forward_plus::PointLightLayout).
+    pub point_lights: Option<ImageView>,
 }
 
 /// The typed RGBA16F material planes and their single-sample D32 depth.
@@ -56,20 +58,30 @@ pub struct GBuffer {
 /// for one invocation per frame. Reserve the targets, camera and lighting
 /// inputs, and any geometry draw and binding declarations separately.
 pub fn reserve(preparation: &mut Preparation, extent: [u32; 2]) -> Result<(), GraphError> {
-    reserve_passes(preparation, extent, false)
+    reserve_passes(preparation, extent, false, true)
 }
 
 pub(super) fn reserve_passes(
     preparation: &mut Preparation,
     [width, height]: [u32; 2],
     opaque_pass_reserved: bool,
+    point_lights: bool,
 ) -> Result<(), GraphError> {
     let frames = preparation.frames_in_flight().get();
     let planes = PLANES.len();
     let plane_count = frames
         .checked_mul(planes)
         .ok_or_else(|| GraphError::invalid_input("Deferred G-buffer reservation overflow"))?;
-    let lighting = deferred_lighting_program();
+    let lighting = if point_lights {
+        crate::passes::pbr::deferred::deferred_local_lighting_program()
+    } else {
+        deferred_lighting_program()
+    };
+    let programs = [
+        gbuffer_program().into(),
+        deferred_lighting_program().into(),
+        lighting.clone().into(),
+    ];
     let lighting_accesses = lighting
         .bindings()
         .iter()
@@ -107,7 +119,7 @@ pub(super) fn reserve_passes(
                     count: frames,
                 },
             ],
-            raster: &[gbuffer_program().into(), lighting.into()],
+            raster: &programs[..2 + usize::from(point_lights)],
             ..WorkingSet::default()
         },
     )
@@ -179,10 +191,15 @@ pub fn append(
             resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
         },
     ];
-    let mut bindings = [inverse; 16];
+    let mut bindings = [inverse; 17];
     bindings[..gbuffer.len()].copy_from_slice(&gbuffer);
-    bindings[gbuffer.len()..].copy_from_slice(&scene.lighting);
-    let program = deferred_lighting_program();
+    bindings[gbuffer.len()..16].copy_from_slice(&scene.lighting);
+    let program = if let Some(lights) = scene.point_lights {
+        bindings[16] = crate::passes::pbr::forward_plus::light_binding(lights);
+        crate::passes::pbr::deferred::deferred_local_lighting_program()
+    } else {
+        deferred_lighting_program()
+    };
     graph.raster(
         LIGHTING_PASS,
         RasterAttachments {
@@ -194,7 +211,13 @@ pub fn append(
             }],
             depth: None,
         },
-        |raster| raster.draw_fullscreen(&program, &bindings, RasterConstants::default()),
+        |raster| {
+            raster.draw_fullscreen(
+                &program,
+                &bindings[..program.bindings().len()],
+                RasterConstants::default(),
+            )
+        },
     )?;
     Ok(GBuffer {
         base_color_metallic: base,

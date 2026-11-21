@@ -103,10 +103,11 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         },
         pbr::SceneLimits {
             frames_in_flight: NonZeroUsize::MIN,
-            max_draws: 7,
+            max_draws: 8,
             max_materials: 6,
+            max_point_lights: 0,
             max_casters_per_cascade: 1,
-            max_transforms: 2,
+            max_transforms: 1,
         },
         &[opaque, blend, textured.clone()],
     )?;
@@ -220,6 +221,8 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             draw(mesh, unlit, 1., 0., 0.8)?,
             draw(mesh, green, 0.55, 0., 0.4)?,
             draw(glass_mesh, glass, 1., 0., 0.)?,
+            draw(pbr_mesh, floor, 1., 0., 0.5)?,
+            // Multiple primitives of one model share the single reserved transform.
             draw(pbr_mesh, floor, 1., 0., 0.5)?,
             draw(mesh, unlit, 0.1, -0.7, 0.2)?,
             draw(mesh, swatch, 0.1, 0.8, 0.2)?,
@@ -382,6 +385,7 @@ fn draw_after_resize(
         frames_in_flight: n,
         max_draws: 1,
         max_materials: 1,
+        max_point_lights: 0,
         max_casters_per_cascade: 0,
         max_transforms: 1,
     };

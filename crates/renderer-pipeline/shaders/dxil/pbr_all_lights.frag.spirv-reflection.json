@@ -99,43 +99,6 @@
                     "offset" : 448
                 }
             ]
-        },
-        "_30" : {
-            "name" : "PointLight",
-            "members" : [
-                {
-                    "name" : "position_radius",
-                    "type" : "vec4",
-                    "offset" : 0
-                },
-                {
-                    "name" : "color_intensity",
-                    "type" : "vec4",
-                    "offset" : 16
-                }
-            ]
-        },
-        "_29" : {
-            "name" : "type.TextureBuffer.LocalLightsData",
-            "members" : [
-                {
-                    "name" : "extent_count",
-                    "type" : "uvec4",
-                    "offset" : 0
-                },
-                {
-                    "name" : "lights",
-                    "type" : "_30",
-                    "array" : [
-                        64
-                    ],
-                    "array_size_is_literal" : [
-                        true
-                    ],
-                    "offset" : 16,
-                    "array_stride" : 32
-                }
-            ]
         }
     },
     "inputs" : [
@@ -233,6 +196,12 @@
             "name" : "shadow_image3",
             "set" : 3,
             "binding" : 3
+        },
+        {
+            "type" : "texture2D",
+            "name" : "local_lights",
+            "set" : 0,
+            "binding" : 2
         }
     ],
     "separate_samplers" : [
@@ -253,16 +222,6 @@
             "name" : "shadow_sampler",
             "set" : 3,
             "binding" : 4
-        }
-    ],
-    "ssbos" : [
-        {
-            "type" : "_29",
-            "name" : "local_lights",
-            "readonly" : true,
-            "block_size" : 2064,
-            "set" : 0,
-            "binding" : 2
         }
     ],
     "ubos" : [

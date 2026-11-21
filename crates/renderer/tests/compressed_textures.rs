@@ -37,7 +37,7 @@ fn compressed_mips_round_up_independently_and_are_sampled_only() {
     };
     assert!(
         graph
-            .declare_pass("invalid storage image", PassKind::Compute, &[access], true)
+            .declare_analysis_pass("invalid storage image", PassKind::Compute, &[access], true)
             .is_err()
     );
     let color = graph.image_view(single, 0, 0).unwrap();

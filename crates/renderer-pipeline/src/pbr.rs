@@ -20,7 +20,7 @@ pub use defaults::{DefaultResources, DefaultViews, Defaults, PreparedDefaults};
 pub use draw::{Draw, GraphMaterial, IndexedDraw, MaterialTextures};
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
-pub use instances::{MAX_TRANSFORMS, Transform};
+pub use instances::Transform;
 pub use material::{MaterialFactors, MaterialUniform, ResidentMaterialUniform};
 pub use unshadowed::UnshadowedView;
 pub use vertex::PbrVertex;
@@ -82,16 +82,18 @@ impl Config {
 }
 
 /// Upper bounds for frame construction. The scene draw count combines opaque
-/// and blended submissions, and the shadow draw limit is per cascade.
+/// and blended commands, and the shadow draw limit is per cascade. Budget
+/// instanced ranges using [`Draw::command_count`].
 #[derive(Clone, Copy, Debug)]
 pub struct SceneLimits {
     pub frames_in_flight: NonZeroUsize,
     pub max_draws: usize,
     pub max_materials: usize,
+    /// Maximum point lights per view. Zero reserves no light data or programs.
+    pub max_point_lights: usize,
     pub max_casters_per_cascade: usize,
-    /// Maximum model transforms in this view, up to [`MAX_TRANSFORMS`].
-    /// Zero reserves no transform resources. Positive limits select the
-    /// smallest prepared GPU table that fits (64 or 1,024 records).
+    /// Maximum model transforms across all draws in one view (u32 addressing).
+    /// Zero reserves no table. Larger tables use bounded descriptor pages.
     pub max_transforms: usize,
 }
 
@@ -225,6 +227,7 @@ pub enum FrameShadows<'a> {
 pub struct Frame<'a> {
     pub(crate) forward_draws: Option<&'a crate::pipeline::ForwardDraws>,
     pub view: &'a PreparedView,
+    pub lights: &'a [PointLight],
     pub materials: &'a [GraphMaterial],
     /// Draws with Opaque or Mask materials in submission order.
     pub opaque: &'a [Draw],
@@ -239,6 +242,13 @@ pub struct Frame<'a> {
 }
 
 impl<'a> Frame<'a> {
+    /// Supply the same point lights to any of the standard PBR techniques.
+    #[must_use]
+    pub fn with_lights(mut self, lights: &'a [PointLight]) -> Self {
+        self.lights = lights;
+        self
+    }
+
     /// Select shadow input from the prepared view. Enabled shadows use a
     /// common caster list. Disabled shadows use the shared default depth.
     pub fn new(
@@ -306,6 +316,7 @@ impl<'a> Frame<'a> {
             transparent,
             shadows,
             camera_target: None,
+            lights: &[],
             transforms: &[],
             forward_draws: None,
         }
