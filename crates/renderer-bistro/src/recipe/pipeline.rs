@@ -720,48 +720,6 @@ impl Resident {
             .transpose()
     }
 
-    #[cfg(all(
-        windows,
-        feature = "presentation",
-        any(feature = "vulkan", feature = "d3d12")
-    ))]
-    pub fn reprepare(
-        mut self,
-        backend: &mut Runtime,
-        prepare: impl FnOnce(&mut Runtime) -> Result<(), Error>,
-    ) -> Result<Self, Error> {
-        let take_keys = |snapshots: &mut Vec<ImportBuffer>| {
-            std::mem::take(snapshots)
-                .into_iter()
-                .map(|snapshot| snapshot.key())
-                .collect::<Vec<_>>()
-        };
-        let vertices = take_keys(&mut self.vertices);
-        let indices = take_keys(&mut self.indices);
-        self.surfaces.release_snapshots();
-        for material in &mut self.materials {
-            material.release_snapshot();
-        }
-        let camera = self.camera.key();
-        let packed = self.packed.take().map(indirect::Resident::release);
-        drop(self.camera);
-        prepare(backend)?;
-        let refresh = |keys: Vec<_>| -> Result<Vec<ImportBuffer>, Error> {
-            keys.into_iter()
-                .map(|key| Ok(backend.refresh_buffer(key)?))
-                .collect()
-        };
-        self.vertices = refresh(vertices)?;
-        self.indices = refresh(indices)?;
-        for material in &mut self.materials {
-            material.refresh_snapshot(backend)?;
-        }
-        self.camera = backend.refresh_buffer(camera)?;
-        self.refresh_surfaces()?;
-        self.packed = packed.map(|packed| packed.refresh(backend)).transpose()?;
-        Ok(self)
-    }
-
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn upload(
         backend: &mut Runtime,

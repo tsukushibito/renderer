@@ -302,7 +302,7 @@ impl Graph {
     }
     /// Represent analysis-only work. A Vulkan runtime must explicitly reject
     /// live declaration-only operations rather than report successful execution.
-    pub fn declare_pass(
+    pub fn declare_analysis_pass(
         &mut self,
         name: &str,
         kind: PassKind,
@@ -1134,7 +1134,7 @@ mod tests {
             pass
         };
         graph
-            .declare_pass(
+            .declare_analysis_pass(
                 "observe",
                 PassKind::Copy,
                 &[Access {

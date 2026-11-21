@@ -116,7 +116,7 @@ try {
         # Canonical UTF-8/LF HLSL makes the checked-in text independent of
         # checkout line-ending settings; there are no includes or macros.
         $text = [IO.File]::ReadAllText($hlsl).Replace("`r`n", "`n")
-        if ($source -ceq 'tone_neutral.frag') {
+        if ($assetName -ceq 'tone_neutral.frag') {
             $unbound = '(?m)^cbuffer ([A-Za-z_][A-Za-z_0-9]*)$'
             if ([regex]::Matches($text, $unbound).Count -ne 1) {
                 throw 'tone_neutral.frag must declare one inline constant block.'
@@ -156,7 +156,7 @@ try {
             }
             Write-Utf8 (Join-Path $temporaryRoot ($assetName + '.spirv-reflection.json')) $spirvReflection
         }
-        $sourceFile = $source -creplace '^(sdr(?:_fxaa)?)_linear\.frag$', '$1.frag'
+        $sourceFile = $source -creplace '(sdr(?:_fxaa)?)_linear\.frag$', '$1.frag'
         $hashes = [ordered]@{
             source_utf8_lf = Get-SourceSha256 (Join-Path $PSScriptRoot $sourceFile)
             spirv = Get-Sha256 $spirv
@@ -178,7 +178,7 @@ try {
     }
     $licenses = [ordered]@{}
     foreach ($license in @('FXAA-notices.txt', 'Godot-MIT.txt', 'Khronos-ToneMapping-Apache-2.0.txt')) {
-        $licenses[$license] = Get-SourceSha256 (Join-Path $PSScriptRoot ('licenses/' + $license))
+        $licenses[$license] = Get-SourceSha256 (Join-Path $PSScriptRoot ('../../renderer-pipeline/shaders/output/licenses/' + $license))
     }
     $manifest = [ordered]@{
         schema = 3

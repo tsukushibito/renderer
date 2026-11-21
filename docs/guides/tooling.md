@@ -424,9 +424,17 @@ ClangやMikk shared libraryをRendererのruntime依存へ追加しない。
 `crates/renderer-pipeline/shaders/`の`.hlsl`と共通`.hlsli`に置く。両方のBistroサンプルもこの資産を参照する。
 [生成スクリプト](../../crates/renderer-pipeline/shaders/regenerate.ps1)から
 固定版DXCを呼び、同じ正本をSPIR-VとDXILに直接コンパイルする。
-標準のNeutral・FXAA・SDR出力shaderとライセンスは`crates/renderer/shaders/`に置く。
-通常buildは生成済みSPIR-V／DXILを使う。標準shaderを変更したときは共通のSPIR-V／DXILを再生成してから、
-それらのmanifestを参照するBistroのmanifestも再生成する。
+標準のNeutral・FXAA・SDR出力shaderとライセンスは`crates/renderer-pipeline/shaders/output/`に置く。
+表示プリセットのGLSLを変更した場合は次の順で標準fragmentのSPIR-V、DXIL、両者を含むPipelineのmanifestを更新する。
+通常buildは同梱のバイナリを読み込む。
+
+```powershell
+& ./crates/renderer/shaders/regenerate.ps1
+& ./crates/renderer/shaders/regenerate-dxil.ps1
+& ./crates/renderer-pipeline/shaders/regenerate.ps1
+```
+
+PBRなどPipeline側のHLSLのみを変更した場合は、Pipelineの生成と照合を実行する。
 
 ```powershell
 & ./crates/renderer-pipeline/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
@@ -434,7 +442,7 @@ ClangやMikk shared libraryをRendererのruntime依存へ追加しない。
 ```
 
 `-Verify`は一時directoryで再生成し、checkoutを書き換えずbinary・reflection・manifestを照合する。
-CIでは`python -B tools/shaders/verify_pipeline_manifest.py`を実行し、SDKなしでHLSL、include、バイナリ、
+CIでは`python -B tools/shaders/verify_pipeline_manifest.py`を実行し、SDKなしでHLSL、出力GLSL・ライセンス、include、バイナリ、
 反射情報、ツールチェーン定義とRenderer側manifestのhashを照合する。Pipeline資産の欠落と未登録ファイルも検出する。
 UTF-8/BOMなし・LFへ揃えたHLSLとincludeを両ターゲットで使い、同じbyte列をhashへ使う。
 両形式のentry pointは`main`、shader modelは6.0、HLSLは2021、最適化は`-O3`。
