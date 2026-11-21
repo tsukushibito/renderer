@@ -113,10 +113,43 @@ pub fn check(mut backend: RuntimeConfig) -> PipelineResult<()> {
     drop(build);
     assert!(Arc::ptr_eq(&original, &materials.snapshot(material)?));
     assert!(meshes.import(&mut pool.begin()?, mesh).is_err());
-    let renderer = setup()
+    let mut renderer = setup()
         .prepare(SceneAssets::new(&mut meshes, &mut materials, &objects))?
         .begin_with_runtime(&mut runtime)?
         .wait()?;
+    let incompatible = RendererSetup::new(renderer::pipeline::CameraGroup::custom(
+        camera,
+        super::toon_pipeline::prepare,
+    ))
+    .prepare(SceneAssets::new(&mut meshes, &mut materials, &objects))?;
+    let rejected = renderer.replace_working_set(incompatible).unwrap_err();
+    assert!(
+        rejected.to_string().contains("ToonPipeline requires"),
+        "{rejected}"
+    );
+    let mut frame = renderer.begin_frame()?;
+    let view = frame.draw_scene(
+        &camera,
+        renderer::pipeline::SceneInput::new(&meshes, &materials, &objects),
+    )?;
+    let read = frame
+        .graph()
+        .readback_image("surviving view", view.depth.unwrap())?;
+    let ticket = frame.submit()?;
+    let mut result = renderer
+        .runtime()
+        .wait_for_frame(ticket.id(), Duration::from_secs(15))?
+        .ok_or("old view timeout")?;
+    let mut depths = [0; 8 * 8 * 4];
+    result.readback_into(read, &mut depths)?;
+    assert!(
+        depths
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|&d| f32::from_le_bytes(d) == 0.5)
+    );
+    drop((result, ticket));
     drop(renderer);
     assert!(Arc::ptr_eq(&original, &materials.snapshot(unrelated)?));
     assert!(!Arc::ptr_eq(&original, &materials.snapshot(material)?));

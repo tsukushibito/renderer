@@ -4,6 +4,8 @@
     any(feature = "vulkan", feature = "d3d12")
 ))]
 use renderer::WindowRenderer;
+#[path = "../../renderer/examples/support/validation.rs"]
+mod validation;
 use renderer::{
     material::Materials,
     mesh::{MeshCapacity, Meshes},
@@ -48,7 +50,7 @@ impl ApplicationHandler for Host {
 
 #[test]
 #[ignore = "requires a Windows desktop and a real GPU"]
-fn standalone_empty_scene_presents_consecutive_frames() -> PipelineResult<()> {
+fn present_before_and_after_suspension_and_resize() -> PipelineResult<()> {
     let mut events = EventLoop::builder().with_any_thread(true).build()?;
     for config in [
         #[cfg(feature = "vulkan")]
@@ -81,13 +83,39 @@ fn standalone_empty_scene_presents_consecutive_frames() -> PipelineResult<()> {
         })?;
         let mut materials = Materials::default();
         let mut view = WindowRenderer::new(
-            window,
+            Arc::clone(&window),
             config,
             camera,
             SceneAssets::new(&mut meshes, &mut materials, &[]),
         )?;
         let mut presented = 0;
-        while presented < 3 {
+        let mut resized = false;
+        while presented < 6 {
+            if presented == 3 && !resized {
+                window.set_minimized(true);
+                view.resize([0, 0], SceneAssets::new(&mut meshes, &mut materials, &[]))?;
+                loop {
+                    events.pump_app_events(Some(Duration::from_millis(1)), &mut host);
+                    match view.draw(|_| panic!("drawing while suspended"))? {
+                        PresentOutcome::Suspended => break,
+                        PresentOutcome::NotReady | PresentOutcome::Recreated => {}
+                        other => panic!("unexpected minimized result: {other:?}"),
+                    }
+                    assert!(Instant::now() < deadline, "suspension timed out");
+                }
+                window.set_minimized(false);
+                let requested = PhysicalSize::new(160, 112);
+                let _ = window.request_inner_size(requested);
+                while window.inner_size() != requested {
+                    events.pump_app_events(Some(Duration::from_millis(1)), &mut host);
+                    assert!(Instant::now() < deadline, "resize timed out");
+                }
+                view.resize(
+                    [160, 112],
+                    SceneAssets::new(&mut meshes, &mut materials, &[]),
+                )?;
+                resized = true;
+            }
             events.pump_app_events(Some(Duration::from_millis(1)), &mut host);
             match view.draw(|frame| {
                 frame.draw_scene(SceneInput::new(&meshes, &materials, &[]), 1.)?;
@@ -99,6 +127,7 @@ fn standalone_empty_scene_presents_consecutive_frames() -> PipelineResult<()> {
             }
             assert!(Instant::now() < deadline, "presentation timed out");
         }
+        validation::check_validation(view.into_runtime()?)?;
     }
     Ok(())
 }

@@ -1,31 +1,77 @@
 //! Recording and explicit configuration changes for an initialized scene renderer.
 use super::*;
 
+/// The replacement views are active. Retry release of their predecessors
+/// with `SceneRenderer::collect_retired_views`.
+#[derive(Debug)]
+pub struct RetiredViewError(Box<dyn std::error::Error>);
+impl std::fmt::Display for RetiredViewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "replacement views active, previous view release pending: {}",
+            self.0
+        )
+    }
+}
+impl std::error::Error for RetiredViewError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
 /// Prepared views, reusable graph storage and the runtime used for their submissions.
 pub struct SceneRenderer<R: BorrowMut<Runtime> = Runtime> {
     pub(super) driver: ViewRenderer,
     pub(super) pool: GraphPool,
     pub(super) runtime: Option<R>,
     pub(super) mesh_budget: u64,
+    pub(super) configured: Preparation,
+    pub(super) retired: Option<ViewRenderer>,
 }
 impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     /// Recreate all views on this runtime at a change boundary. The plan describes
     /// the complete replacement working set, including other engine passes using
     /// the device. Return outstanding result/export owners first. A rejected working
-    /// set preserves the old renderer. If initialization then fails, the runtime and
-    /// engine assets remain accessible; retry with a corrected plan before drawing.
+    /// set or failed initialization preserves the old views. If old-view release
+    /// fails after publication, the error is a [`RetiredViewError`].
     pub fn replace_working_set(&mut self, plan: PreparedSetup<'_>) -> PipelineResult<()> {
-        let (driver, pool, runtime) = self.parts_mut();
-        driver.check_idle()?;
+        self.collect_retired_views()?;
+        self.driver.check_idle()?;
+        let runtime = self.runtime.as_mut().expect("live renderer").borrow_mut();
         plan.check_runtime(runtime)?;
-        runtime.prepare_working_set(plan.preparation().working_set())?;
-        driver.clear(runtime)?;
+        // Keep every transient class and program the original cameras could
+        // need if the new pipeline rejects an asset or fails to initialize.
+        // Registered images and buffers retain their separate native leases.
+        let mut old = Preparation::new(plan.preparation().frames_in_flight());
+        old.add_working_set(self.configured.working_set())?;
+        let mut overlap = Preparation::new(old.frames_in_flight());
+        overlap.add_alternatives(&[&old, plan.preparation()])?;
+        runtime.prepare_working_set(overlap.working_set())?;
         let mut next = plan.begin_with_runtime(runtime)?.wait()?;
-        std::mem::swap(driver, &mut next.driver);
-        std::mem::swap(pool, &mut next.pool);
-        let budget = next.mesh_budget;
+        self.retired = Some(std::mem::replace(
+            &mut self.driver,
+            std::mem::take(&mut next.driver),
+        ));
+        std::mem::swap(&mut self.pool, &mut next.pool);
+        std::mem::swap(&mut self.configured, &mut next.configured);
+        self.mesh_budget = next.mesh_budget;
         drop(next);
-        self.mesh_budget = budget;
+        self.collect_retired_views()
+            .map_err(|e| Box::new(RetiredViewError(e)) as _)
+    }
+
+    pub fn collect_retired_views(&mut self) -> PipelineResult<()> {
+        if let Some(retired) = &mut self.retired {
+            retired.clear(self.runtime.as_mut().expect("live renderer").borrow_mut())?;
+            self.retired = None;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_native_set(&mut self, set: Preparation) -> PipelineResult<()> {
+        self.runtime().prepare_working_set(set.working_set())?;
+        self.configured = set;
         Ok(())
     }
     /// Publish changed asset revisions within the prepared limits. Invoke after
@@ -118,6 +164,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         )
     }
     pub fn clear(&mut self) -> PipelineResult<()> {
+        self.collect_retired_views()?;
         self.driver
             .clear(self.runtime.as_mut().expect("live renderer").borrow_mut())
     }
@@ -131,6 +178,9 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
 impl<R: BorrowMut<Runtime>> Drop for SceneRenderer<R> {
     fn drop(&mut self) {
         if let Some(runtime) = self.runtime.as_mut() {
+            if let Some(retired) = &mut self.retired {
+                let _ = retired.clear(runtime.borrow_mut());
+            }
             let _ = self.driver.clear(runtime.borrow_mut());
         }
     }

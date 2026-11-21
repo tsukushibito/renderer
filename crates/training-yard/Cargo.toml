@@ -8,7 +8,7 @@ rust-version.workspace = true
 [features]
 default = ["graphics"]
 graphics = ["dep:renderer"]
-presentation = ["graphics", "renderer/presentation"]
+presentation = ["graphics", "renderer/presentation", "dep:winit"]
 vulkan = ["renderer-core/vulkan", "renderer?/vulkan"]
 d3d12 = ["renderer-core/d3d12", "renderer?/d3d12"]
 development-validation = ["renderer-core/development-validation", "renderer?/development-validation"]
@@ -18,11 +18,16 @@ memory-profiling = ["renderer-core/memory-profiling", "renderer?/memory-profilin
 renderer = { version = "0.1.0", path = "../renderer", optional = true }
 renderer-core = { version = "0.1.0", path = "../renderer-core" }
 
-[target.'cfg(windows)'.dev-dependencies]
-winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
+[target.'cfg(windows)'.dependencies]
+winit = { version = "0.30", optional = true, default-features = false, features = ["rwh_06"] }
 
 [[test]]
 name = "host_output"
+required-features = ["graphics"]
+
+[[bin]]
+name = "training-yard"
+path = "src/main.rs"
 required-features = ["graphics"]
 
 [lints]

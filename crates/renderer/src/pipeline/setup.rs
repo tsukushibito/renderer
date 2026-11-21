@@ -493,4 +493,4 @@ fn transfer_footprint(desc: ImageDesc) -> PipelineResult<u64> {
 }
 
 mod scene_renderer;
-pub use self::scene_renderer::{CompiledSceneFrame, SceneFrame, SceneRenderer};
+pub use self::scene_renderer::{CompiledSceneFrame, RetiredViewError, SceneFrame, SceneRenderer};

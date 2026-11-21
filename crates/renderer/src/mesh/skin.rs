@@ -305,3 +305,62 @@ impl FramePoses {
             .ok_or_else(|| GraphError::invalid_input("pose has not been recorded for this frame"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_invalid_weights_and_preserves_committed_pose_on_update_failure() {
+        let vertices = [0., 1., 2.]
+            .map(|x| PbrVertex::new([x, 0., 0.], [0., 0., 1.], [0., 1., 0., 1.], [0.; 2]).unwrap());
+        let weight = JointWeights {
+            joints: [0; 4],
+            weights: [1., 0., 0., 0.],
+        };
+        for invalid in [
+            JointWeights {
+                weights: [f32::NAN; 4],
+                ..weight
+            },
+            JointWeights {
+                joints: [1; 4],
+                ..weight
+            },
+            JointWeights {
+                weights: [0.; 4],
+                ..weight
+            },
+        ] {
+            assert!(MeshData::skinned_pbr(&vertices, &[0, 1, 2], 1, &[invalid; 3]).is_err());
+        }
+        let data = MeshData::skinned_pbr(&vertices, &[0, 1, 2], 1, &[weight; 3]).unwrap();
+        let mut meshes = Meshes::new(MeshCapacity {
+            meshes: 1,
+            retired_mesh_versions: 1,
+        })
+        .unwrap();
+        let mesh = meshes.create(data).unwrap();
+        let id = meshes.create_pose(mesh).unwrap();
+        let translated =
+            Transform::new([[1., 0., 0., 4.], [0., 1., 0., 0.], [0., 0., 1., 0.]]).unwrap();
+        meshes.set_joint_transforms(id, &[translated]).unwrap();
+        let previous = &meshes.poses[&id];
+        let (bytes, bounds, revision) =
+            (previous.bytes.clone(), previous.bounds, previous.revision);
+        // Only the last vertex overflows. Earlier vertices already touched the scratch buffer.
+        let overflow =
+            Transform::new([[f32::MAX, 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]]).unwrap();
+        assert!(meshes.set_joint_transforms(id, &[]).is_err());
+        assert!(meshes.set_joint_transforms(id, &[overflow]).is_err());
+        let current = &meshes.poses[&id];
+        assert_eq!(current.bytes, bytes);
+        assert_eq!(current.bounds.min(), bounds.min());
+        assert_eq!(current.bounds.max(), bounds.max());
+        assert_eq!(current.revision, revision);
+        meshes.remove_pose(id);
+        let fresh = meshes.create_pose(mesh).unwrap();
+        assert_ne!(fresh, id);
+        assert!(meshes.set_joint_transforms(id, &[translated]).is_err());
+    }
+}

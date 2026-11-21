@@ -47,6 +47,8 @@ impl<'a, R: BorrowMut<Runtime>> RendererBuild<'a, R> {
             mesh_checkpoint,
             material_checkpoint,
             renderer: Some(SceneRenderer {
+                configured: plan.preparation,
+                retired: None,
                 driver: plan.driver,
                 pool,
                 runtime: Some(runtime),

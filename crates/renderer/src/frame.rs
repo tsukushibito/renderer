@@ -34,18 +34,45 @@ const TRANSFER: &str = "frame output transfer";
 const READBACK: &str = "frame pixels";
 const TONE_MAP: &str = "frame tone map";
 
+#[derive(Clone, Copy)]
+enum FrameDestination {
+    Capture,
+    #[cfg(all(
+        windows,
+        feature = "presentation",
+        any(feature = "vulkan", feature = "d3d12")
+    ))]
+    Window(renderer_core::PresentationConfig),
+}
+
+impl FrameDestination {
+    fn encoding(self) -> SdrOutput {
+        match self {
+            Self::Capture => SdrOutput::capture(false),
+            #[cfg(all(
+                windows,
+                feature = "presentation",
+                any(feature = "vulkan", feature = "d3d12")
+            ))]
+            Self::Window(_) => SdrOutput::display(false),
+        }
+    }
+}
+
 /// Standard drawing context for a camera. A frame borrows it until submission or cancellation.
 pub struct Renderer {
     drawing: SceneRenderer,
     camera: CameraView,
     working_set: Preparation,
+    host: Preparation,
+    destination: FrameDestination,
 }
 
 impl Renderer {
     fn prepare<'a>(
         camera: CameraView,
         assets: SceneAssets<'a>,
-        output: SdrOutput,
+        destination: FrameDestination,
     ) -> PipelineResult<PreparedSetup<'a>> {
         let mut group = CameraGroup::standard(
             camera,
@@ -74,10 +101,18 @@ impl Renderer {
         })?;
         prep.reserve_raster_pass(TRANSFER, SampleCount::X1, |pass| {
             pass.transient_attachment(OUTPUT, target)?;
-            pass.draws(&output.pipeline().program, 1)
+            pass.draws(&destination.encoding().pipeline().program, 1)
         })?;
-        if output == SdrOutput::capture(false) {
-            plan.reserve_readback(READBACK, target)?;
+        match destination {
+            FrameDestination::Capture => plan.reserve_readback(READBACK, target)?,
+            // Each outstanding present may still lease its source after the render
+            // submission completes. The next Graph needs its own writable output.
+            #[cfg(all(
+                windows,
+                feature = "presentation",
+                any(feature = "vulkan", feature = "d3d12")
+            ))]
+            FrameDestination::Window(config) => prep.reserve_image(target, config.max_frames)?,
         }
         Ok(plan)
     }
@@ -97,15 +132,57 @@ impl Renderer {
         assets: SceneAssets<'_>,
         configure: impl FnOnce(&mut Preparation) -> Result<(), GraphError>,
     ) -> PipelineResult<Self> {
-        let mut plan = Self::prepare(camera, assets, SdrOutput::capture(false))?;
-        configure(plan.preparation_mut())?;
+        let destination = FrameDestination::Capture;
+        let mut plan = Self::prepare(camera, assets, destination)?;
+        let host = Self::prepare_host(&mut plan, configure)?;
         let working_set = Self::base_working_set(&plan)?;
         let drawing = plan.build(backend)?;
         Ok(Self {
             drawing,
             camera,
             working_set,
+            host,
+            destination,
         })
+    }
+
+    fn prepare_host(
+        plan: &mut PreparedSetup<'_>,
+        configure: impl FnOnce(&mut Preparation) -> Result<(), GraphError>,
+    ) -> PipelineResult<Preparation> {
+        let mut host = Preparation::new(plan.preparation().frames_in_flight());
+        configure(&mut host)?;
+        plan.preparation_mut()
+            .add_requirements(host.graph_requirements(), host.working_set())?;
+        Ok(host)
+    }
+
+    /// Update projection or viewpoint at the prepared resolution.
+    pub fn set_camera(&mut self, view: crate::pbr::ViewInput) {
+        self.camera.camera = view;
+    }
+
+    /// Reconfigure an existing camera at a resolution or scene change boundary.
+    /// Return outstanding captures first. Registered geometry stays on the device.
+    pub fn reconfigure(
+        &mut self,
+        camera: CameraView,
+        assets: SceneAssets<'_>,
+    ) -> PipelineResult<()> {
+        let mut plan = Self::prepare(camera, assets, self.destination)?;
+        plan.preparation_mut()
+            .add_requirements(self.host.graph_requirements(), self.host.working_set())?;
+        let working_set = Self::base_working_set(&plan)?;
+        let replaced = self.drawing.replace_working_set(plan);
+        if replaced.is_ok()
+            || replaced
+                .as_ref()
+                .is_err_and(|error| error.is::<crate::pipeline::RetiredViewError>())
+        {
+            self.camera = camera;
+            self.working_set = working_set;
+        }
+        replaced
     }
 
     fn base_working_set(plan: &PreparedSetup<'_>) -> PipelineResult<Preparation> {
@@ -137,9 +214,9 @@ impl Renderer {
             .reserve_selection(&mut active, meshes.into_iter())?;
         assets.meshes.reserve_poses(&mut active, assets.objects)?;
         active.reserve_buffer(crate::pbr::MaterialUniform::DESC, uniforms.len())?;
-        self.drawing
-            .runtime()
-            .prepare_working_set(active.working_set())?;
+        assets.meshes.collect_gpu(self.drawing.runtime())?;
+        assets.materials.collect_gpu(self.drawing.runtime())?;
+        self.drawing.prepare_native_set(active)?;
         self.drawing.prepare_assets(assets)
     }
 

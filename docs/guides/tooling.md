@@ -213,7 +213,7 @@ Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受�
 
 同じモデルを複数の位置に置くときは、`model::Model` に部位ごとのメッシュ範囲、共有材質スロット、LOD の最小画素サイズをまとめる。
 `instantiate` で作った個体には変換と材質の上書きを保持する。ロード時に `asset_draws()` で全 LOD の資産を準備し、描画時に `draws(&camera)` でそのビューの部位を抽出する。
-個体の `set_material(slot, Some(handle))` はその個体に効き、`None` は共有材質に戻す。共有材質自体の変更は `Materials::update_pbr` で行う。[二つのカメラと装備材質の実行例](../../crates/training-yard/tests/model_views.rs)
+個体の `set_material(slot, Some(handle))` はその個体に効き、`None` は共有材質に戻す。共有材質自体の変更は `Materials::update_pbr` で行う。[隊員のモデルと更新操作](../../crates/training-yard/src/yard.rs)
 
 スキニングを使うメッシュは、ロード時に `MeshData::skinned_pbr` に頂点と各頂点の最大 4 関節分の重みを渡す。
 個体ごとに `meshes.create_pose(mesh)` でポーズを作り、`actor.set_pose(mesh, Some(pose))` で結ぶ。
@@ -233,6 +233,22 @@ histories.publish(&receipt)?;
 ```
 
 ホストは自分の受理票で表示・読み戻しを続ける。提出を取り消す場合は Graph と `histories` を破棄する。投入が受理された後でビュー履歴の確定が中断した場合は、その受理票で `histories.publish` を再試行できる。トークンを手放した後は `drawing.finish_host_submission(&receipt)` で残りを確定する。[ホスト提出と履歴の回復試験](../../crates/renderer/tests/view_pipelines/publication.rs)
+
+訓練場は同じ隊員と操作を使って次のように起動できる。Windows では `--api d3d12` でも実行できる。
+
+```powershell
+cargo run --release -p training-yard --all-features -- --api vulkan --mode headless --output .tools/yard
+cargo run --release -p training-yard --all-features -- --api vulkan --mode host
+cargo run --release -p training-yard --all-features -- --api vulkan --mode window
+cargo run --release -p training-yard --all-features -- --api vulkan --mode interactive
+```
+
+画面外の再生は各フレームの表示色を PPM に保存する。ホスト再生は主画面、低解像度ビュー、影を一度に提出して読み戻す。
+ウィンドウ再生は自動で終了する。手動操作では 1 で左の鎧を発光、2 で共有色を変更、3 で発光を解除し、4・5・6 で左のポーズ・右のポーズ・静止姿勢を切り替える。Esc で終了する。[ウィンドウのイベント処理](../../crates/training-yard/src/window.rs)・[ホストの描画コード](../../crates/training-yard/src/replay.rs)
+
+ウィンドウの寸法イベントは `WindowRenderer::resize(extent, assets)` に渡す。ゼロ寸法では記録を休止する。
+資産のロードやリサイズは以前の描画と提示の完了を待てる変更境界で行う。ホストが待機時間を制御する場合は `wait_idle(timeout)` を使う。提示待ちの画像がある間は通常の `draw` で提示を進める。
+ビュー構成を置き換える際は、旧ビューと新ビューの資源クラスを一時的に同時に準備する。新ビューの初期化が失敗した場合も以前のビューで描画を続けられる。
 
 個別のパスを準備して標準 Forward を使う場合はカメラと初期シーンから構成する。カメラには安定した `ViewId`、寸法、`ViewInput` を渡す。
 `build` は参照されたメッシュと材質を転送し、初期化に使った投入の完了を回収して返る。
