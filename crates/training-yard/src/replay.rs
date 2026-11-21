@@ -11,6 +11,8 @@ use renderer::{
     pipeline::{CameraGroup, PipelineResult, RendererSetup, StandardConfig, Technique},
 };
 use std::time::Duration;
+mod monitor;
+use monitor::SecurityMonitor;
 
 pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
     let mut yard = Yard::new()?;
@@ -26,12 +28,16 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
         Technique::Forward,
         detailed,
     ));
-    setup.add_group(CameraGroup::standard(
+    let mut monitors = CameraGroup::standard(
         cameras[1],
         Technique::Forward,
         StandardConfig::new(cameras[1].extent),
-    ));
+    );
+    let mut monitor = SecurityMonitor::new()?;
+    monitors.add_view(monitor.camera)?;
+    setup.add_group(monitors);
     let mut plan = setup.prepare(yard.assets())?;
+    monitor.prepare(&mut plan)?;
     for [w, h] in cameras.map(|c| c.extent) {
         plan.reserve_readback("viewport", ImageDesc::rgba8(w, h))?;
     }
@@ -52,7 +58,8 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
     let mut mask = Vec::with_capacity(rest_mask[0].len());
     let mut shadow_reads = Vec::with_capacity(renderer::pbr::CASCADE_COUNT);
     let mut storage = vec![0; 48 * 24 * 4];
-    for step in 0..7 {
+    let mut screen = [0; 48 * 24 * 4];
+    for step in 0..14 {
         #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
         let before = renderer::core::measurement::Snapshot::now();
         if let Some(action) = replay_action(step)
@@ -88,6 +95,7 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
         for shadow in shadows {
             shadow_reads.push(frame.graph().readback_image("caster depth", shadow)?);
         }
+        let refresh = monitor.record(&mut frame, step, &yard, &mut objects)?;
         let (mut graph, mut views) = frame.finish_recording()?;
         canvas::record(
             &mut graph,
@@ -100,12 +108,26 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
             }],
         )?;
         reads[0] = Some(graph.readback_image("viewport", target)?);
-        let ticket = runtime.submit(&graph.compile()?)?;
+        let monitor_read = monitor.composite(&mut graph, target, refresh)?;
+        let composed = graph.readback_image("composite viewport", target)?;
+        let graph = graph.compile()?;
+        let ticket = if let Some(fresh) = refresh {
+            let (ticket, image) = runtime.submit_with_image(&graph, fresh)?;
+            monitor.latest = Some(image);
+            ticket
+        } else {
+            runtime.submit(&graph)?
+        };
         views.publish(&ticket)?;
         drop(views);
         let mut result = runtime
             .wait_for_frame(ticket.id(), Duration::from_secs(15))?
             .ok_or("view timeout")?;
+        result.readback_into(composed, &mut screen)?;
+        if let Some(read) = monitor_read {
+            result.readback_into(read, &mut monitor.reference)?;
+            monitor.verify_subject(step);
+        }
         depth.clear();
         for &read in &shadow_reads {
             let mut layer = [0; 32 * 32 * 4];
@@ -134,6 +156,7 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
             result.readback_into(read.unwrap(), pixels)?;
             if camera.id == cameras[0].id {
                 assert_eq!(pixels[..4], [255; 4]);
+                monitor.verify_composite(step, &screen, pixels);
                 pixels[..4].copy_from_slice(&[0, 0, 0, 255]);
             }
             for (side, baseline) in rest_mask.iter_mut().enumerate() {
@@ -190,6 +213,7 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
             );
         }
     }
+    drop(monitor);
     let mut runtime = drawing.into_runtime()?;
     yard.release(&mut runtime)?;
     validation::check_validation(runtime)

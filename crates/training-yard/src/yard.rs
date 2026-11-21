@@ -170,6 +170,17 @@ impl Yard {
             .with_bounds(self.bounds)
     }
 
+    pub(crate) fn inspect_actor<'a>(
+        &'a self,
+        actor: usize,
+        camera: &CameraView,
+        out: &'a mut Vec<RenderObject>,
+    ) -> SceneInput<'a> {
+        out.clear();
+        out.extend(self.actors[actor].draws(camera));
+        SceneInput::new(&self.meshes, &self.materials, out)
+    }
+
     /// Returns true when a shared GPU asset needs to be prepared at a change boundary.
     pub fn apply(&mut self, action: Action) -> PipelineResult<bool> {
         match action {

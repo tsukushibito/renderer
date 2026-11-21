@@ -243,7 +243,8 @@ cargo run --release -p training-yard --all-features -- --api vulkan --mode windo
 cargo run --release -p training-yard --all-features -- --api vulkan --mode interactive
 ```
 
-画面外の再生は各フレームの表示色を PPM に保存する。ホスト再生は主画面、低解像度ビュー、影を一度に提出して読み戻す。
+画面外の再生は各フレームの表示色を PPM に保存する。ホスト再生は主画面、低解像度ビュー、影、6 フレームごとに更新する監視モニターを一度に提出して読み戻す。
+更新時は同じ Graph のカメラ出力をパネルに合成して `submit_with_image` で保持する。次回は保持した `ManagedImage` のスナップショットを Graph に import して使う。[監視モニターの利用コード](../../crates/training-yard/src/replay/monitor.rs)
 ウィンドウ再生は自動で終了する。手動操作では 1 で左の鎧を発光、2 で共有色を変更、3 で発光を解除し、4・5・6 で左のポーズ・右のポーズ・静止姿勢を切り替える。Esc で終了する。[ウィンドウのイベント処理](../../crates/training-yard/src/window.rs)・[ホストの描画コード](../../crates/training-yard/src/replay.rs)
 
 ウィンドウの寸法イベントは `WindowRenderer::resize(extent, assets)` に渡す。ゼロ寸法では記録を休止する。
