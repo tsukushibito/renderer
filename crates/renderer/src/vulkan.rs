@@ -16,6 +16,7 @@ pub use crate::backends::vulkan::graph::{
 };
 
 pub use crate::backends::vulkan::ValidationMode;
+pub use crate::backends::vulkan::{VulkanHostDevice, VulkanHostFeatures};
 
 #[cfg(all(windows, feature = "presentation"))]
 pub use crate::backends::vulkan::graph::Presenter;

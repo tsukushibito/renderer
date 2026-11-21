@@ -781,6 +781,36 @@ impl VulkanRuntime {
         Self::new_with_validation(config, super::instance::ValidationMode::default())
     }
 
+    /// Create Renderer-owned VMA, execution and staging resources on an existing
+    /// device. The host configures native validation and observes its own callback.
+    /// The Renderer monitor does not receive host validation messages.
+    ///
+    /// # Safety
+    /// The dispatch tables, physical device, logical device and unprotected
+    /// graphics/compute queue must belong to the same live single-device Vulkan
+    /// configuration. The handles and callback state must stay valid while
+    /// `host.lifetime` is retained. Enabled features must describe the host's
+    /// actual creation arguments. Use the supplied mutex for all host access
+    /// requiring external synchronization on this queue (including device-wide
+    /// waits). Never enter Renderer queue operations while holding that mutex.
+    /// The mutex serializes host access; the host must separately synchronize
+    /// GPU access and ownership when sharing native resources.
+    ///
+    /// Reserve `sampler_budget` of the device's available sampler slots for
+    /// this runtime. Provision headroom for its VMA allocations at creation
+    /// and every working-set change, including simultaneous old/new pools:
+    /// all allocators on this device together must obey maxMemoryAllocationCount.
+    pub unsafe fn from_host_device(
+        config: RuntimeConfig,
+        host: super::VulkanHostDevice,
+    ) -> Result<Self, RuntimeError> {
+        Self::validate_config(config)?;
+        let diagnostics = Diagnostics::new();
+        // SAFETY: The caller guarantees the documented Vulkan adoption contract.
+        let device = unsafe { VulkanDevice::from_host(host, diagnostics.clone()) }?;
+        Self::from_device(config, diagnostics, device)
+    }
+
     /// Select native validation independently of optimization and Renderer checks.
     /// Required needs `vulkan-diagnostics`; `development-validation` selects it by default.
     pub fn new_with_validation(

@@ -6,7 +6,7 @@ use ash::vk;
 use super::super::diagnostics::Diagnostics;
 #[cfg(feature = "vulkan-diagnostics")]
 use super::super::diagnostics::DiagnosticsHandle;
-use super::super::instance::{REQUIRED_API, ValidationMode, api_version};
+use super::super::instance::{ValidationMode, api_version};
 use super::VulkanRuntime;
 
 /// Owned adapter/driver facts. Driver version encoding is vendor-specific.
@@ -152,7 +152,7 @@ impl VulkanRuntime {
             name: device.name().to_owned(),
             api_version: api_version(properties.api_version),
             api_version_raw: properties.api_version,
-            instance_api_version: api_version(REQUIRED_API),
+            instance_api_version: api_version(device.instance_api_version()),
             driver_version_raw: properties.driver_version,
             driver_name: driver
                 .driver_name_as_c_str()

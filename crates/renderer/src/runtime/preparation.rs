@@ -188,22 +188,57 @@ impl Runtime {
         match config {
             #[cfg(feature = "vulkan")]
             RuntimeConfig::Vulkan(settings) => {
-                let capacity = limits.vulkan_capacity()?;
-                let mut runtime = crate::vulkan::VulkanRuntime::new_with_validation(
+                let runtime = crate::vulkan::VulkanRuntime::new_with_validation(
                     limits.vulkan_config(settings, 0)?,
                     settings.validation,
                 )?;
-                runtime.set_frame_limit(limits.frames)?;
-                runtime.prepare_graph_working_set(Some(capacity), working_set)?;
-                Ok(Self {
-                    inner: RuntimeInner::Vulkan(runtime),
-                })
+                Self::prepare_vulkan_runtime(runtime, limits, working_set)
             }
             #[cfg(all(feature = "d3d12", windows))]
             RuntimeConfig::D3D12(settings) => Ok(Self {
                 inner: RuntimeInner::D3D12(new_d3d12(settings, limits, working_set)?),
             }),
         }
+    }
+
+    /// Use a host's existing Vulkan device/queue for ordinary Graph execution.
+    /// Set `settings.validation` to `Disabled`; the host owns layer configuration
+    /// and observes diagnostics throughout the shared instance's lifetime.
+    ///
+    /// # Safety
+    /// Uphold the device ownership, enabled features, queue synchronization and
+    /// capacity requirements of [`crate::vulkan::VulkanRuntime::from_host_device`].
+    #[cfg(feature = "vulkan")]
+    pub unsafe fn from_vulkan_device(
+        host: crate::vulkan::VulkanHostDevice,
+        settings: VulkanConfig,
+        limits: RuntimeLimits,
+        working_set: WorkingSet<'_>,
+    ) -> Result<Self, ExecutionError> {
+        limits.validate()?;
+        if settings.validation != crate::vulkan::ValidationMode::Disabled {
+            return Err(ExecutionError::invalid(
+                "an adopted Vulkan instance uses host-configured validation",
+            ));
+        }
+        // SAFETY: The caller accepts the native sharing contract.
+        let runtime = unsafe {
+            crate::vulkan::VulkanRuntime::from_host_device(limits.vulkan_config(settings, 0)?, host)
+        }?;
+        Self::prepare_vulkan_runtime(runtime, limits, working_set)
+    }
+
+    #[cfg(feature = "vulkan")]
+    fn prepare_vulkan_runtime(
+        mut runtime: crate::vulkan::VulkanRuntime,
+        limits: RuntimeLimits,
+        working_set: WorkingSet<'_>,
+    ) -> Result<Self, ExecutionError> {
+        runtime.set_frame_limit(limits.frames)?;
+        runtime.prepare_graph_working_set(Some(limits.vulkan_capacity()?), working_set)?;
+        Ok(Self {
+            inner: RuntimeInner::Vulkan(runtime),
+        })
     }
 
     /// Prepare new classes and Program variants at an explicit change boundary.
