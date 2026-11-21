@@ -29,7 +29,7 @@ class PipelineShaderManifestTest(unittest.TestCase):
         self.manifest = {
             "schema": 2,
             "toolchain_sha256": self.write(self.toolchain, b"{}\n"),
-            "renderer_shaders_sha256": self.write(self.renderer_manifest, b"{}\n"),
+            "renderer_shaders_sha256": self.write(self.renderer_manifest, b'{"artifacts": {}, "licenses": {}}\n'),
             "artifacts": {"surface.frag": artifact},
             "includes": {self.include.name: self.write(self.include, b"// math\n")},
         }
@@ -69,6 +69,31 @@ class PipelineShaderManifestTest(unittest.TestCase):
         extra = self.shaders / "other.frag.hlsl"
         self.write(extra, b"// unlisted\n")
         with self.assertRaisesRegex(ValueError, r"missing=.*surface\.frag\.spv.*unlisted=.*other\.frag\.hlsl"):
+            verify(self.root)
+
+    def test_verifies_standard_output_assets_from_the_shared_glsl_manifest(self):
+        source = self.shaders / "output/sdr.frag"
+        artifact = {"source_utf8_lf": self.write(source, b"shader\n")}
+        for field, target in [
+            ("spirv", "sdr_linear.frag.spv"),
+            ("hlsl", "dxil/sdr_linear.frag.hlsl"),
+            ("dxil", "dxil/sdr_linear.frag.dxil"),
+            ("reflection", "dxil/sdr_linear.frag.reflection.txt"),
+            ("spirv_reflection", "dxil/sdr_linear.frag.spirv-reflection.json"),
+        ]:
+            artifact[field] = self.write(self.shaders / "output" / target, b"compiled shader")
+        license_path = self.shaders / "output/licenses/FXAA-notices.txt"
+        glsl = {
+            "artifacts": {"../../renderer-pipeline/shaders/output/sdr_linear.frag": artifact},
+            "licenses": {license_path.name: self.write(license_path, b"notice\n")},
+        }
+        self.manifest["renderer_shaders_sha256"] = self.write(
+            self.renderer_manifest, json.dumps(glsl).encode()
+        )
+        self.write_manifest()
+        self.assertEqual(verify(self.root), (2, 1))
+        source.write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError, "SHA-256 differs.*sdr.frag"):
             verify(self.root)
 
     def test_rejects_inconsistent_hashes_for_a_shared_variant_source(self):

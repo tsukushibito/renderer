@@ -33,16 +33,17 @@ if ($LASTEXITCODE -ne 0 -or
 # Explicit SPIR-V 1.3 avoids LocalSizeId/maintenance4 requirements. The runtime
 # enables synchronization2/dynamicRendering, but does not enable maintenance4.
 # Use entry point main, GLSL 450 core and optimized code without debug info.
-$sources = @('../fixtures/shaders/invert_rgba8.comp', '../fixtures/shaders/swap_red_blue_rgba8.comp', 'mesh.vert', 'mesh.frag', 'textured.vert', 'textured.frag', 'composite.vert', 'composite.frag', 'uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp', 'indexed_indirect.comp',
-    'tone_neutral.frag', 'sdr.frag', 'sdr_linear.frag', 'sdr_fxaa.frag', 'sdr_fxaa_linear.frag',
-    '../tests/support/shaders/compute_hdr_sampled.comp', '../tests/support/shaders/compute_hdr_storage.comp')
+# Compile every GLSL variant in the shared toolchain manifest, including
+# external test fixtures and renderer-pipeline's standard output programs.
+$toolchain = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil-toolchain.json') -Raw | ConvertFrom-Json
+$sources = $toolchain.shaders.source
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ('renderer-spirv-' + [Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $temporaryRoot
 try {
     foreach ($source in $sources) {
         $variant = @()
         $sourceFile = $source
-        if ($source -cmatch '^sdr(?:_fxaa)?_linear\.frag$') {
+        if ([IO.Path]::GetFileName($source) -cmatch '^sdr(?:_fxaa)?_linear\.frag$') {
             $sourceFile = $source -creplace '_linear\.frag$', '.frag'
             $variant += '-DRENDERER_LINEAR_OUTPUT=1'
         }
