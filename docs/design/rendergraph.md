@@ -881,11 +881,15 @@ vendor依存の高速化や高度なパス統合は採用しておらず、性�
 両APIは同じGraph構築、入力行列、出力を使い、runtimeとPresenterだけを選択する。
 表示専用のGraph操作や別のscene登録を要求せず、swapchain画像を公開しない。
 
-`VulkanRuntime::for_window`と`D3D12Runtime::for_window`は`Arc<winit::window::Window>`と
-共通の`PresentationConfig`を受け取り、runtimeと`Presenter`／`D3D12Presenter`を返す。
-event loop、camera、入力は利用側が所有し、Presenterは必要なWindow寿命を強く保持する。
-`D3D12Runtime::create_presenter`は、厳密な資源クラスで準備した既存Runtimeにも同じ表示契約を接続する。
-PresenterはそのRuntimeのDevice・queue・登録簿の所有を参照し、再準備後も同じ登録簿に結び付く。
+`Runtime::for_window` は `HasWindowHandle + 'static` の Win32 ウィンドウ所有者と
+`PresentationConfig` から Runtime と Presenter を返す。`Arc<winit::window::Window>` やエンジンの
+`Rc` ウィンドウを直接渡せる。event loop、camera、入力は利用側が管理する。
+同じ Device・queue・登録簿を使う二つ目以降の出力は `Runtime::create_presenter` で追加する。
+最初のウィンドウより前に資源を準備するときは `Runtime::new_with_presentation` を使う。Vulkan では
+全ウィンドウで共有する表示用実行枠をここで予約し、D3D12 は各 Presenter の作成時に枠を用意する。
+同じ HWND を他の描画 API と同時に使用せず、別の Presenter に渡す場合は元の Presenter を破棄する。
+各 Presenter を個別に poll する。共通 API の `prepare` は旧世代の退役待ちを `WindowReadiness::Pending` で返す。
+`ExecutionErrorKind::SurfaceLost` を受け取った場合は当該 Presenter を閉じ、新しいウィンドウを既存 Runtime に接続する。
 configは同時表示枠`max_frames`、退役世代上限`max_retired_swapchains`、
 2〜16の希望画像数`desired_images`とVSync要求を持つ。
 実Surfaceの制限に合わせた画像数と、Graph実行枠・表示slot・image indexは別概念である。
@@ -895,6 +899,22 @@ configは同時表示枠`max_frames`、退役世代上限`max_retired_swapchains
 `prepare`で変更を進め、readyなextentと同寸法の完全なlinear RGBA8画像をGraphでexportして
 runtimeの`present`へ渡す。同queueへの別submitでsRGB出力へ変換し、Graph完了のCPU waitは挟まない。
 HDR表示、拡大縮小、tone mapping、transparent Windowはこの入口に含めない。
+
+共通の `WindowPresenter::submit_frame(&mut runtime, &compiled, output)` はGraphを一度投入し、
+export済み画像をWindowに預ける。`present_frame(&mut runtime)` が `NotReady` を返したら、
+同じWindowをpollしてから `present_frame` を再試行する。描画の再投入は不要である。
+recipe経由では `DisplaySdr::export_for_display` でGraphに画像を指定し、
+受理したreceiptを `queue_frame` へ渡す。Windowごとの未表示画像は一枚で、
+別の画像への差し替えや表示中止には `discard_frame` を使う。
+
+`Graph::export_frame_image` で指定した画像は、共通の `Runtime::submit` が返すreceiptから
+`take_frame_image` で取得できる。直接投入時は `Runtime::submit_with_image` でも
+同じ `ManagedImage` を取得できる。Graphが新規作成した画像は、その所有者または未消費receiptを
+破棄すると元のRuntimeの次のsubmit、poll、または `collect_released_images` で登録が外れる。
+返却枠は投入前に確保し、上限は `RuntimeLimits::resource_capacity` とする。
+登録をアセット管理側へ移す場合は `into_registered` で受け取り、不要時に `Runtime::delete` を呼ぶ。
+既存画像をimportして描いた場合は、元の呼び出し側が登録の寿命を管理し続ける。
+いずれも表示やGPU実行が受理された後の物理画像は、それぞれの完了までbackendが保持する。
 
 | 共通の`PresentOutcome` | 利用側の扱い |
 |---|---|

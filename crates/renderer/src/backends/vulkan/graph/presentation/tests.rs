@@ -13,8 +13,8 @@ use crate::graph::{
 };
 use crate::image_transform::{self, Transform};
 use ash::vk;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{rc::Rc, sync::Arc};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -496,7 +496,7 @@ fn check_recreation_failure_recovery(presenter: &mut Presenter) {
     let old_extent = presenter.extent().expect("ready extent");
     let old = {
         let inner = presenter.inner.as_mut().unwrap();
-        let old = Arc::clone(inner.current.as_ref().unwrap());
+        let old = Rc::clone(inner.current.as_ref().unwrap());
         let alternative = if old.format == vk::Format::B8G8R8A8_SRGB {
             vk::Format::R8G8B8A8_SRGB
         } else {
@@ -516,7 +516,7 @@ fn check_recreation_failure_recovery(presenter: &mut Presenter) {
         assert_eq!(inner.prepared_format, Some(old.format));
         assert!(inner.slots.iter().all(|slot| slot.has_format(old.format)));
         assert!(inner.slots.iter().all(|slot| !slot.has_format(alternative)));
-        assert!(Arc::ptr_eq(inner.current.as_ref().unwrap(), &old));
+        assert!(Rc::ptr_eq(inner.current.as_ref().unwrap(), &old));
 
         inner.fail_after_swapchain_create = true;
         old
@@ -529,7 +529,7 @@ fn check_recreation_failure_recovery(presenter: &mut Presenter) {
     {
         let inner = presenter.inner.as_ref().unwrap();
         assert!(inner.current.is_none());
-        assert!(inner.retired.iter().any(|chain| Arc::ptr_eq(chain, &old)));
+        assert!(inner.retired.iter().any(|chain| Rc::ptr_eq(chain, &old)));
     }
 
     // Keep a generation owner through the next prepare even if polling has
@@ -820,7 +820,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
         let retired_handle = measurements.renderer(Phase::Setup, || {
             let retired = &presenter.inner.as_ref().unwrap().retired;
             assert!(!retired.is_empty(), "resize retains an old generation");
-            assert!(retired.iter().all(|chain| Arc::strong_count(chain) == 1));
+            assert!(retired.iter().all(|chain| Rc::strong_count(chain) == 1));
             observations.normal_retired_swapchains = retired.len();
             retired[0].handle
         });
@@ -902,7 +902,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
             assert_eq!(retired.len(), observations.normal_retired_swapchains);
             assert!(
                 retired.iter().any(|chain| {
-                    chain.handle == retired_handle && Arc::strong_count(chain) == 1
+                    chain.handle == retired_handle && Rc::strong_count(chain) == 1
                 }),
                 "ordinary prepare/poll/drain retains the eligible old generation"
             );

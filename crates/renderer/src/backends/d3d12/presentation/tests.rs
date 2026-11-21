@@ -14,7 +14,7 @@ use winit::{
     event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoop},
     platform::{pump_events::EventLoopExtPumpEvents, windows::EventLoopBuilderExtWindows},
-    window::WindowId,
+    window::{Window, WindowId},
 };
 
 const WAIT: Duration = Duration::from_secs(10);

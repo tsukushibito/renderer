@@ -5,14 +5,14 @@
 
 use crate::ImageFormat;
 use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use crate::presentation::HostWindow;
+use raw_window_handle::HasWindowHandle;
 use std::{
     collections::VecDeque,
     sync::Arc,
     time::{Duration, Instant},
 };
 use windows_core::Interface;
-use winit::window::Window;
 
 use super::{
     D3D12Runtime, D3D12RuntimeConfig, D3D12RuntimeError as Error,
@@ -101,21 +101,12 @@ impl Chain {
     fn new(
         owner: &DeviceOwner,
         factory: &IDXGIFactory2,
-        window: &Window,
+        window: &HostWindow,
         config: PresentationConfig,
         extent: (u32, u32),
         tearing: bool,
     ) -> Result<Self, Error> {
-        let RawWindowHandle::Win32(handle) = window
-            .window_handle()
-            .map_err(|e| Error::invalid(format!("Window handle unavailable: {e}")))?
-            .as_raw()
-        else {
-            return Err(Error::unsupported(
-                "D3D12 presentation requires a Win32 window",
-            ));
-        };
-        let hwnd = HWND(handle.hwnd.get() as *mut _);
+        let hwnd = HWND(window.handle.hwnd.get() as *mut _);
         let flags = if tearing {
             DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING as u32
         } else {
@@ -138,7 +129,7 @@ impl Chain {
             ..Default::default()
         };
         let raw = object(owner, "CreateSwapChainForHwnd", || {
-            // SAFETY: D3D12 requires the DIRECT queue here. The owning Arc Window
+            // SAFETY: D3D12 requires the DIRECT queue here. The host window
             // remains retained through swapchain teardown, including uncertainty.
             unsafe { factory.CreateSwapChainForHwnd(&*owner.queue, hwnd, &desc, None, None) }
                 .and_then(|chain| chain.cast::<IDXGISwapChain3>())
@@ -214,7 +205,7 @@ struct Inner {
     #[cfg(test)]
     cancel_next: bool,
     owner: Arc<DeviceOwner>,
-    _window: Arc<Window>,
+    window: HostWindow,
 }
 impl Inner {
     fn poll(&mut self) -> Result<usize, Error> {
@@ -303,7 +294,7 @@ impl Inner {
             self.chain = Some(Chain::new(
                 &self.owner,
                 &self.factory,
-                &self._window,
+                &self.window,
                 self.config,
                 self.desired,
                 self.tearing,
@@ -470,7 +461,7 @@ impl D3D12Runtime {
     /// retain the native Device; the presenter retains the Window through teardown.
     pub fn for_window(
         config: D3D12RuntimeConfig,
-        window: Arc<Window>,
+        window: impl HasWindowHandle + 'static,
         presentation: PresentationConfig,
     ) -> Result<(Self, D3D12Presenter), Error> {
         if !presentation.has_valid_capacities() {
@@ -485,7 +476,7 @@ impl D3D12Runtime {
     /// Presentation shares the runtime's Device and queue.
     pub fn create_presenter(
         &self,
-        window: Arc<Window>,
+        window: impl HasWindowHandle + 'static,
         presentation: PresentationConfig,
     ) -> Result<D3D12Presenter, Error> {
         if !presentation.has_valid_capacities() {
@@ -516,7 +507,7 @@ impl D3D12Runtime {
                 "DXGI VSync off requires tearing support",
             ));
         }
-        let size = window.inner_size();
+        let window = HostWindow::new(window).map_err(|e| Error::invalid(e.to_string()))?;
         let registry_owner = self
             .pool
             .registry
@@ -560,7 +551,7 @@ impl D3D12Runtime {
             program: Program::new(&owner)?,
             factory,
             config: presentation,
-            desired: (size.width, size.height),
+            desired: window.extent,
             dirty: true,
             force_resize: false,
             closed: false,
@@ -573,7 +564,7 @@ impl D3D12Runtime {
             #[cfg(test)]
             cancel_next: false,
             owner,
-            _window: window,
+            window,
         };
         inner.prepare()?;
         Ok(D3D12Presenter { inner: Some(inner) })

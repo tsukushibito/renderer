@@ -667,13 +667,17 @@ slotとguardの状態はprivateに保ち、状態遷移を所有者の操作へ�
 表示例は次回再描画期限を早期eventで後ろへ動かさず、ゼロ寸法ではevent/明示復帰期限を待つ。
 復帰時の描画可否はWindow寸法から決め、Swapchain作成済みかどうかには依存させない。
 
-`for_window`は`Arc<winit::window::Window>`を受け取り、Runtimeと`Presenter`を返す。
-Surface所有者がWindowとInstanceを保持し、Deviceと同じInstanceに由来することを保証する。
-対象をWin32に限定し、winitの`HWND`／`HINSTANCE`からashのWin32 Surface作成を直接呼ぶ。
-別Window libraryや別OSのadapterを含む`ash-window`依存は持たず、D3D12だけの表示構成へashを追加しない。
-イベントループは利用側に置く。M3では確実なWindow寿命を優先した限定adapterとし、
-他のwindow libraryへの接続はPresentation内の境界で追加できるよう、Graph・engine入力から分離する。
-CPUのみの構築とheadless Vulkanはwindow依存を持たず、表示依存はWindows targetのoptional依存に限定する。
+`for_window`は Win32 の `HasWindowHandle` を実装する所有者を受け取り、実 Surface でアダプターと queue を選ぶ。
+先に GPU 資源を準備するホストは `Runtime::new_with_presentation` で Windows 表示拡張と表示用の総実行枠を予約できる。
+この場合は Win32 表示が可能な queue family を選ぶ。`create_presenter` は追加する実 Surface ごとに同じ queue の
+present 対応を照会し、既存の Device・登録簿を共有する。通常の headless 初期化は従来の能力だけを要求する。
+
+Surface は host window と Instance を保持し、各 Swapchain 世代が Surface を保持する。
+クライアント領域から初期寸法を得て、必要なら HWND から HINSTANCE を取得する。ウィンドウのイベントとリサイズ通知はホストが所有する。
+Presenter は呼び出し元スレッドに属し、`Rc` のエンジンウィンドウや `Arc<winit::window::Window>` を受け取れる。
+表示機能の製品依存は Windows の `raw-window-handle` と Win32 照会に限定する。通常フレームでホストのハンドルを再取得しない。
+Renderer 内では Vulkan・DXGI 共通の HWND 登録を初期化・破棄時だけ更新し、一つのウィンドウへの重複接続を拒否する。
+[ネイティブウィンドウと Swapchain の関連付け](https://docs.vulkan.org/refpages/latest/refpages/source/vkCreateSwapchainKHR.html)
 
 `Presenter::prepare`で再作成を進め、`extent`に合うGraph出力を作る。
 Graphのlinear RGBA8_UNORM出力を`present`へ渡し、BGRA8_SRGBまたはRGBA8_SRGB、
