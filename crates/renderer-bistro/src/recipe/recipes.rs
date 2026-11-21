@@ -325,6 +325,7 @@ impl Reference {
                 raster_constant_words: shadow_draws + instance_words,
                 name_bytes: (targets + passes) * 48,
                 upload_bytes,
+                ..Default::default()
             },
             WorkingSet {
                 raster: &raster,

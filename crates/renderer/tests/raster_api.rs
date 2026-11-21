@@ -2,7 +2,7 @@ use renderer::ImageFormat;
 use renderer::graph::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, BufferDesc, Graph, GraphCapacity,
     GraphCapacityKind, GraphErrorKind, GraphPool, ImageDesc, ImageView, LoadOp, PassKind,
-    RasterAttachments, RasterConstants, RasterDraw, RasterParameters, StoreOp,
+    RasterAttachments, RasterConstants, RasterDraw, RasterParameters, RasterRect, StoreOp,
 };
 use renderer::program::ManagedRasterProgram;
 
@@ -41,6 +41,57 @@ fn color(graph: &mut Graph, name: &str) -> Attachment<[f32; 4]> {
         load: LoadOp::Clear([0.25; 4]),
         store: StoreOp::Store,
     }
+}
+
+#[test]
+fn raster_rectangles_use_mip_pixels_and_validate_before_submission() {
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let mut graph = pool.begin().unwrap();
+    let image = graph
+        .image(
+            "mips",
+            ImageDesc {
+                mip_levels: 2,
+                ..ImageDesc::rgba8(8, 4)
+            },
+        )
+        .unwrap();
+    let colors = [Attachment {
+        view: graph.image_view(image, 1, 0).unwrap(),
+        load: LoadOp::Clear([0.0; 4]),
+        store: StoreOp::Store,
+    }];
+    let attachments = RasterAttachments {
+        colors: &colors,
+        color_resolves: &[],
+        depth: None,
+    };
+    for (rect, viewport) in [
+        (RasterRect::new(0, 0, 0, 2), true),
+        (RasterRect::new(1, 0, 4, 2), true),
+        (RasterRect::new(0, u32::MAX, 1, 1), false),
+        (RasterRect::new(0, 1, 4, 2), false),
+    ] {
+        let error = graph
+            .raster("invalid rectangle", attachments, |raster| {
+                // Ignoring an invalid state command must still discard the pass.
+                let _ = if viewport {
+                    raster.set_viewport(Some(rect))
+                } else {
+                    raster.set_scissor(Some(rect))
+                };
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+    }
+    graph
+        .raster("edge rectangles", attachments, |raster| {
+            raster.set_viewport(Some(RasterRect::new(0, 0, 4, 2)))?;
+            raster.set_scissor(Some(RasterRect::new(4, 2, 0, 0)))?;
+            raster.set_scissor(None)
+        })
+        .unwrap();
 }
 
 #[test]
@@ -214,7 +265,7 @@ fn depth_only_draws_require_depth_and_do_not_restore_discarded_contents() {
 
 fn observe(graph: &mut Graph, name: &str, view: ImageView) {
     graph
-        .declare_pass(
+        .declare_analysis_pass(
             name,
             PassKind::Copy,
             &[Access {

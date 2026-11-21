@@ -24,7 +24,7 @@ mod demo {
         window_scene::{self as scene, Composition},
     };
     use renderer::{
-        graph::{GraphPool, ImportBuffer, ImportImage, PassHandle, ResourceKey},
+        graph::{GraphPool, ImportBuffer, ImportImage, PassHandle},
         presentation::PresentOutcome,
         profiling::{GpuTiming, PresentationMetrics, SubmissionMetrics},
         runtime::{FrameCompletion, FrameId, Runtime, WindowPresenter, WindowReadiness},
@@ -238,7 +238,6 @@ mod demo {
         monitor: Option<Monitor>,
         device: Option<serde_json::Value>,
         buffers: Option<[ImportBuffer; 2]>,
-        keys: Option<[ResourceKey; 2]>,
         pool: GraphPool,
         frames: [Option<Frame>; IN_FLIGHT],
         readback: Vec<u8>,
@@ -280,7 +279,6 @@ mod demo {
                 monitor: None,
                 device: None,
                 buffers: None,
-                keys: None,
                 pool: GraphPool::new(scene::capacity(), IN_FLIGHT + 2)?,
                 frames: std::array::from_fn(|_| None),
                 readback: Vec::new(),
@@ -427,18 +425,12 @@ mod demo {
             if !backend.presenter.wait_idle(Duration::ZERO)? {
                 return Ok(false);
             }
-            self.buffers = None;
             match backend::prepare_resources(&mut backend.runtime, extent) {
                 Ok(()) => {}
                 Err(error) if backend::is_backpressure(error.as_ref()) => return Ok(false),
                 Err(error) => return Err(error),
             }
-            if let Some(keys) = self.keys {
-                self.buffers = Some([
-                    backend.runtime.refresh_buffer(keys[0])?,
-                    backend.runtime.refresh_buffer(keys[1])?,
-                ]);
-            } else {
+            if self.buffers.is_none() {
                 let mut graph = self.pool.begin()?;
                 let (vertices, indices) = scene::upload(&mut graph)?;
                 let plan = graph.compile()?;
@@ -455,7 +447,6 @@ mod demo {
                     .ok_or("initial scene upload timed out")?;
                 drop(result);
                 drop(plan);
-                self.keys = Some(buffers.each_ref().map(|buffer| buffer.key()));
                 self.buffers = Some(buffers);
             }
             if let Some(bytes) = readback_bytes {
@@ -710,10 +701,13 @@ mod demo {
                 return Err("presentation shutdown timed out".into());
             }
             self.drain_profiles()?;
-            self.buffers = None;
-            if let Some(keys) = self.keys.take() {
-                for key in keys {
-                    self.backend.as_mut().unwrap().runtime.delete(key)?;
+            if let Some(buffers) = self.buffers.take() {
+                for buffer in buffers {
+                    self.backend
+                        .as_mut()
+                        .unwrap()
+                        .runtime
+                        .delete(buffer.key())?;
                 }
             }
             self.backend = None;

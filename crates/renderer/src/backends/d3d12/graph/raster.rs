@@ -485,20 +485,6 @@ pub(super) fn record(
         record_resolves(graph, colors, &slot.resource_map, &slot.list, storage);
         return Ok(());
     }
-    let viewport = D3D12_VIEWPORT {
-        TopLeftX: 0.0,
-        TopLeftY: 0.0,
-        Width: extent[0] as f32,
-        Height: extent[1] as f32,
-        MinDepth: 0.0,
-        MaxDepth: 1.0,
-    };
-    let rect = D3D12_RECT {
-        left: 0,
-        top: 0,
-        right: extent[0] as i32,
-        bottom: extent[1] as i32,
-    };
     // SAFETY: Pass preparation bounded the native target count. This stack
     // array contains actual CPU handles in fragment-output slot order. The
     // descriptors are not required to be contiguous in their native heap.
@@ -510,15 +496,38 @@ pub(super) fn record(
             false,
             depth_handle.as_ref().map(std::ptr::from_ref),
         );
-        slot.list.RSSetViewports(&[viewport]);
-        slot.list.RSSetScissorRects(&[rect]);
         slot.list.IASetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY(
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
         ));
     }
     let mut bound_pipeline: Option<&RasterPipeline> = None;
     let mut bound_heaps = false;
+    let mut regions = None;
     for batch in batches {
+        if regions != Some(batch.regions) {
+            let (view, clip) = batch.regions.resolve(extent[0], extent[1]);
+            let viewport = D3D12_VIEWPORT {
+                TopLeftX: view.x as f32,
+                TopLeftY: view.y as f32,
+                Width: view.width as f32,
+                Height: view.height as f32,
+                MinDepth: 0.0,
+                MaxDepth: 1.0,
+            };
+            let rect = D3D12_RECT {
+                left: clip.x as i32,
+                top: clip.y as i32,
+                right: (clip.x + clip.width) as i32,
+                bottom: (clip.y + clip.height) as i32,
+            };
+            // SAFETY: Graph construction bounds both rectangles to this
+            // prepared attachment; native D3D12 texture extents fit i32.
+            unsafe {
+                slot.list.RSSetViewports(&[viewport]);
+                slot.list.RSSetScissorRects(&[rect]);
+            }
+            regions = Some(batch.regions);
+        }
         let pipeline = match bound_pipeline {
             Some(pipeline) if pipeline.managed.identity() == batch.program => pipeline,
             _ => {
@@ -579,6 +588,10 @@ fn record_draws(
         let buffer = slot.buffers[slot.resource_map[command.buffer]].raw();
         (signature, buffer, command.command_count)
     });
+    let fully_clipped = batch
+        .regions
+        .scissor
+        .is_some_and(|r| r.width == 0 || r.height == 0);
     for (draw, parameters) in graph
         .raster_draws(&batch.draws)
         .iter()
@@ -732,7 +745,10 @@ fn record_draws(
                 }
             }
         }
-        {
+        // D3D12 warns on a draw with an empty scissor. Its attachment effects
+        // are empty and the Raster contract precludes other shader writes.
+        // Preserve input/provenance checks and all attachment operations.
+        if !fully_clipped {
             #[cfg(feature = "tracy")]
             let _span = tracy_client::Client::running().map(|client| {
                 let location = if draw.indexed.is_some() {

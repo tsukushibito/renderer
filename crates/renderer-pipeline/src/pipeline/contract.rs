@@ -1,6 +1,5 @@
 //! Public contract for independently implemented camera pipelines.
 use super::{Bounds, RenderObject, SceneInput, Sun, ViewInput};
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::runtime::{FrameId, FrameSubmission, Runtime};
 use renderer::{
     capacity::Preparation,
@@ -53,7 +52,6 @@ pub trait ViewPipeline {
         extent: [u32; 2],
         views: NonZeroUsize,
     ) -> Result<(), GraphError>;
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     fn initialize(&mut self, _runtime: &mut Runtime) -> PipelineResult<Option<FrameId>> {
         Ok(None)
     }
@@ -76,15 +74,16 @@ pub trait ViewPipeline {
     ) -> PipelineResult<()> {
         Ok(())
     }
+    /// Publish provisional state after GPU acceptance. Stateless pipelines use the default.
     /// On error retain everything needed to retry with the same receipt.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     fn accept(
         &mut self,
-        state: &mut Self::State,
-        update: &mut Self::Update,
-        submission: &FrameSubmission,
-    ) -> PipelineResult<()>;
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        _state: &mut Self::State,
+        _update: &mut Self::Update,
+        _submission: &FrameSubmission,
+    ) -> PipelineResult<()> {
+        Ok(())
+    }
     fn release_view(
         &mut self,
         _state: &mut Self::State,
@@ -92,7 +91,6 @@ pub trait ViewPipeline {
     ) -> PipelineResult<()> {
         Ok(())
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     fn release(&mut self, _runtime: &mut Runtime) -> PipelineResult<()> {
         Ok(())
     }

@@ -18,6 +18,10 @@
 /crates/renderer-pipeline/shaders/dxil/*.reflection.txt text eol=lf
 /crates/renderer-pipeline/shaders/dxil/*.json text eol=lf
 /crates/renderer-pipeline/shaders/manifest.json text eol=lf
+/crates/renderer-pipeline/shaders/output/dxil/*.hlsl text eol=lf
+/crates/renderer-pipeline/shaders/output/dxil/*.reflection.txt text eol=lf
+/crates/renderer-pipeline/shaders/output/dxil/*.json text eol=lf
+/crates/renderer-pipeline/shaders/output/dxil/*.dxil binary
 
 # Bistro source, verified interchange assets, and comparison image.
 /assets/bistro/source/*.zip filter=lfs diff=lfs merge=lfs -text

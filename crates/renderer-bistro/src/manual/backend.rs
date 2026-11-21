@@ -5,7 +5,7 @@ use super::{
 };
 use renderer::{
     graph::{BufferDesc, ImageDesc, PassHandle},
-    program::{ManagedProgram, ManagedRasterProgram, RasterPipelineRequest},
+    program::{ManagedProgram, RasterPipelineRequest},
     runtime::{
         ExecutionError, FrameCompletion, FrameId, ResourceClass, Runtime, RuntimeConfig,
         RuntimeLimits, WorkingSet,
@@ -39,9 +39,9 @@ pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
         });
     }
     requests.push(program::shadow_program().into());
-    requests.push(ManagedRasterProgram::tone_map_neutral().into());
+    requests.push(renderer_pipeline::passes::output::tone_map_neutral_pipeline());
     let sdr = options.sdr_output();
-    requests.push(sdr.program().into());
+    requests.push(sdr.pipeline());
     if !options.windowed {
         // Offscreen capture includes an AA-off diagnostic.
         requests.push(
@@ -49,8 +49,7 @@ pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
                 fxaa: !sdr.fxaa,
                 ..sdr
             }
-            .program()
-            .into(),
+            .pipeline(),
         );
     }
     requests

@@ -1890,15 +1890,15 @@ shipping／development-validationの通常・最適化構成で確認する。
 Enhanced Barriers、外部suballocatorは未対応である。import／exportは後述の共有registryを使う。
 
 `prepare_graph_working_set(Option<&[D3D12BufferClass]>, &[D3D12ImageClass], &[ManagedRasterProgram], &[ManagedProgram])`は全execution/result、
-export付きsubmission、export／refreshした`ImportBuffer`とそのcloneが返った
+export付きsubmissionが返った
 明示準備境界でbuffer/画像classごとの個数、Programごとのgraphics/compute PSOとroot signature、descriptor heapを準備する。
 buffer指定の`None`は既存のfree class budgetを保持し、`Some`は置き換える。buffer/画像のclass countは
 globalな準備数で、execution数を自動で掛けない。登録済み資源の保持はこの追加budgetと分ける。
 `Some(&[])`はその準備境界で未登録free bufferをゼロにし、余剰allocationを退役させる。
 登録資源は保持するため、後の明示deleteでその物理storageがpoolへ返ることは別の変更境界として扱う。
 空のworking setを、登録資源の将来のdeleteまで含む恒久的なpool禁止としては扱わない。
-登録資源のdeleteは要求しない。key・内容revision・初期化範囲・provenanceとnative資源を保持し、
-再準備後は保持したkeyからbuffer snapshotをrefreshする。scalarな`ImportImage`はそのまま保持できる。
+登録資源のkey・内容revision・初期化範囲・provenanceとnative資源を保持する。
+再準備後のGraphには、既存の`ImportBuffer`と`ImportImage`をそのまま渡せる。
 各execution leaseは物理資源を共有registryから借り、専用のRTV/DSVとdraw別SRVの枠、
 および不変nearest/clamp・linear/repeat sampler descriptorを所有する。Graphのsampler operandに従って選び、
 新classにない登録画像のdescriptor枠も補う。

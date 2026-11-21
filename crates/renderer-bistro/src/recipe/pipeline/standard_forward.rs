@@ -19,7 +19,7 @@ use renderer_pipeline::material::{
 use renderer_pipeline::pbr::ResidentMaterialUniform;
 
 /// Cooked tables and GPU culling use dense asset indices. Keep their mapping to
-/// shareable pipeline handles at the asset boundary, including runtime reprepare.
+/// shareable pipeline handles at the asset boundary.
 pub(super) struct SurfaceTable {
     materials: Materials,
     handles: Vec<MaterialHandle>,
@@ -64,15 +64,6 @@ impl SurfaceTable {
             }
         }
         Ok(())
-    }
-    #[cfg(all(
-        windows,
-        feature = "presentation",
-        any(feature = "vulkan", feature = "d3d12")
-    ))]
-    pub(super) fn release_snapshots(&mut self) {
-        self.materials = Materials::default();
-        self.handles.clear()
     }
     fn resolve(&self, graph: &mut Graph, out: &mut Vec<GraphMaterial>) -> Result<(), GraphError> {
         for &handle in &self.handles {

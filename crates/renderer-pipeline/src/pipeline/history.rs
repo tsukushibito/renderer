@@ -6,6 +6,7 @@ use renderer::graph::GraphCapacityKind;
 struct Caster {
     mesh: MeshHandle,
     geometry_revision: u64,
+    index_range: Option<MeshIndexRange>,
     material: MaterialHandle,
     material_revision: u64,
     transform: Transform,
@@ -58,6 +59,7 @@ impl History {
             let state = Caster {
                 mesh: object.mesh,
                 geometry_revision: input.meshes.revision(object.mesh)?,
+                index_range: object.index_range,
                 material: object.material,
                 material_revision: input.materials.revision(object.material)?,
                 transform: object.transform,

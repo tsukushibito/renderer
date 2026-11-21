@@ -176,28 +176,44 @@ fn validate_binding_shape(
     Ok(())
 }
 
-// Attribute gates omit the inactive include_bytes! expression from the build.
-macro_rules! embedded_shader_binaries {
-    ($spirv:expr, $dxil:expr $(,)?) => {{
-        #[cfg(all(feature = "vulkan", feature = "d3d12", windows))]
-        {
-            $crate::program::ShaderBinaries::both($spirv, $dxil)
-        }
-        #[cfg(all(feature = "vulkan", not(all(feature = "d3d12", windows))))]
-        {
-            $crate::program::ShaderBinaries::vulkan($spirv)
-        }
-        #[cfg(all(not(feature = "vulkan"), feature = "d3d12", windows))]
-        {
-            $crate::program::ShaderBinaries::d3d12($dxil)
-        }
-        #[cfg(not(any(feature = "vulkan", all(feature = "d3d12", windows))))]
-        {
-            $crate::program::ShaderBinaries::metadata_only()
-        }
-    }};
+#[cfg(all(feature = "vulkan", feature = "d3d12", windows))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __renderer_embedded_shader_binaries {
+    ($spirv:expr, $dxil:expr $(,)?) => {
+        $crate::program::ShaderBinaries::both($spirv, $dxil)
+    };
 }
-pub(crate) use embedded_shader_binaries;
+#[cfg(all(feature = "vulkan", not(all(feature = "d3d12", windows))))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __renderer_embedded_shader_binaries {
+    ($spirv:expr, $dxil:expr $(,)?) => {
+        $crate::program::ShaderBinaries::vulkan($spirv)
+    };
+}
+#[cfg(all(not(feature = "vulkan"), feature = "d3d12", windows))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __renderer_embedded_shader_binaries {
+    ($spirv:expr, $dxil:expr $(,)?) => {
+        $crate::program::ShaderBinaries::d3d12($dxil)
+    };
+}
+#[cfg(not(any(feature = "vulkan", all(feature = "d3d12", windows))))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __renderer_embedded_shader_binaries {
+    ($spirv:expr, $dxil:expr $(,)?) => {
+        $crate::program::ShaderBinaries::metadata_only()
+    };
+}
+
+/// Embed SPIR-V and/or DXIL according to the host's enabled Renderer backends.
+/// Only expressions for enabled formats are expanded, including in downstream
+/// crates that declare no backend features of their own.
+#[doc(inline)]
+pub use crate::__renderer_embedded_shader_binaries as embedded_shader_binaries;
 
 macro_rules! embedded_raster_shaders {
     (
@@ -893,6 +909,20 @@ impl ManagedProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_program_keeps_only_enabled_backend_formats() {
+        const BINARIES: ShaderBinaries<&[u8]> =
+            embedded_shader_binaries!(b"spirv".as_slice(), b"dxil".as_slice());
+        assert_eq!(
+            BINARIES.vulkan,
+            cfg!(feature = "vulkan").then_some(b"spirv".as_slice())
+        );
+        assert_eq!(
+            BINARIES.d3d12,
+            cfg!(all(windows, feature = "d3d12")).then_some(b"dxil".as_slice())
+        );
+    }
 
     #[test]
     fn indexed_indirect_encoder_matches_unsized_shader_buffer_layouts() {

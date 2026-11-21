@@ -131,6 +131,14 @@ fn vulkan_graph_working_set_failure_preserves_committed_resources() {
             initialized_ranges_per_resource: 1,
             ..capacity
         };
+        let snapshot = runtime.refresh_buffer(key).unwrap();
+        let error = runtime
+            .prepare_working_set(insufficient, &[class(16)])
+            .unwrap_err();
+        let held = error.capacity().unwrap();
+        assert_eq!(held.resource, RuntimeCapacityKind::ImportRanges);
+        assert_eq!(held.recovery, CapacityRecovery::ReleaseOwners);
+        drop(snapshot);
         let error = runtime
             .prepare_working_set(insufficient, &[class(16)])
             .unwrap_err();

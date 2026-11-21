@@ -146,6 +146,9 @@ pub fn run_on<P: ViewPipeline>(
         None
     };
     meshes.reserve(&mut preparation)?;
+    if resized.is_some() {
+        meshes.reserve_replacement(model, &mut preparation)?;
+    }
     let texture_desc = ImageDesc::rgba8_srgb(2, 2);
     preparation.reserve_image(texture_desc, 1)?;
     let bloom = if example == Example::MixedPost {
@@ -265,9 +268,6 @@ pub fn run_on<P: ViewPipeline>(
                 camera.extent = extent;
                 pipeline.register_view(camera)?;
             }
-            // The old frame has returned, so its mesh registration can be
-            // collected before reserving the same buffer class again.
-            meshes.collect(&mut runtime)?;
             let id = meshes
                 .prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)?
                 .expect("changed mesh version");
@@ -355,9 +355,10 @@ pub fn run_on<P: ViewPipeline>(
             let delta = renderer::measurement::Snapshot::now().since(before);
             assert!(delta.is_allocation_free(), "{delta:?}");
         }
+        meshes.collect_gpu(&mut runtime)?;
         materials.collect_gpu(&mut runtime)?;
     }
-    meshes.clear(&mut runtime)?;
+    meshes.release_gpu(&mut runtime)?;
     materials.clear(&mut runtime)?;
     pipeline.clear(&mut runtime)?;
     runtime.delete(texture.key())?;

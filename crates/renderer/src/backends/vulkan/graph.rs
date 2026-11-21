@@ -410,8 +410,9 @@ impl VulkanRuntime {
     ///
     /// `resources` describes unregistered reusable instances in addition to
     /// explicitly registered inputs. Include recording, GPU and exported uses
-    /// in the counts. Every recording/result/metadata token must be returned
-    /// before changing capacities; ordinary exhaustion never waits implicitly.
+    /// in the counts. Return recording, result, and submission metadata leases
+    /// before reconfiguration. Registered snapshots remain usable. Changing
+    /// the range snapshot pool's own dimensions requires returning its tokens.
     /// Recoverable preparation failures preserve the live working set. During replacement,
     /// the previous and staged native allocations may temporarily coexist.
     pub fn prepare_working_set(
@@ -475,7 +476,7 @@ impl VulkanRuntime {
         self.collect_recycled();
         if !self.frame_consumers_returned() {
             return Err(RuntimeError::capacity_with(
-                "working-set preparation requires returned frame/result/import tokens",
+                "working-set preparation requires returned frame/result/export tokens",
                 RuntimeCapacityError::new(
                     RuntimeCapacityKind::WorkingSet,
                     CapacityRecovery::ReleaseOwners,
@@ -495,6 +496,7 @@ impl VulkanRuntime {
                 "frame working-set capacities must be nonzero",
             ));
         }
+        let ranges = self.stage_import_range_pool(capacity)?;
         let workspaces = StoragePool::new(
             capacity.work_slots,
             || WorkData::new(capacity),
@@ -506,21 +508,6 @@ impl VulkanRuntime {
             ResultData::reset,
         )?;
         let exports = ExportPool::new(capacity.graph.resources, capacity.metadata_slots)?;
-        let ranges = ImportRangesPool::new(
-            capacity.initialized_ranges_per_resource,
-            capacity.range_snapshots,
-        )
-        .map_err(|_| {
-            RuntimeError::capacity_with(
-                "import range preparation failed",
-                RuntimeCapacityError::new(
-                    RuntimeCapacityKind::ImportRanges,
-                    CapacityRecovery::Reconfigure,
-                    None,
-                    None,
-                ),
-            )
-        })?;
         let instances = resources.iter().try_fold(0usize, |total, class| {
             let count = match class {
                 ResourceClass::Buffer { count, .. } | ResourceClass::Image { count, .. } => *count,
@@ -591,11 +578,56 @@ impl VulkanRuntime {
         self.results = Some(results);
         self.exports = Some(exports);
         self.frame_capacity = Some(capacity);
-        *self
-            .import_ranges
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = ranges;
+        if let Some(ranges) = ranges {
+            *self
+                .import_ranges
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner()) = ranges;
+        }
         Ok(())
+    }
+
+    fn stage_import_range_pool(
+        &mut self,
+        capacity: FrameCapacity,
+    ) -> Result<Option<ImportRangesPool>, RuntimeError> {
+        let pool = self
+            .import_ranges
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner());
+        if pool.has_capacity(
+            capacity.initialized_ranges_per_resource,
+            capacity.range_snapshots,
+        ) {
+            return Ok(None);
+        }
+        if !pool.is_idle() {
+            return Err(RuntimeError::capacity_with(
+                "return buffer snapshots before resizing their range pool",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::ImportRanges,
+                    CapacityRecovery::ReleaseOwners,
+                    None,
+                    None,
+                ),
+            ));
+        }
+        ImportRangesPool::new(
+            capacity.initialized_ranges_per_resource,
+            capacity.range_snapshots,
+        )
+        .map(Some)
+        .map_err(|_| {
+            RuntimeError::capacity_with(
+                "import range preparation failed",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::ImportRanges,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
+            )
+        })
     }
 
     fn stage_implicit_raster(
@@ -691,7 +723,7 @@ impl VulkanRuntime {
         self.collect_recycled();
         if !self.frame_consumers_returned() {
             return Err(RuntimeError::capacity_with(
-                "Raster preparation requires returned frame/result/import tokens",
+                "Raster preparation requires returned frame/result/export tokens",
                 RuntimeCapacityError::new(
                     RuntimeCapacityKind::WorkingSet,
                     CapacityRecovery::ReleaseOwners,
@@ -716,11 +748,6 @@ impl VulkanRuntime {
             && self.workspaces.as_ref().is_none_or(|pool| pool.is_idle())
             && self.results.as_ref().is_none_or(|pool| pool.is_idle())
             && self.exports.as_mut().is_none_or(|pool| pool.is_idle())
-            && self
-                .import_ranges
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_idle()
     }
 
     /// Prepare the complete managed Compute working set before ordinary frames.

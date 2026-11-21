@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use renderer::capacity::CapacityRecovery;
-use renderer::graph::{BufferDesc, GraphCapacity, GraphPool, ImageDesc, ResourceKey};
+use renderer::graph::{BufferDesc, GraphCapacity, GraphPool, ImageDesc, ImportBuffer};
 use renderer::runtime::{
     D3D12Config, ResourceClass, Runtime, RuntimeConfig, RuntimeLimits, VulkanConfig, WorkingSet,
 };
@@ -12,18 +12,16 @@ use renderer::{d3d12::D3D12ValidationMode, vulkan::ValidationMode};
 const BYTES: [u8; 8] = [0, 17, 63, 128, 255, 31, 3, 99];
 const WAIT: Duration = Duration::from_secs(5);
 
-fn expect_buffer(runtime: &mut Runtime, pool: &mut GraphPool, key: ResourceKey) {
+fn expect_buffer(runtime: &mut Runtime, pool: &mut GraphPool, snapshot: &ImportBuffer) {
     let mut graph = pool.begin().unwrap();
-    let snapshot = runtime.refresh_buffer(key).unwrap();
-    assert_eq!(snapshot.key(), key);
-    let input = graph.import_buffer("registered buffer", &snapshot).unwrap();
+    let input = graph.import_buffer("registered buffer", snapshot).unwrap();
     let pass = graph
         .readback_buffer("registered contents", input, 0, 8)
         .unwrap();
     let plan = graph.compile().unwrap();
     let receipt = runtime.submit(&plan).unwrap();
     let id = receipt.id();
-    drop((receipt, plan, snapshot));
+    drop((receipt, plan));
     let mut completed = runtime.wait_for_frame(id, WAIT).unwrap().unwrap();
     let mut output = [0; 8];
     completed.readback_into(pass, &mut output).unwrap();
@@ -46,12 +44,14 @@ fn reprepare(runtime: &mut Runtime, limits: RuntimeLimits) {
     let receipt = runtime.submit(&plan).unwrap();
     let snapshot = receipt.export_buffer(output).unwrap();
     let id = receipt.id();
-    drop((receipt, plan));
+    drop(plan);
     assert_eq!(runtime.pending_frames(), 1);
     let completion = runtime.wait_for_frame(id, WAIT).unwrap().unwrap();
     assert_eq!(completion.id(), id);
     drop(completion);
 
+    // The receipt still owns a submission metadata slot, independently of the
+    // immutable buffer snapshot that we keep across failed and successful changes.
     let error = runtime
         .prepare_working_set(WorkingSet::default())
         .unwrap_err();
@@ -59,8 +59,7 @@ fn reprepare(runtime: &mut Runtime, limits: RuntimeLimits) {
         error.capacity().map(|details| details.recovery),
         Some(CapacityRecovery::ReleaseOwners)
     );
-    let key = snapshot.key();
-    drop(snapshot);
+    drop(receipt);
 
     let mut unsupported = ImageDesc::rgba8(8, 8);
     unsupported.array_layers = 2;
@@ -75,10 +74,29 @@ fn reprepare(runtime: &mut Runtime, limits: RuntimeLimits) {
             })
             .is_err()
     );
-    expect_buffer(runtime, &mut pool, key);
+    expect_buffer(runtime, &mut pool, &snapshot);
 
-    runtime.prepare_working_set(WorkingSet::default()).unwrap();
-    expect_buffer(runtime, &mut pool, key);
+    runtime
+        .prepare_working_set(WorkingSet {
+            resources: &[ResourceClass::Image {
+                desc: ImageDesc::rgba8(13, 7),
+                count: 1,
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+    expect_buffer(runtime, &mut pool, &snapshot);
+    // Repreparing must not silently duplicate the range pool and thereby
+    // increase the number of outstanding snapshots allowed by RuntimeLimits.
+    let key = snapshot.key();
+    let error = runtime.refresh_buffer(key).unwrap_err();
+    assert_eq!(
+        error.capacity().unwrap().recovery,
+        CapacityRecovery::ReleaseOwners
+    );
+    drop(snapshot);
+    let snapshot = runtime.refresh_buffer(key).unwrap();
+    expect_buffer(runtime, &mut pool, &snapshot);
     runtime.delete(key).unwrap();
     assert!(runtime.drain_frames(Duration::ZERO).unwrap());
 }
@@ -93,6 +111,7 @@ fn run(strict: bool) {
         },
         frames: 2,
         results: 2,
+        range_snapshots: 1,
         ..Default::default()
     };
     let working_set = WorkingSet {

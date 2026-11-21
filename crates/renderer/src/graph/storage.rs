@@ -569,7 +569,7 @@ mod tests {
         };
         assert_eq!(
             graph
-                .declare_pass(
+                .declare_analysis_pass(
                     "too many",
                     PassKind::Copy,
                     &[access(0..4), access(4..8)],

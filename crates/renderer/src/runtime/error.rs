@@ -35,6 +35,7 @@ enum ExecutionCause {
 
 impl ExecutionError {
     pub fn kind(&self) -> ExecutionErrorKind {
+        #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
         use ExecutionErrorKind as Kind;
         match &self.0 {
             #[cfg(feature = "vulkan")]
@@ -94,6 +95,7 @@ impl ExecutionError {
         Self::local(ExecutionErrorKind::WrongOwner, message, None)
     }
 
+    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub(crate) fn with_capacity(message: &'static str, details: RuntimeCapacityError) -> Self {
         Self::local(
             ExecutionErrorKind::CapacityExhausted,

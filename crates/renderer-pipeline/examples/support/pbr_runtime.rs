@@ -1,7 +1,7 @@
 use std::{error::Error, num::NonZeroUsize, time::Duration};
 
 use renderer::{
-    graph::{GraphCapacity, GraphPool, SampleCount},
+    graph::{GraphPool, SampleCount},
     runtime::{Runtime, RuntimeConfig, RuntimeLimits},
 };
 use renderer_pipeline::{
@@ -72,19 +72,13 @@ pub fn render(
     let (preparation, post) = scene::reserve(&prepared, &triangle, copy_hdr, bloom)?;
     // Graph declarations include initialization uploads and readbacks in
     // this example. The WorkingSet reserves physical resources per slot.
-    let graph = preparation.graph_capacity(GraphCapacity::default())?;
-    let mut pool = GraphPool::new(graph, frames)?;
-    let mut runtime = Runtime::new(
-        api.config(),
-        RuntimeLimits {
-            graph,
-            frames,
-            results: frames,
-            resource_capacity: scene::resource_count(&preparation),
-            ..RuntimeLimits::default()
-        },
-        preparation.working_set(),
-    )?;
+    let limits = preparation.runtime_limits(RuntimeLimits {
+        frames,
+        results: frames,
+        ..RuntimeLimits::default()
+    })?;
+    let mut pool = GraphPool::new(limits.graph, frames)?;
+    let mut runtime = Runtime::new(api.config(), limits, preparation.working_set())?;
     #[cfg(feature = "vulkan")]
     if let Some(vulkan) = runtime.as_vulkan()
         && vulkan.device_info().device_type == "CPU"

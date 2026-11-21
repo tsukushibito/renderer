@@ -1,10 +1,7 @@
 //! Preparation and reuse of the standard PBR fallback images.
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub use native::DefaultResourceError;
-#[cfg(any(test, feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::graph::{GraphCapacity, GraphPool, ImageHandle};
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::runtime::{ExecutionError, FrameId, Runtime};
 use renderer::{
     capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},
@@ -191,7 +188,6 @@ impl DefaultViews {
             .ok_or_else(|| GraphError::invalid_input("PBR material defaults were not prepared"))
     }
 
-    #[cfg(any(test, feature = "vulkan", all(windows, feature = "d3d12")))]
     fn images(self) -> [Option<ImageHandle>; 5] {
         let [white, normal, orm, ibl] = self
             .materials
@@ -219,7 +215,6 @@ impl PreparedDefaults {
     /// can accept consumers while initialization is pending if a frame slot
     /// is available. Wait for the returned frame at the startup boundary
     /// when all prepared slots are needed for normal frames.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn initialize(
         &self,
         runtime: &mut Runtime,
@@ -288,7 +283,6 @@ impl DefaultResources {
     /// Release the registrations at a change boundary. Accepted work keeps
     /// its leases until retirement. If a deletion fails, retry this method
     /// to release the remaining registrations.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn clear(&mut self, runtime: &mut Runtime) -> Result<(), ExecutionError> {
         for image in &mut self.images {
             if let Some(current) = image {
@@ -300,7 +294,6 @@ impl DefaultResources {
     }
 }
 
-#[cfg(any(test, feature = "vulkan", all(windows, feature = "d3d12")))]
 fn upload_graph_capacity(selection: Defaults) -> GraphCapacity {
     let requirements = selection.upload_requirements();
     GraphCapacity {
@@ -321,7 +314,6 @@ fn upload_graph_capacity(selection: Defaults) -> GraphCapacity {
     }
 }
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 mod native {
     use super::{ExecutionError, GraphError};
     use std::{error::Error, fmt};

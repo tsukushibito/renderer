@@ -375,7 +375,7 @@ fn only_supported_whole_image_subresources_are_accepted() {
     ] {
         assert!(
             graph
-                .declare_pass(
+                .declare_analysis_pass(
                     "unsupported",
                     PassKind::Compute,
                     &[Access {
@@ -390,7 +390,7 @@ fn only_supported_whole_image_subresources_are_accepted() {
         );
     }
     graph
-        .declare_pass(
+        .declare_analysis_pass(
             "whole",
             PassKind::Compute,
             &[Access {
@@ -440,7 +440,7 @@ fn declaration_conflicts_keep_first_pair_context_and_validate_inputs_first() {
     ];
     let before = graph.passes.len();
     let error = graph
-        .declare_pass("conflicts", PassKind::Copy, &accesses, false)
+        .declare_analysis_pass("conflicts", PassKind::Copy, &accesses, false)
         .unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
     assert_eq!(error.pass_name(), Some("conflicts"));
@@ -450,7 +450,7 @@ fn declaration_conflicts_keep_first_pair_context_and_validate_inputs_first() {
 
     accesses.push(access(earlier_resource, 16..20, false));
     let error = graph
-        .declare_pass("invalid range first", PassKind::Copy, &accesses, false)
+        .declare_analysis_pass("invalid range first", PassKind::Copy, &accesses, false)
         .unwrap_err();
     assert_eq!(error.resource(), Some(earlier_resource.into()));
     assert_eq!(error.range(), Some(&AccessRange::Buffer(16..20)));
@@ -477,7 +477,7 @@ fn declaration_allows_many_overlapping_readers_then_rejects_a_writer() {
         8_192
     ];
     graph
-        .declare_pass("many readers", PassKind::Copy, &accesses, false)
+        .declare_analysis_pass("many readers", PassKind::Copy, &accesses, false)
         .unwrap();
     accesses.push(Access {
         resource: buffer.into(),
@@ -486,7 +486,7 @@ fn declaration_allows_many_overlapping_readers_then_rejects_a_writer() {
         purpose: AccessPurpose::CopyDestination,
     });
     let error = graph
-        .declare_pass("reader and writer", PassKind::Copy, &accesses, false)
+        .declare_analysis_pass("reader and writer", PassKind::Copy, &accesses, false)
         .unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
     assert_eq!(error.resource(), Some(buffer.into()));
@@ -506,7 +506,7 @@ fn fixed_operations_check_binding_formats_extents_and_aliasing() {
     assert!(graph.copy_image("depth", depth, a).is_err());
     assert!(
         graph
-            .declare_pass(
+            .declare_analysis_pass(
                 "bad binding",
                 PassKind::Compute,
                 &[Access {
