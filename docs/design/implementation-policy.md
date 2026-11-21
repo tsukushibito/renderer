@@ -1728,7 +1728,7 @@ B0〜B5の一律blockerにはせず、採用時は能力・正しさ・利益と
 第二APIは**Windows上のD3D12**とする。M3の表示対象をWindowsから始める方針と、
 利用可能なWindows実機上でVulkanと同じGPU・入力を比較できることを優先した本Rendererの判断である。
 これはD3D12の性能優位や、全対象OSで二つのAPIを提供する方針を意味しない。
-LinuxのVulkan経路とCPUのみのビルドを維持し、第二APIの公開境界にもネイティブ型を露出させない。
+LinuxのVulkan経路とCPUのみのビルドを維持する。共通Graphの型はnative APIに依存せず、ホストDevice・テクスチャの受け渡しだけでbackend専用の公開型を使う。[エンジン所有テクスチャの契約](rendergraph.md#エンジン所有テクスチャをgraphへ渡す)
 
 Metalも比較候補とした。Apple向けのAPI・shader検証手段がある一方、
 現在利用できるMac実機・runnerは確認できていないため、最初の第二APIには選ばない。[^metal]

@@ -19,6 +19,7 @@ mod raster;
 mod raster_clear;
 mod raster_storage;
 mod registry;
+pub use registry::D3D12ExternalDevice;
 mod resources;
 mod sampler;
 pub use device::D3D12DeviceInfo;

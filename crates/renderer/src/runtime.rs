@@ -3,6 +3,8 @@
 mod error;
 mod frames;
 mod id;
+#[cfg(test)]
+pub(crate) mod native_image_tests;
 mod preparation;
 mod queue;
 #[cfg(all(feature = "presentation", windows))]
@@ -168,6 +170,26 @@ impl Runtime {
             RuntimeInner::D3D12(runtime) => runtime.set_profiling(enabled)?,
         }
         Ok(())
+    }
+
+    /// Access Vulkan-specific change-boundary operations.
+    #[cfg(feature = "vulkan")]
+    pub fn as_vulkan_mut(&mut self) -> Option<&mut crate::vulkan::VulkanRuntime> {
+        match &mut self.inner {
+            RuntimeInner::Vulkan(runtime) => Some(runtime),
+            #[cfg(all(feature = "d3d12", windows))]
+            RuntimeInner::D3D12(_) => None,
+        }
+    }
+
+    /// Access D3D12-specific change-boundary operations.
+    #[cfg(all(feature = "d3d12", windows))]
+    pub fn as_d3d12_mut(&mut self) -> Option<&mut crate::d3d12::D3D12Runtime> {
+        match &mut self.inner {
+            #[cfg(feature = "vulkan")]
+            RuntimeInner::Vulkan(_) => None,
+            RuntimeInner::D3D12(runtime) => Some(runtime),
+        }
     }
 
     /// Inspect Vulkan-specific device information, validation, or memory.
