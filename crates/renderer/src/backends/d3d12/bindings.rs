@@ -2060,6 +2060,16 @@ impl ID3D12CommandQueue {
             .map(|| result__)
         }
     }
+    pub unsafe fn GetDesc(&self) -> D3D12_COMMAND_QUEUE_DESC {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).GetDesc)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            );
+            result__
+        }
+    }
 }
 #[repr(C)]
 pub struct ID3D12CommandQueue_Vtbl {
@@ -2080,7 +2090,7 @@ pub struct ID3D12CommandQueue_Vtbl {
     pub GetTimestampFrequency:
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut u64) -> windows_core::HRESULT,
     GetClockCalibration: usize,
-    GetDesc: usize,
+    pub GetDesc: unsafe extern "system" fn(*mut core::ffi::c_void, *mut D3D12_COMMAND_QUEUE_DESC),
 }
 impl windows_core::RuntimeName for ID3D12CommandQueue {}
 windows_core::imp::define_interface!(
@@ -2685,6 +2695,16 @@ impl ID3D12Device {
             .ok()
         }
     }
+    pub unsafe fn GetAdapterLuid(&self) -> LUID {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).GetAdapterLuid)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            );
+            result__
+        }
+    }
 }
 #[repr(C)]
 pub struct ID3D12Device_Vtbl {
@@ -2839,7 +2859,7 @@ pub struct ID3D12Device_Vtbl {
         *mut *mut core::ffi::c_void,
     ) -> windows_core::HRESULT,
     GetResourceTiling: usize,
-    GetAdapterLuid: usize,
+    pub GetAdapterLuid: unsafe extern "system" fn(*mut core::ffi::c_void, *mut LUID),
 }
 impl windows_core::RuntimeName for ID3D12Device {}
 windows_core::imp::define_interface!(
@@ -2854,10 +2874,29 @@ impl core::ops::Deref for ID3D12DeviceChild {
     }
 }
 windows_core::imp::interface_hierarchy!(ID3D12DeviceChild, windows_core::IUnknown, ID3D12Object);
+impl ID3D12DeviceChild {
+    pub unsafe fn GetDevice<T>(&self, result__: *mut Option<T>) -> windows_core::Result<()>
+    where
+        T: windows_core::Interface,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).GetDevice)(
+                windows_core::Interface::as_raw(self),
+                &T::IID,
+                result__ as *mut _ as *mut _,
+            )
+            .ok()
+        }
+    }
+}
 #[repr(C)]
 pub struct ID3D12DeviceChild_Vtbl {
     pub base__: ID3D12Object_Vtbl,
-    GetDevice: usize,
+    pub GetDevice: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *const windows_core::GUID,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
 }
 impl windows_core::RuntimeName for ID3D12DeviceChild {}
 windows_core::imp::define_interface!(
@@ -4307,10 +4346,32 @@ windows_core::imp::interface_hierarchy!(
     IDXGIFactory2,
     IDXGIFactory3
 );
+impl IDXGIFactory4 {
+    pub unsafe fn EnumAdapterByLuid<T>(&self, adapterluid: LUID) -> windows_core::Result<T>
+    where
+        T: windows_core::Interface,
+    {
+        let mut result__ = core::ptr::null_mut();
+        unsafe {
+            (windows_core::Interface::vtable(self).EnumAdapterByLuid)(
+                windows_core::Interface::as_raw(self),
+                adapterluid,
+                &T::IID,
+                &mut result__,
+            )
+            .and_then(|| windows_core::imp::Type::from_abi(result__))
+        }
+    }
+}
 #[repr(C)]
 pub struct IDXGIFactory4_Vtbl {
     pub base__: IDXGIFactory3_Vtbl,
-    EnumAdapterByLuid: usize,
+    pub EnumAdapterByLuid: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        LUID,
+        *const windows_core::GUID,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
     EnumWarpAdapter: usize,
 }
 impl windows_core::RuntimeName for IDXGIFactory4 {}

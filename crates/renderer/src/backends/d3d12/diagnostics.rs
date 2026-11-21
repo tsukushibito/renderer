@@ -69,7 +69,11 @@ impl Session {
         }
         Ok(Self)
     }
-    pub(super) fn attach(&mut self, _device: &ID3D12Device) -> Result<(), D3D12RuntimeError> {
+    pub(super) fn attach(
+        &mut self,
+        _device: &ID3D12Device,
+        _host_owned: bool,
+    ) -> Result<(), D3D12RuntimeError> {
         Ok(())
     }
 }

@@ -128,6 +128,7 @@ pub(in super::super) struct Session {
     global_denied: u64,
     global_discarded: u64,
     token: Option<usize>,
+    host_callback: Option<(ID3D12InfoQueue1, u32)>,
     enabled: bool,
 }
 impl Session {
@@ -144,6 +145,7 @@ impl Session {
                 global_denied: 0,
                 global_discarded: 0,
                 token: None,
+                host_callback: None,
                 enabled: false,
             });
         }
@@ -187,12 +189,14 @@ impl Session {
             global_denied,
             global_discarded,
             token: None,
+            host_callback: None,
             enabled: true,
         })
     }
     pub(in super::super) fn attach(
         &mut self,
         device: &ID3D12Device,
+        host_owned: bool,
     ) -> Result<(), D3D12RuntimeError> {
         if !self.enabled {
             return Ok(());
@@ -211,7 +215,7 @@ impl Session {
                 error,
             )
         })?;
-        inspect_filter(&info)?;
+        inspect_filter(&info, host_owned)?;
         let mut settings = D3D12_DEBUG_DEVICE_GPU_BASED_VALIDATION_SETTINGS::default();
         // SAFETY: Documented matching parameter enum, output type and byte size.
         unsafe {
@@ -268,6 +272,11 @@ impl Session {
             ));
         }
         self.token = Some(token);
+        if host_owned {
+            // A host Device usually outlives this session. Keep enough state
+            // to unregister on both successful teardown and partial failure.
+            self.host_callback = Some((info.clone(), cookie));
+        }
         // Register before scanning startup storage so an internal native thread
         // cannot emit an unobserved message between the two. The overlap may
         // duplicate a diagnostic; strict zero-warning acceptance is unaffected.
@@ -295,9 +304,11 @@ impl Session {
                 if message.ID == D3D12_MESSAGE_ID_CREATEDEVICE_DEBUG_LAYER_STARTUP_OPTIONS {
                     gbv |= text.contains("GPU-Based Validation is enabled (disabled by default).");
                 }
-                self.monitor
-                    .state
-                    .push("D3D12", message.Severity, message.ID, || text.into_owned());
+                if !host_owned {
+                    self.monitor
+                        .state
+                        .push("D3D12", message.Severity, message.ID, || text.into_owned());
+                }
             }
             if info.GetNumMessagesDiscardedByMessageCountLimit() != 0 {
                 return Err(D3D12RuntimeError::unsupported(
@@ -331,7 +342,7 @@ fn check_size<T>(size: usize) -> Result<(), D3D12RuntimeError> {
     Ok(())
 }
 
-fn inspect_filter(info: &ID3D12InfoQueue1) -> Result<(), D3D12RuntimeError> {
+fn inspect_filter(info: &ID3D12InfoQueue1, host_owned: bool) -> Result<(), D3D12RuntimeError> {
     // SAFETY: Live queue; pointer lists returned by GetStorageFilter remain
     // within the aligned owned storage until inspected. No lists are retained.
     unsafe {
@@ -373,8 +384,10 @@ fn inspect_filter(info: &ID3D12InfoQueue1) -> Result<(), D3D12RuntimeError> {
                 ));
             }
         }
-        info.ClearStorageFilter();
-        info.ClearRetrievalFilter();
+        if !host_owned {
+            info.ClearStorageFilter();
+            info.ClearRetrievalFilter();
+        }
     }
     Ok(())
 }
@@ -443,6 +456,12 @@ impl Drop for Session {
                     .push("DXGI", D3D12_MESSAGE_SEVERITY_ERROR, 0, || {
                         error.to_string()
                     });
+            }
+        }
+        if let Some((queue, cookie)) = self.host_callback.take() {
+            // SAFETY: This cookie is from our successful registration on queue.
+            if unsafe { queue.UnregisterMessageCallback(cookie) }.is_err() {
+                self.monitor.state.fail();
             }
         }
         if let Some(token) = self.token.take() {

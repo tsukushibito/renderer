@@ -216,9 +216,46 @@ impl D3D12Runtime {
         compute_programs: &[crate::program::ManagedProgram],
     ) -> Result<Self, D3D12RuntimeError> {
         let device = DeviceOwner::new(config.validation)?;
+        Self::with_device(
+            device,
+            config.capacity,
+            buffers,
+            images,
+            programs,
+            compute_programs,
+        )
+    }
+
+    pub(crate) fn from_queue(
+        queue: &windows_core::IUnknown,
+        config: D3D12RuntimeConfig,
+        buffers: &[D3D12BufferClass],
+        images: &[D3D12ImageClass],
+        programs: &[crate::program::RasterPipelineRequest],
+        compute_programs: &[crate::program::ManagedProgram],
+    ) -> Result<Self, D3D12RuntimeError> {
+        let device = DeviceOwner::adopt_queue(queue, config.validation)?;
+        Self::with_device(
+            device,
+            config.capacity,
+            buffers,
+            images,
+            programs,
+            compute_programs,
+        )
+    }
+
+    fn with_device(
+        device: Arc<DeviceOwner>,
+        capacity: D3D12FrameCapacity,
+        buffers: &[D3D12BufferClass],
+        images: &[D3D12ImageClass],
+        programs: &[crate::program::RasterPipelineRequest],
+        compute_programs: &[crate::program::ManagedProgram],
+    ) -> Result<Self, D3D12RuntimeError> {
         let pool = frame::FramePool::with_graph(
             Arc::clone(&device),
-            config.capacity,
+            capacity,
             buffers,
             images,
             &[],

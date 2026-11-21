@@ -206,6 +206,34 @@ impl Runtime {
         }
     }
 
+    /// Run Graphs on a game engine's existing D3D12 DIRECT queue (node zero).
+    /// QueryInterface and GetDevice retain independent COM references. The host
+    /// may release its original references or continue to submit unrelated work.
+    /// Order accesses to shared resources using their explicit ownership handoff;
+    /// use the runtime's queue lock for multi-operation host queue transactions.
+    /// Required diagnostics observe an already-enabled Debug Layer and GBV;
+    /// this constructor never enables or disables either on the host Device.
+    #[cfg(all(feature = "d3d12", windows))]
+    pub fn from_d3d12_queue(
+        queue: &windows_core::IUnknown,
+        config: D3D12Config,
+        limits: RuntimeLimits,
+        working_set: WorkingSet<'_>,
+    ) -> Result<Self, ExecutionError> {
+        limits.validate()?;
+        let classes = D3D12Classes::new(working_set.resources)?;
+        Ok(Self {
+            inner: RuntimeInner::D3D12(crate::d3d12::D3D12Runtime::from_queue(
+                queue,
+                limits.d3d12_config(config),
+                &classes.buffers,
+                &classes.images,
+                working_set.raster,
+                working_set.compute,
+            )?),
+        })
+    }
+
     /// Prepare new classes and Program variants at an explicit change boundary.
     ///
     /// Return all Graph execution, result, export, and import-range leases

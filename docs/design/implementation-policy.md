@@ -1822,8 +1822,18 @@ D3D12 Deviceはadapter LUIDごとのsingletonであり、作成済みDeviceへ�
 Device removalを起こし得る。[^d3ddevice][^d3ddebug]
 このruntimeはprocess内の最初の診断設定を固定し、同じ設定の生存runtimeではDevice所有者を共有する。
 設定を切り替える要求はnative設定前に拒否する。複数runtimeのqueue操作も共有所有者で直列化する。
-外部のD3D12 Deviceが既に作成されたprocessで後から診断を有効にする使い方は対象外とし、
-診断を使う場合はアプリ内のD3D12 Device作成より先に初期化する。
+既存エンジンは `Runtime::from_d3d12_queue` にホストの DIRECT queue の `IUnknown` を渡す。
+Renderer は node 0 の queue とその親 Device を COM 参照で保持し、実 adapter の LUID と能力を照会する。
+queue の COM identity が一致する Renderer インスタンスは同じ投入 lock を使う。ホストは共有資源の
+所有権を引き渡してから Graph へ接続し、自分の queue 操作を Renderer の実行と順序づける。
+異なる queue 間の依存はホスト側の fence で保証する。
+[GetDevice](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12devicechild-getdevice)・
+[キューの投入順](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12commandqueue-executecommandlists)
+
+既存 Device の診断設定はホストが Device 作成前に決める。引き受け時の `Required` は
+Debug Layer と GBV の既存の証跡を検査する。グローバル設定とホストの InfoQueue filter を保持し、
+この Runtime が登録した callback は終了時に解除する。確認できない設定は初期化エラーになる。
+ホスト Device を受け取った process では、以後の Device 新規作成もグローバル診断 setter を呼ばない。
 
 `development-validation`は`d3d12-diagnostics`も有効にし、native検証の既定を
 `D3D12ValidationMode::Required`にする。追加検証なしの既定は`Disabled`である。
