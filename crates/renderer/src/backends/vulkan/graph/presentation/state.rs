@@ -6,9 +6,9 @@ use super::*;
 
 pub(super) struct Inner {
     pub(super) owner: Arc<MemoryOwner>,
-    pub(super) surface: Arc<WindowSurface>,
-    pub(super) current: Option<Arc<Swapchain>>,
-    pub(super) retired: Vec<Arc<Swapchain>>,
+    pub(super) surface: Rc<WindowSurface>,
+    pub(super) current: Option<Rc<Swapchain>>,
+    pub(super) retired: Vec<Rc<Swapchain>>,
     pub(super) slots: Vec<SlotRecord>,
     pub(super) programs: Vec<Arc<Program>>,
     pub(super) prepared_format: Option<vk::Format>,
@@ -117,11 +117,11 @@ impl Inner {
 
     pub(super) fn collect_retired_swapchains(&mut self) -> usize {
         let before = self.retired.len();
-        // Every outstanding GPU command and queued present owns its own Arc.
+        // Every outstanding GPU command and queued present retains the chain.
         // A sole retired anchor therefore proves both uses have completed.
         // Keep these anchors through ordinary polling so their last-owner
         // native destruction and backing release stay at a change boundary.
-        self.retired.retain(|chain| Arc::strong_count(chain) != 1);
+        self.retired.retain(|chain| Rc::strong_count(chain) != 1);
         before - self.retired.len()
     }
 
@@ -130,8 +130,8 @@ impl Inner {
             return Err(RuntimeError::invalid("Presenter is closed"));
         }
         if self.surface_lost {
-            return Err(RuntimeError::unsupported(
-                "Surface was lost; create a new window runtime",
+            return Err(RuntimeError::surface_lost(
+                "Surface was lost; attach a new presenter",
             ));
         }
         if self.desired.0 == 0 || self.desired.1 == 0 {
@@ -181,7 +181,7 @@ impl Inner {
         }
         self.current = Some(Swapchain::new(
             Arc::clone(&self.owner),
-            Arc::clone(&self.surface),
+            Rc::clone(&self.surface),
             plan,
             old_handle,
             #[cfg(test)]

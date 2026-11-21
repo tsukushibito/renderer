@@ -4,6 +4,11 @@
 //! its event loop; each native presenter retains the window it uses. Readiness
 //! never implies a wait, and accepted presentation does not prove display time.
 
+#[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
+mod window;
+#[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
+pub(crate) use window::HostWindow;
+
 /// Explicit presentation capacity, independent of Graph execution capacity.
 #[derive(Clone, Copy, Debug)]
 pub struct PresentationConfig {

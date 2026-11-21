@@ -11,6 +11,8 @@ pub enum ExecutionErrorKind {
     CapacityExhausted,
     WrongOwner,
     StaleResource,
+    /// The host can close this presenter and attach a fresh window to the runtime.
+    SurfaceLost,
     DeviceLost,
     DeviceUnavailable,
     Native,
@@ -46,6 +48,7 @@ impl ExecutionError {
                     Native::CapacityExhausted => Kind::CapacityExhausted,
                     Native::WrongOwner => Kind::WrongOwner,
                     Native::StaleResource => Kind::StaleResource,
+                    Native::SurfaceLost => Kind::SurfaceLost,
                     Native::DeviceLost => Kind::DeviceLost,
                     Native::DeviceUnavailable => Kind::DeviceUnavailable,
                     Native::Native => Kind::Native,

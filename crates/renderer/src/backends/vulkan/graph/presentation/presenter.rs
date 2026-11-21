@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Owns presentation state and the `Arc<Window>` that backs its native Surface.
+/// Owns presentation state and the host window that backs its native Surface.
 /// Call `poll` regularly and `close` explicitly; event loops remain app-owned.
 pub struct Presenter {
     pub(super) inner: Option<Inner>,
@@ -73,8 +73,8 @@ impl Presenter {
             return Err(RuntimeError::invalid("Presenter is closed"));
         }
         if inner.surface_lost {
-            return Err(RuntimeError::unsupported(
-                "Surface was lost; create a new window runtime",
+            return Err(RuntimeError::surface_lost(
+                "Surface was lost; attach a new presenter",
             ));
         }
         inner

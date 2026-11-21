@@ -15,11 +15,13 @@ use crate::backends::vulkan::presentation::{
 };
 use crate::backends::vulkan::transfer::{PendingTransfer, TransferError, TransferPayload};
 use crate::graph::{ImportImage, ResourceDesc};
+use crate::presentation::HostWindow;
 use crate::profiling::{GpuTiming, PresentationMetrics};
 use ash::vk;
+use raw_window_handle::HasWindowHandle;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use winit::window::Window;
 
 pub use crate::backends::vulkan::presentation::{PresentOutcome, PresentationConfig};
 mod state;
