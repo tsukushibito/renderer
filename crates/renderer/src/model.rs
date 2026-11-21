@@ -1,12 +1,12 @@
 //! Shared model geometry, material slots, and per-view level of detail.
 use crate::{
     material::MaterialHandle,
-    mesh::MeshHandle,
+    mesh::{MeshHandle, SkinPoseId},
     pbr::{Bounds, Transform},
     pipeline::{CameraView, MeshIndexRange, RenderObject},
 };
 use renderer_core::graph::GraphError;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 #[derive(Clone, Copy)]
 pub struct ModelPart {
@@ -22,7 +22,8 @@ pub struct ModelLod {
     pub parts: Vec<ModelPart>,
 }
 
-/// Immutable model-space bounds, material defaults and geometry.
+/// Immutable model-space bounds, material defaults and geometry. Include the
+/// model's intended animation range in its LOD bounds.
 pub struct Model {
     bounds: Bounds,
     materials: Vec<MaterialHandle>,
@@ -70,6 +71,7 @@ impl Model {
         ModelInstance {
             model: Arc::clone(self),
             overrides: vec![None; self.materials.len()],
+            poses: HashMap::new(),
             transform: Transform::IDENTITY,
         }
     }
@@ -79,10 +81,36 @@ impl Model {
 pub struct ModelInstance {
     model: Arc<Model>,
     overrides: Vec<Option<MaterialHandle>>,
+    poses: HashMap<MeshHandle, SkinPoseId>,
     pub transform: Transform,
 }
 
 impl ModelInstance {
+    /// Bind a mesh's independent pose across every material slot and LOD
+    /// referencing that mesh. Subsequent animation updates only change the palette.
+    pub fn set_pose(
+        &mut self,
+        mesh: MeshHandle,
+        pose: Option<SkinPoseId>,
+    ) -> Result<(), GraphError> {
+        if !self
+            .model
+            .lods
+            .iter()
+            .flat_map(|lod| &lod.parts)
+            .any(|part| part.mesh == mesh)
+        {
+            return Err(GraphError::invalid_input(
+                "pose mesh is not a part of this model",
+            ));
+        }
+        if let Some(id) = pose {
+            self.poses.insert(mesh, id);
+        } else {
+            self.poses.remove(&mesh);
+        }
+        Ok(())
+    }
     /// Set one instance's slot, or restore the shared default with `None`.
     pub fn set_material(
         &mut self,
@@ -101,6 +129,7 @@ impl ModelInstance {
         let material = self.overrides[slot].unwrap_or(self.model.materials[slot]);
         let mut object = RenderObject::new(part.mesh, material).with_transform(self.transform);
         object.index_range = part.indices;
+        object.pose = self.poses.get(&part.mesh).copied();
         object
     }
 

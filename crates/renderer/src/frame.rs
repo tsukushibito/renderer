@@ -135,6 +135,7 @@ impl Renderer {
         assets
             .meshes
             .reserve_selection(&mut active, meshes.into_iter())?;
+        assets.meshes.reserve_poses(&mut active, assets.objects)?;
         active.reserve_buffer(crate::pbr::MaterialUniform::DESC, uniforms.len())?;
         self.drawing
             .runtime()

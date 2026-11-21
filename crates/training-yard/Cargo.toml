@@ -12,6 +12,7 @@ presentation = ["graphics", "renderer/presentation"]
 vulkan = ["renderer-core/vulkan", "renderer?/vulkan"]
 d3d12 = ["renderer-core/d3d12", "renderer?/d3d12"]
 development-validation = ["renderer-core/development-validation", "renderer?/development-validation"]
+memory-profiling = ["renderer-core/memory-profiling", "renderer?/memory-profiling"]
 
 [dependencies]
 renderer = { version = "0.1.0", path = "../renderer", optional = true }

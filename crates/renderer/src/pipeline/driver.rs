@@ -59,6 +59,7 @@ struct Pipeline {
 /// Each prepared pipeline supplies its own extent, rendering technique and output.
 #[derive(Default)]
 pub struct ViewRenderer {
+    poses: crate::mesh::FramePoses,
     pipelines: HashMap<PipelineId, Pipeline>,
     views: HashMap<ViewId, PipelineId>,
     pending: Vec<ViewId>,
@@ -161,13 +162,16 @@ impl ViewRenderer {
         id: PipelineId,
         changed: SceneInput<'_>,
     ) -> Result<(), GraphError> {
-        self.pipeline_mut(id)?.group.prepare_scene(changed)
+        self.pipeline_mut(id)?.group.prepare_scene(changed)?;
+        self.poses.reserve(changed.meshes.pose_count());
+        Ok(())
     }
     pub(super) fn prepare_all(&mut self, changed: SceneInput<'_>) -> PipelineResult<()> {
         self.check_idle()?;
         for pipeline in self.pipelines.values_mut() {
             pipeline.group.prepare_scene(changed)?;
         }
+        self.poses.reserve(changed.meshes.pose_count());
         Ok(())
     }
     pub fn remove_scene_pair(
@@ -250,6 +254,7 @@ impl ViewRenderer {
     pub fn begin_frame<'a>(&'a mut self, pool: &mut GraphPool) -> PipelineResult<ViewFrame<'a>> {
         self.check_idle()?;
         let graph = pool.begin()?;
+        self.poses.clear();
         let id = graph.graph_id();
         Ok(ViewFrame {
             renderer: self,
@@ -336,9 +341,18 @@ impl<'a> ViewFrame<'a> {
             return Err(GraphError::invalid_input("abandon replaced view graph"));
         }
         let id = self.renderer.pipeline_for_view(camera.id)?;
-        let input = scene.resolve(self.id, id)?;
+        let mut input = scene.resolve(self.id, id)?;
+        self.renderer
+            .poses
+            .record(graph, input.meshes, input.objects)?;
+        input.poses = Some(&self.renderer.poses);
         let images = record(
-            self.renderer.pipeline_mut(id)?.group.as_mut(),
+            self.renderer
+                .pipelines
+                .get_mut(&id)
+                .expect("registered camera")
+                .group
+                .as_mut(),
             graph,
             camera,
             input,

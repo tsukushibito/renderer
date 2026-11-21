@@ -86,7 +86,7 @@ impl ViewPipeline for ToonPipeline {
         }
         self.draws.clear();
         for obj in scene.objects {
-            let mesh = obj.import_mesh(g, scene.meshes)?;
+            let mesh = scene.import_mesh(g, obj)?;
             let MaterialInstance::Unlit(mat) = scene.materials.get(obj.material)? else {
                 unreachable!("validated material revision")
             };

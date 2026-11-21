@@ -44,8 +44,8 @@ impl InstanceTier {
 /// carries orientation parity for mirrored material and shadow draws.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
-    model: [[f32; 4]; 3],
-    normal: [[f32; 4]; 3],
+    pub(super) model: [[f32; 4]; 3],
+    pub(super) normal: [[f32; 4]; 3],
 }
 
 impl Transform {

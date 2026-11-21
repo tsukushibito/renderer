@@ -176,7 +176,7 @@ impl StandardPipeline {
         )?;
         self.connected.clear();
         for obj in input.objects {
-            let mesh = obj.import_mesh(graph, input.meshes)?;
+            let mesh = input.import_mesh(graph, obj)?;
             self.connected.push(Draw {
                 transform: (obj.transform != Transform::IDENTITY).then_some(obj.transform),
                 sort_center: obj.sort_center.unwrap_or_else(|| mesh.bounds.center()),

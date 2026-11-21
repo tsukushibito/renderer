@@ -38,6 +38,8 @@ impl MeshIndexRange {
 pub struct RenderObject {
     pub mesh: MeshHandle,
     pub material: MaterialHandle,
+    /// Optional independent joint pose of this mesh.
+    pub pose: Option<crate::mesh::SkinPoseId>,
     /// Optional submesh in the shared index buffer.
     pub index_range: Option<MeshIndexRange>,
     pub transform: Transform,
@@ -50,6 +52,7 @@ impl RenderObject {
         Self {
             mesh,
             material,
+            pose: None,
             index_range: None,
             transform: Transform::IDENTITY,
             sort_center: None,
@@ -70,7 +73,15 @@ impl RenderObject {
         graph: &mut Graph,
         meshes: &Meshes,
     ) -> Result<super::Mesh, GraphError> {
-        let mut mesh = meshes.import(graph, self.mesh)?;
+        if self.pose.is_some() {
+            return Err(GraphError::invalid_input(
+                "import a posed object through its recorded scene input",
+            ));
+        }
+        self.select_range(meshes.import(graph, self.mesh)?)
+    }
+
+    fn select_range(&self, mut mesh: super::Mesh) -> Result<super::Mesh, GraphError> {
         if let Some(range) = self.index_range {
             if range.indices().end > mesh.index_count {
                 return Err(GraphError::invalid_input(
@@ -117,6 +128,7 @@ impl EnvironmentMaps {
 /// Borrow the same object list for any number of cameras.
 #[derive(Clone, Copy)]
 pub struct SceneInput<'a> {
+    pub(super) poses: Option<&'a crate::mesh::FramePoses>,
     pub meshes: &'a Meshes,
     pub materials: &'a Materials,
     pub objects: &'a [RenderObject],
@@ -132,6 +144,7 @@ pub struct SceneInput<'a> {
 impl<'a> SceneInput<'a> {
     pub fn new(meshes: &'a Meshes, materials: &'a Materials, objects: &'a [RenderObject]) -> Self {
         Self {
+            poses: None,
             meshes,
             materials,
             objects,
@@ -140,6 +153,25 @@ impl<'a> SceneInput<'a> {
             bounds: None,
             environment: None,
         }
+    }
+    /// Resolve this frame's posed vertices and the object's selected index range.
+    /// All camera and shadow passes reference the same uploaded pose revision.
+    pub fn import_mesh(
+        &self,
+        graph: &mut Graph,
+        object: &RenderObject,
+    ) -> Result<super::Mesh, GraphError> {
+        let Some(id) = object.pose else {
+            return object.import_mesh(graph, self.meshes);
+        };
+        let posed = self
+            .poses
+            .ok_or_else(|| GraphError::invalid_input("record the scene's poses before drawing"))?
+            .stream(id, object.mesh)?;
+        object.select_range(
+            self.meshes
+                .import_geometry(graph, object.mesh, Some(posed))?,
+        )
     }
     #[must_use]
     pub fn with_sun(mut self, sun: Sun) -> Self {

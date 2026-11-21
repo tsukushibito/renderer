@@ -228,6 +228,9 @@ impl RendererSetup {
         assets
             .meshes
             .reserve_selection(&mut preparation, meshes.iter().copied())?;
+        assets
+            .meshes
+            .reserve_poses(&mut preparation, assets.objects)?;
         preparation.add_requirements(
             GraphRequirements {
                 resources: uniforms,

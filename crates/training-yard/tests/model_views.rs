@@ -7,9 +7,9 @@
 use renderer::{
     core::{graph::ImageDesc, runtime::RuntimeConfig},
     material::{Materials, PbrParams},
-    mesh::{MeshCapacity, MeshData, Meshes},
+    mesh::{JointWeights, MeshCapacity, MeshData, Meshes},
     model::{Model, ModelInstance, ModelLod, ModelPart},
-    pbr::{Bounds, PbrVertex, Projection, Transform, ViewInput},
+    pbr::{Bounds, PbrVertex, Projection, ShadowSettings, Sun, Transform, ViewInput},
     pipeline::{
         CameraGroup, CameraView, MeshIndexRange, PipelineResult, RenderObject, RendererSetup,
         SceneAssets, SceneInput, StandardConfig, Technique, ViewId,
@@ -20,6 +20,11 @@ use std::time::Duration;
 
 #[path = "../../renderer/examples/support/validation.rs"]
 mod validation;
+
+#[cfg(feature = "memory-profiling")]
+#[global_allocator]
+static ALLOCATOR: renderer::core::measurement::CountingAllocator<std::alloc::System> =
+    renderer::core::measurement::CountingAllocator::new(std::alloc::System);
 
 fn emission(rgb: [f32; 3]) -> PbrParams {
     let mut params = PbrParams::color([0., 0., 0., 1.]);
@@ -57,9 +62,21 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
             })
         })
         .collect();
-    let mesh = meshes.create(MeshData::pbr(
+    let weights = vertices
+        .iter()
+        .map(|v| {
+            let w = (v.position()[1] + 0.75) / 1.5;
+            JointWeights {
+                joints: [0, 1, 0, 0],
+                weights: [1. - w, w, 0., 0.],
+            }
+        })
+        .collect::<Vec<_>>();
+    let mesh = meshes.create(MeshData::skinned_pbr(
         &vertices,
         &[0, 1, 2, 1, 3, 2, 2, 3, 4, 3, 5, 4],
+        2,
+        &weights,
     )?)?;
     let mut materials = Materials::default();
     let body = materials.create_pbr(emission([1., 0., 0.]))?;
@@ -95,10 +112,26 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
             Transform::new([[1., 0., 0., x], [0., 1., 0., 0.], [0., 0., 1., 0.]]).unwrap();
         actor
     });
+    let poses = [meshes.create_pose(mesh)?, meshes.create_pose(mesh)?];
+    for (actor, pose) in actors.iter_mut().zip(poses) {
+        actor.set_pose(mesh, Some(pose))?;
+    }
     let mut assets = asset_draws(&actors);
     // Load the optional emissive material along with the equipment.
     assets.push(RenderObject::new(mesh, glow));
-    let mut setup = RendererSetup::standard(cameras[0]);
+    let world_bounds = Bounds::new([-1., -1., 0.], [1., 1., 1.])?;
+    let sun = Sun::new([0., 0., -1.], [0.01; 3])?;
+    let mut detailed = StandardConfig::new(cameras[0].extent);
+    detailed.shadows = Some(ShadowSettings {
+        resolution: 32,
+        distance: 2.,
+        ..Default::default()
+    });
+    let mut setup = RendererSetup::new(CameraGroup::standard(
+        cameras[0],
+        Technique::Forward,
+        detailed,
+    ));
     setup.add_group(CameraGroup::standard(
         cameras[1],
         Technique::Forward,
@@ -108,9 +141,20 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
     for [w, h] in cameras.map(|c| c.extent) {
         plan.reserve_readback("viewport", ImageDesc::rgba8(w, h))?;
     }
+    for _ in 0..renderer::pbr::CASCADE_COUNT {
+        plan.reserve_readback("caster depth", ImageDesc::depth32(32, 32))?;
+    }
     let mut drawing = plan.build(config)?;
     let mut objects = Vec::with_capacity(4);
-    for step in 0..4 {
+    let mut rest_shadow = vec![false; 32 * 32 * renderer::pbr::CASCADE_COUNT];
+    let mut depth = Vec::with_capacity(rest_shadow.len());
+    let mut rest_mask = [vec![false; 24 * 24], vec![false; 24 * 24]];
+    let mut mask = Vec::with_capacity(rest_mask[0].len());
+    let mut shadow_reads = Vec::with_capacity(renderer::pbr::CASCADE_COUNT);
+    let mut storage = vec![0; 48 * 24 * 4];
+    for step in 0..7 {
+        #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
+        let before = renderer::core::measurement::Snapshot::now();
         match step {
             1 => actors[0].set_material(1, Some(glow))?,
             2 => {
@@ -119,6 +163,19 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
                 drawing.prepare_assets(SceneAssets::new(&mut meshes, &mut materials, &assets))?;
             }
             3 => actors[0].set_material(1, None)?,
+            4..=6 => {
+                for (side, pose) in poses.iter().enumerate() {
+                    let dy = match (step, side) {
+                        (4, 0) => -0.4,
+                        (5, 1) => 0.2,
+                        _ => 0.,
+                    };
+                    let joint =
+                        Transform::new([[1., 0., 0., 0.], [0., 1., 0., dy], [0., 0., 1., 0.]])?;
+                    meshes.set_joint_transforms(*pose, &[Transform::IDENTITY, joint])?;
+                }
+                assert!(meshes.set_joint_transforms(poses[0], &[]).is_err());
+            }
             _ => {}
         }
         let mut frame = drawing.begin_frame()?;
@@ -126,7 +183,9 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
         for (camera, read) in cameras.iter().zip(&mut reads) {
             objects.clear();
             objects.extend(actors.iter().flat_map(|actor| actor.draws(camera)));
-            let input = SceneInput::new(&meshes, &materials, &objects);
+            let input = SceneInput::new(&meshes, &materials, &objects)
+                .with_bounds(world_bounds)
+                .with_sun(sun);
             let hdr = frame.draw_scene(camera, input)?.color;
             let image = frame.write_output(camera.id, hdr, 1., None)?;
             *read = Some(
@@ -135,18 +194,51 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
                     .readback_image("viewport", image.raw_image())?,
             );
         }
+        let shadows = frame
+            .standard_output(cameras[0].id)
+            .unwrap()
+            .scene
+            .shadows
+            .unwrap();
+        shadow_reads.clear();
+        for shadow in shadows {
+            shadow_reads.push(frame.graph().readback_image("caster depth", shadow)?);
+        }
         let ticket = frame.submit()?;
         let mut result = drawing
             .runtime()
             .wait_for_frame(ticket.id(), Duration::from_secs(15))?
             .ok_or("view timeout")?;
+        depth.clear();
+        for &read in &shadow_reads {
+            let mut layer = [0; 32 * 32 * 4];
+            result.readback_into(read, &mut layer)?;
+            depth.extend(
+                layer
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|&v| f32::from_le_bytes(v) < 1.),
+            );
+        }
+        if step == 0 {
+            assert!(depth.iter().any(|&occupied| occupied), "empty cascades");
+            rest_shadow.copy_from_slice(&depth);
+        } else {
+            assert_eq!(
+                depth != rest_shadow,
+                (4..=5).contains(&step),
+                "caster coverage at step {step}"
+            );
+        }
         for (camera, read) in cameras.iter().zip(reads) {
             let [w, h] = camera.extent.map(|n| n as usize);
-            let mut pixels = vec![0; w * h * 4];
-            result.readback_into(read.unwrap(), &mut pixels)?;
-            for side in 0..2 {
+            let pixels = &mut storage[..w * h * 4];
+            result.readback_into(read.unwrap(), pixels)?;
+            for (side, baseline) in rest_mask.iter_mut().enumerate() {
                 // Bins are black, red body, blue armor, green armor and cyan body.
                 let mut counts = [0usize; 5];
+                mask.clear();
                 for row in pixels.chunks_exact(w * 4) {
                     for p in row[side * w * 2..(side + 1) * w * 2].as_chunks::<4>().0 {
                         let bin = match [p[0] > 100, p[1] > 100, p[2] > 100] {
@@ -158,9 +250,21 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
                             rgb => panic!("unexpected color {rgb:?}"),
                         };
                         counts[bin] += 1;
+                        mask.push(bin != 0);
                     }
                 }
                 let detailed = camera.id == cameras[0].id;
+                if detailed {
+                    if step == 0 {
+                        baseline.copy_from_slice(&mask);
+                    } else {
+                        assert_eq!(
+                            mask != *baseline,
+                            (step, side) == (4, 0) || (step, side) == (5, 1),
+                            "posed silhouette at step {step} side {side}"
+                        );
+                    }
+                }
                 let glowing = side == 0 && (1..=2).contains(&step);
                 assert_eq!(
                     counts.map(|n| n > 0),
@@ -175,6 +279,15 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
                 );
             }
         }
+        drop((result, ticket));
+        #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
+        if step >= 4 {
+            let delta = renderer::core::measurement::Snapshot::now().since(before);
+            assert!(
+                delta.is_allocation_free(),
+                "animated frame {step}: {delta:?}"
+            );
+        }
     }
     let mut runtime = drawing.into_runtime()?;
     meshes.release_gpu(&mut runtime)?;
@@ -182,16 +295,12 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
     validation::check_validation(runtime)
 }
 
-#[cfg(feature = "vulkan")]
 #[test]
-#[ignore = "requires a Vulkan device"]
-fn vulkan_model_views() -> PipelineResult<()> {
-    check(RuntimeConfig::Vulkan(Default::default()))
-}
-
-#[cfg(all(windows, feature = "d3d12"))]
-#[test]
-#[ignore = "requires a D3D12 device"]
-fn d3d12_model_views() -> PipelineResult<()> {
-    check(RuntimeConfig::D3D12(Default::default()))
+#[ignore = "requires real devices for each enabled backend"]
+fn posed_models_in_two_views() -> PipelineResult<()> {
+    #[cfg(feature = "vulkan")]
+    check(RuntimeConfig::Vulkan(Default::default()))?;
+    #[cfg(all(windows, feature = "d3d12"))]
+    check(RuntimeConfig::D3D12(Default::default()))?;
+    Ok(())
 }

@@ -215,6 +215,11 @@ Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受�
 `instantiate` で作った個体には変換と材質の上書きを保持する。ロード時に `asset_draws()` で全 LOD の資産を準備し、描画時に `draws(&camera)` でそのビューの部位を抽出する。
 個体の `set_material(slot, Some(handle))` はその個体に効き、`None` は共有材質に戻す。共有材質自体の変更は `Materials::update_pbr` で行う。[二つのカメラと装備材質の実行例](../../crates/training-yard/tests/model_views.rs)
 
+スキニングを使うメッシュは、ロード時に `MeshData::skinned_pbr` に頂点と各頂点の最大 4 関節分の重みを渡す。
+個体ごとに `meshes.create_pose(mesh)` でポーズを作り、`actor.set_pose(mesh, Some(pose))` で結ぶ。
+ゲーム側でアニメーションを評価したら、逆バインド変換を含むモデル空間の最終行列を `meshes.set_joint_transforms(pose, &palette)` に一度渡す。
+現在は CPU で頂点を変形し、そのフレームで使うポーズごとに一つの頂点バッファをアップロードする。各材質スロット・カメラ・影が同じ頂点を読む。LOD 用モデル境界にはアニメーション全体を含める。
+
 個別のパスを準備して標準 Forward を使う場合はカメラと初期シーンから構成する。カメラには安定した `ViewId`、寸法、`ViewInput` を渡す。
 `build` は参照されたメッシュと材質を転送し、初期化に使った投入の完了を回収して返る。
 

@@ -13,7 +13,10 @@ use renderer_core::{
 };
 use std::{collections::HashMap, sync::Arc};
 use upload::UploadBatch;
+mod skin;
 mod upload;
+pub(crate) use skin::FramePoses;
+pub use skin::{JointWeights, SkinPoseId};
 pub(crate) use upload::MeshCheckpoint;
 pub use upload::MeshUploadProgress;
 
@@ -25,6 +28,7 @@ pub struct MeshData {
     geometry: GeometryData,
     bounds: Bounds,
     attributes: Vec<VertexAttribute>,
+    skin: Option<Arc<skin::Skin>>,
 }
 impl MeshData {
     pub fn pbr(vertices: &[PbrVertex], indices: &[u32]) -> Result<Self, GraphError> {
@@ -53,6 +57,7 @@ impl MeshData {
             geometry,
             bounds,
             attributes: attributes.to_vec(),
+            skin: None,
         }
     }
 }
@@ -74,6 +79,7 @@ fn indexed_bounds(
     Bounds::new(min, max)
 }
 struct Layout {
+    skin: Option<Arc<skin::Skin>>,
     bounds: Bounds,
     attributes: Vec<VertexAttribute>,
     vertex_stride: u32,
@@ -82,6 +88,7 @@ struct Layout {
 impl MeshData {
     fn into_parts(self) -> (GeometryData, Arc<Layout>) {
         let layout = Layout {
+            skin: self.skin,
             bounds: self.bounds,
             attributes: self.attributes,
             vertex_stride: self.geometry.vertex_stride(),
@@ -142,6 +149,7 @@ impl Asset {
 
 /// Owns mesh identities, CPU geometry and GPU registrations for one runtime.
 pub struct Meshes {
+    poses: HashMap<SkinPoseId, skin::Pose>,
     registry: MeshRegistry,
     assets: HashMap<MeshHandle, Asset>,
     retired: Vec<RetiredVersion>,
@@ -184,6 +192,7 @@ impl Meshes {
             .try_reserve(capacity.meshes)
             .map_err(|_| MeshError::capacity_exhausted("unable to reserve mesh assets"))?;
         Ok(Self {
+            poses: HashMap::new(),
             registry,
             assets,
             retired,
@@ -218,6 +227,7 @@ impl Meshes {
     }
     pub fn remove(&mut self, mesh: MeshHandle) -> Result<(), MeshError> {
         self.registry.delete_mesh(mesh)?;
+        self.poses.retain(|_, pose| pose.mesh != mesh);
         let mut asset = self.assets.remove(&mesh).expect("registered mesh");
         asset.retire_upload(&mut self.retired);
         asset.retire_active(&mut self.retired);
@@ -321,6 +331,15 @@ impl Meshes {
 
     /// Import the current resident vertex/index range into this Graph.
     pub fn import(&self, graph: &mut Graph, mesh: MeshHandle) -> Result<Mesh, GraphError> {
+        self.import_geometry(graph, mesh, None)
+    }
+
+    pub(crate) fn import_geometry(
+        &self,
+        graph: &mut Graph,
+        mesh: MeshHandle,
+        posed: Option<skin::PosedStream>,
+    ) -> Result<Mesh, GraphError> {
         let asset = self
             .assets
             .get(&mesh)
@@ -329,10 +348,17 @@ impl Meshes {
             .active
             .as_ref()
             .ok_or_else(|| GraphError::invalid_input("prepare the mesh before drawing"))?;
+        let (vertices, bounds) = match posed {
+            Some(stream) => (stream.vertices, stream.bounds),
+            None => (
+                graph.import_readonly_buffer(VERTEX_BUFFER, &active.buffers[0])?,
+                active.layout.bounds,
+            ),
+        };
         Ok(Mesh {
-            bounds: active.layout.bounds,
+            bounds,
             vertex_stride: active.layout.vertex_stride,
-            vertices: graph.import_readonly_buffer(VERTEX_BUFFER, &active.buffers[0])?,
+            vertices,
             indices: graph.import_readonly_buffer(INDEX_BUFFER, &active.buffers[1])?,
             first_index: 0,
             index_count: active.layout.index_count,

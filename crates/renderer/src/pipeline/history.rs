@@ -6,6 +6,7 @@ use renderer_core::graph::GraphCapacityKind;
 struct Caster {
     mesh: MeshHandle,
     geometry_revision: u64,
+    pose: Option<(crate::mesh::SkinPoseId, u64)>,
     index_range: Option<MeshIndexRange>,
     material: MaterialHandle,
     material_revision: u64,
@@ -59,6 +60,16 @@ impl History {
             let state = Caster {
                 mesh: object.mesh,
                 geometry_revision: input.meshes.revision(object.mesh)?,
+                pose: object
+                    .pose
+                    .map(|id| {
+                        input
+                            .poses
+                            .expect("posed geometry was connected")
+                            .stream(id, object.mesh)
+                            .map(|stream| (id, stream.revision))
+                    })
+                    .transpose()?,
                 index_range: object.index_range,
                 material: object.material,
                 material_revision: input.materials.revision(object.material)?,
