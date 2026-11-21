@@ -65,7 +65,10 @@ pub fn render(
     bloom: Bloom,
     caster_revisions: &[[u64; CASCADE_COUNT]],
 ) -> Result<Vec<CapturedFrame>, Box<dyn Error>> {
-    let frames = caster_revisions.len().max(1);
+    let frames = caster_revisions
+        .len()
+        .max(settings.frame_lights.len())
+        .max(1);
     // Give enabled Bloom an emitter above its scene-linear threshold.
     let triangle = Triangle::for_view(bloom != Bloom::Off, settings.placement, settings.view)?;
     let mut prepared = scene::prepare(NonZeroUsize::new(frames).unwrap(), settings)?;
@@ -128,7 +131,10 @@ pub fn render(
             &triangle,
             Some(&defaults),
             &post,
-            settings,
+            Settings {
+                frame_lights: settings.frame_lights.get(index..=index).unwrap_or_default(),
+                ..settings
+            },
             shadow_history,
         )?;
         #[cfg(test)]
