@@ -16,7 +16,7 @@
 ashはVulkanローダーを実行時に読み込み、通常のCPUライブラリビルドへSDK依存を広げない。
 CPUのテスト・benchmark用依存が要求するツールは開発手順で分けて管理する。
 
-ネイティブ型や生のハンドルはバックエンド内部に閉じる。
+ネイティブ型を使う公開境界を、ホストDevice・テクスチャを受け渡すVulkan専用APIに限定する。
 未使用の公開RHI、汎用encoder、Backend traitを先に固定しない。
 公開Graph APIはGPU非依存で、Vulkanの実行は`VulkanRuntime`から明示的に開始する。
 管理下Compute、順序付きRasterと深度、表示用のsampled image描画を扱う。
@@ -47,6 +47,14 @@ Graphのnative実行は次の責務に分ける。公開APIや汎用backend trai
 
 記録の子moduleは準備operandへprivateにアクセスする。テストのためだけにfieldを公開せず、
 資源の所有者を分散させない。記録から退役までのlease・実Fenceによる完了・失敗時の保持は同じ契約を使う。
+
+<a id="host-textures"></a>
+
+### ホストが所有する画像
+
+`VulkanRuntime::external_device` はInstance・Device・loaderを保持する。`image_create_info(desc)` で、実Device上で必要なformat・tiling・sample数・usageを確認できる。ホストは対応する単一layerの2D画像、bind済みmemory、両方の寿命を保証する `Arc` を渡す。ホストのDropでVulkanを呼ぶ場合、そのownerにもDeviceを保持する。Vulkanは既存のVkImageから作成時の全属性を照会できないため、`register_external_image` のunsafe契約で実際の属性との一致を保証する。Rendererは利用するviewだけを作成・破棄し、ホストの画像をVMAの所有物として解放しない。
+
+初回の `VulkanImageState::DISCARD` は内容を破棄する。既存内容を読むときは全subresourceの現在のlayoutと、全mipのtexelが定義済みであることを伝える。同一queueのhost submissionには `with_queue` を使う。別queueから渡す場合は、先行GPUアクセスの完了・可視性と、必要なqueue family release/acquireをホスト側で確立する。登録・返却はCPUの変更境界で、待機やGPU命令を発行しない。返却後の最初のbarrierは返却されたlayoutと、先行アクセスを覆うALL_COMMANDS / MEMORY_READ | MEMORY_WRITEを起点にする。別Deviceとの共有には外部memory・semaphoreとOSハンドルの専用契約が必要になる。[Vulkanの同期とqueue family ownership](https://docs.vulkan.org/spec/latest/chapters/synchronization.html)
 
 ## Instance・Device・キュー
 

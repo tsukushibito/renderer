@@ -20,7 +20,9 @@ use crate::graph::{
     ImportRangesPool, ResourceDesc, ResourceKey, provenance::BufferProvenance,
 };
 
+mod interop;
 mod reuse;
+pub use interop::D3D12ExternalDevice;
 use reuse::{ReuseClass, ReuseIndex};
 impl From<ResourceDesc> for ReuseClass {
     fn from(desc: ResourceDesc) -> Self {
@@ -41,6 +43,7 @@ impl From<ResourceDesc> for ReuseClass {
 enum Native {
     Buffer(DeviceBuffer),
     Image(DeviceImage),
+    HostImage(ID3D12Resource),
 }
 struct Physical(Native);
 // SAFETY: Only DEFAULT resources enter this store, never mapped host buffers.
@@ -61,6 +64,7 @@ impl PhysicalRef {
         match &self.0.as_ref().expect("leased physical resource").0 {
             Native::Buffer(value) => value.raw(),
             Native::Image(value) => value.raw(),
+            Native::HostImage(value) => value,
         }
     }
     fn clear(&mut self) {
@@ -526,7 +530,11 @@ impl Registry {
             .map_err(|error| Error::invalid(error.to_string()))
     }
     pub(super) fn delete(&mut self, key: ResourceKey) -> Result<(), Error> {
-        self.entry(key)?;
+        if matches!(&self.entry(key)?.physical().0, Native::HostImage(_)) {
+            return Err(Error::invalid(
+                "release an external image with release_external_image",
+            ));
+        }
         let entry = &mut self.entries[key.index as usize];
         entry.registered = false;
         entry.initialized.clear();

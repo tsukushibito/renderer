@@ -8,7 +8,7 @@ use crate::graph::{ImageDesc, SampleCount};
 use ash::vk;
 use vk_mem::Alloc;
 
-use super::error::RuntimeError;
+use super::error::{RuntimeError, RuntimeErrorKind};
 use super::memory::MemoryOwner;
 
 /// Owns the buffer and allocation together. Initialization and scheduled access
@@ -150,8 +150,9 @@ fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeEr
 /// Allocation and its view are one owner; layout/content state belongs to the
 /// canonical runtime entry, independently of this immutable storage identity.
 pub(super) struct DeviceImage {
+    // Drops after the views (in Drop) and before the last Device owner.
+    backing: ImageBacking,
     owner: Arc<MemoryOwner>,
-    allocation: vk_mem::Allocation,
     pub(super) image: vk::Image,
     pub(super) view: vk::ImageView,
     /// Full-chain sampled View; aliases `view` only for single-mip images.
@@ -165,6 +166,11 @@ pub(super) struct DeviceImage {
     pub(super) aspect: vk::ImageAspectFlags,
 }
 
+enum ImageBacking {
+    Allocated(vk_mem::Allocation),
+    Host { _lifetime: Arc<dyn Send + Sync> },
+}
+
 /// Validated creation parameters for the Device that owns the Graph resources.
 #[derive(Clone, Copy)]
 pub(super) struct ImageCreation {
@@ -176,6 +182,26 @@ pub(super) struct ImageCreation {
     usage: vk::ImageUsageFlags,
     aspect: vk::ImageAspectFlags,
     supports_linear_filtering: bool,
+}
+
+impl ImageCreation {
+    pub(super) fn info(self) -> vk::ImageCreateInfo<'static> {
+        vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(self.format)
+            .extent(vk::Extent3D {
+                width: self.width,
+                height: self.height,
+                depth: 1,
+            })
+            .mip_levels(self.mip_levels)
+            .array_layers(1)
+            .samples(self.samples)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(self.usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+    }
 }
 
 impl DeviceImage {
@@ -328,66 +354,18 @@ impl DeviceImage {
             .device
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
-        let ImageCreation {
-            width,
-            height,
-            mip_levels,
-            format,
-            samples,
-            usage,
-            aspect,
-            supports_linear_filtering,
-        } = creation;
-        let extent = vk::Extent2D { width, height };
-        let info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .format(format)
-            .extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            })
-            .mip_levels(mip_levels)
-            .array_layers(1)
-            .samples(samples)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let info = creation.info();
         let allocation_info = vk_mem::AllocationCreateInfo {
             usage: vk_mem::MemoryUsage::AutoPreferDevice,
             ..Default::default()
         };
-        let mip_views = Vec::with_capacity((mip_levels - 1) as usize);
         #[cfg(feature = "memory-profiling")]
         crate::measurement::record_native(crate::measurement::NativeEvent::ResourceCreate, 1);
         // SAFETY: VMA retains this Device, internally synchronizes allocation,
         // and satisfies the exact native image's requirements/bind operation.
         let (image, allocation) = unsafe { owner.raw.create_image(&info, &allocation_info) }
             .map_err(|result| native(&owner, "vmaCreateImage(Graph)", result))?;
-        let mut result = Self {
-            owner,
-            allocation,
-            image,
-            view: vk::ImageView::null(),
-            sampled_view: vk::ImageView::null(),
-            mip_views,
-            mip_levels,
-            supports_linear_filtering,
-            extent,
-            format,
-            aspect,
-        };
-        result.view = result.create_view(0, 1, usage)?;
-        for mip in 1..mip_levels {
-            let view = result.create_view(mip, 1, usage)?;
-            result.mip_views.push(view);
-        }
-        result.sampled_view = if mip_levels == 1 {
-            result.view
-        } else {
-            result.create_view(0, mip_levels, vk::ImageUsageFlags::SAMPLED)?
-        };
+        let result = Self::with_views(owner, creation, image, ImageBacking::Allocated(allocation))?;
         #[cfg(feature = "vulkan-diagnostics")]
         {
             let name = CString::new(name)
@@ -431,6 +409,69 @@ impl DeviceImage {
                 )
             })?;
         }
+        Ok(result)
+    }
+
+    /// # Safety
+    /// `image` must be bound on this Device with creation parameters compatible
+    /// with `desc`; `lifetime` must retain the image and backing memory.
+    pub(super) unsafe fn from_host(
+        owner: Arc<MemoryOwner>,
+        desc: ImageDesc,
+        image: vk::Image,
+        lifetime: Arc<dyn Send + Sync>,
+    ) -> Result<Self, RuntimeError> {
+        let creation = Self::prepare(&owner, desc)?;
+        Self::with_views(
+            owner,
+            creation,
+            image,
+            ImageBacking::Host {
+                _lifetime: lifetime,
+            },
+        )
+    }
+
+    pub(super) fn is_external(&self) -> bool {
+        matches!(self.backing, ImageBacking::Host { .. })
+    }
+
+    fn with_views(
+        owner: Arc<MemoryOwner>,
+        creation: ImageCreation,
+        image: vk::Image,
+        backing: ImageBacking,
+    ) -> Result<Self, RuntimeError> {
+        let mut result = Self {
+            backing,
+            owner,
+            image,
+            view: vk::ImageView::null(),
+            sampled_view: vk::ImageView::null(),
+            mip_views: Vec::new(),
+            mip_levels: creation.mip_levels,
+            supports_linear_filtering: creation.supports_linear_filtering,
+            extent: vk::Extent2D {
+                width: creation.width,
+                height: creation.height,
+            },
+            format: creation.format,
+            aspect: creation.aspect,
+        };
+        result
+            .mip_views
+            .try_reserve_exact((creation.mip_levels - 1) as usize)
+            .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?;
+        result.view = result.create_view(0, 1, creation.usage)?;
+        for mip in 1..creation.mip_levels {
+            let view = result.create_view(mip, 1, creation.usage)?;
+            result.mip_views.push(view);
+        }
+        result.sampled_view = if creation.mip_levels == 1 {
+            result.view
+        } else {
+            result.create_view(0, creation.mip_levels, vk::ImageUsageFlags::SAMPLED)?
+        };
         Ok(result)
     }
 
@@ -507,11 +548,14 @@ impl Drop for DeviceImage {
                 );
                 self.owner.device.raw().destroy_image_view(self.view, None);
             }
-            #[cfg(feature = "memory-profiling")]
-            crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
-            self.owner
-                .raw
-                .destroy_image(self.image, &mut self.allocation);
+            if let ImageBacking::Allocated(allocation) = &mut self.backing {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ResourceDestroy,
+                    1,
+                );
+                self.owner.raw.destroy_image(self.image, allocation);
+            }
         }
     }
 }

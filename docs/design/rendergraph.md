@@ -4,7 +4,7 @@
 検索・章ナビゲーション付きHTMLの生成は[文書ガイド](../guides/html-docs.md)を参照する。
 
 Graphの宣言・解析はGPUとウィンドウに依存せず、通常のCPU構成で利用する。
-Vulkan実行は`vulkan` featureで追加し、公開APIへash・VMAの型を出さない。
+Vulkan実行は`vulkan` featureで追加する。Graphの公開型はash・VMAに依存しない。
 Windowsの`d3d12` featureは同じ`CompiledGraph`のbuffer upload・copy・readbackと、
 画像upload/copy/readback・owned RasterとCompute dispatchを実行する。
 Graphの宣言・解析と、各backendが実行できる操作の範囲は区別する。
@@ -77,7 +77,7 @@ bufferは半開byte範囲を指定する。
 予定されたGPU状態と実際の完了を別々に管理する。
 
 通常のパスは、copy、管理下Compute、attachment操作、順序付きRasterを宣言する。
-任意の生CommandBuffer、未信頼shader、ネイティブ外部ハンドルは受け入れない。
+同じDeviceに属するエンジン所有画像は、下記の登録を経て通常の `ImportImage` として使う。
 利用側のCompute shaderは、静的descriptorまたはロードしたバイナリとABIを明示したunsafe境界で取り込む。
 これにより、実行する操作と宣言した用途・範囲・bindingを対応づける。
 汎用RHIや未信頼shaderのサンドボックスを提供する契約ではない。
@@ -90,6 +90,17 @@ bufferは半開byte範囲を指定する。
 
 両APIともnative未対応の操作や準備済み容量の不足をprepareで明示エラーにする。
 共有Graphを構築できることだけで、すべてのbackendがその操作を実行できるとは扱わない。
+
+### エンジン所有テクスチャをGraphへ渡す
+
+1. `Runtime::as_vulkan_mut` または `as_d3d12_mut` で選択中のbackendを取得する。`external_device()` はnative Deviceを保持するownerを返す。エンジンはこのDevice上で作成したテクスチャを渡す。入力テクスチャと最終描画先で同じ手順を使える。
+2. ホスト側の先行アクセスを完了させ、キューと画像状態を合わせて `unsafe register_external_image` を呼ぶ。成功から返却までは、ホストの別queue・CPU・aliasを含めてRendererに排他的アクセスを渡す。登録時に予算を消費する。複数frameで利用する画像は登録を維持する。
+3. 戻り値を `Graph::import_image` に渡す。次のGraphで最新の書き込みを使うときは同じkeyで `Runtime::refresh_image` を呼ぶ。登録時の確認やview作成は通常のフレーム投入経路に持ち込まない。
+4. `release_external_image(key)` は記録・GPU・表示のleaseが残る間 `Ok(None)` を返す。未投入の記録を手放し、投入済みframeをpollまたはwaitで退役させて再試行する。`Ok(Some(..))` でホストのアクセスを再開でき、古いkey・snapshotは失効する。GPU完了を確認できないエラーでは排他的アクセスを返却したものと扱わない。
+
+Vulkanではhostのallocation owner、layout、初期化の保証を渡し、返却されたlayoutを次のbarrierに使う。[Vulkan側の所有権と同期](vulkan.md#host-textures)
+
+D3D12では `windows_core::IUnknown` を受け取り、実際の `ID3D12Resource`、`GetDevice` のCOM identity、descriptorとheapを登録時に確認する。単一nodeのDEFAULT heapのcommitted 2D textureを全subresourceがCOMMONの状態で渡す。返却状態もCOMMONで、戻り値のboolが全mipの初期化を表す。1×のRGBA8 UNORM・RGBA16FはRTとUAVの両方、4×はRT、D32はR32_TYPELESSとDEPTH_STENCIL、RGBA8 sRGBは追加flagなしを使う。Graph用の画像slotをdescriptorごとに予約するか、登録後に一度 `prepare_working_set` を呼ぶ。hostはResourceをresidentに保ち、Rendererは独立のCOM参照を保持する。[ID3D12DeviceChild::GetDevice](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12devicechild-getdevice)
 
 `program::ManagedProgram`はComputeの不変ABIとアクセス範囲を定義する。
 `Graph::dispatch`が各bindingと論理資源を所有し、両runtimeが明示準備したpipelineとdescriptorへ具体化する。
