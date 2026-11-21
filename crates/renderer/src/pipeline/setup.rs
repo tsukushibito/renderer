@@ -45,6 +45,10 @@ impl<'a> SceneAssets<'a> {
         self.lights = lights;
         self
     }
+    /// Borrow the same working set for a retryable preparation attempt.
+    pub fn reborrow(&mut self) -> SceneAssets<'_> {
+        SceneAssets::new(self.meshes, self.materials, self.objects).with_lights(self.lights)
+    }
     fn input(&self) -> SceneInput<'_> {
         SceneInput::new(self.meshes, self.materials, self.objects).with_lights(self.lights)
     }

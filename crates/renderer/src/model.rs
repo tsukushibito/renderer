@@ -145,6 +145,14 @@ impl ModelInstance {
     /// Borrow the selected parts for this camera. Independent cameras can extract
     /// different geometry concurrently from the same instance.
     pub fn draws(&self, camera: &CameraView) -> impl ExactSizeIterator<Item = RenderObject> + '_ {
+        self.draw_parts(camera).map(|(_, object)| object)
+    }
+
+    /// Keep the selected part's slot and mesh range alongside its resolved draw.
+    pub fn draw_parts(
+        &self,
+        camera: &CameraView,
+    ) -> impl ExactSizeIterator<Item = (ModelPart, RenderObject)> + '_ {
         let levels = &self.model.lods;
         let level = if levels.len() == 1 {
             &levels[0]
@@ -152,7 +160,7 @@ impl ModelInstance {
             let size = projected_size(self.model.bounds, self.transform, camera);
             &levels[levels.partition_point(|lod| f64::from(lod.min_pixels) > size)]
         };
-        level.parts.iter().map(|part| self.object(*part))
+        level.parts.iter().map(|&part| (part, self.object(part)))
     }
 }
 

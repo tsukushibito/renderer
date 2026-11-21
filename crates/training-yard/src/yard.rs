@@ -1,7 +1,7 @@
 //! The training yard owns the actors, equipment choices and animation inputs.
 use renderer::{
     material::{MaterialHandle, Materials, PbrParams},
-    mesh::{JointWeights, MeshCapacity, MeshData, Meshes, SkinPoseId},
+    mesh::{JointWeights, MeshCapacity, MeshData, MeshHandle, Meshes, SkinPoseId},
     model::{Model, ModelInstance, ModelLod, ModelPart},
     pbr::{Bounds, PbrVertex, Projection, Sun, Transform, ViewInput},
     pipeline::{
@@ -9,11 +9,23 @@ use renderer::{
     },
     unlit_forward::IDENTITY,
 };
+use std::sync::Arc;
+mod equipment;
+pub use equipment::EquipmentAsset;
+use equipment::{EquipmentLoads, LoadedArmor};
+
+pub const REPLAY_FRAMES: usize = 24;
 
 pub struct Yard {
     pub(crate) meshes: Meshes,
     pub(crate) materials: Materials,
-    actors: [ModelInstance; 2],
+    actors: [Option<ModelInstance>; 2],
+    model: Arc<Model>,
+    mesh: MeshHandle,
+    occupant: u64,
+    loads: EquipmentLoads,
+    equipped: Option<RenderObject>,
+    pub(crate) load_error: Option<renderer::core::graph::GraphError>,
     poses: [SkinPoseId; 2],
     assets: Vec<RenderObject>,
     body: MaterialHandle,
@@ -28,6 +40,10 @@ pub enum Action {
     Armor(bool),
     BodyColor([f32; 3]),
     Pose([f32; 2]),
+    Request(EquipmentAsset),
+    Deliver(EquipmentAsset),
+    Despawn,
+    Respawn,
 }
 
 pub fn replay_action(step: usize) -> Option<Action> {
@@ -38,6 +54,16 @@ pub fn replay_action(step: usize) -> Option<Action> {
         4 => Some(Action::Pose([-0.4, 0.])),
         5 => Some(Action::Pose([0., 0.2])),
         6 => Some(Action::Pose([0.; 2])),
+        14 => Some(Action::Request(EquipmentAsset::Narrow)),
+        15 => Some(Action::Request(EquipmentAsset::Wide)),
+        16 => Some(Action::Deliver(EquipmentAsset::Wide)),
+        17 => Some(Action::Deliver(EquipmentAsset::Narrow)),
+        18 => Some(Action::Request(EquipmentAsset::Broken)),
+        19 => Some(Action::Deliver(EquipmentAsset::Broken)),
+        20 => Some(Action::Request(EquipmentAsset::Spare)),
+        21 => Some(Action::Despawn),
+        22 => Some(Action::Respawn),
+        23 => Some(Action::Deliver(EquipmentAsset::Spare)),
         _ => None,
     }
 }
@@ -67,8 +93,8 @@ pub fn camera(id: u64, extent: [u32; 2]) -> PipelineResult<CameraView> {
 impl Yard {
     pub fn new() -> PipelineResult<Self> {
         let mut meshes = Meshes::new(MeshCapacity {
-            meshes: 1,
-            retired_mesh_versions: 1,
+            meshes: 3,
+            retired_mesh_versions: 2,
         })?;
         let vertices: Vec<_> = [-0.75, 0., 0.75]
             .into_iter()
@@ -144,7 +170,13 @@ impl Yard {
         Ok(Self {
             meshes,
             materials,
-            actors,
+            actors: actors.map(Some),
+            model,
+            mesh,
+            occupant: 1,
+            loads: EquipmentLoads::default(),
+            equipped: None,
+            load_error: None,
             poses,
             assets,
             body,
@@ -164,7 +196,9 @@ impl Yard {
         out: &'a mut Vec<RenderObject>,
     ) -> SceneInput<'a> {
         out.clear();
-        out.extend(self.actors.iter().flat_map(|actor| actor.draws(camera)));
+        for actor in 0..self.actors.len() {
+            self.extract_parts(actor, camera, out);
+        }
         SceneInput::new(&self.meshes, &self.materials, out)
             .with_sun(self.sun)
             .with_bounds(self.bounds)
@@ -177,19 +211,67 @@ impl Yard {
         out: &'a mut Vec<RenderObject>,
     ) -> SceneInput<'a> {
         out.clear();
-        out.extend(self.actors[actor].draws(camera));
+        self.extract_parts(actor, camera, out);
         SceneInput::new(&self.meshes, &self.materials, out)
     }
 
-    /// Returns true when a shared GPU asset needs to be prepared at a change boundary.
-    pub fn apply(&mut self, action: Action) -> PipelineResult<bool> {
+    fn extract_parts(&self, index: usize, camera: &CameraView, out: &mut Vec<RenderObject>) {
+        if let Some(actor) = &self.actors[index] {
+            for (part, object) in actor.draw_parts(camera) {
+                let replacement = self
+                    .equipped
+                    .filter(|_| index == 0 && part.material_slot == 1);
+                out.push(replacement.map_or(object, |armor| armor.with_transform(actor.transform)));
+            }
+        }
+    }
+
+    fn release_armor(&mut self, armor: RenderObject) -> PipelineResult<()> {
+        self.assets.retain(|o| o.mesh != armor.mesh);
+        self.meshes.remove(armor.mesh)?;
+        self.materials.remove(armor.material)?;
+        Ok(())
+    }
+
+    fn equip(
+        &mut self,
+        loaded: LoadedArmor,
+        prepare: impl FnOnce(SceneAssets<'_>) -> PipelineResult<()>,
+    ) -> PipelineResult<()> {
+        let material = self.materials.create_pbr(emission(loaded.color))?;
+        let mesh = match self.meshes.create(loaded.mesh) {
+            Ok(mesh) => mesh,
+            Err(error) => {
+                self.materials.remove(material)?;
+                return Err(error.into());
+            }
+        };
+        let armor = RenderObject::new(mesh, material);
+        self.assets.push(armor);
+        if let Err(error) = prepare(self.assets()) {
+            self.release_armor(armor)?;
+            return Err(error);
+        }
+        if let Some(old) = self.equipped.replace(armor) {
+            self.release_armor(old)?;
+        }
+        Ok(())
+    }
+
+    pub fn apply(
+        &mut self,
+        action: Action,
+        prepare: impl FnOnce(SceneAssets<'_>) -> PipelineResult<()>,
+    ) -> PipelineResult<()> {
         match action {
             Action::Armor(enabled) => {
-                self.actors[0].set_material(1, enabled.then_some(self.glow))?
+                if let Some(actor) = &mut self.actors[0] {
+                    actor.set_material(1, enabled.then_some(self.glow))?;
+                }
             }
             Action::BodyColor(color) => {
                 self.materials.update_pbr(self.body, emission(color))?;
-                return Ok(true);
+                prepare(self.assets())?;
             }
             Action::Pose(heights) => {
                 for (&pose, dy) in self.poses.iter().zip(heights) {
@@ -199,8 +281,39 @@ impl Yard {
                         .set_joint_transforms(pose, &[Transform::IDENTITY, joint])?;
                 }
             }
+            Action::Request(asset) => {
+                if self.actors[0].is_some() {
+                    self.loads.request(self.occupant, asset)?;
+                }
+            }
+            Action::Deliver(asset) => {
+                let occupant = self.actors[0].as_ref().map(|_| self.occupant);
+                match self.loads.deliver(occupant, asset)? {
+                    Some(Ok(payload)) => self.equip(payload, prepare)?,
+                    Some(Err(error)) => self.load_error = Some(error),
+                    None => {}
+                }
+            }
+            Action::Despawn => {
+                self.actors[0] = None;
+                if let Some(armor) = self.equipped.take() {
+                    self.release_armor(armor)?;
+                }
+            }
+            Action::Respawn if self.actors[0].is_none() => {
+                self.occupant = self
+                    .occupant
+                    .checked_add(1)
+                    .ok_or("actor generation exhausted")?;
+                let mut actor = self.model.instantiate();
+                actor.set_pose(self.mesh, Some(self.poses[0]))?;
+                actor.transform =
+                    Transform::new([[1., 0., 0., -0.5], [0., 1., 0., 0.], [0., 0., 1., 0.]])?;
+                self.actors[0] = Some(actor);
+            }
+            Action::Respawn => {}
         }
-        Ok(false)
+        Ok(())
     }
 
     pub(crate) fn release(

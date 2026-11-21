@@ -1,5 +1,5 @@
 //! Two cameras and four directional shadow cascades recorded on the host's Graph.
-use crate::{Yard, camera, replay_action, validation};
+use crate::{REPLAY_FRAMES, Yard, camera, replay_action, validation};
 use renderer::{
     canvas::{self, Layer, Paint},
     core::{
@@ -37,6 +37,15 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
     monitors.add_view(monitor.camera)?;
     setup.add_group(monitors);
     let mut plan = setup.prepare(yard.assets())?;
+    // The host's known asset pack can stream one four-vertex armor and its material.
+    for size in [
+        4 * renderer::passes::pbr::VERTEX_BYTES as u64,
+        6 * 4,
+        renderer::pbr::MaterialUniform::DESC.size,
+    ] {
+        plan.preparation_mut()
+            .reserve_buffer(renderer::core::graph::BufferDesc { size }, 1)?;
+    }
     monitor.prepare(&mut plan)?;
     for [w, h] in cameras.map(|c| c.extent) {
         plan.reserve_readback("viewport", ImageDesc::rgba8(w, h))?;
@@ -59,14 +68,14 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
     let mut shadow_reads = Vec::with_capacity(renderer::pbr::CASCADE_COUNT);
     let mut storage = vec![0; 48 * 24 * 4];
     let mut screen = [0; 48 * 24 * 4];
-    for step in 0..14 {
+    for step in 0..REPLAY_FRAMES {
         #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
         let before = renderer::core::measurement::Snapshot::now();
-        if let Some(action) = replay_action(step)
-            && yard.apply(action)?
-        {
-            yard.materials.collect_gpu(drawing.runtime())?;
-            drawing.prepare_assets(yard.assets())?;
+        if let Some(action) = replay_action(step) {
+            yard.apply(action, |assets| {
+                assets.materials.collect_gpu(drawing.runtime())?;
+                drawing.prepare_assets(assets)
+            })?;
         }
         let mut graph = host_pool.begin()?;
         let target = graph.image("host viewport", ImageDesc::rgba8(48, 24))?;
@@ -146,7 +155,7 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
         } else {
             assert_eq!(
                 depth != rest_shadow,
-                (4..=5).contains(&step),
+                (4..=5).contains(&step) || (16..=21).contains(&step),
                 "caster coverage at step {step}"
             );
         }
@@ -161,7 +170,7 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
             }
             for (side, baseline) in rest_mask.iter_mut().enumerate() {
                 // Bins are black, red body, blue armor, green armor and cyan body.
-                let mut counts = [0usize; 5];
+                let mut counts = [0usize; 6];
                 mask.clear();
                 for row in pixels.chunks_exact(w * 4) {
                     for p in row[side * w * 2..(side + 1) * w * 2].as_chunks::<4>().0 {
@@ -171,6 +180,7 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
                             [false, false, true] => 2,
                             [false, true, false] => 3,
                             [false, true, true] => 4,
+                            [true, true, false] => 5,
                             rgb => panic!("unexpected color {rgb:?}"),
                         };
                         counts[bin] += 1;
@@ -184,20 +194,25 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
                     } else {
                         assert_eq!(
                             mask != *baseline,
-                            (step, side) == (4, 0) || (step, side) == (5, 1),
+                            (step, side) == (4, 0)
+                                || (step, side) == (5, 1)
+                                || (side == 0 && (16..=21).contains(&step)),
                             "posed silhouette at step {step} side {side}"
                         );
                     }
                 }
                 let glowing = side == 0 && (1..=2).contains(&step);
+                let equipped = side == 0 && (16..=20).contains(&step);
+                let occupied = side != 0 || step != 21;
                 assert_eq!(
                     counts.map(|n| n > 0),
                     [
                         true,
                         step < 2,
-                        detailed && !glowing,
+                        detailed && occupied && !glowing && !equipped,
                         detailed && glowing,
-                        step >= 2
+                        occupied && step >= 2,
+                        detailed && equipped,
                     ],
                     "step {step} side {side} size {w}x{h}: {counts:?}"
                 );
@@ -205,7 +220,7 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
         }
         drop((result, ticket));
         #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
-        if step >= 4 {
+        if (4..14).contains(&step) {
             let delta = renderer::core::measurement::Snapshot::now().since(before);
             assert!(
                 delta.is_allocation_free(),

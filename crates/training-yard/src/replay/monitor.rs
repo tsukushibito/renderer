@@ -110,7 +110,7 @@ impl SecurityMonitor {
         }
         assert_eq!(
             visible,
-            [step == 5, step == 11],
+            [step == 5, step > 5],
             "monitor subject on frame {}",
             step + 1
         );

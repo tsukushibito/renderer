@@ -1,5 +1,5 @@
 //! Window events and replay feed the same yard actions.
-use crate::{Action, Yard, camera, replay_action, standalone, validation};
+use crate::{Action, REPLAY_FRAMES, Yard, camera, replay_action, standalone, validation};
 use renderer::{
     WindowRenderer,
     core::{PresentOutcome, runtime::RuntimeConfig},
@@ -24,6 +24,7 @@ struct Events {
     window: Option<Arc<Window>>,
     size: Option<[u32; 2]>,
     actions: std::collections::VecDeque<Action>,
+    equipment_step: usize,
     closed: bool,
     error: Option<winit::error::OsError>,
 }
@@ -58,6 +59,11 @@ impl ApplicationHandler for Events {
                     KeyCode::Digit4 => 4,
                     KeyCode::Digit5 => 5,
                     KeyCode::Digit6 => 6,
+                    KeyCode::Space => {
+                        let step = 14 + self.equipment_step;
+                        self.equipment_step = (self.equipment_step + 1) % (REPLAY_FRAMES - 14);
+                        step
+                    }
                     KeyCode::Escape => {
                         self.closed = true;
                         return;
@@ -97,7 +103,7 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
     let mut step = 0;
     let mut advance = true;
     let mut last_present = Instant::now();
-    while !input.closed && (interactive || step < 7) {
+    while !input.closed && (interactive || step < REPLAY_FRAMES) {
         events.pump_app_events(Some(Duration::from_millis(4)), &mut input);
         if let Some(extent) = input.size.take() {
             renderer.resize(extent, yard.assets())?;
@@ -106,17 +112,16 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
             }
         }
         #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
-        let measured = (!interactive && step >= 4).then(renderer::core::measurement::Snapshot::now);
+        let measured = (!interactive && (4..14).contains(&step))
+            .then(renderer::core::measurement::Snapshot::now);
         if advance {
             let action = if interactive {
                 input.actions.pop_front()
             } else {
                 replay_action(step)
             };
-            if let Some(action) = action
-                && yard.apply(action)?
-            {
-                renderer.prepare_assets(yard.assets())?;
+            if let Some(action) = action {
+                yard.apply(action, |assets| renderer.prepare_assets(assets))?;
             }
             advance = false;
         }
@@ -134,7 +139,7 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
         }
         #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
         if let Some(before) = measured {
-            if step == 7 && !renderer.wait_idle(Duration::from_secs(15))? {
+            if step == 14 && !renderer.wait_idle(Duration::from_secs(15))? {
                 return Err("final presentation retirement timed out".into());
             }
             let events = renderer::core::measurement::Snapshot::now().since(before);
@@ -150,7 +155,7 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
     let mut runtime = renderer.into_runtime()?;
     yard.release(&mut runtime)?;
     validation::check_validation(runtime)?;
-    if !interactive && step != 7 {
+    if !interactive && step != REPLAY_FRAMES {
         return Err("window closed during replay".into());
     }
     Ok(())

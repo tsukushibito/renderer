@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "-h" | "--help" => {
                 println!(
-                    "training-yard --api vulkan|d3d12 --mode headless|host|window|interactive [--output DIRECTORY]\nInteractive keys: 1 armor glow, 2 shared color, 3 restore armor, 4/5 pose left/right, 6 rest, Esc close."
+                    "training-yard --api vulkan|d3d12 --mode headless|host|window|interactive [--output DIRECTORY]\nInteractive keys: 1 armor glow, 2 shared color, 3 restore armor, 4/5 pose left/right, 6 rest, Space step equipment replay, Esc close."
                 );
                 return Ok(());
             }
