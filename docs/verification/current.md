@@ -20,6 +20,10 @@ Windows build 26200、GeForce RTX 3060、NVIDIA 610.88、Rust 1.99.0 で訓練�
 | Vulkan | `c14918ad2699` | `1622e27695f2` | `6a2a39d3af61` |
 | D3D12 | `baa236b1bc92` | `c6f61b199a1a` | `357783b17ad4` |
 
+変更のない `4d1e6eb` から受入スクリプトを実行し、全 24 コマンドが成功した。各構成 293 ファイル、計 1,172 ファイルはすべて基準とバイト一致した（基準 ZIP の SHA-256 は `a33b2c846e9144452be41ea4683f0e02d43cff04993ae1feb5f8442aa70f17dc`）。監視映像の提示中、8 枚目の後に実ウィンドウを 384 × 192 から 320 × 160 に変更して以降の 16 枚も提示した。各ビルド構成で訓練場の実機テスト 13 件に加え、Vulkan と D3D12 のホスト所有デバイス・画像の試験が通過した。最小化中は描画を休止し、復帰後の寸法で提示できた。GPU とドライバーの実機範囲は上記の Windows 環境に限る。[ウィンドウ復帰の試験](../../crates/training-yard/tests/window.rs)・[受入手順](../guides/tooling.md#scene-materials)
+
+公開例の `rust_pipeline` を実行し、`toon_views`、`two_views`、`textured_view`、`mixed_post`、`pbr_forward` を両バックエンドで再生した。最後の例はホストの HDR コピー、Bloom、影再利用を含み、中心の SDR は両 API とも [252, 118, 118, 255]、深度は 0.976431、2 枚目で 4 カスケードを再利用した。graphics を外した訓練場の直接依存は `renderer-core` だけとなり、二つの Compute の逆順回収試験も両 API で通過した。workspace の全機能テストは 611 件成功、通常実行で除外した実機等のテストは 166 件。上記の実機試験は別途明示実行した。[公開例](../guides/examples.md)・[core 単独の試験](../../crates/training-yard/tests/core_compute.rs)
+
 隊員と装備交換に続く射線の 5 フレームを、単体ウィンドウ・ヘッドレス・ホスト所有 Graph の 3 経路で再生した。48 × 24 の出力で、ガラスを通した赤い弾道、緑の障害物による遮蔽、その手前に移動した弾道、消えた後の背景を全画素で照合した。途中の 2 フレームは 3D が 24 × 12、白い照準は出力の (1, 1) の 1 画素だけで、色差は各成分 1 以下。Windows Vulkan・D3D12 の厳格構成・製品構成で各 3 経路が成功し、実ウィンドウでは各 29 枚を提示した。ホストの射線 5 フレームは製品構成で毎回のメモリイベントがすべて 0 件だった。[描画と判定](../../crates/training-yard/src/effects.rs)・[再現手順](../guides/tooling.md)
 
 空で起動して箱を移動・削除した後、個別の姿勢を持つ PBR 個体 17 体と、起動時に存在しなかった Toon 材質を標準 `prepare_assets` でロードし、両方の色を描画できた。共通 Runtime の試験では、初期 4 KiB の転送領域を拡張して 128 KiB の全バイトを書き戻し、拡張前に保持した登録バッファーの内容を読み戻した。不正な画像を含む拡張に失敗した直後にも、以前の上限と登録内容が維持された。Vulkan・D3D12 の厳格構成と製品構成で確認した。[ロード後の描画](../../crates/training-yard/tests/standard_motion.rs)・[同一デバイスでの容量変更](../../crates/renderer-core/tests/shared_runtime.rs)
