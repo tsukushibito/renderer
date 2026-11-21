@@ -12,6 +12,7 @@ use renderer::{
     program::{ManagedRasterProgram, VertexAttribute},
 };
 use std::{collections::HashMap, sync::Arc};
+use upload::UploadBatch;
 mod upload;
 pub use upload::MeshUploadProgress;
 
@@ -98,7 +99,15 @@ struct Upload {
     keys: [Option<ResourceKey>; 2],
     accepted_bytes: u64,
 }
+// Published layout ownership moves here until explicit GPU collection. Import
+// tokens return their range slots at publication; only their registrations remain.
+struct RetiredVersion {
+    keys: [Option<ResourceKey>; 2],
+    _layout: Option<Arc<Layout>>,
+}
+
 struct Asset {
+    selected_epoch: u64,
     layout: Arc<Layout>,
     revision: u64,
     active: Option<Resident>,
@@ -111,12 +120,21 @@ impl Asset {
             .map_or(&self.layout, |ready| &ready.layout)
     }
 
-    fn retire_upload(&mut self, retired: &mut Vec<ResourceKey>) {
-        retired.extend(std::mem::take(&mut self.upload).keys.into_iter().flatten());
+    fn retire_upload(&mut self, retired: &mut Vec<RetiredVersion>) {
+        let keys = std::mem::take(&mut self.upload).keys;
+        if keys.iter().any(Option::is_some) {
+            retired.push(RetiredVersion {
+                keys,
+                _layout: None,
+            });
+        }
     }
-    fn retire_active(&mut self, retired: &mut Vec<ResourceKey>) {
+    fn retire_active(&mut self, retired: &mut Vec<RetiredVersion>) {
         if let Some(active) = self.active.take() {
-            retired.extend(active.buffers.map(|b| b.key()));
+            retired.push(RetiredVersion {
+                keys: active.buffers.map(|buffer| Some(buffer.key())),
+                _layout: Some(active.layout),
+            });
         }
     }
 }
@@ -125,7 +143,8 @@ impl Asset {
 pub struct Meshes {
     registry: MeshRegistry,
     assets: HashMap<MeshHandle, Asset>,
-    retired: Vec<ResourceKey>,
+    retired: Vec<RetiredVersion>,
+    batch: UploadBatch,
 }
 impl Meshes {
     /// Budget the two initialized imports for each distinct mesh referenced by
@@ -140,10 +159,28 @@ impl Meshes {
         )
     }
     pub fn new(capacity: MeshCapacity) -> Result<Self, MeshError> {
+        let registry = MeshRegistry::new(capacity)?;
+        // Between collections each live slot starts with at most a published
+        // and an uploading version. Each accepted update/removal retires at
+        // most two more. release_gpu drains the queue before detaching assets.
+        let retired_capacity = capacity
+            .meshes
+            .checked_add(capacity.retired_mesh_versions)
+            .and_then(|versions| versions.checked_mul(2))
+            .ok_or_else(|| MeshError::capacity_exhausted("mesh retirement capacity overflow"))?;
+        let mut retired = Vec::new();
+        retired.try_reserve_exact(retired_capacity).map_err(|_| {
+            MeshError::capacity_exhausted("unable to reserve mesh retirement queue")
+        })?;
+        let mut assets = HashMap::new();
+        assets
+            .try_reserve(capacity.meshes)
+            .map_err(|_| MeshError::capacity_exhausted("unable to reserve mesh assets"))?;
         Ok(Self {
-            registry: MeshRegistry::new(capacity)?,
-            assets: HashMap::new(),
-            retired: Vec::new(),
+            registry,
+            assets,
+            retired,
+            batch: UploadBatch::new(capacity.meshes)?,
         })
     }
     pub fn create(&mut self, data: MeshData) -> Result<MeshHandle, MeshError> {
@@ -152,6 +189,7 @@ impl Meshes {
         self.assets.insert(
             handle,
             Asset {
+                selected_epoch: 0,
                 layout,
                 revision: 1,
                 active: None,
