@@ -176,8 +176,8 @@ impl StandardPipeline {
             .import(graph)?;
         let prepared = self.prepare_view(
             camera.camera,
-            camera.sun,
-            camera.bounds,
+            input.sun,
+            input.bounds,
             match input.environment {
                 Some(env) => env.import(graph)?,
                 None => defaults.environment()?,

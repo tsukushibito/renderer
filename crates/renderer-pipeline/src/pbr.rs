@@ -114,7 +114,7 @@ pub struct Environment {
 pub struct PreparedView {
     data: view::ViewData,
     pub(crate) sort_direction: [f64; 3],
-    culling: ViewCulling,
+    culling: Option<ViewCulling>,
     uniform: [u8; CAMERA_BYTES],
     environment: Environment,
     extent: [u32; 2],
@@ -125,7 +125,7 @@ impl PreparedView {
     pub(crate) fn prepare(
         view: ViewInput,
         sun: Sun,
-        bounds: Bounds,
+        bounds: Option<Bounds>,
         environment: Environment,
         extent: [u32; 2],
         shadows: Option<ShadowSettings>,
@@ -147,9 +147,9 @@ impl PreparedView {
             ],
         )?;
         Ok(Self {
-            sort_direction: view.sort_direction(),
+            sort_direction: view.forward(),
             uniform: data.uniform_bytes(),
-            culling: ViewCulling::new(*data.matrix(), data.shadow_matrices(), bounds),
+            culling: bounds.map(|bounds| ViewCulling::new(*data.matrix(), data.shadow_matrices(), bounds)),
             data,
             environment,
             extent,
@@ -176,13 +176,13 @@ impl PreparedView {
 
     /// Whether this world-space box may intersect the camera frustum.
     pub fn visible(&self, bounds: Bounds) -> bool {
-        self.culling.visible(bounds)
+        self.culling.is_none_or(|c| c.visible(bounds))
     }
 
     /// Whether this world-space box may contribute to a cascade.
     /// Returns `None` for indices outside the prepared maps.
     pub fn cascade_overlaps(&self, cascade: usize, bounds: Bounds) -> Option<bool> {
-        self.culling.cascade_overlaps(cascade, bounds)
+        self.culling?.cascade_overlaps(cascade, bounds)
     }
 
     /// Key each enabled cascade by its projection and the caller's revision

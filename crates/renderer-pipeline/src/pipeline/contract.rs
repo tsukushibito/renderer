@@ -1,5 +1,5 @@
 //! Public contract for independently implemented camera pipelines.
-use super::{Bounds, RenderObject, SceneInput, Sun, ViewInput};
+use super::{RenderObject, SceneInput, ViewInput};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::runtime::{FrameId, FrameSubmission, Runtime};
 use renderer::{
@@ -19,8 +19,6 @@ pub struct CameraView {
     pub id: ViewId,
     pub extent: [u32; 2],
     pub camera: ViewInput,
-    pub bounds: Bounds,
-    pub sun: Sun,
 }
 
 /// Graph-local scene-linear Rec.709, single-sample RGBA16F and optional D32.

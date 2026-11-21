@@ -256,7 +256,7 @@ impl StandardPipeline {
         &self,
         input: ViewInput,
         sun: Sun,
-        bounds: Bounds,
+        bounds: impl Into<Option<Bounds>>,
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
         self.recipe.prepare_view(input, sun, bounds, environment)
