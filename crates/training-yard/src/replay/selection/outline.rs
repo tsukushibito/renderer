@@ -108,10 +108,13 @@ impl Readbacks {
         result: &mut FrameCompletion,
         base: &[u8],
         output: &mut [u8; 48 * 24 * 4],
+        record: &super::super::FrameRecord,
     ) -> PipelineResult<()> {
         let mut ids = [0; 48 * 24 * 4];
         result.readback_into(self.ids, &mut ids)?;
         result.readback_into(self.outlined, output)?;
+        record.save("parts.u32", &ids)?;
+        record.save("outlined.rgba8", output)?;
         let selected = |x: i32, y: i32| {
             (0..48).contains(&x)
                 && (0..24).contains(&y)

@@ -5,18 +5,81 @@ use renderer::{
     core::{
         ImageFormat,
         graph::{GraphPool, ImageDesc, LoadOp, RasterRect, SampleCount},
-        runtime::RuntimeConfig,
+        runtime::{ManagedImage, Runtime, RuntimeConfig},
     },
     pbr::ShadowSettings,
-    pipeline::{CameraGroup, PipelineResult, RendererSetup, StandardConfig, Technique},
+    pipeline::{
+        CameraGroup, PipelineResult, PreparedSetup, RendererSetup, SceneRenderer, StandardConfig,
+        Technique,
+    },
 };
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+mod lighting;
 mod monitor;
 use monitor::SecurityMonitor;
 mod selection;
 use selection::Selection;
 
-pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
+struct FrameRecord(Option<PathBuf>);
+impl FrameRecord {
+    fn start(output: Option<&Path>, step: usize) -> PipelineResult<Self> {
+        let dir = output.map(|root| root.join(format!("frame-{step:02}")));
+        if let Some(dir) = &dir {
+            std::fs::create_dir_all(dir)?;
+            std::fs::write(
+                dir.join("input.txt"),
+                format!(
+                    "frame {}\naction {:?}\npreview cut {}\nmonitor update {}\n",
+                    step + 1,
+                    replay_action(step),
+                    matches!(step, 8 | 9),
+                    (step + 1).is_multiple_of(6)
+                ),
+            )?;
+        }
+        Ok(Self(dir))
+    }
+    fn save(&self, file: &str, bytes: &[u8]) -> PipelineResult<()> {
+        if let Some(dir) = &self.0 {
+            std::fs::write(dir.join(file), bytes)?;
+        }
+        Ok(())
+    }
+}
+
+pub fn host(config: RuntimeConfig, output: Option<&Path>) -> PipelineResult<()> {
+    let (runtime, ()) = squad(output, |plan| Ok((plan.build(config)?, ())))?;
+    let runtime = crate::effects::host(runtime)?;
+    validation::check_validation(lighting::check(runtime)?)
+}
+
+/// Record the same composed viewport for an offscreen host or for presentation
+/// on a window sharing this device. Only the caller builds the device and presents.
+pub(crate) trait Viewport {
+    /// Break on close, or continue with the size of the drawable output.
+    fn begin(
+        &mut self,
+        _: &mut Runtime,
+        _: bool,
+    ) -> PipelineResult<std::ops::ControlFlow<(), Option<[u32; 2]>>> {
+        Ok(std::ops::ControlFlow::Continue(None))
+    }
+    fn present(&mut self, _: &mut Runtime, _: ManagedImage) -> PipelineResult<()>;
+}
+
+impl Viewport for () {
+    fn present(&mut self, _: &mut Runtime, _: ManagedImage) -> PipelineResult<()> {
+        unreachable!("offscreen viewport did not request a display image")
+    }
+}
+
+pub(crate) fn squad<P: Viewport>(
+    output: Option<&Path>,
+    build: impl FnOnce(PreparedSetup<'_>) -> PipelineResult<(SceneRenderer, P)>,
+) -> PipelineResult<(Runtime, P)> {
     let mut yard = Yard::new()?;
     let mut cameras = [camera(1, [48, 24])?, camera(2, [12, 6])?];
     let mut detailed = StandardConfig::new(cameras[0].extent);
@@ -43,6 +106,9 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
     // A mouse query can remain outstanding while the main view submits its next frame.
     setup.frames_in_flight = std::num::NonZeroUsize::new(2).unwrap();
     let mut plan = setup.prepare(yard.assets())?;
+    if output.is_some() {
+        plan.reserve_readback("main depth", ImageDesc::depth32(48, 24))?;
+    }
     let mut selection = Selection::prepare(&mut plan, cameras[0])?;
     // The host's known asset pack can stream one four-vertex armor and its material.
     for size in [
@@ -65,7 +131,24 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
             pass.attachment()?;
             pass.draws(&canvas::programs(ImageFormat::Rgba8Unorm)?[1], 1)
         })?;
-    let mut drawing = plan.build(config)?;
+    let (mut drawing, mut destination) = build(plan)?;
+    if let Some(dir) = output {
+        std::fs::create_dir_all(dir)?;
+        #[cfg(feature = "vulkan")]
+        if let Some(device) = drawing.runtime().as_vulkan() {
+            std::fs::write(
+                dir.join("adapter.txt"),
+                format!("{:#?}", device.device_info()),
+            )?;
+        }
+        #[cfg(all(windows, feature = "d3d12"))]
+        if let Some(device) = drawing.runtime().as_d3d12() {
+            std::fs::write(
+                dir.join("adapter.txt"),
+                format!("{:#?}", device.device_info()),
+            )?;
+        }
+    }
     let mut host_pool = GraphPool::new(drawing.runtime().limits().graph, 1)?;
     let mut objects = Vec::with_capacity(4);
     let mut rest_shadow = vec![false; 32 * 32 * renderer::pbr::CASCADE_COUNT];
@@ -76,6 +159,13 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
     let mut storage = vec![0; 48 * 24 * 4];
     let mut screen = [0; 48 * 24 * 4];
     for step in 0..REPLAY_FRAMES {
+        let std::ops::ControlFlow::Continue(window_extent) =
+            destination.begin(drawing.runtime(), selection.has_pending_click())?
+        else {
+            selection.discard_pending(&mut drawing)?;
+            break;
+        };
+        let record = FrameRecord::start(output, step)?;
         #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
         let before = renderer::core::measurement::Snapshot::now();
         if let Some(action) = replay_action(step) {
@@ -102,10 +192,19 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
         let target = graph.image("host viewport", ImageDesc::rgba8(48, 24))?;
         let (mut frame, runtime) = drawing.begin_host_frame(graph)?;
         let mut reads = [None; 2];
+        let mut main_depth = None;
         for (camera, read) in cameras.iter().zip(&mut reads) {
             let input = yard.extract(camera, &mut objects);
-            let hdr = frame.draw_scene(camera, input)?.color;
+            let scene = frame.draw_scene(camera, input)?;
+            let hdr = scene.color;
             let main = camera.id == cameras[0].id;
+            if main && output.is_some() {
+                main_depth =
+                    Some(frame.graph().readback_image(
+                        "main depth",
+                        scene.depth.ok_or("missing primary depth")?,
+                    )?);
+            }
             if (7..=10).contains(&step) {
                 let reused = frame
                     .standard_output(camera.id)
@@ -155,29 +254,67 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
         let outline = selection.highlight(&mut graph, target, ids, &yard)?;
         let monitor_read = monitor.composite(&mut graph, target, refresh)?;
         let composed = graph.readback_image("composite viewport", target)?;
-        let graph = graph.compile()?;
-        let ticket = if let Some(fresh) = refresh {
-            let (ticket, image) = runtime.submit_with_image(&graph, fresh)?;
-            monitor.latest = Some(image);
-            ticket
+        let display = if let Some([w, h]) = window_extent {
+            let layer = Layer {
+                paint: Paint::Image(graph.image_view(target, 0, 0)?),
+                rect: RasterRect::new(0, 0, w, h),
+                clip: None,
+            };
+            let handle = graph.image("window viewport", ImageDesc::rgba8(w, h))?;
+            canvas::record(&mut graph, handle, LoadOp::Clear([0.; 4]), &[layer])?;
+            graph.export_image(handle)?;
+            Some(handle)
         } else {
-            runtime.submit(&graph)?
+            None
+        };
+        let graph = graph.compile()?;
+        let (ticket, display) = match (refresh, display) {
+            (Some(fresh), Some(screen)) => {
+                let (ticket, [feed, screen]) =
+                    runtime.submit_with_images(&graph, [fresh, screen])?;
+                monitor.latest = Some(feed);
+                (ticket, Some(screen))
+            }
+            (Some(fresh), None) => {
+                let (ticket, feed) = runtime.submit_with_image(&graph, fresh)?;
+                monitor.latest = Some(feed);
+                (ticket, None)
+            }
+            (None, Some(screen)) => {
+                let (ticket, screen) = runtime.submit_with_image(&graph, screen)?;
+                (ticket, Some(screen))
+            }
+            (None, None) => (runtime.submit(&graph)?, None),
         };
         views.publish(&ticket)?;
         drop(views);
+        if let Some(screen) = display {
+            destination.present(runtime, screen)?;
+        }
         let mut result = runtime
             .wait_for_frame(ticket.id(), Duration::from_secs(15))?
             .ok_or("view timeout")?;
         result.readback_into(composed, &mut screen)?;
+        record.save("composed.rgba8", &screen)?;
+        if let Some(depth) = main_depth {
+            result.readback_into(depth, &mut storage)?;
+            record.save("main.depth32", &storage)?;
+        }
         selection.check(samples, &mut result, &yard, step)?;
         if let Some(read) = monitor_read {
             result.readback_into(read, &mut monitor.reference)?;
             monitor.verify_subject(step);
         }
         depth.clear();
-        for &read in &shadow_reads {
+        for (&read, name) in shadow_reads.iter().zip([
+            "shadow0.depth32",
+            "shadow1.depth32",
+            "shadow2.depth32",
+            "shadow3.depth32",
+        ]) {
             let mut layer = [0; 32 * 32 * 4];
             result.readback_into(read, &mut layer)?;
+            record.save(name, &layer)?;
             depth.extend(
                 layer
                     .as_chunks::<4>()
@@ -200,10 +337,18 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
             let [w, h] = camera.extent.map(|n| n as usize);
             let pixels = &mut storage[..w * h * 4];
             result.readback_into(read.unwrap(), pixels)?;
+            record.save(
+                if camera.id == cameras[0].id {
+                    "main.rgba8"
+                } else {
+                    "preview.rgba8"
+                },
+                pixels,
+            )?;
             if camera.id == cameras[0].id {
                 assert_eq!(pixels[..4], [255; 4]);
                 let mut outlined = [0; 48 * 24 * 4];
-                outline.verify(&mut result, pixels, &mut outlined)?;
+                outline.verify(&mut result, pixels, &mut outlined, &record)?;
                 monitor.verify_composite(step, &screen, &outlined);
                 pixels[..4].copy_from_slice(&[0, 0, 0, 255]);
             }
@@ -265,7 +410,7 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
             selection.resolve_after_respawn(&mut drawing, &yard)?;
         }
         #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
-        if (4..14).contains(&step) {
+        if output.is_none() && window_extent.is_none() && (4..14).contains(&step) {
             let delta = renderer::core::measurement::Snapshot::now().since(before);
             assert!(
                 delta.is_allocation_free(),
@@ -276,5 +421,5 @@ pub fn host(config: RuntimeConfig) -> PipelineResult<()> {
     drop(monitor);
     let mut runtime = drawing.into_runtime()?;
     yard.release(&mut runtime)?;
-    validation::check_validation(runtime)
+    Ok((runtime, destination))
 }

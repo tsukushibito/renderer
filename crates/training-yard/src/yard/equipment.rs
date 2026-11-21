@@ -3,7 +3,7 @@
 use renderer::{core::graph::GraphError, mesh::MeshData, pbr::PbrVertex, pipeline::PipelineResult};
 use std::thread::JoinHandle;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum EquipmentAsset {
     Narrow,
     Wide,

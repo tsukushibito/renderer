@@ -23,6 +23,18 @@ pub(super) struct Selection {
 }
 
 impl Selection {
+    pub fn has_pending_click(&self) -> bool {
+        self.pending.is_some()
+    }
+    pub fn discard_pending(&mut self, drawing: &mut SceneRenderer) -> PipelineResult<()> {
+        if let Some(click) = self.pending.take() {
+            drawing
+                .runtime()
+                .wait_for_frame(click.submission, Duration::from_secs(15))?
+                .ok_or("pick timed out during shutdown")?;
+        }
+        Ok(())
+    }
     pub fn prepare(plan: &mut PreparedSetup<'_>, camera: CameraView) -> PipelineResult<Self> {
         outline::prepare(plan, camera.extent)?;
         Ok(Self {

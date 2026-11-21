@@ -663,7 +663,7 @@ pipeline初回作成と定常状態を分離する。現行共通領域の予約
 **採用方針:** 次の三層を公開し、標準機能の利用と利用側によるパス定義を同じ基盤で成立させる。
 以下は採用した契約であり、実装済みの範囲は[公開標準部品](rendergraph.md#公開標準パスと標準グラフ)と作業順序を参照する。
 snapshotを使う標準描画の入口は[現行契約](rendergraph.md#エンジン入力と標準描画)、移行は[作業順序](#public-api-migration)を参照する。
-この節のクレート名は現行実装を指す。次の公開構成と採否の基準は[renderer と renderer-core の設計・実装計画](#renderer-core-plan)に記す。
+二つの製品クレートにこの三層を配置した根拠と受入条件は[公開 API の設計と実装](#renderer-core-plan)に記す。
 
 | 公開する層 | 責務と利用方法 |
 |---|---|
@@ -782,7 +782,7 @@ B2のPBR、B3の影・HDR・tone mappingは標準パスと標準グラフへ段�
 ### 7.8 renderer と renderer-core の公開 API を検証して実装する計画
 
 単体ゲームが 3D と HUD を一画面に描けること、既存エンジンが自分のシーン・UI・提出権を保てること、GPU 基盤だけでも使えることを同時に満たす。
-目標とする製品クレートは `renderer` と `renderer-core` の二つ。以下の型名・呼び出しは試作で評価する候補である。
+製品クレートは `renderer` と `renderer-core` の二つ。以下に利用コードから選んだ境界と、その判断を再検証する条件を示す。
 現在使える API は[組み込みガイド](../guides/tooling.md#scene-materials)、実行済みの検証は[現行の検証記録](../verification/current.md#engine-integration)を参照する。
 
 ゲーム世界の所有と描画入力の境界は、Filament の平坦な描画シーンと Bevy の描画用データ抽出が参考になる。どちらの入力でも同じ描画方式へ到達できるかを試す。
@@ -805,30 +805,33 @@ B2のPBR、B3の影・HDR・tone mappingは標準パスと標準グラフへ段�
 
 #### 利用コードで比較する入口
 
-次は操作順と所有者を示す Rust のスケッチ。試作では各例を公開 API のみ使う別クレートでコンパイルし、補助関数の中までレビューする。
+次は製品 API の呼び出し側の抜粋。ウィンドウのイベント処理、ゲーム内の個体 ID、HUD のレイアウトを呼び出し側が持つ。
 単体アプリは空で開始でき、登録後の最初の移動にも通常の更新を使う。HUD だけのフレームでは `draw_scene` を省く。
 
 ```rust,ignore
-let mut renderer = Renderer::new(device)?;
-let mut level = renderer.create_scene();
-let actor = level.spawn(model)?;
-level.instance_mut(actor)?.set_transform(pose);
-
-let mut frame = renderer.begin_frame(&window)?;
-frame.draw_scene(&level, &camera)?;
-frame.draw_overlay(hud.draw_data())?;
-frame.present()?;
+let mut renderer = WindowRenderer::new(window, backend, camera, assets)?;
+// 描画イベント。提示待ちの再試行では draw が前回の画像を使う。
+let outcome = renderer.draw(|frame| {
+    let input = SceneInput::new(&meshes, &materials, scene.objects());
+    frame.draw_scene(input, exposure)?;
+    frame.draw_overlay(&hud_layers)?;
+    Ok(())
+})?;
 ```
 
 ホストが描画世界と提出を所有する場合は、抽出した形状・姿勢・ライトをそのまま借りて記録する。標準シーンを使う経路と同じ PBR 部品を通す。
-下例の `host` が Graph と提出を所有し、`outline` はホストの部品である。記録中の入力借用が終わっても、提出に必要な資源の版は保持する。
+下例ではホストが Graph と最終提出を所有する。記録中の入力借用が終わっても、提出に必要な資源の版は保持する。訓練場はこの境界で輪郭と監視モニターを追加する。[利用コード](../../crates/training-yard/src/replay.rs)
 
 ```rust,ignore
-let target = host.color_target();
-let images = renderer.record_scene(host.graph_mut(), world.render_input(), &camera, target)?;
-outline.record(host.graph_mut(), &images, selection)?;
-host.record_ui(target)?;
-host.submit()?;
+let mut graph = host_pool.begin()?;
+let target = graph.image("viewport", output_desc)?;
+let (mut frame, runtime) = drawing.begin_host_frame(graph)?;
+let hdr = frame.draw_scene(&camera, extracted)?.color;
+frame.write_output(camera.id, hdr, exposure, Some(target))?;
+let (mut graph, mut histories) = frame.finish_recording()?;
+canvas::record(&mut graph, target, LoadOp::Load, &hud_layers)?;
+let receipt = runtime.submit(&graph.compile()?)?;
+histories.publish(&receipt)?;
 ```
 
 core のみの利用者は、同じ Graph に Compute と読み戻しを宣言して `graph.compile()`、`runtime.submit(&compiled)`、完了通知、結果の消費と返却までを行う。

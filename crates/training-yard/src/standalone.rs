@@ -1,20 +1,24 @@
 //! Standard Frame entry points shared by the interactive window and headless capture.
-use crate::{REPLAY_FRAMES, Yard, camera, replay_action, validation};
+use crate::{
+    REPLAY_FRAMES, Yard, camera,
+    effects::{self, FiringLane},
+    replay_action, validation,
+};
 use renderer::{
     Frame, Renderer,
     canvas::{Layer, Paint},
     core::{graph::RasterRect, runtime::RuntimeConfig},
-    pipeline::{CameraView, PipelineResult, RenderObject},
+    pipeline::{PipelineResult, RenderObject},
 };
 use std::{io::Write, path::Path, time::Duration};
 
 pub(crate) fn draw(
     frame: &mut Frame<'_>,
     yard: &Yard,
-    camera: &CameraView,
     scratch: &mut Vec<RenderObject>,
 ) -> PipelineResult<()> {
-    frame.draw_scene(yard.extract(camera, scratch), 1.)?;
+    let scene_view = *frame.scene_view();
+    frame.draw_scene(yard.extract(&scene_view, scratch), 1.)?;
     frame.draw_overlay(&[Layer {
         paint: Paint::Color([1.; 4]),
         rect: RasterRect::new(0, 0, 1, 1),
@@ -58,7 +62,7 @@ pub fn headless(config: RuntimeConfig, output: Option<&Path>) -> PipelineResult<
             consume(&mut renderer, capture, &mut pixels, step, output)?;
         }
         let mut frame = renderer.begin_frame()?;
-        draw(&mut frame, &yard, &camera, &mut scratch)?;
+        draw(&mut frame, &yard, &mut scratch)?;
         let capture = frame.capture()?;
         if matches!(step, 15 | 20) {
             // Keep the old result through the next asset change. Preparation may
@@ -68,7 +72,39 @@ pub fn headless(config: RuntimeConfig, output: Option<&Path>) -> PipelineResult<
             consume(&mut renderer, capture, &mut pixels, step, output)?;
         }
     }
+    let mut lane = FiringLane::new()?;
+    for step in 0..effects::FRAMES {
+        match step {
+            0 => renderer.prepare_assets(lane.assets())?,
+            2 => renderer.set_scene_extent(Some([24, 12]), lane.assets())?,
+            4 => renderer.set_scene_extent(None, lane.assets())?,
+            _ => {}
+        }
+        #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
+        let before = renderer::core::measurement::Snapshot::now();
+        let mut frame = renderer.begin_frame()?;
+        let extent = frame.scene_view().extent;
+        frame.draw_scene(lane.input(step)?, 1.)?;
+        frame.draw_overlay(&[effects::HUD])?;
+        let capture = frame.capture()?;
+        if !renderer.read_capture(&capture, &mut pixels, Duration::from_secs(15))? {
+            return Err("firing lane capture timed out".into());
+        }
+        #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
+        {
+            let events = renderer::core::measurement::Snapshot::now().since(before);
+            assert!(
+                events.is_allocation_free(),
+                "capture lane step {step}: {events:?}"
+            );
+        }
+        if let Some(dir) = output {
+            write_frame(dir, REPLAY_FRAMES + step, &pixels)?;
+        }
+        effects::verify(&pixels, camera.extent, extent, step)?;
+    }
     let mut runtime = renderer.into_runtime()?;
+    lane.release(&mut runtime)?;
     yard.release(&mut runtime)?;
     validation::check_validation(runtime)
 }
@@ -82,6 +118,9 @@ fn consume(
 ) -> PipelineResult<()> {
     if !renderer.read_capture(&capture, pixels, Duration::from_secs(15))? {
         return Err(format!("capture timeout at replay step {step}").into());
+    }
+    if let Some(dir) = output {
+        write_frame(dir, step, pixels)?;
     }
     if pixels[..4] != [255; 4] {
         return Err(format!("HUD missing at replay step {step}").into());
@@ -108,14 +147,16 @@ fn consume(
             "equipment step {step}"
         );
     }
-    if let Some(dir) = output {
-        let path = dir.join(format!("frame-{step:02}.ppm"));
-        let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
-        file.write_all(b"P6\n48 24\n255\n")?;
-        for rgba in pixels.as_chunks::<4>().0 {
-            file.write_all(&rgba[..3])?;
-        }
-        file.flush()?;
+    Ok(())
+}
+
+fn write_frame(dir: &Path, step: usize, pixels: &[u8; 48 * 24 * 4]) -> PipelineResult<()> {
+    let path = dir.join(format!("frame-{step:02}.ppm"));
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
+    file.write_all(b"P6\n48 24\n255\n")?;
+    for rgba in pixels.as_chunks::<4>().0 {
+        file.write_all(&rgba[..3])?;
     }
+    file.flush()?;
     Ok(())
 }

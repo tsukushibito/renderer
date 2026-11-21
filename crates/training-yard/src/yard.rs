@@ -35,7 +35,7 @@ pub struct Yard {
 }
 
 /// Actions from either keyboard input or the deterministic replay.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Action {
     Armor(bool),
     BodyColor([f32; 3]),

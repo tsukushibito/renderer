@@ -14,9 +14,9 @@ static ALLOCATOR: renderer::core::measurement::CountingAllocator<std::alloc::Sys
 #[ignore = "requires real devices for each enabled backend"]
 fn posed_models_in_two_views() -> PipelineResult<()> {
     #[cfg(feature = "vulkan")]
-    training_yard::replay::host(RuntimeConfig::Vulkan(Default::default()))?;
+    training_yard::replay::host(RuntimeConfig::Vulkan(Default::default()), None)?;
     #[cfg(all(windows, feature = "d3d12"))]
-    training_yard::replay::host(RuntimeConfig::D3D12(Default::default()))?;
+    training_yard::replay::host(RuntimeConfig::D3D12(Default::default()), None)?;
     Ok(())
 }
 

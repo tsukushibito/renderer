@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "-h" | "--help" => {
                 println!(
-                    "training-yard --api vulkan|d3d12 --mode headless|host|window|interactive [--output DIRECTORY]\nInteractive keys: 1 armor glow, 2 shared color, 3 restore armor, 4/5 pose left/right, 6 rest, Space step equipment replay, Esc close."
+                    "training-yard --api vulkan|d3d12 --mode headless|host|window|interactive [--output DIRECTORY]\nInteractive keys: 1 armor glow, 2 shared color, 3 restore armor, 4/5 pose left/right, 6 rest, Space step equipment replay, F step firing lane, V play monitor replay and finish, Esc close."
                 );
                 return Ok(());
             }
@@ -47,11 +47,11 @@ fn run(api: &str, mode: &str, output: Option<PathBuf>) -> Result<(), Box<dyn Err
     };
     match mode {
         "headless" => training_yard::standalone::headless(config, output.as_deref())?,
-        _ if output.is_some() => return Err("use --output with --mode headless".into()),
         "host" => {
-            training_yard::replay::host(config)?;
+            training_yard::replay::host(config, output.as_deref())?;
             training_yard::targets::run(config)?;
         }
+        _ if output.is_some() => return Err("use --output with --mode headless or host".into()),
         #[cfg(all(windows, feature = "presentation"))]
         "window" | "interactive" => training_yard::window::run(config, mode == "interactive")?,
         _ => return Err(format!("unknown mode {mode}").into()),

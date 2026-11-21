@@ -33,6 +33,7 @@ const OUTPUT: &str = "frame output";
 const TRANSFER: &str = "frame output transfer";
 const READBACK: &str = "frame pixels";
 const TONE_MAP: &str = "frame tone map";
+const SCENE_LINEAR: &str = "scene display linear";
 
 #[derive(Clone, Copy)]
 enum FrameDestination {
@@ -63,6 +64,7 @@ impl FrameDestination {
 pub struct Renderer {
     drawing: SceneRenderer,
     camera: CameraView,
+    scene_extent: Option<[u32; 2]>,
     working_set: Preparation,
     host: Preparation,
     destination: FrameDestination,
@@ -71,14 +73,16 @@ pub struct Renderer {
 impl Renderer {
     fn prepare<'a>(
         camera: CameraView,
+        scene_extent: Option<[u32; 2]>,
         assets: SceneAssets<'a>,
         destination: FrameDestination,
     ) -> PipelineResult<PreparedSetup<'a>> {
-        let mut group = CameraGroup::standard(
-            camera,
-            Technique::Forward,
-            StandardConfig::new(camera.extent),
-        );
+        let scene = CameraView {
+            extent: scene_extent.unwrap_or(camera.extent),
+            ..camera
+        };
+        let mut group =
+            CameraGroup::standard(scene, Technique::Forward, StandardConfig::new(scene.extent));
         group.output = None;
         let mut setup = RendererSetup::new(group);
         // Small scenes commonly load the first models after showing their UI.
@@ -89,6 +93,14 @@ impl Renderer {
         let target = ImageDesc::rgba8(w, h);
         let prep = plan.preparation_mut();
         prep.reserve_transient_image(LINEAR, ImageDesc::rgba16_float(w, h))?;
+        if scene.extent != camera.extent {
+            let [sw, sh] = scene.extent;
+            prep.reserve_transient_image(SCENE_LINEAR, ImageDesc::rgba16_float(sw, sh))?;
+            prep.reserve_raster_pass("canvas", SampleCount::X1, |pass| {
+                pass.attachment()?;
+                pass.draws(&canvas::programs(ImageFormat::Rgba16Float)?[0], 1)
+            })?;
+        }
         prep.reserve_raster_pass(TONE_MAP, SampleCount::X1, |pass| {
             pass.attachment()?;
             pass.draws(&output::tone_map_neutral_pipeline().program, 1)
@@ -133,13 +145,14 @@ impl Renderer {
         configure: impl FnOnce(&mut Preparation) -> Result<(), GraphError>,
     ) -> PipelineResult<Self> {
         let destination = FrameDestination::Capture;
-        let mut plan = Self::prepare(camera, assets, destination)?;
+        let mut plan = Self::prepare(camera, None, assets, destination)?;
         let host = Self::prepare_host(&mut plan, configure)?;
         let working_set = Self::base_working_set(&plan)?;
         let drawing = plan.build(backend)?;
         Ok(Self {
             drawing,
             camera,
+            scene_extent: None,
             working_set,
             host,
             destination,
@@ -175,7 +188,29 @@ impl Renderer {
         camera: CameraView,
         assets: SceneAssets<'_>,
     ) -> PipelineResult<()> {
-        let mut plan = Self::prepare(camera, assets, self.destination)?;
+        self.configure_view(camera, self.scene_extent, assets)
+    }
+
+    /// Set the 3D render resolution at a change boundary. Overlays and captures
+    /// use the full output size. Pass `None` to follow output resizes again.
+    pub fn set_scene_extent(
+        &mut self,
+        extent: Option<[u32; 2]>,
+        assets: SceneAssets<'_>,
+    ) -> PipelineResult<()> {
+        self.configure_view(self.camera, extent, assets)
+    }
+
+    fn configure_view(
+        &mut self,
+        camera: CameraView,
+        scene_extent: Option<[u32; 2]>,
+        assets: SceneAssets<'_>,
+    ) -> PipelineResult<()> {
+        if scene_extent.is_some_and(|extent| extent.contains(&0)) {
+            return Err("3D render extent must be nonzero".into());
+        }
+        let mut plan = Self::prepare(camera, scene_extent, assets, self.destination)?;
         plan.preparation_mut()
             .add_requirements(self.host.graph_requirements(), self.host.working_set())?;
         let working_set = Self::base_working_set(&plan)?;
@@ -186,6 +221,7 @@ impl Renderer {
                 .is_err_and(|error| error.is::<crate::pipeline::RetiredViewError>())
         {
             self.camera = camera;
+            self.scene_extent = scene_extent;
             self.working_set = working_set;
         }
         replaced
@@ -269,7 +305,11 @@ impl Renderer {
         let recording = self.drawing.begin_frame()?;
         Ok(Frame {
             recording,
-            camera: self.camera,
+            camera: CameraView {
+                extent: self.scene_extent.unwrap_or(self.camera.extent),
+                ..self.camera
+            },
+            output_extent: self.camera.extent,
             linear: None,
         })
     }
@@ -318,16 +358,21 @@ impl Capture {
 pub struct Frame<'a> {
     recording: SceneFrame<'a>,
     camera: CameraView,
+    output_extent: [u32; 2],
     linear: Option<ImageHandle>,
 }
 
 impl Frame<'_> {
+    /// Camera and actual 3D resolution used for view-dependent extraction and LOD.
+    pub fn scene_view(&self) -> &CameraView {
+        &self.camera
+    }
     pub fn graph(&mut self) -> &mut Graph {
         self.recording.graph()
     }
 
     fn new_target(&mut self) -> Result<ImageHandle, GraphError> {
-        let [w, h] = self.camera.extent;
+        let [w, h] = self.output_extent;
         self.graph().image(LINEAR, ImageDesc::rgba16_float(w, h))
     }
 
@@ -340,8 +385,24 @@ impl Frame<'_> {
         }
         let hdr = self.recording.draw_scene(&self.camera, input)?.color;
         let view = self.graph().image_view(hdr, 0, 0)?;
-        let target = self.new_target()?;
+        let scaled = self.camera.extent != self.output_extent;
+        let target = if scaled {
+            let [w, h] = self.camera.extent;
+            self.graph()
+                .image(SCENE_LINEAR, ImageDesc::rgba16_float(w, h))?
+        } else {
+            self.new_target()?
+        };
         output::tone_map_neutral(self.graph(), TONE_MAP, view, target, exposure)?;
+        if scaled {
+            let image = self.graph().image_view(target, 0, 0)?;
+            let [w, h] = self.output_extent;
+            return self.draw_overlay(&[Layer {
+                rect: renderer_core::graph::RasterRect::new(0, 0, w, h),
+                clip: None,
+                paint: canvas::Paint::Image(image),
+            }]);
+        }
         self.linear = Some(target);
         Ok(())
     }
@@ -363,7 +424,7 @@ impl Frame<'_> {
         }
         let linear = self.linear.expect("initialized frame");
         let source = self.graph().image_view(linear, 0, 0)?;
-        let [w, h] = self.camera.extent;
+        let [w, h] = self.output_extent;
         let target = self.graph().image(OUTPUT, ImageDesc::rgba8(w, h))?;
         output::write_sdr(self.graph(), TRANSFER, source, target, encoding)
     }
@@ -376,7 +437,7 @@ impl Frame<'_> {
         Ok(Capture {
             frame: accepted.id(),
             pixels,
-            extent: self.camera.extent,
+            extent: self.output_extent,
         })
     }
 }

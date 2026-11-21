@@ -39,7 +39,7 @@ impl WindowRenderer {
     ) -> PipelineResult<Self> {
         let presentation = renderer_core::PresentationConfig::default();
         let destination = FrameDestination::Window(presentation);
-        let mut plan = Renderer::prepare(camera, assets, destination)?;
+        let mut plan = Renderer::prepare(camera, None, assets, destination)?;
         let host = Renderer::prepare_host(&mut plan, configure)?;
         plan.fit_backend(&mut backend)?;
         let (runtime, presenter) = Runtime::for_window(
@@ -56,6 +56,7 @@ impl WindowRenderer {
             renderer: Renderer {
                 drawing,
                 camera,
+                scene_extent: None,
                 working_set,
                 destination,
                 host,
@@ -65,6 +66,21 @@ impl WindowRenderer {
     }
 
     pub fn prepare_assets(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
+        self.ready_for_change()?;
+        self.renderer.prepare_assets(assets)
+    }
+
+    /// Set the 3D resolution independently of the window and its HUD.
+    pub fn set_scene_extent(
+        &mut self,
+        extent: Option<[u32; 2]>,
+        assets: SceneAssets<'_>,
+    ) -> PipelineResult<()> {
+        self.ready_for_change()?;
+        self.renderer.set_scene_extent(extent, assets)
+    }
+
+    fn ready_for_change(&mut self) -> PipelineResult<()> {
         if self.presenter.has_pending_frame() {
             use renderer_core::capacity::{
                 CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind,
@@ -77,8 +93,7 @@ impl WindowRenderer {
             )
             .into());
         }
-        self.wait_for_change()?;
-        self.renderer.prepare_assets(assets)
+        self.wait_for_change()
     }
 
     fn wait_for_change(&mut self) -> PipelineResult<()> {

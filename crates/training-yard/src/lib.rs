@@ -3,6 +3,7 @@
     feature = "graphics",
     any(feature = "vulkan", all(windows, feature = "d3d12"))
 ))]
+mod effects;
 mod yard;
 pub use yard::*;
 pub mod replay;

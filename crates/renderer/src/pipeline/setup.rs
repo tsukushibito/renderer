@@ -370,6 +370,15 @@ impl<'a> PreparedSetup<'a> {
         backend.fit_preparation(&self.preparation, self.upload_capacity()?, self.readback)?;
         Ok(())
     }
+    /// Install this complete working set and grow recording storage on an existing
+    /// device. Include the host's live passes in the plan before calling this.
+    pub fn prepare_runtime(&self, runtime: &mut Runtime) -> PipelineResult<()> {
+        Ok(runtime.prepare_fitted_working_set(
+            &self.preparation,
+            self.upload_capacity()?,
+            self.readback,
+        )?)
+    }
     fn upload_capacity(&self) -> PipelineResult<u64> {
         let req = self.preparation.graph_requirements();
         // Allow placement padding between native image transfers in the same submission.

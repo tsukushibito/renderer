@@ -239,7 +239,7 @@ histories.publish(&receipt)?;
 
 ```powershell
 cargo run --release -p training-yard --all-features -- --api vulkan --mode headless --output .tools/yard
-cargo run --release -p training-yard --all-features -- --api vulkan --mode host
+cargo run --release -p training-yard --all-features -- --api vulkan --mode host --output .tools/yard-host
 cargo run --release -p training-yard --all-features -- --api vulkan --mode window
 cargo run --release -p training-yard --all-features -- --api vulkan --mode interactive
 ```
@@ -248,7 +248,18 @@ cargo run --release -p training-yard --all-features -- --api vulkan --mode inter
 更新時は同じ Graph のカメラ出力をパネルに合成して `submit_with_image` で保持する。次回は保持した `ManagedImage` のスナップショットを Graph に import して使う。[監視モニターの利用コード](../../crates/training-yard/src/replay/monitor.rs)
 ウィンドウ再生は自動で終了する。手動操作では 1 で左の鎧を発光、2 で共有色を変更、3 で発光を解除し、4・5・6 で左のポーズ・右のポーズ・静止姿勢を切り替える。Space で装備要求・完了・削除・再生成を 1 操作ずつ進め、Esc で終了する。[ウィンドウのイベント処理](../../crates/training-yard/src/window.rs)・[ホストの描画コード](../../crates/training-yard/src/replay.rs)
 
+V で監視モニターと選択輪郭を含む 24 フレームを同じウィンドウに再生して終了する。更新フレームでは監視画像と提示画像を一度の `submit_with_images` で取得する。
+
+Windows の GPU、デスクトップ、Vulkan の検証レイヤー、D3D12 の Graphics Tools が揃った環境では、次のコマンドで二つのバックエンドと厳格・製品の両構成を検証できる。引数に新しい保存先を指定する。
+
+```powershell
+python -B tools/training_yard/accept.py .tools/yard-acceptance
+```
+
+保存先にはコマンドと終了状態、Git リビジョン、実行ファイルの SHA-256、アダプター、フレーム別の入力・画像・差分が残る。ヘッドレス画像は sRGB の PPM。ホスト画像は表示リニア RGBA8、部位 ID は little-endian u32、深度と影は little-endian f32。基準は実機で独立の画素・姿勢・選択判定を通した 29 枚の PPM とホスト 24 フレームから作成した。全画素を対象に色は各成分 1、深度・影は絶対差 0.00001 を上限とし、ID と入力列は完全一致を要求する。保存なしのホスト実行でメモリを別途計測する。基準を変更する際は画像差分と期待値の変更理由をレビューする。[受入スクリプト](../../tools/training_yard/accept.py)・[基準データ](../../crates/training-yard/tests/reference.zip)
+
 ウィンドウの寸法イベントは `WindowRenderer::resize(extent, assets)` に渡す。ゼロ寸法では記録を休止する。
+3D の解像度を変えるには、ロード境界で `set_scene_extent(Some([width, height]), assets)` を呼ぶ。`Frame::scene_view()` の寸法を LOD 選択に使える。Canvas とキャプチャの寸法は出力に合わせる。`None` でウィンドウに追従する。訓練場の最後の 5 フレームでは、ガラスと障害物を弾道が横切る間に 3D 解像度を半分にし、1 画素の照準を描く。手動操作の F でこの 5 場面を順に再生して隊員画面へ戻る。[射線の材質と期待画素](../../crates/training-yard/src/effects.rs)
 連続するカメラ移動には `set_camera`、カットには `cut_camera` を使う。ホストが複数ビューを管理するときは `drawing.camera_cut(view_id)` でそのビューの時間履歴を無効化できる。標準パイプラインは準備済みの影画像に次回描き直す。
 資産のロードやリサイズは以前の描画と提示の完了を待てる変更境界で行う。ホストが待機時間を制御する場合は `wait_idle(timeout)` を使う。提示待ちの画像がある間は通常の `draw` で提示を進める。
 ビュー構成を置き換える際は、旧ビューと新ビューの資源クラスを一時的に同時に準備する。新ビューの初期化が失敗した場合も以前のビューで描画を続けられる。
