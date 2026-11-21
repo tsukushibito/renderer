@@ -232,8 +232,8 @@ impl Runtime {
     ) -> Result<Self, ExecutionError> {
         limits.validate()?;
         let classes = D3D12Classes::new(working_set.resources)?;
-        Ok(Self {
-            inner: RuntimeInner::D3D12(crate::d3d12::D3D12Runtime::from_queue(
+        Self::with_inner(
+            RuntimeInner::D3D12(crate::d3d12::D3D12Runtime::from_queue(
                 queue,
                 limits.d3d12_config(config),
                 &classes.buffers,
@@ -241,7 +241,8 @@ impl Runtime {
                 working_set.raster,
                 working_set.compute,
             )?),
-        })
+            limits.resource_capacity,
+        )
     }
 
     /// Prepare new classes and Program variants at an explicit change boundary.
