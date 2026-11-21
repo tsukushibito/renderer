@@ -211,6 +211,10 @@ Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受�
 画面内の端末のように自作のパスを組み込む場合は、`headless_with` または `WindowRenderer::new_with` でパスの資源を予約し、`frame.graph()` に記録する。
 そこで描いた画像ビューはそのフレーム内の Canvas に渡せる。[端末の奥行きと HUD 合成の実行例](../../crates/training-yard/tests/world_panel.rs)
 
+同じモデルを複数の位置に置くときは、`model::Model` に部位ごとのメッシュ範囲、共有材質スロット、LOD の最小画素サイズをまとめる。
+`instantiate` で作った個体には変換と材質の上書きを保持する。ロード時に `asset_draws()` で全 LOD の資産を準備し、描画時に `draws(&camera)` でそのビューの部位を抽出する。
+個体の `set_material(slot, Some(handle))` はその個体に効き、`None` は共有材質に戻す。共有材質自体の変更は `Materials::update_pbr` で行う。[二つのカメラと装備材質の実行例](../../crates/training-yard/tests/model_views.rs)
+
 個別のパスを準備して標準 Forward を使う場合はカメラと初期シーンから構成する。カメラには安定した `ViewId`、寸法、`ViewInput` を渡す。
 `build` は参照されたメッシュと材質を転送し、初期化に使った投入の完了を回収して返る。
 

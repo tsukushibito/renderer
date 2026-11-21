@@ -62,6 +62,7 @@ mod frame;
 pub use frame::*;
 pub mod material;
 pub mod mesh;
+pub mod model;
 pub mod passes;
 pub mod pbr;
 pub mod pbr_deferred;
