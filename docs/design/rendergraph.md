@@ -498,8 +498,8 @@ native Programを使わないattachment-onlyへ正規化する。一般形のcle
 Programのidentityはshader・ABI・固定状態を含む不変の版を表す。埋め込み版は静的descriptorの同一性を使い、
 ロードした版は取込ごとに再利用しないIDを割り当てる。差し替える際は新しい版を明示準備する。
 runtimeのpipeline／layoutとdescriptor leaseは記録・未投入cancel・実GPU完了まで保持する。
-Program集合を変更する前には、GPU完了だけでなく結果ハンドルをDropし、export／refreshした
-buffer snapshotも返却する。D3D12は最後のreadback消費時にnative readback枠を返すが、
+Program集合を変更する前に実行を完了させ、結果ハンドルとexport付きsubmissionを返却する。
+export／refreshしたbuffer snapshotは同じ登録内容を参照し続ける。D3D12は最後のreadback消費時にnative readback枠を返すが、
 結果ハンドル自体の返却はregistryに保持する小さな共有anchorで追跡し、Vulkanと同じ変更境界にする。
 anchorは再準備でもregistryとともに保持し、通常frameの結果返却でheapを解放しない。
 共通上限は一つのworking set内の64 Program、4 binding group、19 binding、16 vertex属性、128 byteのinline定数であり、
@@ -828,9 +828,9 @@ CPU探索と所有取得・返却の比較は[現在の検証](../verification/c
 通常のprepareは登録中・参照中の物理資源、実行枠、結果枠、export metadata、range tokenの不足を
 容量エラーとして返し、増設もGPU待機もしない。`initialized_ranges_per_resource`と`range_snapshots`は
 個別に指定でき、途中のtoken取得失敗でも既に取得した参照を全て返す。
-working set変更はVulkanと同様に全実行・結果・export付きsubmissionとexport／refreshした
-`ImportBuffer`の全clone返却を必要とする。登録資源のdeleteは不要で、key・内容・初期化・provenanceを維持する。
-buffer snapshotは保持したkeyから再取得でき、scalarな`ImportImage`は変更前のものを利用できる。
+working set変更はVulkanと同様に全実行・結果・export付きsubmissionの返却を必要とする。
+登録資源のkey・revision・初期化範囲・provenanceと、発行済みの`ImportBuffer`・`ImportImage`を維持する。
+buffer snapshot用のpoolはregistryとともに存続し、固定の枠数に既存のtokenを含める。内容更新やdeleteによる失効は従来どおりである。
 新classに含めなかった登録画像も各executionのview枠へ含め、native画像を余分に複製しない。
 準備に必要なnative資源・Program・descriptorを別poolに全て作成してから、旧registryの再利用可能な
 未登録indexへ新資源を移し、最後にregistryを新poolへ移す。登録entryは動かさず、未登録indexの世代を

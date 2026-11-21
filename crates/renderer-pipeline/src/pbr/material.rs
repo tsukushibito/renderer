@@ -290,25 +290,12 @@ impl ResidentMaterialUniform {
             .ok_or_else(|| GraphError::invalid_input("PBR material snapshot is not available"))
     }
 
-    /// Return the range snapshot before an explicit Runtime reprepare. The
-    /// private registration and its immutable contents remain unchanged.
-    pub fn release_snapshot(&mut self) {
-        self.snapshot = None;
-    }
-
-    /// Reacquire the snapshot after reprepare. Use the same Runtime.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn refresh_snapshot(&mut self, runtime: &Runtime) -> Result<(), ExecutionError> {
-        self.snapshot = Some(runtime.refresh_buffer(self.key)?);
-        Ok(())
-    }
-
     /// Unregister the material. Previously accepted work keeps its leases.
     /// On failure, the registration remains available for a retry.
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn release(&mut self, runtime: &mut Runtime) -> Result<(), ExecutionError> {
         runtime.delete(self.key)?;
-        self.release_snapshot();
+        self.snapshot = None;
         Ok(())
     }
 }

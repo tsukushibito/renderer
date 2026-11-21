@@ -236,16 +236,6 @@ impl Resident {
         })
     }
 
-    #[cfg(all(windows, feature = "presentation"))]
-    pub fn release(self) -> Released {
-        Released {
-            layout: self.layout,
-            vertices: self.vertices.key(),
-            indices: self.indices.key(),
-            aabbs: self.aabbs.as_ref().map(ImportBuffer::key),
-        }
-    }
-
     pub fn prepare_frame<'a>(
         &'a self,
         graph: &mut Graph,
@@ -303,30 +293,6 @@ fn binding(binding: u32, buffer: BufferHandle, size: u64) -> Binding {
             offset: 0,
             size,
         },
-    }
-}
-
-#[cfg(all(windows, feature = "presentation"))]
-pub(super) struct Released {
-    layout: Arc<Layout>,
-    vertices: renderer::graph::ResourceKey,
-    indices: renderer::graph::ResourceKey,
-    aabbs: Option<renderer::graph::ResourceKey>,
-}
-
-#[cfg(all(windows, feature = "presentation"))]
-impl Released {
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn refresh(self, backend: &renderer::runtime::Runtime) -> Result<Resident, Error> {
-        Ok(Resident {
-            layout: self.layout,
-            vertices: backend.refresh_buffer(self.vertices)?,
-            indices: backend.refresh_buffer(self.indices)?,
-            aabbs: self
-                .aabbs
-                .map(|key| backend.refresh_buffer(key))
-                .transpose()?,
-        })
     }
 }
 

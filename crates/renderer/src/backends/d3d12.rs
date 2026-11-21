@@ -240,10 +240,9 @@ impl D3D12Runtime {
     }
     /// Reserves exact image classes, descriptor arenas and immutable Raster and
     /// Compute pipelines at an explicit change boundary. All execution and result
-    /// leases, completed submissions with exports, and all exported/refreshed
-    /// `ImportBuffer` snapshots and clones must have returned. Registered resources
-    /// retain their keys and contents; `delete` is not required. Refresh buffer
-    /// snapshots after changing the working set. Registered images get view slots
+    /// leases and completed submissions with exports must have returned.
+    /// Registered resources retain their keys, contents, and import snapshots.
+    /// Registered images get view slots
     /// even when omitted from `images`. Ordinary Graph preparation never grows storage.
     /// `buffers: None` retains the current prepared buffer-class budget;
     /// `Some(classes)` replaces it, including `Some(&[])` for no free buffers.
@@ -276,7 +275,7 @@ impl D3D12Runtime {
         let mut registry = self.pool.registry.lock().unwrap_or_else(|e| e.into_inner());
         if !registry.metadata_is_idle() {
             return Err(D3D12RuntimeError::capacity_with(
-                "return submission exports and buffer snapshots before changing the working set",
+                "return submission and result metadata before changing the working set",
                 RuntimeCapacityError::new(
                     RuntimeCapacityKind::ExportMetadata,
                     CapacityRecovery::ReleaseOwners,

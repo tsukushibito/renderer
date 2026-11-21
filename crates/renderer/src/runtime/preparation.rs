@@ -208,9 +208,9 @@ impl Runtime {
 
     /// Prepare new classes and Program variants at an explicit change boundary.
     ///
-    /// Return all Graph execution, result, export, and import-range leases
-    /// before replacing the set. Registered resources retain keys and contents;
-    /// refresh buffer snapshots with the retained keys after preparation.
+    /// Return Graph execution, result and submission export metadata leases
+    /// before replacing the set. Registered buffers and images keep their keys,
+    /// scheduled contents and import snapshots, including snapshots in built Graphs.
     /// Unused idle resources from the previous set are released when the
     /// replacement commits. Failed replacements preserve the previous set.
     pub fn prepare_working_set(
