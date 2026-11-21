@@ -331,7 +331,6 @@ impl DeviceImage {
                     },
                 },
             }),
-            crate::ImageFormat::Rgba8Srgb => None,
             crate::ImageFormat::Rgba8Unorm | crate::ImageFormat::Rgba16Float => {
                 Some(D3D12_CLEAR_VALUE {
                     Format: image_format(desc.format),
@@ -340,6 +339,7 @@ impl DeviceImage {
                     },
                 })
             }
+            _ => None,
         };
         let desc = Self::graph_resource_desc(desc);
         let mut raw = None;
@@ -383,7 +383,6 @@ impl DeviceImage {
     pub(super) fn graph_resource_desc(desc: crate::graph::ImageDesc) -> D3D12_RESOURCE_DESC {
         let flags = match desc.format {
             crate::ImageFormat::Depth32Float => D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
-            crate::ImageFormat::Rgba8Srgb => D3D12_RESOURCE_FLAG_NONE,
             crate::ImageFormat::Rgba8Unorm | crate::ImageFormat::Rgba16Float => {
                 // Multisampled render targets do not support UAV use.
                 let mut flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
@@ -392,6 +391,7 @@ impl DeviceImage {
                 }
                 flags
             }
+            _ => D3D12_RESOURCE_FLAG_NONE,
         };
         D3D12_RESOURCE_DESC {
             Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
@@ -421,6 +421,14 @@ pub(super) fn image_format(format: crate::ImageFormat) -> DXGI_FORMAT {
         crate::ImageFormat::Rgba8Srgb => DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
         crate::ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
         crate::ImageFormat::Depth32Float => DXGI_FORMAT_R32_TYPELESS,
+        crate::ImageFormat::Rgba32Float => DXGI_FORMAT_R32G32B32A32_FLOAT,
+        crate::ImageFormat::Bc1RgbaUnorm => DXGI_FORMAT_BC1_UNORM,
+        crate::ImageFormat::Bc1RgbaSrgb => DXGI_FORMAT_BC1_UNORM_SRGB,
+        crate::ImageFormat::Bc3RgbaUnorm => DXGI_FORMAT_BC3_UNORM,
+        crate::ImageFormat::Bc3RgbaSrgb => DXGI_FORMAT_BC3_UNORM_SRGB,
+        crate::ImageFormat::Bc5RgUnorm => DXGI_FORMAT_BC5_UNORM,
+        crate::ImageFormat::Bc7RgbaUnorm => DXGI_FORMAT_BC7_UNORM,
+        crate::ImageFormat::Bc7RgbaSrgb => DXGI_FORMAT_BC7_UNORM_SRGB,
     }
 }
 

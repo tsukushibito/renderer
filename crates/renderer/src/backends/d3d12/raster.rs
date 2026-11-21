@@ -1,6 +1,6 @@
 //! Immutable native graphics programs, created only at working-set preparation.
 
-use crate::{ImageFormat, graph::SampleCount};
+use crate::graph::SampleCount;
 use std::mem::ManuallyDrop;
 
 use crate::program::{
@@ -411,16 +411,15 @@ impl RasterPipeline {
         }
         let mut formats = [DXGI_FORMAT_UNKNOWN; MAX_RASTER_COLOR_ATTACHMENTS];
         for (destination, format) in formats.iter_mut().zip(managed.color_outputs()) {
-            *destination = match format {
-                ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
-                ImageFormat::Rgba8Srgb => DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
-                ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
-                ImageFormat::Depth32Float => {
-                    return Err(D3D12RuntimeError::unsupported(
-                        "Raster color output cannot use a depth format",
-                    ));
-                }
-            };
+            if !matches!(
+                format,
+                crate::ImageFormat::Rgba8Unorm | crate::ImageFormat::Rgba16Float
+            ) {
+                return Err(D3D12RuntimeError::unsupported(
+                    "color attachments require Rgba8Unorm or Rgba16Float",
+                ));
+            }
+            *destination = super::resources::image_format(*format);
             require_format(
                 owner,
                 *destination,

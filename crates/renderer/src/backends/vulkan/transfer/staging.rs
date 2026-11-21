@@ -317,7 +317,7 @@ impl SharedStaging {
                 .instance_raw()
                 .get_physical_device_properties(owner.device.physical_device())
         };
-        let alignment = properties.limits.non_coherent_atom_size.max(8);
+        let alignment = properties.limits.non_coherent_atom_size.max(16);
         let arena = Arena::new(capacity, alignment, max_ranges)?;
         let factory = VulkanAllocator {
             owner: Arc::clone(&owner),

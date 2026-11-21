@@ -530,14 +530,10 @@ impl Graph {
                             BindingType::SampledImage => (true, false, AccessPurpose::Sampled),
                             BindingType::StorageImageRead(format)
                             | BindingType::StorageImageWrite(format) => {
-                                if matches!(
-                                    format,
-                                    crate::ImageFormat::Depth32Float
-                                        | crate::ImageFormat::Rgba8Srgb
-                                ) {
+                                if !format.supports_storage() {
                                     return Err(self.resource_error(
                                         GraphErrorKind::Unsupported,
-                                        "depth and sRGB storage image bindings are unsupported",
+                                        "image format does not support storage bindings",
                                         resource,
                                     ));
                                 }

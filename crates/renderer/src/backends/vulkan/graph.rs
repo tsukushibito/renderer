@@ -261,10 +261,7 @@ impl Entry {
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 enum CacheDescriptor {
     Buffer(u64),
-    Rgba8(u32, u32, u32, u32),
-    Rgba8Srgb(u32, u32, u32, u32),
-    Rgba16(u32, u32, u32, u32),
-    Depth32(u32, u32, u32, u32),
+    Image(ImageFormat, u32, u32, u32, u32),
 }
 impl From<ResourceDesc> for CacheDescriptor {
     fn from(desc: ResourceDesc) -> Self {
@@ -277,12 +274,7 @@ impl From<ResourceDesc> for CacheDescriptor {
                     desc.mip_levels,
                     desc.sample_count.as_u32(),
                 );
-                match desc.format {
-                    ImageFormat::Rgba8Unorm => Self::Rgba8(width, height, mip_levels, samples),
-                    ImageFormat::Rgba8Srgb => Self::Rgba8Srgb(width, height, mip_levels, samples),
-                    ImageFormat::Rgba16Float => Self::Rgba16(width, height, mip_levels, samples),
-                    ImageFormat::Depth32Float => Self::Depth32(width, height, mip_levels, samples),
-                }
+                Self::Image(desc.format, width, height, mip_levels, samples)
             }
         }
     }
@@ -642,8 +634,8 @@ impl VulkanRuntime {
             {
                 match desc.format {
                     ImageFormat::Rgba8Unorm => color = true,
-                    ImageFormat::Rgba16Float | ImageFormat::Rgba8Srgb => {}
                     ImageFormat::Depth32Float => depth = true,
+                    _ => {}
                 }
             }
         }
