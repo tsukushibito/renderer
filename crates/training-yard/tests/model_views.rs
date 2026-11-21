@@ -5,7 +5,12 @@
     any(feature = "vulkan", all(windows, feature = "d3d12"))
 ))]
 use renderer::{
-    core::{graph::ImageDesc, runtime::RuntimeConfig},
+    canvas::{self, Layer, Paint},
+    core::{
+        ImageFormat,
+        graph::{GraphPool, ImageDesc, LoadOp, RasterRect, SampleCount},
+        runtime::RuntimeConfig,
+    },
     material::{Materials, PbrParams},
     mesh::{JointWeights, MeshCapacity, MeshData, Meshes},
     model::{Model, ModelInstance, ModelLod, ModelPart},
@@ -144,7 +149,13 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
     for _ in 0..renderer::pbr::CASCADE_COUNT {
         plan.reserve_readback("caster depth", ImageDesc::depth32(32, 32))?;
     }
+    plan.preparation_mut()
+        .reserve_raster_pass("canvas", SampleCount::X1, |pass| {
+            pass.attachment()?;
+            pass.draws(&canvas::programs(ImageFormat::Rgba8Unorm)?[1], 1)
+        })?;
     let mut drawing = plan.build(config)?;
+    let mut host_pool = GraphPool::new(drawing.runtime().limits().graph, 1)?;
     let mut objects = Vec::with_capacity(4);
     let mut rest_shadow = vec![false; 32 * 32 * renderer::pbr::CASCADE_COUNT];
     let mut depth = Vec::with_capacity(rest_shadow.len());
@@ -178,7 +189,9 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
             }
             _ => {}
         }
-        let mut frame = drawing.begin_frame()?;
+        let mut graph = host_pool.begin()?;
+        let target = graph.image("host viewport", ImageDesc::rgba8(48, 24))?;
+        let (mut frame, runtime) = drawing.begin_host_frame(graph)?;
         let mut reads = [None; 2];
         for (camera, read) in cameras.iter().zip(&mut reads) {
             objects.clear();
@@ -187,12 +200,15 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
                 .with_bounds(world_bounds)
                 .with_sun(sun);
             let hdr = frame.draw_scene(camera, input)?.color;
-            let image = frame.write_output(camera.id, hdr, 1., None)?;
-            *read = Some(
-                frame
-                    .graph()
-                    .readback_image("viewport", image.raw_image())?,
-            );
+            let main = camera.id == cameras[0].id;
+            let image = frame.write_output(camera.id, hdr, 1., main.then_some(target))?;
+            if !main {
+                *read = Some(
+                    frame
+                        .graph()
+                        .readback_image("viewport", image.raw_image())?,
+                );
+            }
         }
         let shadows = frame
             .standard_output(cameras[0].id)
@@ -204,9 +220,22 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
         for shadow in shadows {
             shadow_reads.push(frame.graph().readback_image("caster depth", shadow)?);
         }
-        let ticket = frame.submit()?;
-        let mut result = drawing
-            .runtime()
+        let (mut graph, mut views) = frame.finish_recording()?;
+        canvas::record(
+            &mut graph,
+            target,
+            LoadOp::Load,
+            &[Layer {
+                paint: Paint::Color([1.; 4]),
+                rect: RasterRect::new(0, 0, 1, 1),
+                clip: None,
+            }],
+        )?;
+        reads[0] = Some(graph.readback_image("viewport", target)?);
+        let ticket = runtime.submit(&graph.compile()?)?;
+        views.publish(&ticket)?;
+        drop(views);
+        let mut result = runtime
             .wait_for_frame(ticket.id(), Duration::from_secs(15))?
             .ok_or("view timeout")?;
         depth.clear();
@@ -235,6 +264,10 @@ fn check(config: RuntimeConfig) -> PipelineResult<()> {
             let [w, h] = camera.extent.map(|n| n as usize);
             let pixels = &mut storage[..w * h * 4];
             result.readback_into(read.unwrap(), pixels)?;
+            if camera.id == cameras[0].id {
+                assert_eq!(pixels[..4], [255; 4]);
+                pixels[..4].copy_from_slice(&[0, 0, 0, 255]);
+            }
             for (side, baseline) in rest_mask.iter_mut().enumerate() {
                 // Bins are black, red body, blue armor, green armor and cyan body.
                 let mut counts = [0usize; 5];

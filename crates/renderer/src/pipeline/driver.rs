@@ -64,6 +64,7 @@ pub struct ViewRenderer {
     views: HashMap<ViewId, PipelineId>,
     pending: Vec<ViewId>,
     accepted: Option<FrameSubmission>,
+    host_publication: Option<FrameId>,
     moving: Option<(ViewId, PipelineId)>,
 }
 
@@ -138,7 +139,7 @@ impl ViewRenderer {
             .ok_or_else(|| GraphError::invalid_input("unregistered camera"))
     }
     pub(super) fn check_idle(&self) -> PipelineResult<()> {
-        if self.accepted.is_some() {
+        if self.accepted.is_some() || self.host_publication.is_some() {
             Err("finish publishing accepted views first".into())
         } else if self.moving.is_some() {
             Err("finish reconfiguring the camera before using the view renderer".into())
@@ -254,28 +255,67 @@ impl ViewRenderer {
     pub fn begin_frame<'a>(&'a mut self, pool: &mut GraphPool) -> PipelineResult<ViewFrame<'a>> {
         self.check_idle()?;
         let graph = pool.begin()?;
+        Ok(self.start_recording(graph))
+    }
+
+    /// Continue recording in the host's Graph, including passes already declared there.
+    pub fn begin_host_frame(&mut self, graph: Graph) -> PipelineResult<ViewFrame<'_>> {
+        self.check_idle()?;
+        Ok(self.start_recording(graph))
+    }
+
+    fn start_recording(&mut self, graph: Graph) -> ViewFrame<'_> {
         self.poses.clear();
         let id = graph.graph_id();
-        Ok(ViewFrame {
+        ViewFrame {
             renderer: self,
             graph: Some(graph),
             id,
             failed: false,
-        })
+        }
     }
     /// Retry publication of remaining histories, using the existing GPU receipt.
     pub fn finish_submission(&mut self) -> PipelineResult<FrameSubmission> {
         let receipt = self.accepted.as_ref().ok_or("no accepted submission")?;
-        while let Some(&view) = self.pending.last() {
-            let group = self.views[&view];
-            self.pipelines
+        Self::publish_pending(&mut self.pending, &self.views, &mut self.pipelines, receipt)?;
+        Ok(self.accepted.take().expect("accepted receipt"))
+    }
+
+    /// Retry a partially published host submission, using the same receipt.
+    pub fn finish_host_submission(&mut self, receipt: &FrameSubmission) -> PipelineResult<()> {
+        if self.host_publication != Some(receipt.id()) {
+            return Err("no pending view publication for this host frame".into());
+        }
+        Self::publish_pending(&mut self.pending, &self.views, &mut self.pipelines, receipt)?;
+        self.host_publication = None;
+        Ok(())
+    }
+
+    fn publish_pending(
+        pending: &mut Vec<ViewId>,
+        views: &HashMap<ViewId, PipelineId>,
+        pipelines: &mut HashMap<PipelineId, Pipeline>,
+        receipt: &FrameSubmission,
+    ) -> PipelineResult<()> {
+        while let Some(&view) = pending.last() {
+            let group = views[&view];
+            pipelines
                 .get_mut(&group)
                 .expect("registered pipeline")
                 .group
                 .accept(view, receipt)?;
-            self.pending.pop();
+            pending.pop();
         }
-        Ok(self.accepted.take().expect("accepted receipt"))
+        Ok(())
+    }
+
+    fn check_submission(&self, graph: u64) -> PipelineResult<()> {
+        for view in &self.pending {
+            self.pipelines[&self.views[view]]
+                .group
+                .check_submission(*view, graph)?;
+        }
+        Ok(())
     }
     pub fn clear(&mut self, runtime: &mut Runtime) -> PipelineResult<()> {
         self.finish_reconfiguration(runtime)?;
@@ -298,6 +338,14 @@ pub struct ViewFrame<'a> {
     failed: bool,
 }
 impl<'a> ViewFrame<'a> {
+    pub fn draw_scene(
+        &mut self,
+        camera: &CameraView,
+        input: SceneInput<'_>,
+    ) -> Result<ViewImages, GraphError> {
+        let bound = self.bind_for_view(camera.id, input)?;
+        self.draw_view(bound, camera)
+    }
     /// Bind the scene once for all cameras in this camera's pipeline group.
     pub fn bind_for_view<'s>(
         &self,
@@ -436,6 +484,23 @@ impl<'a> ViewFrame<'a> {
             frame: self,
         })
     }
+    /// Return the host's mutable Graph and a token for its provisional view histories.
+    /// Append host UI, compile and submit as usual, then publish with that receipt.
+    /// Dropping the token before submission abandons the provisional changes.
+    pub fn finish_recording(mut self) -> PipelineResult<(Graph, RecordedViews<'a>)> {
+        let graph = self.graph.take().expect("building frame");
+        if self.failed || self.id != graph.graph_id() {
+            return Err(GraphError::invalid_input("abandon failed or replaced view graph").into());
+        }
+        self.renderer.check_submission(self.id)?;
+        Ok((
+            graph,
+            RecordedViews {
+                frame: self,
+                published: None,
+            },
+        ))
+    }
     pub fn submit(self, runtime: &mut Runtime) -> Result<FrameSubmission, ViewSubmitError> {
         self.compile()
             .map_err(|e| ViewSubmitError::Rejected(e.into()))?
@@ -444,7 +509,7 @@ impl<'a> ViewFrame<'a> {
 }
 impl Drop for ViewFrame<'_> {
     fn drop(&mut self) {
-        if self.renderer.accepted.is_none() {
+        if self.renderer.accepted.is_none() && self.renderer.host_publication.is_none() {
             for view in self.renderer.pending.drain(..) {
                 let id = self.renderer.views[&view];
                 self.renderer
@@ -455,6 +520,33 @@ impl Drop for ViewFrame<'_> {
                     .cancel(view);
             }
         }
+    }
+}
+
+/// Associates view-history updates with a specific Graph. The host retains its
+/// submission receipt, exported images and readbacks.
+#[must_use]
+pub struct RecordedViews<'a> {
+    frame: ViewFrame<'a>,
+    published: Option<FrameId>,
+}
+
+impl RecordedViews<'_> {
+    pub fn publish(&mut self, receipt: &FrameSubmission) -> PipelineResult<()> {
+        if receipt.graph_id() != self.frame.id
+            || self.published.is_some_and(|id| id != receipt.id())
+        {
+            return Err("receipt differs from the recorded view graph or submission".into());
+        }
+        let renderer = &mut self.frame.renderer;
+        if self.published.is_none() {
+            renderer.host_publication = Some(receipt.id());
+            self.published = Some(receipt.id());
+        }
+        if renderer.host_publication.is_some() {
+            renderer.finish_host_submission(receipt)?;
+        }
+        Ok(())
     }
 }
 
@@ -481,13 +573,9 @@ impl CompiledViewFrame<'_> {
     }
     pub fn submit(self, runtime: &mut Runtime) -> Result<FrameSubmission, ViewSubmitError> {
         let renderer = &mut *self.frame.renderer;
-        for view in &renderer.pending {
-            let id = renderer.views[view];
-            renderer.pipelines[&id]
-                .group
-                .check_submission(*view, self.plan.graph_id())
-                .map_err(ViewSubmitError::Rejected)?;
-        }
+        renderer
+            .check_submission(self.plan.graph_id())
+            .map_err(ViewSubmitError::Rejected)?;
         let receipt = runtime
             .submit(&self.plan)
             .map_err(|e| ViewSubmitError::Rejected(e.into()))?;

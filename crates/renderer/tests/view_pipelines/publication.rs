@@ -14,7 +14,7 @@ use std::{cell::Cell, num::NonZeroUsize, rc::Rc, time::Duration};
 
 struct HistoryProbe {
     publications: Rc<[Cell<u32>; 2]>,
-    interrupt: bool,
+    interrupt: Rc<Cell<bool>>,
     fail_create: Rc<Cell<bool>>,
     fail_release: Rc<Cell<bool>>,
 }
@@ -65,7 +65,7 @@ impl ViewPipeline for HistoryProbe {
         receipt: &FrameSubmission,
     ) -> PipelineResult<()> {
         assert_eq!(*update, receipt.graph_id());
-        if *state == 0 && std::mem::take(&mut self.interrupt) {
+        if *state == 0 && self.interrupt.replace(false) {
             return Err("injected publication failure".into());
         }
         let counter = &self.publications[*state];
@@ -77,6 +77,7 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
     let fail_create = Rc::new(Cell::new(false));
     let fail_release = Rc::new(Cell::new(false));
     let calls = Rc::new([Cell::new(0), Cell::new(0)]);
+    let interrupt = Rc::new(Cell::new(true));
     let mut prep = Preparation::new(NonZeroUsize::MIN);
     let mut driver = ViewRenderer::new();
     let group = driver.prepare_pipeline(
@@ -84,7 +85,7 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
             publications: calls.clone(),
             fail_create: fail_create.clone(),
             fail_release: fail_release.clone(),
-            interrupt: true,
+            interrupt: interrupt.clone(),
         },
         [1, 1],
         NonZeroUsize::MIN,
@@ -96,7 +97,7 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
             publications: calls.clone(),
             fail_create: fail_create.clone(),
             fail_release: fail_release.clone(),
-            interrupt: false,
+            interrupt: Rc::new(Cell::new(false)),
         },
         [2, 1],
         NonZeroUsize::MIN,
@@ -171,6 +172,33 @@ pub fn check(api: RuntimeConfig) -> PipelineResult<()> {
         Err(ViewSubmitError::Rejected(_))
     ));
     assert_eq!((calls[0].get(), calls[1].get()), (1, 1));
+    let mut abandoned = driver.begin_host_frame(pool.begin()?)?;
+    abandoned.draw_scene(&a, scene)?;
+    drop(abandoned.finish_recording()?);
+    assert_eq!((calls[0].get(), calls[1].get()), (1, 1));
+
+    let mut host = driver.begin_host_frame(pool.begin()?)?;
+    host.draw_scene(&a, scene)?;
+    let output = host.draw_scene(&b, scene)?.color;
+    let (mut graph, mut histories) = host.finish_recording()?;
+    assert!(histories.publish(&receipt).is_err());
+    drop(receipt);
+    let read = graph.readback_image("host read", output)?;
+    let host_receipt = rt.submit(&graph.compile()?)?;
+    interrupt.set(true);
+    assert!(histories.publish(&host_receipt).is_err());
+    drop(histories);
+    assert_eq!((calls[0].get(), calls[1].get()), (1, 2));
+    assert!(driver.begin_frame(&mut pool).is_err());
+    driver.finish_host_submission(&host_receipt)?;
+    assert_eq!((calls[0].get(), calls[1].get()), (2, 2));
+    let mut result = rt
+        .wait_for_frame(host_receipt.id(), Duration::from_secs(10))?
+        .ok_or("host timeout")?;
+    let mut pixels = [255; 16];
+    result.readback_into(read, &mut pixels)?;
+    assert_eq!(pixels, [0; 16]);
+    drop((result, host_receipt));
     driver.remove_view(b.id, &mut rt)?;
     let moved = CameraView {
         extent: b.extent,

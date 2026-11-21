@@ -220,6 +220,20 @@ Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受�
 ゲーム側でアニメーションを評価したら、逆バインド変換を含むモデル空間の最終行列を `meshes.set_joint_transforms(pose, &palette)` に一度渡す。
 現在は CPU で頂点を変形し、そのフレームで使うポーズごとに一つの頂点バッファをアップロードする。各材質スロット・カメラ・影が同じ頂点を読む。LOD 用モデル境界にはアニメーション全体を含める。
 
+既存エンジンのビューポートでは、ホストが用意した Graph と描画先をそのまま使える。次の例で `drawing` は初期化済みの `SceneRenderer`、`host_target` は同じ Graph に作った表示リニア RGBA8 ターゲットである。
+
+```rust,ignore
+let (mut frame, runtime) = drawing.begin_host_frame(host_graph)?;
+let scene = frame.draw_scene(&camera, input)?;
+frame.write_output(camera.id, scene.color, 1.0, Some(host_target))?;
+let (mut graph, mut histories) = frame.finish_recording()?;
+host_ui.record(&mut graph, host_target)?;
+let receipt = runtime.submit(&graph.compile()?)?;
+histories.publish(&receipt)?;
+```
+
+ホストは自分の受理票で表示・読み戻しを続ける。提出を取り消す場合は Graph と `histories` を破棄する。投入が受理された後でビュー履歴の確定が中断した場合は、その受理票で `histories.publish` を再試行できる。トークンを手放した後は `drawing.finish_host_submission(&receipt)` で残りを確定する。[ホスト提出と履歴の回復試験](../../crates/renderer/tests/view_pipelines/publication.rs)
+
 個別のパスを準備して標準 Forward を使う場合はカメラと初期シーンから構成する。カメラには安定した `ViewId`、寸法、`ViewInput` を渡す。
 `build` は参照されたメッシュと材質を転送し、初期化に使った投入の完了を回収して返る。
 

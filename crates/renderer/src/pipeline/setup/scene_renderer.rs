@@ -74,6 +74,22 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
             runtime: self.runtime.as_mut().expect("live renderer").borrow_mut(),
         })
     }
+
+    /// Record on a host-allocated Graph while the host keeps access to the Runtime
+    /// for scheduling and observing its own submissions.
+    pub fn begin_host_frame(
+        &mut self,
+        graph: renderer_core::graph::Graph,
+    ) -> PipelineResult<(ViewFrame<'_>, &mut Runtime)> {
+        let frame = self.driver.begin_host_frame(graph)?;
+        Ok((
+            frame,
+            self.runtime.as_mut().expect("live renderer").borrow_mut(),
+        ))
+    }
+    pub fn finish_host_submission(&mut self, receipt: &FrameSubmission) -> PipelineResult<()> {
+        self.driver.finish_host_submission(receipt)
+    }
     pub fn runtime(&mut self) -> &mut Runtime {
         self.runtime.as_mut().expect("live renderer").borrow_mut()
     }
@@ -137,14 +153,6 @@ impl DerefMut for SceneFrame<'_> {
     }
 }
 impl<'a> SceneFrame<'a> {
-    pub fn draw_scene(
-        &mut self,
-        camera: &CameraView,
-        input: SceneInput<'_>,
-    ) -> Result<ViewImages, GraphError> {
-        let bound = self.bind_for_view(camera.id, input)?;
-        self.frame.draw_view(bound, camera)
-    }
     pub fn compile(self) -> Result<CompiledSceneFrame<'a>, GraphError> {
         Ok(CompiledSceneFrame {
             frame: self.frame.compile()?,
