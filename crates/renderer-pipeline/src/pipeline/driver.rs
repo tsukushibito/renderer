@@ -130,13 +130,13 @@ impl ViewRenderer {
             .get_mut(&id)
             .ok_or_else(|| GraphError::invalid_input("unknown view pipeline"))
     }
-    fn route(&self, view: ViewId) -> Result<PipelineId, GraphError> {
+    pub fn pipeline_for_view(&self, view: ViewId) -> Result<PipelineId, GraphError> {
         self.views
             .get(&view)
             .copied()
             .ok_or_else(|| GraphError::invalid_input("unregistered camera"))
     }
-    fn check_idle(&self) -> PipelineResult<()> {
+    pub(super) fn check_idle(&self) -> PipelineResult<()> {
         if self.accepted.is_some() {
             Err("finish publishing accepted views first".into())
         } else if self.moving.is_some() {
@@ -163,6 +163,13 @@ impl ViewRenderer {
     ) -> Result<(), GraphError> {
         self.pipeline_mut(id)?.group.prepare_scene(changed)
     }
+    pub(super) fn prepare_all(&mut self, changed: SceneInput<'_>) -> PipelineResult<()> {
+        self.check_idle()?;
+        for pipeline in self.pipelines.values_mut() {
+            pipeline.group.prepare_scene(changed)?;
+        }
+        Ok(())
+    }
     pub fn remove_scene_pair(
         &mut self,
         id: PipelineId,
@@ -187,7 +194,7 @@ impl ViewRenderer {
     }
     pub fn remove_view(&mut self, id: ViewId, runtime: &mut Runtime) -> PipelineResult<()> {
         self.check_idle()?;
-        let group = self.route(id)?;
+        let group = self.pipeline_for_view(id)?;
         self.pipeline_mut(group)?.group.remove_view(id, runtime)?;
         self.views.remove(&id);
         Ok(())
@@ -205,7 +212,7 @@ impl ViewRenderer {
         match self.moving {
             None => {
                 self.check_idle()?;
-                let old = self.route(camera.id)?;
+                let old = self.pipeline_for_view(camera.id)?;
                 if old == id {
                     return Err(
                         "prepare a different pipeline configuration before moving the view".into(),
@@ -222,7 +229,7 @@ impl ViewRenderer {
 
     fn finish_reconfiguration(&mut self, runtime: &mut Runtime) -> PipelineResult<()> {
         if let Some((view, target)) = self.moving {
-            let old = self.route(view)?;
+            let old = self.pipeline_for_view(view)?;
             self.pipeline_mut(old)?.group.remove_view(view, runtime)?;
             *self.views.get_mut(&view).expect("registered view") = target;
             self.moving = None;
@@ -286,6 +293,14 @@ pub struct ViewFrame<'a> {
     failed: bool,
 }
 impl<'a> ViewFrame<'a> {
+    /// Bind the scene once for all cameras in this camera's pipeline group.
+    pub fn bind_for_view<'s>(
+        &self,
+        view: ViewId,
+        scene: SceneInput<'s>,
+    ) -> Result<FrameScene<'s>, GraphError> {
+        self.bind_scene(self.renderer.pipeline_for_view(view)?, scene)
+    }
     pub fn graph(&mut self) -> &mut Graph {
         self.graph.as_mut().expect("building frame")
     }
@@ -320,7 +335,7 @@ impl<'a> ViewFrame<'a> {
         if graph.graph_id() != self.id {
             return Err(GraphError::invalid_input("abandon replaced view graph"));
         }
-        let id = self.renderer.route(camera.id)?;
+        let id = self.renderer.pipeline_for_view(camera.id)?;
         let input = scene.resolve(self.id, id)?;
         let images = record(
             self.renderer.pipeline_mut(id)?.group.as_mut(),
@@ -360,7 +375,7 @@ impl<'a> ViewFrame<'a> {
         })
     }
     pub fn standard_output(&self, view: ViewId) -> Option<&StandardViewOutput> {
-        let id = self.renderer.route(view).ok()?;
+        let id = self.renderer.pipeline_for_view(view).ok()?;
         let group = self.renderer.pipeline(id).ok()?.group.as_ref() as &dyn Any;
         group
             .downcast_ref::<PreparedGroup<StandardPipeline>>()?
@@ -373,7 +388,7 @@ impl<'a> ViewFrame<'a> {
         exposure: f32,
         target: Option<ImageHandle>,
     ) -> Result<SdrImage, GraphError> {
-        let id = self.renderer.route(view)?;
+        let id = self.renderer.pipeline_for_view(view)?;
         let output = self
             .renderer
             .pipeline(id)?

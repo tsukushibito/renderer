@@ -115,8 +115,10 @@ impl Runtime {
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub(super) fn with_inner(
         inner: super::RuntimeInner,
-        limit: usize,
+        limits: super::RuntimeLimits,
+        config: super::RuntimeConfig,
     ) -> Result<Self, ExecutionError> {
+        let limit = limits.resource_capacity;
         let mut pending = Vec::new();
         pending.try_reserve_exact(limit).map_err(|_| {
             ExecutionError::with_capacity(
@@ -131,6 +133,8 @@ impl Runtime {
         })?;
         Ok(Self {
             inner,
+            limits,
+            config,
             image_releases: Arc::new(ImageReleases {
                 #[cfg(all(
                     windows,

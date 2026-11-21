@@ -14,6 +14,7 @@ use renderer::{
 use std::{collections::HashMap, sync::Arc};
 use upload::UploadBatch;
 mod upload;
+pub(crate) use upload::MeshCheckpoint;
 pub use upload::MeshUploadProgress;
 
 const VERTEX_BUFFER: &str = "mesh vertices";
@@ -147,6 +148,12 @@ pub struct Meshes {
     batch: UploadBatch,
 }
 impl Meshes {
+    pub(crate) fn geometry(&self, mesh: MeshHandle) -> Result<&GeometryData, GraphError> {
+        self.registry
+            .geometry(mesh)
+            .map_err(|e| GraphError::invalid_input(e.to_string()))
+    }
+
     /// Budget the two initialized imports for each distinct mesh referenced by
     /// this frame. Register their resident physical classes with [`Self::reserve`].
     pub fn reserve_imports(
@@ -218,10 +225,18 @@ impl Meshes {
     }
     /// Register resident buffer classes once. Budget overlapping versions at updates.
     pub fn reserve(&self, preparation: &mut Preparation) -> Result<(), GraphError> {
+        self.reserve_selection(preparation, self.registry.live_mesh_handles())
+    }
+
+    pub(crate) fn reserve_selection(
+        &self,
+        preparation: &mut Preparation,
+        handles: impl Iterator<Item = MeshHandle>,
+    ) -> Result<(), GraphError> {
         let mut classes = Vec::new();
         let mut upload = GraphRequirements::default();
-        for handle in self.registry.live_mesh_handles() {
-            let data = self.registry.geometry(handle).expect("live mesh");
+        for handle in handles {
+            let data = self.geometry(handle)?;
             upload = upload.checked_add(GraphRequirements {
                 resources: 2,
                 passes: 2,

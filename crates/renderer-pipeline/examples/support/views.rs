@@ -3,23 +3,19 @@
 pub(crate) mod toon;
 #[path = "validation.rs"]
 pub(crate) mod validation;
-use renderer::{
-    capacity::Preparation,
-    graph::{GraphPool, ImageDesc},
-    runtime::{Runtime, RuntimeConfig, RuntimeLimits},
-};
+use renderer::{graph::ImageDesc, runtime::RuntimeConfig};
 use renderer_pipeline::{
     material::{AlphaMode, MaterialDefinition, Materials, PbrParams, UnlitParams, Value},
     mesh::{MeshCapacity, MeshData, Meshes},
-    passes::{bloom::Bloom, output::SdrOutput},
+    passes::bloom::Bloom,
     pbr::{Bounds, PbrVertex, Projection, SceneLimits, Sun, Technique, Transform, ViewInput},
     pipeline::{
-        CameraView, RenderObject, SceneInput, StandardConfig, StandardPipeline, ViewId,
-        ViewPipeline, ViewRenderer,
+        CameraGroup, CameraView, PreparedSetup, RenderObject, RendererSetup, SceneAssets,
+        SceneInput, StandardConfig, StandardPipeline, ViewId, ViewPipeline,
     },
     unlit_forward::{IDENTITY, Vertex},
 };
-use std::{error::Error, num::NonZeroUsize, time::Duration};
+use std::{error::Error, time::Duration};
 
 // Each executable selects one of the same shared workflows.
 #[allow(dead_code)]
@@ -46,7 +42,9 @@ pub fn standard(
 #[allow(dead_code)]
 pub fn run<P: ViewPipeline + 'static>(
     example: Example,
-    make: impl Fn([u32; 2], SceneLimits, &[MaterialDefinition]) -> Result<P, Box<dyn Error>>,
+    make: impl Fn([u32; 2], SceneLimits, &[MaterialDefinition]) -> Result<P, Box<dyn Error>>
+    + Copy
+    + 'static,
 ) -> Result<(), Box<dyn Error>> {
     let api = match std::env::args().nth(1).as_deref() {
         #[cfg(feature = "vulkan")]
@@ -60,18 +58,12 @@ pub fn run<P: ViewPipeline + 'static>(
 pub fn run_on<P: ViewPipeline + 'static>(
     api: RuntimeConfig,
     example: Example,
-    make: impl Fn([u32; 2], SceneLimits, &[MaterialDefinition]) -> Result<P, Box<dyn Error>>,
+    make: impl Fn([u32; 2], SceneLimits, &[MaterialDefinition]) -> Result<P, Box<dyn Error>>
+    + Copy
+    + 'static,
 ) -> Result<(), Box<dyn Error>> {
     let mut extent = [64, 64];
     let count = if example == Example::TwoViews { 2 } else { 1 };
-    let limits = SceneLimits {
-        frames_in_flight: NonZeroUsize::MIN,
-        max_draws: 4,
-        max_materials: 4,
-        max_transforms: 4,
-        max_point_lights: 0,
-        max_casters_per_cascade: 0,
-    };
     let mut meshes = Meshes::new(MeshCapacity {
         meshes: 2,
         retired_mesh_versions: 2,
@@ -103,7 +95,6 @@ pub fn run_on<P: ViewPipeline + 'static>(
     };
     let model = meshes.create(geometry(1.)?)?;
     let mut materials = Materials::default();
-    let mut definitions = Vec::new();
     let mut extra = Vec::new();
     if example == Example::MixedPost {
         let mesh = meshes.create(MeshData::unlit(
@@ -119,86 +110,35 @@ pub fn run_on<P: ViewPipeline + 'static>(
         let marker = materials.create_unlit(UnlitParams {
             color: [0., 0., 1., 1.],
         })?;
-        definitions.push(definition);
         for (material, x) in [(marker, -0.35), (toon, 0.35)] {
             let t = Transform::new([[0.5, 0., 0., x], [0., 0.5, 0., 0.], [0., 0., 1., -0.1]])?;
             extra.push(RenderObject::new(mesh, material).with_transform(t));
         }
     }
-    let mut pipeline = ViewRenderer::new();
-    let prepare = |pipeline: &mut ViewRenderer, extent| -> Result<_, Box<dyn Error>> {
-        let mut budget = Preparation::new(NonZeroUsize::MIN);
-        let group = pipeline.prepare_pipeline(
-            make(extent, limits, &definitions)?,
-            extent,
-            NonZeroUsize::new(count).unwrap(),
-            Some(SdrOutput::display(false)),
-            &mut budget,
-        )?;
-        Ok((group, budget))
-    };
-    let (mut group, mut preparation) = prepare(&mut pipeline, extent)?;
     let resize = example != Example::MixedPost;
-    meshes.reserve(&mut preparation)?;
     let texture_desc = ImageDesc::rgba8_srgb(2, 2);
-    preparation.reserve_image(texture_desc, 1)?;
-    let bloom = if example == Example::MixedPost {
-        Bloom::Tent
-    } else {
-        Bloom::Off
-    };
-    let bloom = bloom.prepare(&mut preparation, ImageDesc::rgba16_float(64, 64))?;
-    let runtime_limits = preparation.runtime_limits(RuntimeLimits::default())?;
-    let capacity = runtime_limits.graph;
-    let mut runtime = Runtime::new(api, runtime_limits, preparation.working_set())?;
-    let id = pipeline.initialize_pipeline(group, &mut runtime)?;
-    let wait = |runtime: &mut Runtime, id| -> Result<(), Box<dyn Error>> {
-        drop(
-            runtime
-                .wait_for_frame(id, Duration::from_secs(15))?
-                .ok_or("upload timed out")?,
-        );
-        Ok(())
-    };
-    if let Some(id) = id {
-        wait(&mut runtime, id)?;
-    }
-    let mut startup = GraphPool::new(capacity, 1)?;
-    let (upload, texture) = runtime.upload_texture(
-        &mut startup,
-        "checker",
-        texture_desc,
-        &[
-            255, 255, 255, 255, 80, 80, 80, 255, 80, 80, 80, 255, 255, 255, 255, 255,
-        ],
-    )?;
-    wait(&mut runtime, upload)?;
-    let paint = |color| {
-        let mut params = PbrParams::color(color);
-        params.factors.double_sided = true;
-        params.textures.base_color = Some(texture.snapshot().clone());
-        params
-    };
     let red = [1., 0.2, 0.1, 1.];
     let material = if example == Example::TwoViews {
         materials.create_unlit(UnlitParams { color: red })?
     } else {
-        materials.create_pbr(paint(red))?
+        materials.create_pbr(PbrParams::color(red))?
     };
     let mut objects = vec![RenderObject::new(model, material)];
     objects.extend(extra);
-    if example == Example::MixedPost {
-        let mut glass = paint([0.2, 0.5, 1., 0.5]);
-        glass.factors.alpha_mode = AlphaMode::Blend;
+    let glass_color = [0.2, 0.5, 1., 0.5];
+    let glass = if example == Example::MixedPost {
+        let handle = materials.create_pbr(PbrParams::color(glass_color))?;
         objects.push(
-            RenderObject::new(model, materials.create_pbr(glass)?).with_transform(Transform::new(
-                [[0.6, 0., 0., 0.], [0., 0.6, 0., 0.], [0., 0., 1., -0.2]],
-            )?),
+            RenderObject::new(model, handle).with_transform(Transform::new([
+                [0.6, 0., 0., 0.],
+                [0., 0.6, 0., 0.],
+                [0., 0., 1., -0.2],
+            ])?),
         );
-    }
-    if let Some(id) = meshes.prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)? {
-        wait(&mut runtime, id)?;
-    }
+        Some(handle)
+    } else {
+        None
+    };
     let mut views = Vec::new();
     for index in 0..count {
         let mut matrix = IDENTITY;
@@ -218,57 +158,94 @@ pub fn run_on<P: ViewPipeline + 'static>(
             extent,
             camera,
         };
-        pipeline.register_view(group, &view)?;
         views.push(view);
     }
-    let mut pool = GraphPool::new(capacity, 1)?;
+    let setup = |views: &[CameraView]| -> Result<RendererSetup, Box<dyn Error>> {
+        let mut group = CameraGroup::custom(views[0], make);
+        for view in &views[1..] {
+            group.add_view(*view)?;
+        }
+        Ok(RendererSetup::new(group))
+    };
+    let mut plan =
+        setup(&views)?.prepare(SceneAssets::new(&mut meshes, &mut materials, &objects))?;
+    let prepare_passes =
+        |plan: &mut PreparedSetup<'_>, extent: [u32; 2]| -> Result<_, Box<dyn Error>> {
+            plan.reserve_texture("checker", texture_desc)?;
+            for _ in 0..count {
+                plan.reserve_readback("view pixels", ImageDesc::rgba8(extent[0], extent[1]))?;
+            }
+            let effect = if example == Example::MixedPost {
+                Bloom::Tent
+            } else {
+                Bloom::Off
+            };
+            Ok(effect.prepare(
+                plan.preparation_mut(),
+                ImageDesc::rgba16_float(extent[0], extent[1]),
+            )?)
+        };
+    let mut bloom = prepare_passes(&mut plan, extent)?;
+    let mut renderer = plan.build(api)?;
+    let (upload, texture) = renderer.upload_texture(
+        "checker",
+        texture_desc,
+        &[
+            255, 255, 255, 255, 80, 80, 80, 255, 80, 80, 80, 255, 255, 255, 255, 255,
+        ],
+    )?;
+    drop(
+        renderer
+            .runtime()
+            .wait_for_frame(upload, Duration::from_secs(15))?
+            .ok_or("texture upload timed out")?,
+    );
+    let paint = |color| {
+        let mut params = PbrParams::color(color);
+        params.factors.double_sided = true;
+        params.textures.base_color = Some(texture.snapshot().clone());
+        params
+    };
+    if example != Example::TwoViews {
+        materials.update_pbr(material, paint(red))?;
+        if let Some(handle) = glass {
+            let mut params = paint(glass_color);
+            params.factors.alpha_mode = AlphaMode::Blend;
+            materials.update_pbr(handle, params)?;
+        }
+        materials.collect_gpu(renderer.runtime())?;
+        renderer.prepare_assets(SceneAssets::new(&mut meshes, &mut materials, &objects))?;
+    }
     let mut previous = [None; 2];
     for step in 0..3 {
         #[cfg(test)]
         if step == 1 {
-            let stale = pipeline.begin_frame(&mut pool)?;
+            let stale = renderer.begin_frame()?;
             assert!(
                 stale
-                    .bind_scene(group, SceneInput::new(&meshes, &materials, &objects))
+                    .bind_for_view(views[0].id, SceneInput::new(&meshes, &materials, &objects))
                     .is_err()
             );
         }
         if step == 1 && resize {
             extent = [32, 32];
-            let (next, mut replacement) = prepare(&mut pipeline, extent)?;
-            meshes.reserve(&mut replacement)?;
-            meshes.reserve_replacement(model, &mut replacement)?;
-            replacement.reserve_image(texture_desc, 1)?;
-            runtime.prepare_working_set(replacement.working_set())?;
             for camera in &mut views {
                 camera.extent = extent;
-                pipeline.reconfigure_view(next, camera, &mut runtime)?;
             }
-            pipeline.remove_pipeline(group, &mut runtime)?;
-            group = next;
-            if let Some(id) = pipeline.initialize_pipeline(group, &mut runtime)? {
-                wait(&mut runtime, id)?;
-            }
-            let id = meshes
-                .prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)?
-                .expect("changed mesh version");
-            wait(&mut runtime, id)?;
-        }
-        if step < 2 {
-            if let Some(id) =
-                materials.prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)?
-            {
-                wait(&mut runtime, id)?;
-            }
-            pipeline.prepare_scene(group, SceneInput::new(&meshes, &materials, &objects))?;
+            let mut plan =
+                setup(&views)?.prepare(SceneAssets::new(&mut meshes, &mut materials, &objects))?;
+            bloom = prepare_passes(&mut plan, extent)?;
+            renderer.replace_working_set(plan)?;
+        } else if step == 1 {
+            renderer.prepare_assets(SceneAssets::new(&mut meshes, &mut materials, &objects))?;
         }
         let scene = SceneInput::new(&meshes, &materials, &objects)
             .with_sun(Sun::new([0., 0., -1.], [2.; 3])?)
             .with_bounds(Bounds::new([-1., -1., 0.], [1., 1., 1.])?);
         #[cfg(all(test, feature = "memory-profiling"))]
         let before = renderer::measurement::Snapshot::now();
-        let mut frame = pipeline.begin_frame(&mut pool)?;
-        let scene = frame.bind_scene(group, scene)?;
+        let mut frame = renderer.begin_frame()?;
+        let scene = frame.bind_for_view(views[0].id, scene)?;
         let mut reads = [None; 2];
         for (camera, slot) in views.iter().zip(&mut reads) {
             let hdr = frame.draw_view(scene, camera)?.color;
@@ -304,8 +281,9 @@ pub fn run_on<P: ViewPipeline + 'static>(
                 materials.update_pbr(material, paint(green))?;
             }
         }
-        let sent = frame.submit(&mut runtime)?;
-        let mut frame = runtime
+        let sent = frame.submit()?;
+        let mut frame = renderer
+            .runtime()
             .wait_for_frame(sent.id(), Duration::from_secs(15))?
             .ok_or("frame timed out")?;
         for (i, read) in reads.into_iter().flatten().enumerate() {
@@ -339,12 +317,12 @@ pub fn run_on<P: ViewPipeline + 'static>(
             let delta = renderer::measurement::Snapshot::now().since(before);
             assert!(delta.is_allocation_free(), "{delta:?}");
         }
-        meshes.collect_gpu(&mut runtime)?;
-        materials.collect_gpu(&mut runtime)?;
+        meshes.collect_gpu(renderer.runtime())?;
+        materials.collect_gpu(renderer.runtime())?;
     }
+    let mut runtime = renderer.into_runtime()?;
     meshes.release_gpu(&mut runtime)?;
     materials.clear(&mut runtime)?;
-    pipeline.clear(&mut runtime)?;
     drop(texture);
     validation::check_validation(runtime)
 }

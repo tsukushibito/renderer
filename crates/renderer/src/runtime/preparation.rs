@@ -10,7 +10,7 @@ use super::RuntimeInner;
 use super::{ExecutionError, Runtime};
 
 /// Selects the GPU backend and its physical preparation limits.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeConfig {
     #[cfg(feature = "vulkan")]
     Vulkan(VulkanConfig),
@@ -18,9 +18,62 @@ pub enum RuntimeConfig {
     D3D12(D3D12Config),
 }
 
+impl RuntimeConfig {
+    /// Raise physical limits for the declared working set. Transfer sizes are per
+    /// submission and include texture row/placement padding. The staging pool
+    /// on Vulkan is shared by concurrent submissions.
+    #[cfg_attr(
+        not(any(feature = "vulkan", all(windows, feature = "d3d12"))),
+        allow(unused_variables)
+    )]
+    pub fn fit_preparation(
+        &mut self,
+        preparation: &crate::capacity::Preparation,
+        upload_bytes: u64,
+        readback_bytes: u64,
+    ) -> Result<(), crate::graph::GraphError> {
+        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        let req = preparation.graph_requirements();
+        match *self {
+            #[cfg(feature = "vulkan")]
+            Self::Vulkan(ref mut settings) => {
+                let overflow =
+                    || crate::graph::GraphError::invalid_input("Vulkan preparation limit overflow");
+                let frames = preparation.frames_in_flight().get();
+                let staging = upload_bytes
+                    .max(readback_bytes)
+                    .checked_mul(frames as u64)
+                    .ok_or_else(overflow)?;
+                let ranges = req.passes.checked_mul(frames).ok_or_else(overflow)?;
+                let sets = req
+                    .compute_dispatches
+                    .checked_add(req.draws.min(req.bindings))
+                    .ok_or_else(overflow)?;
+                let sets = u32::try_from(sets).map_err(|_| overflow())?;
+                settings.max_shader_bindings = settings.max_shader_bindings.max(sets);
+                settings.staging_bytes = settings.staging_bytes.max(staging);
+                settings.staging_ranges = settings.staging_ranges.max(ranges);
+                Ok(())
+            }
+            #[cfg(all(windows, feature = "d3d12"))]
+            Self::D3D12(ref mut settings) => {
+                for class in preparation.working_set().resources {
+                    if let ResourceClass::Buffer { desc, .. } = class {
+                        settings.max_buffer_bytes = settings.max_buffer_bytes.max(desc.size);
+                    }
+                }
+                settings.buffer_count = settings.buffer_count.max(req.resources);
+                settings.upload_bytes = settings.upload_bytes.max(upload_bytes);
+                settings.readback_bytes = settings.readback_bytes.max(readback_bytes);
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Physical Vulkan limits fixed at initialization.
 #[cfg(feature = "vulkan")]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VulkanConfig {
     pub validation: crate::vulkan::ValidationMode,
     /// Capacity of each shared upload and readback staging buffer.
@@ -48,7 +101,7 @@ impl Default for VulkanConfig {
 /// Physical D3D12 limits fixed at initialization. Transfer bytes include the
 /// native padding of placed texture footprints.
 #[cfg(all(feature = "d3d12", windows))]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct D3D12Config {
     pub validation: crate::d3d12::D3D12ValidationMode,
     /// Buffer operands per Graph, including imported buffers.
@@ -80,7 +133,7 @@ impl Default for D3D12Config {
 
 /// Logical limits shared by headless and windowed Graph runtimes. Bounds are
 /// fixed at initialization. Graph storage is allocated separately by the caller.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeLimits {
     pub graph: GraphCapacity,
     /// Accepted Graph submissions whose completion has not been consumed.
@@ -189,6 +242,37 @@ impl RuntimeLimits {
     )
 )]
 impl Runtime {
+    /// Check the fixed physical limits before replacing a working set or attaching
+    /// a prepared subsystem to this device. No native state changes on this path.
+    pub fn check_transfer_and_binding_limits(
+        &self,
+        preparation: &crate::capacity::Preparation,
+        upload: u64,
+        readback: u64,
+    ) -> Result<(), ExecutionError> {
+        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        {
+            let mut required = self.config;
+            required
+                .fit_preparation(preparation, upload, readback)
+                .map_err(|_| ExecutionError::invalid("backend capacity overflow"))?;
+            if required != self.config {
+                return Err(ExecutionError::with_capacity(
+                    "preparation exceeds fixed backend limits",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::WorkingSet,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
+        match self.config {}
+    }
+
     /// Create a headless runtime with a complete prepared execution working set.
     pub fn new(
         config: RuntimeConfig,
@@ -203,12 +287,13 @@ impl Runtime {
                     limits.vulkan_config(settings, 0)?,
                     settings.validation,
                 )?;
-                Self::prepare_vulkan_runtime(runtime, limits, working_set)
+                Self::prepare_vulkan_runtime(runtime, settings, limits, working_set)
             }
             #[cfg(all(feature = "d3d12", windows))]
             RuntimeConfig::D3D12(settings) => Self::with_inner(
                 RuntimeInner::D3D12(new_d3d12(settings, limits, working_set)?),
-                limits.resource_capacity,
+                limits,
+                config,
             ),
         }
     }
@@ -240,18 +325,23 @@ impl Runtime {
                 host,
             )
         }?;
-        Self::prepare_vulkan_runtime(runtime, limits, working_set)
+        Self::prepare_vulkan_runtime(runtime, settings, limits, working_set)
     }
 
     #[cfg(feature = "vulkan")]
     fn prepare_vulkan_runtime(
         mut runtime: crate::vulkan::VulkanRuntime,
+        settings: VulkanConfig,
         limits: RuntimeLimits,
         working_set: WorkingSet<'_>,
     ) -> Result<Self, ExecutionError> {
         runtime.set_frame_limit(limits.frames)?;
         runtime.prepare_graph_working_set(Some(limits.vulkan_capacity()?), working_set)?;
-        Self::with_inner(RuntimeInner::Vulkan(runtime), limits.resource_capacity)
+        Self::with_inner(
+            RuntimeInner::Vulkan(runtime),
+            limits,
+            RuntimeConfig::Vulkan(settings),
+        )
     }
 
     /// Run Graphs on a game engine's existing D3D12 DIRECT queue (node zero).
@@ -279,7 +369,8 @@ impl Runtime {
                 working_set.raster,
                 working_set.compute,
             )?),
-            limits.resource_capacity,
+            limits,
+            RuntimeConfig::D3D12(config),
         )
     }
 

@@ -7,6 +7,7 @@ pub use crate::pbr::{MaterialFactors, MaterialTextures};
 pub use definition::{CustomMaterial, MaterialDefinition, Parameter, Value};
 use renderer::graph::{Graph, GraphError, ImageView, ImportImage};
 use renderer::program::SamplerDescriptor;
+pub(crate) use residency::MaterialCheckpoint;
 use std::{
     collections::HashMap,
     sync::{

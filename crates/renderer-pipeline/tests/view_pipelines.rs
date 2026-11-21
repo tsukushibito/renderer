@@ -16,7 +16,11 @@ use renderer_pipeline::pipeline::PipelineResult;
 mod shared;
 
 fn compare(api: RuntimeConfig) -> PipelineResult<()> {
-    shared::check(api)?;
+    shared::check(api).map_err(|e| format!("heterogeneous reference: {e}"))?;
+    views::run_on(api, views::Example::Textured, views::standard)
+        .map_err(|e| format!("textured: {e}"))?;
+    views::run_on(api, views::Example::MixedPost, views::standard)
+        .map_err(|e| format!("mixed: {e}"))?;
     views::run_on(api, views::Example::TwoViews, views::standard)?;
     views::run_on(api, views::Example::TwoViews, toon_pipeline::prepare)
 }
@@ -48,4 +52,21 @@ fn vulkan_publication() -> PipelineResult<()> {
 #[ignore = "requires real D3D12 hardware"]
 fn d3d12_publication() -> PipelineResult<()> {
     publication::check(RuntimeConfig::D3D12(Default::default()))
+}
+
+#[path = "view_pipelines/setup.rs"]
+mod setup;
+
+#[cfg(feature = "vulkan")]
+#[test]
+#[ignore = "requires real Vulkan hardware"]
+fn vulkan_setup_lifecycle() -> PipelineResult<()> {
+    setup::check(RuntimeConfig::Vulkan(Default::default()))
+}
+
+#[cfg(all(windows, feature = "d3d12"))]
+#[test]
+#[ignore = "requires real D3D12 hardware"]
+fn d3d12_setup_lifecycle() -> PipelineResult<()> {
+    setup::check(RuntimeConfig::D3D12(Default::default()))
 }

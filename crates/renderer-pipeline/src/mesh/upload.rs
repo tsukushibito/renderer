@@ -24,6 +24,79 @@ struct Transfer {
     exports: Option<[BufferHandle; 2]>,
 }
 
+/// Exclusive setup borrows the registry until it publishes or restores these versions.
+pub(crate) struct MeshCheckpoint(Vec<(MeshHandle, Option<Resident>, super::Upload)>);
+
+impl MeshCheckpoint {
+    pub(crate) fn begin(
+        meshes: &mut Meshes,
+        selected: &[MeshHandle],
+        runtime: &Runtime,
+    ) -> Result<Self, DefaultResourceError> {
+        meshes.check_runtime(selected, runtime)?;
+        let mut saved = Vec::new();
+        for mesh in selected {
+            let asset = meshes.assets.get_mut(mesh).expect("validated mesh");
+            if !asset
+                .active
+                .as_ref()
+                .is_some_and(|active| active.revision == asset.revision)
+            {
+                saved.push((
+                    *mesh,
+                    asset.active.take(),
+                    std::mem::take(&mut asset.upload),
+                ));
+            }
+        }
+        Ok(Self(saved))
+    }
+
+    pub(crate) fn finish(
+        &mut self,
+        meshes: &mut Meshes,
+        commit: bool,
+        runtime: &mut Runtime,
+    ) -> Result<(), ExecutionError> {
+        while let Some((mesh, old_active, old_upload)) = self.0.last_mut() {
+            let asset = meshes
+                .assets
+                .get_mut(mesh)
+                .expect("exclusively borrowed mesh");
+            if commit {
+                // The previous drawable may still be referenced by a CPU graph.
+                if let Some(active) = old_active.take() {
+                    meshes.retired.push(super::RetiredVersion {
+                        keys: active.buffers.map(|b| Some(b.key())),
+                        _layout: Some(active.layout),
+                    });
+                }
+                if old_upload.keys.iter().any(Option::is_some) {
+                    meshes.retired.push(super::RetiredVersion {
+                        keys: old_upload.keys,
+                        _layout: None,
+                    });
+                }
+            } else {
+                // Convert a published staging version back to keys for retryable deletion.
+                if let Some(active) = asset.active.take() {
+                    asset.upload.keys = active.buffers.map(|b| Some(b.key()));
+                }
+                for key in &mut asset.upload.keys {
+                    if let Some(k) = *key {
+                        runtime.delete(k)?;
+                        *key = None;
+                    }
+                }
+                asset.active = old_active.take();
+                asset.upload = std::mem::take(old_upload);
+            }
+            self.0.pop();
+        }
+        Ok(())
+    }
+}
+
 pub(super) struct UploadBatch {
     transfers: Vec<Transfer>,
     epoch: u64,
@@ -101,6 +174,25 @@ impl UploadBatch {
 }
 
 impl Meshes {
+    pub(crate) fn check_runtime(
+        &self,
+        selected: &[MeshHandle],
+        runtime: &Runtime,
+    ) -> Result<(), ExecutionError> {
+        for mesh in selected {
+            let asset = &self.assets[mesh];
+            if let Some(active) = &asset.active {
+                for buffer in &active.buffers {
+                    runtime.refresh_buffer(buffer.key())?;
+                }
+            }
+            for key in asset.upload.keys.into_iter().flatten() {
+                runtime.refresh_buffer(key)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Upload every pending version in a single startup/asset submission.
     /// Use `stream_gpu` for a bounded frame or a mesh larger than staging.
     pub fn prepare_gpu(

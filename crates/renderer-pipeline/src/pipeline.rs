@@ -32,6 +32,8 @@ mod scene_pairs;
 pub use scene_pairs::{FrameScene, PipelineId};
 mod contract;
 pub use contract::*;
+mod setup;
+pub use setup::*;
 
 struct ForwardCommand {
     program: ManagedRasterProgram,

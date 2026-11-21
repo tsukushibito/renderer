@@ -1,5 +1,125 @@
 //! GPU registrations owned by the material registry.
 use super::*;
+use renderer::runtime::{ExecutionError, Runtime};
+use std::collections::BTreeSet;
+
+pub(crate) struct MaterialCheckpoint {
+    original: Vec<(MaterialHandle, Arc<MaterialInstance>)>,
+    uniform_start: usize,
+}
+
+impl MaterialCheckpoint {
+    pub(crate) fn begin(
+        materials: &Materials,
+        selected: &BTreeSet<MaterialHandle>,
+        runtime: &Runtime,
+    ) -> Result<Self, ExecutionError> {
+        let mut original = Vec::new();
+        for &handle in selected {
+            let entry = &materials.entries[&handle];
+            match entry.as_ref() {
+                MaterialInstance::Pbr(p) => {
+                    if let PbrSource::Imported(buffer) = &p.source {
+                        runtime.refresh_buffer(buffer.key())?;
+                    }
+                    for image in [
+                        &p.textures.base_color,
+                        &p.textures.normal,
+                        &p.textures.orm,
+                        &p.textures.emissive,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        runtime.refresh_image(image.key())?;
+                    }
+                }
+                MaterialInstance::Custom(m) => {
+                    for p in m.definition().parameters() {
+                        if let Some(Value::Texture(image)) = m.value(p.name()) {
+                            runtime.refresh_image(image.key())?;
+                        }
+                    }
+                }
+                MaterialInstance::Unlit(_) => {}
+            }
+            if materials.dirty.contains(&handle) {
+                original.push((handle, entry.clone()));
+            }
+        }
+        Ok(Self {
+            original,
+            uniform_start: materials.owned_uniforms.len(),
+        })
+    }
+
+    pub(crate) fn upload(
+        &self,
+        materials: &mut Materials,
+        runtime: &mut Runtime,
+    ) -> Result<Option<renderer::runtime::FrameId>, pbr::DefaultResourceError> {
+        let count = self.original.len();
+        if count == 0 {
+            return Ok(None);
+        }
+        // Exported buffer provenance may keep its upload Graph alive after fence
+        // completion. Give this revision its own storage outside the frame pool.
+        let size = |per: usize| {
+            count
+                .checked_mul(per)
+                .ok_or_else(|| GraphError::invalid_input("material upload capacity overflow"))
+        };
+        let mut pool = renderer::graph::GraphPool::new(
+            renderer::graph::GraphCapacity {
+                resources: count,
+                passes: count,
+                accesses: count,
+                draws: 0,
+                raster_constant_words: Some(0),
+                bindings: 0,
+                attachments: 0,
+                dependencies: 0,
+                initial_ranges: 0,
+                name_bytes: size(2 * "material factors".len())?,
+                upload_bytes: size(crate::passes::pbr::MATERIAL_BYTES)?,
+                edges: size(2)?,
+                segments: size(2)?,
+                readers: count,
+            },
+            1,
+        )?;
+        let mut other = std::mem::take(&mut materials.dirty);
+        for (handle, _) in &self.original {
+            if other.remove(handle) {
+                materials.dirty.insert(*handle);
+            }
+        }
+        let result = materials.prepare_gpu(runtime, &mut pool);
+        materials.dirty.append(&mut other);
+        result
+    }
+
+    pub(crate) fn rollback(
+        &mut self,
+        materials: &mut Materials,
+        runtime: &mut Runtime,
+    ) -> Result<(), ExecutionError> {
+        for (handle, entry) in self.original.drain(..) {
+            materials.entries.insert(handle, entry);
+            materials.dirty.insert(handle);
+        }
+        while materials.owned_uniforms.len() > self.uniform_start {
+            materials
+                .owned_uniforms
+                .last_mut()
+                .expect("staged uniform")
+                .1
+                .release(runtime)?;
+            materials.owned_uniforms.pop();
+        }
+        Ok(())
+    }
+}
 
 impl Materials {
     /// Upload new or edited inline PBR factors together at an asset-change boundary.

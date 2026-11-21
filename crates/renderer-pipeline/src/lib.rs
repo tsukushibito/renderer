@@ -1,10 +1,10 @@
 //! Compose public Renderer Graphs with reusable drawing passes and recipes.
 //!
-//! Register their resource and Program requirements in
-//! [`renderer::capacity::Preparation`].
-//! Prepare resource and Program reservations, then append standard and
-//! application-specific passes to the same Graph. Renderer owns native
-//! preparation, scheduling and execution.
+//! Start with [`pipeline::RendererSetup::standard`] and [`pipeline::SceneAssets`].
+//! Blocking or incremental setup derives the view, graph and GPU reservations from
+//! the scene. [`pipeline::PreparedSetup`] lets an engine compose additional passes
+//! or attach its own runtime. A [`pipeline::SceneFrame`] can record multiple cameras,
+//! application passes and output in one submission.
 //!
 //! Choose the GPU backends on the host application's `renderer` dependency, or
 //! forward them through this crate's matching features. A reusable pipeline

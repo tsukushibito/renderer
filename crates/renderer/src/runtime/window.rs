@@ -63,8 +63,7 @@ impl Runtime {
                     )?;
                 runtime.set_frame_limit(limits.frames)?;
                 runtime.prepare_graph_working_set(Some(capacity), working_set)?;
-                let runtime =
-                    Self::with_inner(RuntimeInner::Vulkan(runtime), limits.resource_capacity)?;
+                let runtime = Self::with_inner(RuntimeInner::Vulkan(runtime), limits, config)?;
                 let presenter =
                     WindowPresenter::new(&runtime, WindowPresenterInner::Vulkan(presenter));
                 Ok((runtime, presenter))
@@ -73,8 +72,7 @@ impl Runtime {
             RuntimeConfig::D3D12(settings) => {
                 let runtime = super::preparation::new_d3d12(settings, limits, working_set)?;
                 let presenter = runtime.create_presenter(window, presentation)?;
-                let runtime =
-                    Self::with_inner(RuntimeInner::D3D12(runtime), limits.resource_capacity)?;
+                let runtime = Self::with_inner(RuntimeInner::D3D12(runtime), limits, config)?;
                 let presenter =
                     WindowPresenter::new(&runtime, WindowPresenterInner::D3D12(presenter));
                 Ok((runtime, presenter))
@@ -104,7 +102,7 @@ impl Runtime {
                 )?;
                 runtime.set_frame_limit(limits.frames)?;
                 runtime.prepare_graph_working_set(Some(capacity), working_set)?;
-                Self::with_inner(RuntimeInner::Vulkan(runtime), limits.resource_capacity)
+                Self::with_inner(RuntimeInner::Vulkan(runtime), limits, config)
             }
             #[cfg(feature = "d3d12")]
             RuntimeConfig::D3D12(_) => Self::new(config, limits, working_set),

@@ -210,7 +210,6 @@ impl Preparation {
     /// Raise the supplied runtime limits to accommodate the prepared Graph,
     /// frame concurrency, one result per in-flight frame, and all resource classes.
     /// Include additional retained results or external registrations in `base`.
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub fn runtime_limits(
         &self,
         mut base: crate::runtime::RuntimeLimits,

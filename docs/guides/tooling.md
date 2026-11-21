@@ -190,56 +190,60 @@ materials.update_pbr(blue_paint, PbrParams::color([0.03, 0.1, 0.8, 1.0]))?;
 アプリケーションがシーン、階層、アニメーションを所有する。描画時には、メッシュと材質のハンドルと
 ワールド変換を持つ `RenderObject` のスライスを渡す。同じスライスを複数のカメラから描画できる。
 
-起動時に `ViewRenderer::new()` を作り、描画方式・寸法ごとにグループを登録する。例えば主画面に標準PBR、別の解像度のミニマップに独自方式を選べる。
-グループごとに使うビュー数を指定し、同じフレームで使うグループの資源を一つの `Preparation` に集約する。
+標準 Forward はカメラと初期シーンから準備できる。カメラには安定した `ViewId`、寸法、`ViewInput` を渡す。
+`build` は参照されたメッシュと材質を転送し、初期化に使った投入の完了を回収して返る。
 
 ```rust
-let mut renderer = ViewRenderer::new();
-let mut preparation = Preparation::new(limits.frames_in_flight);
-let group = renderer.prepare_pipeline(
-    StandardPipeline::forward(extent, limits)?,
-    extent,
-    view_count,
-    Some(SdrOutput::display(false)),
-    &mut preparation,
-)?;
-meshes.reserve(&mut preparation)?;
-let bloom = Bloom::Tent.prepare(&mut preparation, ImageDesc::rgba16_float(extent[0], extent[1]))?;
-let runtime_limits = preparation.runtime_limits(base_limits)?;
-let mut pool = GraphPool::new(runtime_limits.graph, graph_slots)?;
-let (mut runtime, mut presenter) = Runtime::for_window(
-    config, runtime_limits, preparation.working_set(), window, presentation_config,
-)?;
-let initial_upload = renderer.initialize_pipeline(group, &mut runtime)?;
-renderer.register_view(group, &camera)?;
-```
+use renderer_pipeline::pipeline::{RendererSetup, SceneAssets, SceneInput};
 
-`camera` には安定した `ViewId`、寸法、`ViewInput` を持たせる。`initial_upload` が `Some(id)` なら通常の完了処理で回収する。
-メッシュと材質はアセット作成・変更時に各レジストリの `prepare_gpu` で転送し、`prepare_scene(group, changed)` に新規・変更した組合せだけを渡す。
-使わなくなった組合せは `remove_scene_pair(group, mesh, material)` で外せる。
+let assets = SceneAssets::new(&mut meshes, &mut materials, &objects).with_lights(&lights);
+let mut renderer = RendererSetup::standard(camera).build(backend, assets)?;
 
-```rust
-// アセットの作成・変更時
-renderer.prepare_scene(group, SceneInput::new(&meshes, &materials, &changed_objects))?;
-
-// 毎フレーム
-let scene = SceneInput::new(&meshes, &materials, &objects)
-    .with_sun(sun)
-    .with_lights(&point_lights);
-let mut frame = renderer.begin_frame(&mut pool)?;
-let bound = frame.bind_scene(group, scene)?;
-let hdr = frame.draw_view(bound, &camera)?.color;
-let hdr = bloom.add_passes(frame.graph(), hdr)?;
+// 毎フレーム。HDR の後に独自パスを追加できる。
+let mut frame = renderer.begin_frame()?;
+let scene = SceneInput::new(&meshes, &materials, &objects).with_sun(sun).with_lights(&lights);
+let hdr = frame.draw_scene(&camera, scene)?.color;
 let sdr = frame.write_output(camera.id, hdr, exposure, None)?;
 sdr.display().expect("display output configured").export_for_display(frame.graph())?;
-let mut receipt = frame.submit(&mut runtime)?;
-presenter.queue_frame(&mut receipt)?;
-let outcome = presenter.present_frame(&mut runtime)?;
+let receipt = frame.submit()?;
 ```
 
-`FrameScene` はそのフレームとグループに属する。複数カメラが同じオブジェクトを描く場合は `bind_scene` の戻り値を共有する。
-オブジェクト順、部分集合、変換は毎フレーム変更できる。照明、シーン境界、環境マップはシーン入力で共有する。
-表示が `NotReady` のときは同じPresenterの `present_frame` を再試行する。保存用のビューなら `sdr.capture()` で読み戻しを宣言してから投入する。
+`frames_in_flight` の既定値は 1。`additional_objects` は追加の描画、材質、モデル変換、カスケードごとの
+影描画に使える件数、`additional_lights` は追加の点光源数。初期シーンでは同じ材質とモデル変換を共有して数える。
+移動開始やインスタンスの分離で個別の変換が増える場合にも余裕を指定する。
+新しいサイズのメッシュ、独自シェーダーや追加の描画方式を使う際は、変更時にそれらの資源も予約する。
+
+同じ方式・寸法のカメラは `CameraGroup::add_view` で登録し、フレーム内で
+`frame.bind_for_view(camera.id, scene)?` の戻り値を複数回の `draw_view` に使える。
+寸法や方式の異なるカメラは `RendererSetup::add_group` で追加する。
+`CameraGroup::standard` で描画方式、MSAA、影を、`group.output` で出力を設定する。
+`CameraGroup::custom` のファクトリには寸法、シーンから求めた上限、使用中の独自材質定義が渡る。
+
+**ホスト所有の Runtime と後処理。** ウィンドウや既存デバイスを使う場合、まず CPU 上でシーンの予約を求める。
+他のサブシステムの資源と同時に使うパスもここで合算する。次の例ではホストがウィンドウと表示を管理する。
+
+```rust
+let mut plan = setup.prepare(SceneAssets::new(&mut meshes, &mut materials, &objects))?;
+let bloom = Bloom::Tent.prepare(plan.preparation_mut(), ImageDesc::rgba16_float(width, height))?;
+plan.reserve_texture("albedo", texture_desc)?;
+plan.fit_backend(&mut backend)?;
+let (mut runtime, mut presenter) = Runtime::for_window(
+    backend, plan.runtime_limits(base_limits)?, plan.preparation().working_set(), window, presentation_config,
+)?;
+let mut renderer = plan.begin_with_runtime(&mut runtime)?.wait()?;
+```
+
+描画時は `bloom.add_passes(frame.graph(), hdr)?` の出力を `write_output` に渡す。
+表示する場合は受理票を `presenter.queue_frame(&mut receipt)?` に渡し、
+`presenter.present_frame(renderer.runtime())?` を呼ぶ。`NotReady` のときは同じ Presenter で再試行する。
+通常の GPU 完了と読み戻しはエンジンで回収する。`reserve_readback` は同時に読む画像ごとに一回呼ぶ。
+
+**分割ロード。** `setup.begin_build(backend, assets)?` または `plan.begin_with_runtime(&mut runtime)?`
+でローダーを作り、ロードループで `poll()?` を呼ぶ。`Poll::Ready(())` を受けたら `finish()?` で描画へ移る。
+各 poll は GPU を待たず、メッシュ転送は `mesh_upload_bytes`（既定 1 MiB）ずつ進む。デバイス作成と
+シェーダー準備は同期処理。容量が他の投入で埋まっている場合はホスト所有の完了や結果を返却して同じビルドを再試行する。
+`cancel()?` は元のアセット版を復元する。返されたフレーム ID があればホストが完了を回収する。
+未完のビルドを drop すると、復元に加えて自分の未回収の投入を待つ。
 
 独自方式は `ViewPipeline` を実装する。`reserve` で共有資源とビュー別の作業領域を予約し、
 `check_object` で対応材質・頂点レイアウトを確認する。`record` 内では `object.import_mesh(graph, scene.meshes)` で
@@ -259,14 +263,18 @@ Unlit は頂点色、材質色、オブジェクトの tint を乗算する。
 `renderer.finish_submission()` を再試行して残りの履歴を確定し、表示へ進む。
 独自方式の `accept` は再試行に必要な状態を保持する。不要なカメラは `remove_view` で解放する。
 
-**リサイズ・方式変更。** 新しい寸法と方式で `prepare_pipeline` し、引き続き使うグループの要求は `reserve_pipeline` で集める。
-実行を完了し、結果とexport付き受理票を返してから `Runtime::prepare_working_set` を呼ぶ。登録済みのメッシュ・材質・画像のキーとスナップショットは同じRuntimeで引き続き使える。
-`reconfigure_view(new_group, &camera, &mut runtime)` はそのカメラの旧履歴を解放する。最後のカメラを移したグループは `remove_pipeline` できる。
-新グループを `initialize_pipeline` し、そのグループで使う組合せを `prepare_scene` に登録する。
-Graphの記録容量が増えたら新しい容量の `GraphPool` を使う。`RuntimeLimits` に指定した実行上限は初期化時に決まるため、想定する最大構成を含める。
+**リサイズ・方式変更。** 同じレジストリと新しいカメラで `setup.prepare(assets)?` を呼び、
+継続するエンジンのパスも予約に含める。未完の実行と結果・受理票を返却してから
+`renderer.replace_working_set(plan)?` を呼ぶ。これは Runtime 全体の作業用資源とカメラの履歴を更新する。
+同じ Runtime の常駐メッシュ、材質、テクスチャを再利用できる。デバイス作成時の上限を超える計画は
+`CapacityRecovery::Reconfigure` を返す。ホストが独自に作業用資源を管理する場合は、
+合算した予約をホストから準備した後に `begin_with_runtime` で接続する。
+一部のカメラだけ移動して他の履歴を保つ場合は `parts_mut` から `ViewRenderer::reconfigure_view` を使う。
 
-**アセットの更新。** 大きなメッシュは `meshes.stream_gpu(&mut runtime, &mut pool, &selection, byte_budget)` で優先順と1回分の転送量を指定できる。
-完全な新版が受理されるまで既存メッシュを描画できる。旧版を使うGraphとアップロードが重なる場合は `meshes.reserve_replacement` でバッファを追加予約する。
+**アセットの更新。** 予約内の変更を公開するには、旧版を使う Graph を投入または破棄し、
+`renderer.prepare_assets(SceneAssets::new(&mut meshes, &mut materials, &changed_objects))?` を呼ぶ。
+大きなメッシュは `meshes.stream_gpu(&mut runtime, &mut pool, &selection, byte_budget)` で優先順と1回分の転送量を指定できる。
+完全な新版が受理されるまで既存メッシュを描画できる。旧版を使うGraphと同サイズの更新が重なる場合は `plan.reserve_mesh_replacement(mesh)?` でバッファを追加予約する。
 `Runtime::upload_texture(&mut pool, name, desc, bytes)` は画像を転送し、`(FrameId, ManagedImage)` を返す。
 あらかじめ画像の資源クラスと転送容量を予約する。入力は `ImageDesc::texture_2d` と `with_mip_levels` で記述し、
 最大mipから順に詰めた `desc.byte_len()` バイトを渡す。BC1・BC3・BC5・BC7は4×4ブロック単位で並べる。

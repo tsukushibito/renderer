@@ -66,6 +66,8 @@ use crate::graph::{CompiledGraph, ImportBuffer, ImportImage, ResourceKey};
 /// Poll or wait explicitly to obtain completed frames. Dropping an accepted
 /// frame's metadata leaves pending work in this runtime.
 pub struct Runtime {
+    limits: RuntimeLimits,
+    config: RuntimeConfig,
     inner: RuntimeInner,
     image_releases: std::sync::Arc<managed_image::ImageReleases>,
 }
@@ -89,6 +91,11 @@ enum RuntimeInner {
     )
 )]
 impl Runtime {
+    /// Logical capacities fixed when this runtime was created.
+    pub fn limits(&self) -> RuntimeLimits {
+        self.limits
+    }
+
     /// Accept a compiled Graph once, without waiting for earlier Graphs.
     ///
     /// A successful return exposes scheduled exports for same-runtime follow-up
