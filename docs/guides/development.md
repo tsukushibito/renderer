@@ -1455,6 +1455,14 @@ DXGIのqueue markerやVulkanのpresent fenceを画面への表示完了とは数
 strictはCore＋SyncVal／Debug Layer＋GBVの実効とwarning／error／corruption／callback失敗ゼロを要求します。
 製品相当は追加診断をコンパイル除外し、native Disabledのreleaseを別processで実行します。
 
+共通 API の複数ウィンドウ試験では、エンジン所有の HWND 二枚に同じ登録済み画像を表示します。
+最初のウィンドウを閉じた後も、残りの Presenter と資源登録を使用できることを確認します。
+
+```powershell
+cargo test --locked --release -p renderer --test host_windows --no-default-features --features vulkan,d3d12,presentation,development-validation -- --ignored --test-threads=1
+cargo test --locked --release -p renderer --test host_windows --no-default-features --features vulkan,d3d12,presentation -- --ignored --test-threads=1
+```
+
 既存のVulkan WSI受入も保持します。同じsourceの再present、取得後取消、旧世代の保持、
 複数pendingと保持readback、全owner返却を通常frameのメモリ窓まで確認する試験です。
 
