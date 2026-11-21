@@ -70,7 +70,11 @@ impl Prepared {
                 frames_in_flight: concurrent,
                 max_draws,
                 max_materials: scene.materials.len(),
-                max_point_lights: if options.pipeline.uses_local_lights() { crate::recipe::lighting::PRESET_LEN } else { 0 },
+                max_point_lights: if options.pipeline.uses_local_lights() {
+                    super::lighting::PRESET_LEN
+                } else {
+                    0
+                },
                 max_casters_per_cascade: max_draws,
                 max_transforms: if options.instances.enabled() {
                     crate::shared::instancing::COUNT
@@ -202,6 +206,7 @@ pub(super) struct Reference {
     depth: ImageDesc,
     clear: [f32; 4],
     mode: PipelineMode,
+    pub lights: Option<super::lighting::LightTable>,
     output: PreparedOutput,
     pub opaque: ManagedRasterProgram,
     pub transparent: ManagedRasterProgram,
@@ -271,22 +276,27 @@ impl Reference {
             .collect::<Vec<_>>();
         if tiled {
             preparation.reserve_image(
-                pbr_forward_plus::tile_mask_desc(options.width, options.height)?,
+                super::lighting::layout().tile_mask_desc(options.width, options.height)?,
                 1,
             )?;
             targets += 1;
         }
-        let local_lights = options.pipeline.uses_local_lights();
+        let local_lights = options
+            .pipeline
+            .uses_local_lights()
+            .then(|| {
+                super::lighting::LightTable::new(
+                    options.fixture,
+                    [options.width, options.height],
+                    tiled,
+                )
+            })
+            .transpose()?;
         let mut upload_bytes = pbr::VIEW_BYTES;
-        if local_lights {
-            preparation.reserve_buffer(
-                BufferDesc {
-                    size: pbr_forward_plus::LIGHT_BUFFER_BYTES,
-                },
-                1,
-            )?;
+        if local_lights.is_some() {
+            preparation.reserve_image(super::lighting::layout().image_desc(), 1)?;
             targets += 1;
-            upload_bytes += pbr_forward_plus::LIGHT_BUFFER_BYTES as usize;
+            upload_bytes += super::lighting::layout().byte_len();
         }
         if is_deferred {
             let size = program::deferred::DEFERRED_RECONSTRUCTION_BYTES;
@@ -343,6 +353,7 @@ impl Reference {
             depth,
             clear,
             mode: options.pipeline,
+            lights: local_lights,
             output,
             opaque,
             transparent,
