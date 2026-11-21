@@ -15,10 +15,11 @@
 //! which classifies draws and sorts transparent geometry across shader families.
 //!
 //! Keep your application scene above this layer. Register geometry with
-//! [`mesh::Meshes`], prepare changed meshes and materials, then bind a [`pipeline::SceneInput`] once per
-//! pipeline using [`pipeline::ViewFrame::bind_scene`]. Pass that binding to
-//! [`pipeline::ViewFrame::draw_view`] for each of its cameras. Use [`pipeline::ViewFrame::graph`] to insert your
-//! own post-processing before SDR output. The executable examples are
+//! [`mesh::Meshes`], prepare changed meshes and materials, then bind a
+//! [`pipeline::SceneInput`] once per pipeline using [`pipeline::ViewFrame::bind_scene`].
+//! Pass that binding to [`pipeline::ViewFrame::draw_view`] for each camera.
+//! Use [`pipeline::ViewFrame::graph`] to insert post-processing before SDR output.
+//! The executable examples are
 //! `textured_view`, `two_views`, `toon_views`, and `mixed_post`. Implement
 //! [`pipeline::ViewPipeline`] to use the same [`pipeline::ViewRenderer`] with a custom technique.
 //!
@@ -35,13 +36,15 @@
 //! | [`pbr_forward_plus::prepare`] | 1×, 4× | Indexed, indirect, instanced | Indexed, instanced | Indexed, instanced | Built in |
 //! | [`pbr_deferred::prepare`] | 1× | Indexed, indirect, instanced | Indexed, instanced | Indexed, instanced | Built in |
 //!
-//! A positive [`pbr::SceneLimits::max_transforms`] enables instanced draws
-//! and one shared transform per opaque indirect group. Indexed draws
+//! Set [`pbr::SceneLimits::max_transforms`] to the required transform capacity.
+//! Instanced draws may span multiple transform pages, and an opaque indirect group
+//! can share one transform. Indexed draws
 //! without transform operands keep their world-space vertex contract.
 //! Transparent draws are supplied in back-to-front order. A 4× scene resolves
 //! its color to a single-sample HDR image and has no scene depth output.
-//! Forward+ accepts point lights for the view. Deferred shades its G-buffer
-//! before compositing the caller's transparent draws.
+//! Set [`pbr::SceneLimits::max_point_lights`] for Forward, Forward+ or Deferred.
+//! Forward+ culls lights by screen tile. Deferred shades its G-buffer before
+//! compositing transparent draws.
 //!
 //! For HDR composition, add the scene and application passes to the same Graph
 //! before adding the standard output stage. Drop or reset the frame Graph after

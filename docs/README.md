@@ -12,6 +12,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 
 | 読みたいこと | 入口 |
 |---|---|
+| ゲームエンジンに組み込みたい | [シーンの所有、カメラごとの描画方式、1 フレームの組み立て](guides/tooling.md#scene-materials)、[Windows の複数表示](design/rendergraph.md#windows-presentation)、[組み込み機能の検証](verification/current.md#engine-integration) |
 | Examplesを動かしたい | [Examplesの実行と選び方](guides/examples.md) |
 | Rustで標準パスやレシピを使いたい | [`renderer-pipeline`の標準部品](design/rendergraph.md#公開標準パスと標準グラフ) |
 | PBR・Unlit・独自シェーダーを同じシーンで描きたい | [マテリアルの作成・共有・更新](guides/tooling.md#scene-materials) |
