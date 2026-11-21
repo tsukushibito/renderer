@@ -6,6 +6,10 @@
 //! application-specific passes to the same Graph. Renderer owns native
 //! preparation, scheduling and execution.
 //!
+//! Use [`material::Materials`] to create shareable PBR, vertex-color Unlit or
+//! custom materials. Submit their handles together through [`scene::Scene`],
+//! which classifies draws and sorts transparent geometry across shader families.
+//!
 //! # Choosing a PBR recipe
 //!
 //! Select the standard technique through [`pbr::Prepared::new`] and reuse
@@ -33,10 +37,12 @@
 
 #![deny(unsafe_code)]
 
+pub mod material;
 pub mod passes;
 pub mod pbr;
 pub mod pbr_deferred;
 pub mod pbr_forward;
 pub mod pbr_forward_plus;
+pub mod scene;
 mod shader_binaries;
 pub mod unlit_forward;

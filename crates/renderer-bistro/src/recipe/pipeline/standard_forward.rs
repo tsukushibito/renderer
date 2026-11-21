@@ -1,7 +1,7 @@
 //! Connect Bistro's materials, draws and history to the public PBR recipes.
 
 use super::{Scene, shadow};
-use renderer_pipeline::pbr::{Draw, Material};
+use renderer_pipeline::pbr::{Draw, GraphMaterial};
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::{
@@ -10,12 +10,82 @@ use super::{
     select_draws, shadow_casters,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer_pipeline::pbr::{
-    self, Frame, FrameShadows, IndexedDraw, MaterialTextures, ShadowSource,
-};
+use renderer_pipeline::pbr::{self, Frame, FrameShadows, IndexedDraw, ShadowSource};
 
+use renderer::graph::{Graph, GraphError, ImportImage};
+use renderer_pipeline::material::{
+    MaterialHandle, MaterialInstance, MaterialTextures, Materials, PbrMaterial,
+};
+use renderer_pipeline::pbr::ResidentMaterialUniform;
+
+/// Cooked tables and GPU culling use dense asset indices. Keep their mapping to
+/// shareable pipeline handles at the asset boundary, including runtime reprepare.
+pub(super) struct SurfaceTable {
+    materials: Materials,
+    handles: Vec<MaterialHandle>,
+    maps: Vec<[usize; 4]>,
+}
+impl SurfaceTable {
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub(super) fn new(
+        scene: &Scene,
+        uniforms: &[ResidentMaterialUniform],
+        images: &[ImportImage],
+    ) -> Result<Self, GraphError> {
+        let mut table = Self {
+            materials: Materials::default(),
+            handles: Vec::with_capacity(uniforms.len()),
+            maps: scene.materials.iter().map(|m| m.textures).collect(),
+        };
+        table.refresh(uniforms, images)?;
+        Ok(table)
+    }
+    pub(super) fn refresh(
+        &mut self,
+        uniforms: &[ResidentMaterialUniform],
+        images: &[ImportImage],
+    ) -> Result<(), GraphError> {
+        for (index, (maps, uniform)) in self.maps.iter().zip(uniforms).enumerate() {
+            let [base_color, normal, orm, emissive] = maps.map(|i| images[i].clone());
+            let material = PbrMaterial::resident(
+                uniform,
+                MaterialTextures {
+                    base_color,
+                    normal,
+                    orm,
+                    emissive,
+                },
+            )?;
+            if let Some(&handle) = self.handles.get(index) {
+                self.materials.update_resident_pbr(handle, material)?
+            } else {
+                self.handles
+                    .push(self.materials.create_resident_pbr(material))
+            }
+        }
+        Ok(())
+    }
+    #[cfg(all(
+        windows,
+        feature = "presentation",
+        any(feature = "vulkan", feature = "d3d12")
+    ))]
+    pub(super) fn release_snapshots(&mut self) {
+        self.materials = Materials::default();
+        self.handles.clear()
+    }
+    fn resolve(&self, graph: &mut Graph, out: &mut Vec<GraphMaterial>) -> Result<(), GraphError> {
+        for &handle in &self.handles {
+            let MaterialInstance::Pbr(p) = self.materials.get(handle)? else {
+                unreachable!("Bistro cooks PBR materials")
+            };
+            out.push(p.resolve(graph, "material factors", None)?)
+        }
+        Ok(())
+    }
+}
 pub(super) struct Inputs {
-    materials: Vec<Material>,
+    materials: Vec<GraphMaterial>,
     opaque: Vec<Draw>,
     transparent: Vec<Draw>,
     casters: [Vec<Draw>; shadow::CASCADE_COUNT],
@@ -125,25 +195,9 @@ pub(super) fn build(
         .as_mut()
         .expect("workspace prepared for the public recipes");
     inputs.materials.clear();
-    for (material, &factors) in scene.materials.iter().zip(&workspace.materials) {
-        let [base, normal, orm, emissive] = material.textures;
-        let texture = |index: usize| {
-            graph.sampled_image_view(
-                workspace.images[index],
-                0,
-                scene.images[index].mips.len() as u32,
-            )
-        };
-        inputs.materials.push(Material::new(
-            factors,
-            MaterialTextures {
-                base_color: texture(base)?,
-                normal: texture(normal)?,
-                orm: texture(orm)?,
-                emissive: texture(emissive)?,
-            },
-        ));
-    }
+    resident
+        .surfaces
+        .resolve(&mut graph, &mut inputs.materials)?;
     let geometry = |index: usize| IndexedDraw {
         vertices: workspace.vertices[index],
         indices: workspace.indices[index],
@@ -233,18 +287,18 @@ pub(super) fn build(
                 .unshadowed()?,
         )
     };
-    let frame = Frame {
-        view: &view,
-        materials: &inputs.materials,
-        opaque: &inputs.opaque,
-        transparent: &inputs.transparent,
+    let mut frame = Frame::with_shadows(
+        &view,
+        &inputs.materials,
+        &inputs.opaque,
+        &inputs.transparent,
         shadows,
-        camera_target: Some(camera_target),
-        transforms: workspace
-            .placements
-            .as_ref()
-            .map_or(&[], |placements| &placements.transforms[..]),
-    };
+    );
+    frame.camera_target = Some(camera_target);
+    frame.transforms = workspace
+        .placements
+        .as_ref()
+        .map_or(&[], |p| &p.transforms[..]);
     let lights = resident
         .local_lights
         .as_ref()

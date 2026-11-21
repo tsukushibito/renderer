@@ -105,11 +105,15 @@ impl Prepared {
                         view_projection,
                         lighting: scene.lighting,
                     },
-                    |pass, _| scene.draw_opaque(pass),
+                    |pass, _| scene.draw_pbr_opaque(pass),
                 )?;
-                if scene.has_transparency {
+                if scene.has_transparency || scene.has_forward_opaque() {
                     graph.raster(
-                        "scene_transparent",
+                        if scene.has_forward_opaque() {
+                            "scene_forward"
+                        } else {
+                            "scene_transparent"
+                        },
                         RasterAttachments {
                             color_resolves: &[],
                             colors: &[Attachment {
@@ -123,7 +127,10 @@ impl Prepared {
                                 store: StoreOp::Store,
                             }),
                         },
-                        |pass| scene.draw_transparent(pass),
+                        |pass| {
+                            scene.draw_forward_opaque(pass)?;
+                            scene.draw_transparent(pass)
+                        },
                     )?;
                 }
                 gbuffer = Some(views);

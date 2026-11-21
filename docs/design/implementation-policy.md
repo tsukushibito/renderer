@@ -958,7 +958,13 @@ Vulkanのdescriptor予約はComputeのdispatch分を含める。`renderer-bistro
 
 ### 12.1 エンジンとのデータ境界
 
-エンジンはシーンとアセットの意味を所有し、RendererはGPUリソースと描画実行を所有する。mesh / material / texture等は安定したRendererハンドルで参照する。
+アプリはシーンとゲームアセットを所有し、`renderer-pipeline` はサーフェスの定義・インスタンスと描画パスへの割り当てを所有する。
+`renderer` は GPU 資源、プログラム、Graph の実行・完了を管理する。マテリアルには pipeline の `MaterialHandle` を使う。
+
+材質更新では新しい版を発行する。取得済み CPU スナップショットは旧版を参照し、構築済み Graph はその時点の定数・プログラム・資源参照を保持する。
+外部テクスチャや常駐係数の登録は所有者が管理する。提出前に登録を取り消した資源は runtime の鮮度検査に従い、受理済み処理の資源は GPU 完了まで保持する。
+パラメータ名・型・バインディングは定義・編集境界で照合する。ビューごとの解決と整列には明示準備した領域を使う。
+混在描画の入力と対応範囲は[マテリアルの使い方](../guides/tooling.md#scene-materials)を参照。
 
 CPU assetの同一性とimmutableな版はバックエンドから独立させる。Vulkanと第二APIへ同じsnapshotを渡すために、
 assetを二重登録する設計にしない。GPU常駐はCPU asset寿命と分け、件数・byte予算、退避、準備済みframeのpin、

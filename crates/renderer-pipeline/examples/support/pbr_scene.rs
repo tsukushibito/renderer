@@ -1,3 +1,4 @@
+use renderer_pipeline::material::{MaterialHandle, MaterialInstance, Materials, PbrParams};
 use std::num::NonZeroUsize;
 
 use renderer::{
@@ -17,9 +18,9 @@ use renderer_pipeline::{
     },
     pbr::{
         Bounds, CASCADE_COUNT, CameraStorage, Config, DefaultResources, DefaultViews, Defaults,
-        Draw, Frame, FrameShadows, IndexedDraw, Material, MaterialFactors, MaterialTextures,
-        MaterialUniform, PbrVertex, PointLight, Prepared, PreparedDefaults, Projection,
-        SceneLimits, ShadowHistory, ShadowSettings, ShadowUpdates, Sun, ViewInput,
+        Draw, Frame, FrameShadows, GraphMaterial, IndexedDraw, MaterialFactors, PbrVertex,
+        PointLight, Prepared, PreparedDefaults, Projection, SceneLimits, ShadowHistory,
+        ShadowSettings, ShadowUpdates, Sun, ViewInput,
     },
 };
 
@@ -31,7 +32,8 @@ pub const COPY_PASS: &str = "application HDR copy";
 
 pub struct Triangle {
     geometry: GeometryData,
-    material: MaterialFactors,
+    materials: Materials,
+    material: MaterialHandle,
     view: ViewFixture,
 }
 
@@ -101,7 +103,13 @@ impl Triangle {
         } else {
             material
         };
+        let mut materials = Materials::default();
+        let material = materials.create_pbr(PbrParams {
+            factors: material,
+            ..Default::default()
+        })?;
         Ok(Self {
+            materials,
             geometry: GeometryData::new(VERTEX_BYTES as u32, &vertices, &indices)?,
             material,
             view,
@@ -131,7 +139,7 @@ impl Triangle {
         &self,
         graph: &mut Graph,
         defaults: &DefaultViews,
-    ) -> Result<(IndexedDraw, [Material; 1]), GraphError> {
+    ) -> Result<(IndexedDraw, [GraphMaterial; 1]), GraphError> {
         let [vertex_desc, index_desc, _] = self.buffer_descs();
         let vertices = graph.buffer("triangle vertices", vertex_desc)?;
         let indices = graph.buffer("triangle indices", index_desc)?;
@@ -139,7 +147,9 @@ impl Triangle {
             .upload_vertices(graph, "upload vertices", vertices)?;
         self.geometry
             .upload_indices(graph, "upload indices", indices)?;
-        let factors = MaterialUniform::upload(graph, "triangle material factors", self.material)?;
+        let MaterialInstance::Pbr(material) = self.materials.get(self.material)? else {
+            unreachable!("triangle uses PBR")
+        };
 
         Ok((
             IndexedDraw {
@@ -149,10 +159,7 @@ impl Triangle {
                 index_count: self.geometry.index_count(),
                 material: 0,
             },
-            [Material::new(
-                factors,
-                defaults.material_textures(MaterialTextures::default())?,
-            )],
+            [material.resolve(graph, "triangle material factors", Some(*defaults))?],
         ))
     }
 }

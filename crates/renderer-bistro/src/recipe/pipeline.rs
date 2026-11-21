@@ -535,6 +535,7 @@ pub(super) struct Resident {
     pub vertices: Vec<ImportBuffer>,
     pub indices: Vec<ImportBuffer>,
     pub materials: Vec<ResidentMaterialUniform>,
+    surfaces: standard_forward::SurfaceTable,
     pub images: Vec<ImportImage>,
     pub environment: [ImportImage; 3],
     pub environment_mips: [u32; 3],
@@ -737,6 +738,7 @@ impl Resident {
         };
         let vertices = take_keys(&mut self.vertices);
         let indices = take_keys(&mut self.indices);
+        self.surfaces.release_snapshots();
         for material in &mut self.materials {
             material.release_snapshot();
         }
@@ -755,6 +757,7 @@ impl Resident {
             material.refresh_snapshot(backend)?;
         }
         self.camera = backend.refresh_buffer(camera)?;
+        self.refresh_surfaces()?;
         self.packed = packed.map(|packed| packed.refresh(backend)).transpose()?;
         Ok(self)
     }
@@ -916,10 +919,12 @@ impl Resident {
             .iter()
             .map(|bounds| pbr::Bounds::new(bounds.min, bounds.max))
             .collect::<Result<Vec<_>, _>>()?;
+        let surfaces = standard_forward::SurfaceTable::new(scene, &materials, &images)?;
         Ok(Self {
             vertices,
             indices,
             materials,
+            surfaces,
             images,
             environment: environment_images,
             environment_mips: [
@@ -1109,6 +1114,11 @@ pub(super) struct Built {
 }
 
 impl Resident {
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub(super) fn refresh_surfaces(&mut self) -> Result<(), Error> {
+        Ok(self.surfaces.refresh(&self.materials, &self.images)?)
+    }
+
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn accept_camera(
         &mut self,
@@ -1493,6 +1503,7 @@ pub(super) fn build(
 
     let mut graph = pool.begin()?;
     let uniform = import_frame(&mut graph, workspace, resident)?;
+    import_reference_materials(&mut graph, workspace, resident)?;
     graph.upload_buffer("camera update boundary", uniform, 0, &frame_uniform)?;
     graph.export_buffer(uniform)?;
     let (prepared, bloom) = workspace.prepared.select(options).reference();
@@ -1660,8 +1671,7 @@ fn import_frame(
         .map(|client| client.span(tracy_client::span_location!("bistro.build.imports"), 0));
     workspace.vertices.clear();
     workspace.indices.clear();
-    workspace.materials.clear();
-    workspace.images.clear();
+
     for value in &resident.vertices {
         workspace
             .vertices
@@ -1672,6 +1682,15 @@ fn import_frame(
             .indices
             .push(graph.import_buffer("mesh indices", value)?);
     }
+    Ok(graph.import_buffer("camera", &resident.camera)?)
+}
+fn import_reference_materials(
+    graph: &mut Graph,
+    workspace: &mut Workspace,
+    resident: &Resident,
+) -> Result<(), Error> {
+    workspace.materials.clear();
+    workspace.images.clear();
     for value in &resident.materials {
         workspace
             .materials
@@ -1682,7 +1701,7 @@ fn import_frame(
             .images
             .push(graph.import_image("material image", value)?);
     }
-    Ok(graph.import_buffer("camera", &resident.camera)?)
+    Ok(())
 }
 
 fn material_visible(options: &Options, scene: &Scene, index: usize) -> bool {

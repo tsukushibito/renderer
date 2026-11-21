@@ -177,7 +177,7 @@ pub fn render(
     Ok(captured)
 }
 
-fn check_validation(runtime: Runtime) -> Result<(), Box<dyn Error>> {
+pub(super) fn check_validation(runtime: Runtime) -> Result<(), Box<dyn Error>> {
     let strict = cfg!(feature = "development-validation");
     #[cfg(feature = "vulkan")]
     if let Some(vulkan) = runtime.as_vulkan() {

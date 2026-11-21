@@ -47,6 +47,9 @@ pub(super) enum Shape {
 }
 
 impl ViewInput {
+    pub(crate) fn sort_direction(self) -> [f64; 3] {
+        self.forward
+    }
     /// Validate the projection and retain the exact FP32 raster matrix.
     ///
     /// Off-axis and oblique *orientations* of the whole view are allowed. The

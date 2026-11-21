@@ -90,6 +90,17 @@ impl Transform {
         })
     }
 
+    pub(crate) fn columns(self) -> [[f32; 4]; 4] {
+        std::array::from_fn(|col| {
+            [
+                self.model[0][col],
+                self.model[1][col],
+                self.model[2][col],
+                if col == 3 { 1.0 } else { 0.0 },
+            ]
+        })
+    }
+
     /// Encode the canonical 96-byte transform record.
     pub fn encode(self) -> [u8; TRANSFORM_BYTES] {
         let mut bytes = [0; TRANSFORM_BYTES];

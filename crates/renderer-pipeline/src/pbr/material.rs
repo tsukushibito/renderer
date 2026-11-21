@@ -17,14 +17,7 @@ use crate::passes::pbr::MATERIAL_BYTES;
 
 const SIZE: u64 = MATERIAL_BYTES as u64;
 
-/// Alpha interpretation of the bundled Forward and shadow shaders.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum AlphaMode {
-    #[default]
-    Opaque,
-    Mask,
-    Blend,
-}
+use crate::material::AlphaMode;
 
 /// Material constants encoded at asset creation or update. Pass them to
 /// [`super::MaterialUniform::upload`] before using the material in a recipe.
@@ -157,7 +150,7 @@ impl MaterialUniform {
         Self::append(graph, name, bytes, alpha_mode)
     }
 
-    fn append(
+    pub(crate) fn append(
         graph: &mut Graph,
         name: &str,
         bytes: &[u8; MATERIAL_BYTES],
@@ -172,6 +165,18 @@ impl MaterialUniform {
         })
     }
 
+    pub(crate) fn import_snapshot(
+        graph: &mut Graph,
+        name: &str,
+        snapshot: &ImportBuffer,
+        alpha_mode: AlphaMode,
+    ) -> Result<Self, GraphError> {
+        Ok(Self {
+            buffer: graph.import_buffer(name, snapshot)?,
+            graph: graph.graph_id(),
+            alpha_mode,
+        })
+    }
     pub const fn alpha_mode(self) -> AlphaMode {
         self.alpha_mode
     }
@@ -272,16 +277,12 @@ impl ResidentMaterialUniform {
     /// Import the scheduled contents of this material without waiting for GPU
     /// completion. The Runtime retains them through every accepted consumer.
     pub fn import(&self, graph: &mut Graph, name: &str) -> Result<MaterialUniform, GraphError> {
-        let snapshot = self
-            .snapshot
+        MaterialUniform::import_snapshot(graph, name, self.snapshot()?, self.alpha_mode)
+    }
+    pub(crate) fn snapshot(&self) -> Result<&ImportBuffer, GraphError> {
+        self.snapshot
             .as_ref()
-            .ok_or_else(|| GraphError::invalid_input("PBR material snapshot is not available"))?;
-        let buffer = graph.import_buffer(name, snapshot)?;
-        Ok(MaterialUniform {
-            buffer,
-            graph: graph.graph_id(),
-            alpha_mode: self.alpha_mode,
-        })
+            .ok_or_else(|| GraphError::invalid_input("PBR material snapshot is not available"))
     }
 
     /// Return the range snapshot before an explicit Runtime reprepare. The

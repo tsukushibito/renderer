@@ -7,6 +7,17 @@ mod scene;
 #[path = "../examples/support/pbr_runtime.rs"]
 mod runtime;
 
+#[cfg(all(
+    feature = "memory-profiling",
+    any(feature = "vulkan", all(windows, feature = "d3d12"))
+))]
+#[global_allocator]
+static ALLOCATOR: renderer::measurement::CountingAllocator<std::alloc::System> =
+    renderer::measurement::CountingAllocator::new(std::alloc::System);
+
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+#[path = "pbr_gpu/mixed.rs"]
+mod mixed;
 mod cpu {
     use std::num::NonZeroUsize;
 

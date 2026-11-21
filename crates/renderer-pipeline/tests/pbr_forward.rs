@@ -11,7 +11,7 @@ use renderer::program::SamplerDescriptor;
 use renderer_pipeline::passes::output::SdrOutput;
 use renderer_pipeline::pbr::{
     self, AlphaMode, Bounds, CASCADE_COUNT, CameraStorage, Defaults, Draw, Environment, Frame,
-    FrameShadows, IndexedDraw, Material, MaterialFactors, MaterialTextures, MaterialUniform,
+    FrameShadows, GraphMaterial, IndexedDraw, MaterialFactors, MaterialTextures, MaterialUniform,
     PreparedView, Projection, SceneLimits, ShadowHistory, ShadowKey, ShadowSettings, ShadowSource,
     Sun, Transform, VIEW_BYTES, ViewInput,
 };
@@ -80,7 +80,7 @@ fn graph_pool(recipe: &Prepared) -> GraphPool {
     GraphPool::new(limits, 1).unwrap()
 }
 
-fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, Material, IndexedDraw) {
+fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, GraphMaterial, IndexedDraw) {
     let geometry = GeometryData::new(48, &[0; 144], &[0, 1, 2]).unwrap();
     let vertices = graph
         .buffer(
@@ -156,7 +156,7 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, Material, Inde
             },
         )
         .unwrap();
-    let material = Material::new(
+    let material = GraphMaterial::new(
         factors,
         MaterialTextures {
             base_color: color,
@@ -347,7 +347,7 @@ fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
         },
     )
     .unwrap();
-    let materials = [material, Material::new(factors, material.textures())];
+    let materials = [material, GraphMaterial::new(factors, material.textures())];
     let draws = [Draw::WorldSpaceIndexed(draw)];
     let transparent = [Draw::WorldSpaceIndexed(IndexedDraw {
         material: 1,
@@ -537,7 +537,7 @@ fn material_alpha_routes_to_the_matching_pass_before_graph_mutation() {
     .encode()
     .unwrap();
     let factors = MaterialUniform::upload_encoded(&mut graph, "blend factors", &encoded).unwrap();
-    let materials = [opaque, Material::new(factors, opaque.textures())];
+    let materials = [opaque, GraphMaterial::new(factors, opaque.textures())];
     let opaque = [Draw::WorldSpaceIndexed(draw)];
     let blended = [Draw::WorldSpaceIndexed(IndexedDraw {
         material: 1,
@@ -643,7 +643,7 @@ fn msaa_resolves_empty_opaque_batches_and_transparent_batches_without_depth_outp
             },
         )
         .unwrap();
-        let materials = [Material::new(factors, material.textures())];
+        let materials = [GraphMaterial::new(factors, material.textures())];
         let draws = [Draw::WorldSpaceIndexed(draw)];
         let frame = Frame::with_cascades(
             &view,

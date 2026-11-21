@@ -164,6 +164,56 @@ HDR画像のコピーパスを挟んだGraphをCPUで構築・compileする。
 cargo run --locked -p renderer-pipeline --no-default-features --example rust_pipeline
 ```
 
+<a id="scene-materials"></a>
+
+### メッシュにマテリアルを割り当てる
+
+`renderer_pipeline::material::Materials` をシーンと一緒に保持する。単色の材質は作成時に色を渡せばよい。
+同じハンドルを複数の描画に渡すと、そのハンドルへの更新が次に構築する Graph から全描画に反映される。
+
+```rust
+use renderer_pipeline::material::{Materials, PbrParams, UnlitParams};
+
+let mut materials = Materials::default();
+let red_paint = materials.create_pbr(PbrParams::color([0.8, 0.04, 0.02, 1.0]))?;
+let marker = materials.create_unlit(UnlitParams { color: [1.0, 0.8, 0.1, 1.0] })?;
+
+// このメッシュだけ青い塗装に変える。
+let blue_paint = materials.duplicate(red_paint)?;
+materials.update_pbr(blue_paint, PbrParams::color([0.03, 0.1, 0.8, 1.0]))?;
+```
+
+独自 Toon の場合はコンパイル済みプログラムを渡し、公開パラメータを一度宣言する。
+次のプログラムは先頭 16 ワードで列優先の clip-from-model 行列を、続く 4 ワードで線形 RGBA を受け取る。
+
+```rust
+use renderer_pipeline::material::{AlphaMode, MaterialDefinition, Parameter, Value};
+use renderer_pipeline::scene::{Draw, Frame, Scene};
+
+let toon = MaterialDefinition::new(toon_program, None, AlphaMode::Opaque, vec![
+    Parameter::Constant { name: "color".into(), word: 16, default: Value::Color([1.0; 4]) },
+])?;
+let clothing = materials.create_custom(&toon, &[("color", Value::Color([0.2, 0.6, 1.0, 1.0]))])?;
+let mut scene = Scene::new(technique, config, limits, &[toon])?;
+
+// 初期化時に scene.preparation() で作業領域を準備し、scene.defaults().initialize() で既定画像を作る。
+// 各フレームでメッシュを Graph に接続し、その Graph のビューと既定画像を使う。
+let draws = [Draw::new(floor_mesh, red_paint), Draw::new(sign_mesh, marker),
+             Draw::new(character_mesh, clothing)];
+let hdr = scene.add_scene(&mut graph, &materials, Frame::new(&view, defaults, &draws))?.hdr;
+```
+
+`Draw::new` はワールド空間の頂点を受け取る。モデル空間の頂点では `draw.transform` を指定する。
+Unlit は頂点色とマテリアル色と `draw.tint` を掛け合わせる。モデル内の原点と中心が離れた半透明メッシュは
+`draw.sort_center` にローカル中心を設定する。pipeline はビュー方向の奥行きで全種類の半透明物をまとめて整列する。
+メッシュの頂点レイアウトは使用するプログラムに合わせる。標準 PBR は 48 バイト、頂点色 Unlit は 28 バイト。
+
+独自プログラムの描画条件は 1× の indexed Forward。Deferred のビューでは照明計算後に共通の深度へ描く。
+影を描く定義には同じ頂点・マテリアル入力を受け取る深度プログラムを指定する。テクスチャとサンプラーは
+`Parameter::Binding` で宣言する。独自の定数ブロックには `Value::Uniform`、読み取り専用の構造化データには `Value::StorageRead` を使える。テクスチャの登録はアセット所有者が維持し、更新時は新しい画像スナップショットを渡す。
+GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resident` で接続できる。
+[独自 Toon の登録、描画、GPU 読み戻しの実例](../../crates/renderer-pipeline/tests/pbr_gpu/mixed.rs)
+
 <a id="pbr-forward-recipe"></a>
 
 ### PBRの標準レシピを使う
@@ -171,7 +221,7 @@ cargo run --locked -p renderer-pipeline --no-default-features --example rust_pip
 モデル空間のメッシュ1個は `Draw::model(geometry, transform_index)` で指定し、変換はフレームの表に登録する。
 ワールド空間に変換済みの頂点には `WorldSpaceIndexed` または `WorldSpaceIndirect` を使う。
 材質係数をフレーム間で共有するときは `ResidentMaterialUniform::import` で係数を接続し、
-当該Graphのテクスチャ・サンプラーと合わせて `pbr::Material` を組み立てる。
+当該Graphのテクスチャ・サンプラーと合わせて `pbr::GraphMaterial` を組み立てる。
 
 `renderer_pipeline::pbr::Prepared::new(technique, config, scene_limits)`でForward、Forward+、Deferredから選ぶ。
 描画寸法・出力条件と、同時フレーム・材質・描画・各カスケードのキャスターの上限を渡す。
@@ -198,7 +248,7 @@ Runtime作成後に`defaults.initialize`を一度呼び、アプリのフレー�
 既定画像を使い終えたら`DefaultResources::clear`で登録を解除する。
 
 `PbrVertex`をエンコードし、`MaterialUniform::upload`で`MaterialFactors`をアップロードする。
-`Material::new`へ係数と、`MaterialTextures`の名前付きベースカラー・法線・ORM・発光ビューを渡す。
+`GraphMaterial::new`へ係数と、`MaterialTextures`の名前付きベースカラー・法線・ORM・発光ビューを渡す。
 省略したマップは`DefaultViews::material_textures`で補え、`environment`でIBLの寄与を無効にできる。
 標準材質は全マップで一つのサンプラーを共有する。既定は`LinearRepeat`で、`with_sampler`により`LinearClamp`などの既存設定を選べる。
 マスク材質が影を描くときも、同じサンプラーでベースカラーのアルファを読む。

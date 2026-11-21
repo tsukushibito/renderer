@@ -23,13 +23,13 @@ pub struct MaterialTextures<T = ImageView> {
 /// Graph-local factors and texture views. The alpha mode comes from the same
 /// upload that supplies the shader factors.
 #[derive(Clone, Copy, Debug)]
-pub struct Material {
+pub struct GraphMaterial {
     factors: MaterialUniform,
     textures: MaterialTextures,
     sampler: SamplerDescriptor,
 }
 
-impl Material {
+impl GraphMaterial {
     /// Use linear filtering and repeat addressing on all material maps.
     pub const fn new(factors: MaterialUniform, textures: MaterialTextures) -> Self {
         Self {
@@ -169,7 +169,7 @@ impl Batch {
         graph: &mut Graph,
         program: &ManagedRasterProgram,
         stage: Bindings<'_>,
-        materials: &[Material],
+        materials: &[GraphMaterial],
         draws: &[Draw],
         instances: Option<(&ManagedRasterProgram, InstanceBuffer)>,
     ) -> Result<(), GraphError> {
@@ -262,7 +262,7 @@ impl Batch {
         graph: &mut Graph,
         program: &ManagedRasterProgram,
         stage: Bindings<'_>,
-        materials: &[Material],
+        materials: &[GraphMaterial],
         material: usize,
         transforms: Option<InstanceBuffer>,
     ) -> Result<RasterBindings, GraphError> {
@@ -281,11 +281,20 @@ impl Batch {
         program: &ManagedRasterProgram,
         instances: Option<&ManagedRasterProgram>,
     ) -> Result<(), GraphError> {
-        if self.commands.is_empty() {
+        self.draw_range(pass, program, instances, 0..self.commands.len())
+    }
+
+    pub(crate) fn draw_range(
+        &self,
+        pass: &mut RasterPass<'_, '_>,
+        program: &ManagedRasterProgram,
+        instances: Option<&ManagedRasterProgram>,
+        range: std::ops::Range<usize>,
+    ) -> Result<(), GraphError> {
+        if range.is_empty() {
             return pass.draw(program, std::iter::empty::<RasterDraw>());
         }
-        for batch in self
-            .commands
+        for batch in self.commands[range]
             .chunk_by(|a, b| std::mem::discriminant(a) == std::mem::discriminant(b))
         {
             match batch[0] {
@@ -368,7 +377,7 @@ impl Bindings<'_> {
         self,
         graph: &mut Graph,
         program: &ManagedRasterProgram,
-        material: Material,
+        material: GraphMaterial,
         transforms: Option<InstanceBuffer>,
     ) -> Result<RasterBindings, GraphError> {
         let camera = match self {

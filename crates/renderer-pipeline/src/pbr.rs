@@ -13,16 +13,17 @@ mod unshadowed;
 mod vertex;
 mod view;
 
+pub use crate::material::AlphaMode;
 pub use culling::{CascadeClip, Frustum, ViewCulling};
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub use defaults::DefaultResourceError;
 pub use defaults::{DefaultResources, DefaultViews, Defaults, PreparedDefaults};
-pub use draw::{Draw, IndexedDraw, Material, MaterialTextures};
+pub use draw::{Draw, GraphMaterial, IndexedDraw, MaterialTextures};
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::{MAX_TRANSFORMS, Transform};
-pub use material::{AlphaMode, MaterialFactors, MaterialUniform, ResidentMaterialUniform};
+pub use material::{MaterialFactors, MaterialUniform, ResidentMaterialUniform};
 pub use recipe::{Prepared, Technique};
 pub use unshadowed::UnshadowedView;
 pub use vertex::PbrVertex;
@@ -99,6 +100,7 @@ pub struct Environment {
 /// A view calculated before selecting scene draws, cascade draws or history.
 pub struct PreparedView {
     data: view::ViewData,
+    pub(crate) sort_direction: [f64; 3],
     culling: ViewCulling,
     uniform: [u8; CAMERA_BYTES],
     environment: Environment,
@@ -132,6 +134,7 @@ impl PreparedView {
             ],
         )?;
         Ok(Self {
+            sort_direction: view.sort_direction(),
             uniform: data.uniform_bytes(),
             culling: ViewCulling::new(*data.matrix(), data.shadow_matrices(), bounds),
             data,
@@ -208,8 +211,9 @@ pub enum FrameShadows<'a> {
 }
 
 pub struct Frame<'a> {
+    pub(crate) forward_draws: Option<&'a crate::scene::ForwardDraws>,
     pub view: &'a PreparedView,
-    pub materials: &'a [Material],
+    pub materials: &'a [GraphMaterial],
     /// Draws with Opaque or Mask materials in submission order.
     pub opaque: &'a [Draw],
     /// Indexed draws with Blend materials, already ordered back to front.
@@ -227,7 +231,7 @@ impl<'a> Frame<'a> {
     /// common caster list. Disabled shadows use the shared default depth.
     pub fn new(
         view: &'a PreparedView,
-        materials: &'a [Material],
+        materials: &'a [GraphMaterial],
         opaque: &'a [Draw],
         transparent: &'a [Draw],
         casters: &'a [Draw],
@@ -256,31 +260,49 @@ impl<'a> Frame<'a> {
     /// Override `shadows` for per-cascade culling or history reuse.
     pub fn with_cascades(
         view: &'a PreparedView,
-        materials: &'a [Material],
+        materials: &'a [GraphMaterial],
         opaque: &'a [Draw],
         transparent: &'a [Draw],
         casters: &'a [Draw],
+    ) -> Self {
+        Self::with_shadows(
+            view,
+            materials,
+            opaque,
+            transparent,
+            FrameShadows::Cascades(
+                [ShadowSource::Render {
+                    target: None,
+                    casters,
+                }; CASCADE_COUNT],
+            ),
+        )
+    }
+
+    /// Compose an advanced frame from per-cascade targets or reused shadow maps.
+    pub fn with_shadows(
+        view: &'a PreparedView,
+        materials: &'a [GraphMaterial],
+        opaque: &'a [Draw],
+        transparent: &'a [Draw],
+        shadows: FrameShadows<'a>,
     ) -> Self {
         Self {
             view,
             materials,
             opaque,
             transparent,
-            shadows: FrameShadows::Cascades(
-                [ShadowSource::Render {
-                    target: None,
-                    casters,
-                }; CASCADE_COUNT],
-            ),
+            shadows,
             camera_target: None,
             transforms: &[],
+            forward_draws: None,
         }
     }
 
     /// Construct a frame for a recipe prepared without shadow settings.
     pub fn unshadowed(
         view: &'a PreparedView,
-        materials: &'a [Material],
+        materials: &'a [GraphMaterial],
         opaque: &'a [Draw],
         transparent: &'a [Draw],
         placeholder: UnshadowedView,

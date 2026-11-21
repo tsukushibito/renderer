@@ -298,14 +298,8 @@ impl PreparedScene {
         };
         let (shadow_views, shadow_images) = match (self.config.shadows, frame.shadows) {
             (Some(settings), FrameShadows::Cascades(sources)) => {
-                let views = self.add_shadows(
-                    graph,
-                    camera,
-                    frame.materials,
-                    settings,
-                    sources,
-                    transforms,
-                )?;
+                let views =
+                    self.add_shadows(graph, camera, &frame, settings, sources, transforms)?;
                 (views, Some(views.map(ImageView::image)))
             }
             (None, FrameShadows::Disabled(placeholder)) => {
@@ -357,7 +351,9 @@ impl PreparedScene {
             RasterScene {
                 camera,
                 lighting,
-                has_transparency: !frame.transparent.is_empty(),
+                has_transparency: !frame.transparent.is_empty()
+                    || frame.forward_draws.is_some_and(|draws| draws.has_blend()),
+                forward_draws: frame.forward_draws,
                 opaque: &self.opaque,
                 transparent: &self.transparent,
                 programs,
@@ -471,7 +467,7 @@ impl PreparedScene {
         &mut self,
         graph: &mut Graph,
         camera: BufferHandle,
-        materials: &[crate::pbr::Material],
+        frame: &Frame<'_>,
         settings: ShadowSettings,
         sources: [ShadowSource<'_>; CASCADE_COUNT],
         transforms: Option<InstanceBuffer>,
@@ -479,6 +475,7 @@ impl PreparedScene {
         let desc = shadow_desc(settings);
         let program = &self.programs.world.shadow;
         let instanced = self.programs.model.as_ref().map(|model| &model.shadow);
+        let materials = frame.materials;
         self.shadow.reset_bindings(materials.len());
         let mut views = [None; CASCADE_COUNT];
         for (cascade, source) in sources.into_iter().enumerate() {
@@ -503,7 +500,11 @@ impl PreparedScene {
                     instanced.zip(transforms),
                 )?;
                 add_shadow_pass(graph, cascade, view, |pass| {
-                    self.shadow.draw(pass, program, instanced)
+                    self.shadow.draw(pass, program, instanced)?;
+                    if let Some(draws) = frame.forward_draws {
+                        draws.draw_shadow(pass, cascade)?;
+                    }
+                    Ok(())
                 })?;
             }
             views[cascade] = Some(view);
@@ -516,13 +517,30 @@ pub(crate) struct RasterScene<'a> {
     pub(crate) camera: BufferHandle,
     pub(crate) lighting: [Binding; 9],
     pub(crate) has_transparency: bool,
+    forward_draws: Option<&'a crate::scene::ForwardDraws>,
     opaque: &'a Batch,
     transparent: &'a Batch,
     programs: &'a ScenePrograms,
 }
 
 impl RasterScene<'_> {
+    pub(crate) fn has_forward_opaque(&self) -> bool {
+        self.forward_draws.is_some_and(|draws| draws.has_opaque())
+    }
+    pub(crate) fn draw_forward_opaque(
+        &self,
+        pass: &mut RasterPass<'_, '_>,
+    ) -> Result<(), GraphError> {
+        if let Some(draws) = self.forward_draws {
+            draws.draw_opaque(pass)?
+        }
+        Ok(())
+    }
     pub(crate) fn draw_opaque(&self, pass: &mut RasterPass<'_, '_>) -> Result<(), GraphError> {
+        self.draw_pbr_opaque(pass)?;
+        self.draw_forward_opaque(pass)
+    }
+    pub(crate) fn draw_pbr_opaque(&self, pass: &mut RasterPass<'_, '_>) -> Result<(), GraphError> {
         self.opaque.draw(
             pass,
             &self.programs.world.opaque,
@@ -531,6 +549,16 @@ impl RasterScene<'_> {
     }
 
     pub(crate) fn draw_transparent(&self, pass: &mut RasterPass<'_, '_>) -> Result<(), GraphError> {
+        if let Some(draws) = self.forward_draws {
+            return draws.draw_color(pass, |pass, range| {
+                self.transparent.draw_range(
+                    pass,
+                    &self.programs.world.blend,
+                    self.programs.model.as_ref().map(|model| &model.blend),
+                    range,
+                )
+            });
+        }
         self.transparent.draw(
             pass,
             &self.programs.world.blend,

@@ -462,6 +462,7 @@ pub(super) fn execute(
             upload_texture(backend, &mut upload_pool, desc, &changed_texture)?;
         require_stale(backend, &stale_image)?;
         resident.images[image_index] = backend.refresh_image(resident.images[image_index].key())?;
+        resident.refresh_surfaces()?;
         // Isolate the texture binding: the original material is still registered
         // and the earlier frame owner has not observed completion. A simultaneous
         // material-factor change must not mask a missing texture-reference update.
@@ -486,6 +487,7 @@ pub(super) fn execute(
         let mut new_owners = Vec::new();
         resident.materials[material_index] =
             pipeline::upload_material(backend, &mut new_owners, &changed_material)?;
+        resident.refresh_surfaces()?;
         require_stale(backend, &stale_buffer)?;
         let pending_memory = backend::memory_snapshot(backend)?;
         let expected_retained_bytes = desc
@@ -541,6 +543,7 @@ pub(super) fn execute(
         let mut restored_owners = Vec::new();
         resident.materials[material_index] =
             pipeline::upload_material(backend, &mut restored_owners, &original_material)?;
+        resident.refresh_surfaces()?;
         // The current material's original owner is released only at this change
         // boundary. Pending work retained its own immutable provenance as needed.
         resident.upload_owners[material_index] = restored_owners.remove(0);
