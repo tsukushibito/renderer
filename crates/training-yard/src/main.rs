@@ -48,7 +48,10 @@ fn run(api: &str, mode: &str, output: Option<PathBuf>) -> Result<(), Box<dyn Err
     match mode {
         "headless" => training_yard::standalone::headless(config, output.as_deref())?,
         _ if output.is_some() => return Err("use --output with --mode headless".into()),
-        "host" => training_yard::replay::host(config)?,
+        "host" => {
+            training_yard::replay::host(config)?;
+            training_yard::targets::run(config)?;
+        }
         #[cfg(all(windows, feature = "presentation"))]
         "window" | "interactive" => training_yard::window::run(config, mode == "interactive")?,
         _ => return Err(format!("unknown mode {mode}").into()),

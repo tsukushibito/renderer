@@ -7,6 +7,7 @@ mod yard;
 pub use yard::*;
 pub mod replay;
 pub mod standalone;
+pub mod targets;
 #[path = "../../renderer/examples/support/validation.rs"]
 mod validation;
 #[cfg(all(windows, feature = "presentation"))]

@@ -19,3 +19,13 @@ fn posed_models_in_two_views() -> PipelineResult<()> {
     training_yard::replay::host(RuntimeConfig::D3D12(Default::default()))?;
     Ok(())
 }
+
+#[test]
+#[ignore = "requires real devices for each enabled backend"]
+fn changing_1024_targets_and_recovering_capacity() -> PipelineResult<()> {
+    #[cfg(feature = "vulkan")]
+    training_yard::targets::run(RuntimeConfig::Vulkan(Default::default()))?;
+    #[cfg(all(windows, feature = "d3d12"))]
+    training_yard::targets::run(RuntimeConfig::D3D12(Default::default()))?;
+    Ok(())
+}

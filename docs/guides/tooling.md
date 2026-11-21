@@ -256,6 +256,8 @@ cargo run --release -p training-yard --all-features -- --api vulkan --mode inter
 
 `image.read_pixel(graph, [x, y])` は左上を原点として 1 画素を記録し、結果はその提出の完了時に 4 バイトで受け取る。クリック時点の対応表を保持して世代を照合すれば、古いクリックが新しい隊員に適用されるのを防げる。輪郭パスは同じ Graph で ID 画像を直接読める。[非同期クリック](../../crates/training-yard/src/replay/selection.rs)・[ホスト所有の輪郭パス](../../crates/training-yard/src/replay/selection/outline.rs)
 
+同じ `--mode host` の後半では、1,024 体の標的をホスト側の配列から描く。実行枠が占有されていれば完了を回収し、結果枠が占有されていれば読み戻しを終えて返却する。ビューの描画数を超えた場合はフレームを省略し、ロード時に実際の標的一覧から再準備する。[容量不足からの復帰と描画結果の比較](../../crates/training-yard/src/targets.rs)
+
 個別のパスを準備して標準 Forward を使う場合はカメラと初期シーンから構成する。カメラには安定した `ViewId`、寸法、`ViewInput` を渡す。
 `build` は参照されたメッシュと材質を転送し、初期化に使った投入の完了を回収して返る。
 
