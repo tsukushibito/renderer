@@ -140,7 +140,7 @@ impl Look {
         let name = match self {
             Self::Reference => "reference",
             Self::LumberyardDay => {
-                conditions.light_direction = [0.3302644, 0.8244736, -0.459531];
+                conditions.light_direction = BAKE_SCENARIOS[0].direction;
                 conditions.light_color = [8.4, 8.0, 7.1];
                 conditions.background = [0.55, 0.68, 0.92];
                 environment.strength = 0.92;
@@ -164,7 +164,8 @@ pub(crate) struct BakeScenario {
 pub(crate) const BAKE_SCENARIOS: [BakeScenario; 2] = [
     BakeScenario {
         sky: [0.55, 0.68, 0.92],
-        direction: [0.3302644, 0.8244736, -0.459531],
+        // Fit to the menu board and streetlamp shadows in ORCA exterior plate 1.
+        direction: [0.519167, 0.4784949, -0.7081725],
         sun: [8.4, 8.0, 7.1],
     },
     BakeScenario {
