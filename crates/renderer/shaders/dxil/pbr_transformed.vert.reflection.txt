@@ -7,7 +7,8 @@
 ; TEXCOORD                 1   xyz         1     NONE   float   xyz
 ; TEXCOORD                 2   xyzw        2     NONE   float   xyzw
 ; TEXCOORD                 3   xy          3     NONE   float   xy
-; SV_InstanceID            0   x           4   INSTID    uint   x
+; SV_VertexID              0   x           4   VERTID    uint   x
+; SV_InstanceID            0   x           5   INSTID    uint   x
 ;
 ;
 ; Output signature:
@@ -18,10 +19,12 @@
 ; TEXCOORD                 1   xyz         1     NONE   float   xyz
 ; TEXCOORD                 2   xyzw        2     NONE   float   xyzw
 ; TEXCOORD                 3   xy          3     NONE   float   xy
+; TEXCOORD                 5     zw        3     NONE   float     zw
 ; TEXCOORD                 4   x           4     NONE    uint   x
+; TEXCOORD                 6    y          4     NONE    uint    y
 ; SV_Position              0   xyzw        5      POS   float   xyzw
 ;
-; shader hash: 7079a357cb63c59444dcc37f0f312d99
+; shader hash: 6cf4302d94d7b5bef5feb1b9ee5fe3f7
 ;
 ; Pipeline Runtime Information:
 ;
@@ -31,10 +34,10 @@
 ; MinimumExpectedWaveLaneCount: 0
 ; MaximumExpectedWaveLaneCount: 4294967295
 ; UsesViewID: false
-; SigInputElements: 5
-; SigOutputElements: 6
+; SigInputElements: 6
+; SigOutputElements: 8
 ; SigPatchConstOrPrimElements: 0
-; SigInputVectors: 5
+; SigInputVectors: 6
 ; SigOutputVectors[0]: 6
 ; SigOutputVectors[1]: 0
 ; SigOutputVectors[2]: 0
@@ -50,6 +53,7 @@
 ; TEXCOORD                 1
 ; TEXCOORD                 2
 ; TEXCOORD                 3
+; SV_VertexID              0
 ; SV_InstanceID            0
 ;
 ; Output signature:
@@ -61,6 +65,8 @@
 ; TEXCOORD                 2                 linear
 ; TEXCOORD                 3                 linear
 ; TEXCOORD                 4        nointerpolation
+; TEXCOORD                 5                 linear
+; TEXCOORD                 6        nointerpolation
 ; SV_Position              0          noperspective
 ;
 ; Buffer Definitions:
@@ -123,24 +129,27 @@
 ;
 ; ViewId state:
 ;
-; Number of inputs: 17, outputs: 24
+; Number of inputs: 21, outputs: 24
 ; Outputs dependent on ViewId: {  }
 ; Inputs contributing to computation of Outputs:
-;   output 0 depends on inputs: { 0, 1, 2, 16 }
-;   output 1 depends on inputs: { 0, 1, 2, 16 }
-;   output 2 depends on inputs: { 0, 1, 2, 16 }
-;   output 4 depends on inputs: { 4, 5, 6, 16 }
-;   output 5 depends on inputs: { 4, 5, 6, 16 }
-;   output 6 depends on inputs: { 4, 5, 6, 16 }
-;   output 8 depends on inputs: { 8, 9, 10, 16 }
-;   output 9 depends on inputs: { 8, 9, 10, 16 }
-;   output 10 depends on inputs: { 8, 9, 10, 16 }
-;   output 11 depends on inputs: { 11, 16 }
+;   output 0 depends on inputs: { 0, 1, 2, 20 }
+;   output 1 depends on inputs: { 0, 1, 2, 20 }
+;   output 2 depends on inputs: { 0, 1, 2, 20 }
+;   output 4 depends on inputs: { 4, 5, 6, 20 }
+;   output 5 depends on inputs: { 4, 5, 6, 20 }
+;   output 6 depends on inputs: { 4, 5, 6, 20 }
+;   output 8 depends on inputs: { 8, 9, 10, 20 }
+;   output 9 depends on inputs: { 8, 9, 10, 20 }
+;   output 10 depends on inputs: { 8, 9, 10, 20 }
+;   output 11 depends on inputs: { 11, 20 }
 ;   output 12 depends on inputs: { 12 }
 ;   output 13 depends on inputs: { 13 }
-;   output 16 depends on inputs: { 16 }
-;   output 20 depends on inputs: { 0, 1, 2, 16 }
-;   output 21 depends on inputs: { 0, 1, 2, 16 }
-;   output 22 depends on inputs: { 0, 1, 2, 16 }
-;   output 23 depends on inputs: { 0, 1, 2, 16 }
+;   output 14 depends on inputs: { 16 }
+;   output 15 depends on inputs: { 16 }
+;   output 16 depends on inputs: { 20 }
+;   output 17 depends on inputs: { 16 }
+;   output 20 depends on inputs: { 0, 1, 2, 20 }
+;   output 21 depends on inputs: { 0, 1, 2, 20 }
+;   output 22 depends on inputs: { 0, 1, 2, 20 }
+;   output 23 depends on inputs: { 0, 1, 2, 20 }
 ;

@@ -49,7 +49,7 @@ fn frame_input(
     frame: usize,
 ) -> Result<crate::shared::camera::CameraInput, Error> {
     let camera = camera(conditions, options, frame)?;
-    conditions.frame_input(camera, options.width, options.height)
+    options.camera_lighting(conditions, camera, frame)
 }
 
 #[allow(
@@ -227,7 +227,7 @@ fn identity(
         "environment":environment,"shadows":options.shadows,"aa":options.aa,"bloom":options.bloom.name(),
         "samples":options.sample_count.as_u32(),"pipeline":options.pipeline.name(),
         "shader_manifest":options.shader_assets.as_ref().map(|selection| &selection.manifest),
-        "local_lights":options.pipeline.uses_local_lights()
+        "local_lights":options.uses_light_grid()
             .then(|| super::lighting::identity(options.fixture)),
         "instances":options.instances.name(),"instance_draws":options.instances.draws(),
         "submission":options.submission.name(),
@@ -238,7 +238,7 @@ fn identity(
             "filter":"manual nearest 3x3 PCF"},
         "aa_profile":{"edge_threshold_min":0.0312,"edge_threshold_max":0.125,"iterations":12,
             "subpixel_quality":0.75,"position":"after Neutral, before sRGB"},
-        "lighting":"B3 GGX sun + static split-sum IBL; four stable CSM cascades with manual 3x3 PCF",
+        "lighting":if options.baked_lighting.is_some() {"GGX sun, baked diffuse and split-sum specular IBL"} else {"B3 GGX sun + static split-sum IBL; four stable CSM cascades with manual 3x3 PCF"},
         "output":"linear RGBA16F -> optional Bloom -> EV+1 -> Khronos PBR Neutral -> optional FXAA -> single sRGB OETF -> RGBA8 UNORM; alpha 1",
         "completion":"nonblocking backend poll with thread::yield_now on not-ready; no VSync/presentation"});
     #[cfg(feature = "development-validation")]
@@ -526,7 +526,11 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
                 "B3 full-scene rendering requires --ibl-manifest from tools/bistro/ibl.py",
             )?)?
         };
-    let look = options.look.apply(&mut conditions, &mut environment);
+    if let Some(pos) = options.ball {
+        scene.add_white_sphere(pos);
+    }
+    let mut look = options.look.apply(&mut conditions, &mut environment);
+    options.apply_baked_lighting(&mut scene, &mut conditions, &mut environment, &mut look)?;
     let environment_identity = environment.identity.clone();
     // Hash the same manifest bytes that Scene::load parsed. A separate read
     // could otherwise identify a different revision from the loaded contents.
@@ -757,6 +761,25 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         &mut workspace,
         0,
     )?;
+    if options.sweep && options.frames > 1 {
+        for (label, frame) in [
+            ("midpoint", (options.frames - 1) / 2),
+            ("dusk", options.frames - 1),
+        ] {
+            let mut at = options.clone();
+            at.output = options.output.join(label);
+            capture(
+                &mut backend,
+                &mut resident,
+                &scene,
+                &at,
+                &conditions,
+                &mut pool,
+                &mut workspace,
+                frame,
+            )?;
+        }
+    }
     if let Some(hits) = captured.get("shadow_reuse_hits") {
         measured["shadow_reuse"]["output_capture_hits"] = hits.clone();
     }

@@ -374,7 +374,7 @@ impl Reference {
             return Ok(pbr_forward::add_scene_passes(
                 graph,
                 [self.hdr.width, self.hdr.height],
-                self.clear,
+                frame.clear.unwrap_or(self.clear),
                 self.depth.sample_count,
                 frame.has_transparency,
                 opaque_draws,
@@ -391,7 +391,7 @@ impl Reference {
                 point_lights: None,
                 hdr: hdr_view,
                 depth: depth_view,
-                clear: self.clear,
+                clear: frame.clear.unwrap_or(self.clear),
                 camera: frame.camera,
                 view_projection: frame.view_projection,
                 lighting: frame.lighting,
@@ -427,6 +427,7 @@ impl Reference {
 }
 
 pub(super) struct SceneFrame {
+    pub clear: Option<[f32; 4]>,
     pub camera: BufferHandle,
     pub view_projection: [[f32; 4]; 4],
     pub lighting: [Binding; 9],

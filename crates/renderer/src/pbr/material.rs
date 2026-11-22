@@ -32,6 +32,17 @@ pub struct MaterialFactors {
     pub alpha_cutoff: f32,
     pub alpha_mode: AlphaMode,
     pub double_sided: bool,
+    /// First baked triangle chart for this static placement and LOD. Lightmapped
+    /// mesh vertices are expanded in triangle order; UV0 remains the material UV.
+    pub lightmap: Option<LightmapBinding>,
+}
+
+/// Bind a static placement and LOD to its consecutive triangle charts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LightmapBinding {
+    pub first_chart: u32,
+    /// Start of the expanded receiver vertices within the bound vertex buffer.
+    pub first_vertex: u32,
 }
 
 impl Default for MaterialFactors {
@@ -46,11 +57,47 @@ impl Default for MaterialFactors {
             alpha_cutoff: 0.5,
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
+            lightmap: None,
         }
     }
 }
 
 impl MaterialFactors {
+    /// Decode a cooked standard material at an asset import or change boundary.
+    pub fn decode(bytes: &[u8; MATERIAL_BYTES]) -> Result<Self, GraphError> {
+        let block = bytes.as_chunks::<4>().0;
+        let alpha_mode = match u32::from_le_bytes(block[12]) {
+            0 => AlphaMode::Opaque,
+            1 => AlphaMode::Mask,
+            2 => AlphaMode::Blend,
+            _ => return Err(GraphError::invalid_input("invalid PBR material alpha mode")),
+        };
+        let floats = |index: usize| f32::from_le_bytes(block[index]);
+        let factors = MaterialFactors {
+            base_color: std::array::from_fn(floats),
+            emissive: std::array::from_fn(|index| floats(4 + index)),
+            normal_scale: floats(7),
+            metallic: floats(8),
+            roughness: floats(9),
+            occlusion_strength: floats(10),
+            alpha_cutoff: floats(11),
+            alpha_mode,
+            double_sided: u32::from_le_bytes(block[13]) != 0,
+            lightmap: u32::from_le_bytes(block[14])
+                .checked_sub(1)
+                .map(|first_chart| LightmapBinding {
+                    first_chart,
+                    first_vertex: u32::from_le_bytes(block[15]),
+                }),
+        };
+        if factors.encode()? != *bytes {
+            return Err(GraphError::invalid_input(
+                "invalid PBR material flags or padding",
+            ));
+        }
+        Ok(factors)
+    }
+
     /// Encode the standard shader ABI for a custom Graph or cooked asset.
     pub fn encode(self) -> Result<[u8; MATERIAL_BYTES], GraphError> {
         if self
@@ -68,6 +115,10 @@ impl MaterialFactors {
         {
             return Err(GraphError::invalid_input("invalid PBR material factors"));
         }
+        let chart = self
+            .lightmap
+            .map_or(Some(0), |b| b.first_chart.checked_add(1))
+            .ok_or_else(|| GraphError::invalid_input("lightmap chart index overflow"))?;
         let floats = self.base_color.into_iter().chain(self.emissive).chain([
             self.normal_scale,
             self.metallic,
@@ -81,9 +132,15 @@ impl MaterialFactors {
             AlphaMode::Blend => 2,
         };
         let mut bytes = [0; MATERIAL_BYTES];
-        let words = floats
-            .map(f32::to_le_bytes)
-            .chain([mode, u32::from(self.double_sided), 0, 0].map(u32::to_le_bytes));
+        let words = floats.map(f32::to_le_bytes).chain(
+            [
+                mode,
+                u32::from(self.double_sided),
+                chart,
+                self.lightmap.map_or(0, |b| b.first_vertex),
+            ]
+            .map(u32::to_le_bytes),
+        );
         for (out, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
             *out = value;
         }
@@ -127,31 +184,8 @@ impl MaterialUniform {
         name: &str,
         bytes: &[u8; MATERIAL_BYTES],
     ) -> Result<Self, GraphError> {
-        let block = bytes.as_chunks::<4>().0;
-        let alpha_mode = match u32::from_le_bytes(block[12]) {
-            0 => AlphaMode::Opaque,
-            1 => AlphaMode::Mask,
-            2 => AlphaMode::Blend,
-            _ => return Err(GraphError::invalid_input("invalid PBR material alpha mode")),
-        };
-        let floats = |index: usize| f32::from_le_bytes(block[index]);
-        let factors = MaterialFactors {
-            base_color: std::array::from_fn(floats),
-            emissive: std::array::from_fn(|index| floats(4 + index)),
-            normal_scale: floats(7),
-            metallic: floats(8),
-            roughness: floats(9),
-            occlusion_strength: floats(10),
-            alpha_cutoff: floats(11),
-            alpha_mode,
-            double_sided: u32::from_le_bytes(block[13]) != 0,
-        };
-        if factors.encode()? != *bytes {
-            return Err(GraphError::invalid_input(
-                "invalid PBR material flags or padding",
-            ));
-        }
-        Self::append(graph, name, bytes, alpha_mode)
+        let factors = MaterialFactors::decode(bytes)?;
+        Self::append(graph, name, bytes, factors.alpha_mode)
     }
 
     pub(crate) fn append(
@@ -312,6 +346,10 @@ mod tests {
             alpha_cutoff: 2.0,
             alpha_mode: AlphaMode::Mask,
             double_sided: true,
+            lightmap: Some(LightmapBinding {
+                first_chart: 15,
+                first_vertex: 7,
+            }),
         };
         let bytes = values.encode().unwrap();
         let words = bytes.as_chunks::<4>().0;
@@ -322,7 +360,7 @@ mod tests {
             ]
             .map(f32::to_le_bytes)
         );
-        assert_eq!(words[12..], [1u32, 1, 0, 0].map(u32::to_le_bytes));
+        assert_eq!(words[12..], [1u32, 1, 16, 7].map(u32::to_le_bytes));
         assert!(
             MaterialFactors {
                 roughness: f32::NAN,

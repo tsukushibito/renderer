@@ -2058,6 +2058,11 @@
       "sha256": "b70ffa4e9f9f0727acdf6a0c2f83dadfc86b39eace115c73a87c365db86d6a5a"
     },
     {
+      "path": "docs/verification/bistro-baked-lighting-preview.png",
+      "size": 1040253,
+      "sha256": "dc059d25cfbdc6bc3d67d1249974783ee9e02989f9ffd396637146bf727c8c5b"
+    },
+    {
       "path": "docs/verification/bistro-conditions-preview.png",
       "size": 1825564,
       "sha256": "b2b531fea1fc4f648fc6b6c141dc838c5d0803691627b3e3ac224ac5b6e4cdfc"

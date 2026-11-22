@@ -1,0 +1,95 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "comp",
+            "workgroup_size" : [
+                32,
+                1,
+                1
+            ],
+            "workgroup_size_is_spec_constant_id" : [
+                false,
+                false,
+                false
+            ]
+        }
+    ],
+    "types" : {
+        "_8" : {
+            "name" : "Receiver",
+            "members" : [
+                {
+                    "name" : "p",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "normal",
+                    "type" : "vec4",
+                    "offset" : 16
+                }
+            ]
+        },
+        "_7" : {
+            "name" : "type.StructuredBuffer.Receiver",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "_8",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 32
+                }
+            ]
+        },
+        "_10" : {
+            "name" : "type.RWStructuredBuffer.v4float",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 16
+                }
+            ]
+        }
+    },
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "scene",
+            "set" : 0,
+            "binding" : 0
+        }
+    ],
+    "ssbos" : [
+        {
+            "type" : "_7",
+            "name" : "jobs",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 1
+        },
+        {
+            "type" : "_10",
+            "name" : "result",
+            "writeonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 2
+        }
+    ]
+}

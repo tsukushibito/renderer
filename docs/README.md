@@ -14,6 +14,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 |---|---|
 | ゲームエンジンに組み込みたい | [シーンの所有、カメラごとの描画方式、1 フレームの組み立て](guides/tooling.md#scene-materials)、[Windows の複数表示](design/rendergraph.md#windows-presentation)、[組み込み機能の検証](verification/current.md#engine-integration) |
 | 二つのクレートの使い分けと判断根拠を知りたい | [renderer と renderer-core の責務と利用コード](design/implementation-policy.md#renderer-core-plan)、[訓練場と Bistro の実機結果](verification/current.md#engine-integration) |
+| ライトマップと照度プローブを使いたい | [ベイクと描画](guides/examples.md#bistro-baked-lighting)、[Bistro の比較画像と精度](verification/current.md#bistro-baked-lighting) |
 | Examplesを動かしたい | [Examplesの実行と選び方](guides/examples.md) |
 | Rustで標準パスやレシピを使いたい | [`renderer`の標準部品](design/rendergraph.md#公開標準パスと標準グラフ) |
 | PBR・Unlit・独自シェーダーを同じシーンで描きたい | [マテリアルの作成・共有・更新](guides/tooling.md#scene-materials) |

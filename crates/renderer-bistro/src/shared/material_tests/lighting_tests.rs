@@ -77,6 +77,7 @@ fn image_levels(width: u32, height: u32, levels: &[Vec<[f64; 3]>]) -> ibl::Image
         mips.push(start..bytes.len());
     }
     ibl::Image {
+        format: renderer_core::ImageFormat::Rgba16Float,
         width,
         height,
         mips,

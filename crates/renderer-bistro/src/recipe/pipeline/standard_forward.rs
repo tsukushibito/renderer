@@ -136,6 +136,7 @@ pub(super) fn build(
                 placements.shadow_bounds
             }),
         pbr::Environment {
+            diffuse_lighting: options.diffuse_lighting(camera_input.scenario_blend),
             irradiance,
             reflection,
             brdf_lut,
@@ -144,6 +145,11 @@ pub(super) fn build(
             max_prefilter_lod: max_prefilter_lod as u32,
         },
     )?;
+    let view = if let Some(clear) = options.sweep_clear(camera_input.scenario_blend) {
+        view.with_clear_color(clear)?
+    } else {
+        view
+    };
     // GPU culling reads the current camera before the recipe adds its passes.
     if options.submission == SubmissionMode::Indirect {
         graph.upload_buffer(

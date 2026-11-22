@@ -1146,10 +1146,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "renderer-bake"
+version = "0.1.0"
+dependencies = [
+ "renderer",
+]
+
+[[package]]
 name = "renderer-bistro"
 version = "0.1.0"
 dependencies = [
  "renderer",
+ "renderer-bake",
  "renderer-core",
  "renderer-example-support",
  "serde_json",

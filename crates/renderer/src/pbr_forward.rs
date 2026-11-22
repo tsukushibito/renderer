@@ -153,6 +153,7 @@ impl Prepared {
             samples,
             ..
         } = self.common.config();
+        let clear_color = frame.view.clear_override.unwrap_or(clear_color);
         self.common.add_scene_using(graph, frame, |graph, scene| {
             add_scene_passes(
                 graph,

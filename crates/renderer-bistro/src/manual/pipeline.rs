@@ -61,7 +61,7 @@ pub(super) fn image_desc(image: &super::asset::TextureImage) -> ImageDesc {
 fn environment_desc(image: &ibl::Image) -> ImageDesc {
     ImageDesc {
         mip_levels: image.mips.len() as u32,
-        ..ImageDesc::rgba16_float(image.width, image.height)
+        ..ImageDesc::texture_2d(image.width, image.height, image.format)
     }
 }
 
@@ -1303,7 +1303,9 @@ pub(super) fn build(
                 },
             ];
             let bindings = if deferred && !material.blend {
-                graph.raster_bindings(&program::deferred::gbuffer_program(), &material_bindings)?
+                let mut bindings = [lighting_bindings[0]; 8];
+                bindings[..7].copy_from_slice(&material_bindings);
+                graph.raster_bindings(&program::deferred::gbuffer_program(), &bindings)?
             } else {
                 let program = options.pipeline.forward_program(material.blend);
                 let mut bindings =

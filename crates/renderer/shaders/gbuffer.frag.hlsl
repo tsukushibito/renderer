@@ -1,6 +1,10 @@
 #include "material_sampling.hlsli"
 #include "octahedral.hlsli"
 
+ConstantBuffer<CameraData> camera : register(b0, space0);
+Texture2D<float4> irradiance_image : register(t0, space2);
+#include "probe_volume.hlsli"
+#include "lightmap.hlsli"
 struct PixelInput {
     BISTRO_LOCATION(1) float3 world_normal : TEXCOORD1;
     BISTRO_LOCATION(2) float4 world_tangent : TEXCOORD2;
@@ -8,6 +12,8 @@ struct PixelInput {
 #ifdef BISTRO_TRANSFORMED_DIRECTIONS
     BISTRO_LOCATION(4) nointerpolation uint mirrored : TEXCOORD4;
 #endif
+    BISTRO_LOCATION(5) float2 lightmap_uv : TEXCOORD5;
+    BISTRO_LOCATION(6) nointerpolation uint lightmap_triangle : TEXCOORD6;
     bool front_facing : SV_IsFrontFace;
 };
 
@@ -23,6 +29,7 @@ GBuffer main(PixelInput input) {
 #endif
     Surface surface = sample_material(
         input.world_normal, input.world_tangent, input.texcoord, input.front_facing).surface;
+    apply_lightmap(surface,input.front_facing ? material.flags.z : 0u,material.flags.w,input.lightmap_triangle,input.lightmap_uv);
     GBuffer result;
     result.base_metallic = float4(surface.base_color, surface.metallic);
     result.normal_roughness = float4(

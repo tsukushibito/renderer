@@ -46,7 +46,7 @@ float4 main(float4 pixel : SV_Position) : SV_Target0 {
     BrdfInputs brdf = make_brdf_inputs(position, surface);
     float3 color = evaluate_lighting(position, surface, brdf);
 #ifdef BISTRO_LOCAL_LIGHTS
-    color += local_light_radiance(pixel.xy, position, surface.normal, brdf.view, brdf.f0, brdf.diffuse_color, surface.roughness);
+    if(baked_debug()==0u)color += local_light_radiance(pixel.xy, position, surface.normal, brdf.view, brdf.f0, brdf.diffuse_color, surface.roughness);
 #endif
     return float4(clamp(color, 0.0, 65504.0), 1.0);
 }

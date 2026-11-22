@@ -111,17 +111,42 @@ pub struct EnvironmentMaps {
 }
 impl EnvironmentMaps {
     pub fn import(&self, graph: &mut Graph) -> Result<Environment, GraphError> {
+        self.import_diffuse(graph, &self.irradiance)
+    }
+    pub(super) fn import_diffuse(
+        &self,
+        graph: &mut Graph,
+        irradiance: &renderer_core::graph::ImportImage,
+    ) -> Result<Environment, GraphError> {
         let mut import = |texture: &renderer_core::graph::ImportImage| {
             crate::material::texture_view(graph, texture)
         };
         Ok(Environment {
-            irradiance: import(&self.irradiance)?,
+            irradiance: import(irradiance)?,
+            diffuse_lighting: crate::pbr::DiffuseLighting::EnvironmentMap,
             reflection: import(&self.reflection)?,
             brdf_lut: import(&self.brdf_lut)?,
             strength: self.strength,
             yaw_radians: self.yaw_radians,
             max_prefilter_lod: self.max_prefilter_lod,
         })
+    }
+}
+
+/// A resident diffuse atlas and the two-scenario blend for this view.
+#[derive(Clone, Copy)]
+pub struct BakedLightingInput<'a> {
+    pub atlas: &'a renderer_core::graph::ImportImage,
+    pub blend: f32,
+    pub view: crate::pbr::BakedLightingView,
+}
+impl<'a> BakedLightingInput<'a> {
+    pub fn new(atlas: &'a renderer_core::graph::ImportImage, blend: f32) -> Self {
+        Self {
+            atlas,
+            blend,
+            view: crate::pbr::BakedLightingView::Shaded,
+        }
     }
 }
 
@@ -140,6 +165,8 @@ pub struct SceneInput<'a> {
     pub bounds: Option<Bounds>,
     /// Lighting textures imported into the current Graph.
     pub environment: Option<&'a EnvironmentMaps>,
+    /// Baked diffuse can be used on its own or with the environment's specular maps.
+    pub baked_lighting: Option<BakedLightingInput<'a>>,
 }
 impl<'a> SceneInput<'a> {
     pub fn new(meshes: &'a Meshes, materials: &'a Materials, objects: &'a [RenderObject]) -> Self {
@@ -152,6 +179,7 @@ impl<'a> SceneInput<'a> {
             sun: Sun::OFF,
             bounds: None,
             environment: None,
+            baked_lighting: None,
         }
     }
     /// Resolve this frame's posed vertices and the object's selected index range.

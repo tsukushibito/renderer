@@ -66,7 +66,7 @@ impl Placements {
             .enumerate()
             .filter_map(|(index, (mesh, bound))| {
                 let material = &scene.materials[mesh.material];
-                if material.uniform[48..52] != [0; 4] {
+                if material.uniform[48..52] != [0; 4] || material.uniform[56..60] != [0; 4] {
                     return None;
                 }
                 let diameter = bound

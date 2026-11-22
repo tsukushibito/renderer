@@ -6,7 +6,7 @@
         }
     ],
     "types" : {
-        "_11" : {
+        "_14" : {
             "name" : "type.ConstantBuffer.CameraData",
             "members" : [
                 {
@@ -118,11 +118,21 @@
             "type" : "vec2",
             "name" : "out.var.TEXCOORD3",
             "location" : 3
+        },
+        {
+            "type" : "vec2",
+            "name" : "out.var.TEXCOORD5",
+            "location" : 5
+        },
+        {
+            "type" : "uint",
+            "name" : "out.var.TEXCOORD6",
+            "location" : 6
         }
     ],
     "ubos" : [
         {
-            "type" : "_11",
+            "type" : "_14",
             "name" : "type.ConstantBuffer.CameraData",
             "block_size" : 464,
             "set" : 0,

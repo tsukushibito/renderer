@@ -1,0 +1,65 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; no parameters
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; no parameters
+; shader hash: 85be2718c1082b6d19d5d8da9332133e
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Compute Shader
+; NumThreads=(32,1,1)
+; NumBytesGroupSharedMemory: 3072
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 0
+; SigOutputElements: 0
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 0
+; SigOutputVectors[0]: 0
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Buffer Definitions:
+;
+; Resource bind info for jobs
+; {
+;
+;   struct struct.Receiver
+;   {
+;
+;       float4 p;                                     ; Offset:    0
+;       float4 normal;                                ; Offset:   16
+;
+;   } $Element;                                       ; Offset:    0 Size:    32
+;
+; }
+;
+; Resource bind info for result
+; {
+;
+;   float4 $Element;                                  ; Offset:    0 Size:    16
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; scene                             texture     f32          2d      T0             t0     1
+; jobs                              texture  struct         r/o      T1             t1     1
+; result                                UAV  struct         r/w      U0             u2     1
+;

@@ -8,6 +8,7 @@
 #include "local_light_pbr.hlsli"
 #endif
 
+#include "lightmap.hlsli"
 struct PixelInput {
     BISTRO_LOCATION(0) float3 world_position : TEXCOORD0;
     BISTRO_LOCATION(1) float3 world_normal : TEXCOORD1;
@@ -18,6 +19,8 @@ struct PixelInput {
     // position and the mirror flag at the registers assigned by this order.
     BISTRO_LOCATION(4) nointerpolation uint mirrored : TEXCOORD4;
 #endif
+    BISTRO_LOCATION(5) float2 lightmap_uv : TEXCOORD5;
+    BISTRO_LOCATION(6) nointerpolation uint lightmap_triangle : TEXCOORD6;
 #if BISTRO_LOCAL_LIGHTS == 2
     float4 pixel : SV_Position;
 #endif
@@ -31,6 +34,7 @@ float4 main(PixelInput input) : SV_Target0 {
     MaterialSample sampled = sample_material(
         input.world_normal, input.world_tangent, input.texcoord, input.front_facing);
     Surface surface = sampled.surface;
+    apply_lightmap(surface,input.front_facing ? material.flags.z : 0u,material.flags.w,input.lightmap_triangle,input.lightmap_uv);
     BrdfInputs brdf = make_brdf_inputs(input.world_position, surface);
     float3 color = evaluate_lighting(input.world_position, surface, brdf);
 #if defined(BISTRO_LOCAL_LIGHTS)
@@ -39,7 +43,7 @@ float4 main(PixelInput input) : SV_Target0 {
 #else
     float2 pixel_center = 0.0;
 #endif
-    color += local_light_radiance(
+    if(baked_debug()==0u)color += local_light_radiance(
         pixel_center, input.world_position, surface.normal, brdf.view, brdf.f0, brdf.diffuse_color, surface.roughness);
 #endif
     // The ideal low-roughness peak may exceed binary16's finite range. Preserve

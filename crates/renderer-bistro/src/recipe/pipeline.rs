@@ -3,8 +3,8 @@
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::camera::Frustum;
 use super::{
-    Bloom, Error, Options, PipelineMode, SubmissionMode, asset::Scene, camera::Camera, ibl,
-    instancing, lighting, program, recipes, shadow,
+    Bloom, Error, Options, SubmissionMode, asset::Scene, camera::Camera, ibl, instancing, lighting,
+    program, recipes, shadow,
 };
 use renderer::{
     pbr::{
@@ -129,7 +129,7 @@ pub(super) struct Budget {
     pub upload_bytes: usize,
     pub readback_bytes: u64,
     pub ranges: usize,
-    pipeline: PipelineMode,
+    use_light_grid: bool,
     defaults: Option<pbr::PreparedDefaults>,
     fixture: bool,
     packed: Option<Arc<indirect::Layout>>,
@@ -151,7 +151,7 @@ pub(super) fn image_desc(image: &super::asset::TextureImage) -> ImageDesc {
 fn environment_desc(image: &ibl::Image) -> ImageDesc {
     ImageDesc {
         mip_levels: image.mips.len() as u32,
-        ..ImageDesc::rgba16_float(image.width, image.height)
+        ..ImageDesc::texture_2d(image.width, image.height, image.format)
     }
 }
 
@@ -497,7 +497,7 @@ impl Budget {
             upload_bytes,
             readback_bytes,
             ranges: resources * (options.inflight + 3) + 32,
-            pipeline: options.pipeline,
+            use_light_grid: options.uses_light_grid(),
             defaults,
             fixture: options.fixture,
             packed,
@@ -815,8 +815,7 @@ impl Resident {
         initial_uniform[..128].copy_from_slice(&camera.uniform_bytes());
         let camera = upload_buffer(backend, &mut upload_owners, &initial_uniform)?;
         let local_lights = budget
-            .pipeline
-            .uses_local_lights()
+            .use_light_grid
             .then(|| lighting::preset(budget.fixture));
         let defaults = if let Some(defaults) = budget.defaults {
             let (resources, startup) = defaults.initialize(backend)?;
@@ -1442,6 +1441,12 @@ pub(super) fn build(
         frame_uniform[112 + word * 4..116 + word * 4].copy_from_slice(&value.to_le_bytes());
     }
     frame_uniform[128..].copy_from_slice(&shadow_data.uniform_bytes());
+    if options.baked_lighting.is_some() {
+        frame_uniform[460..464].copy_from_slice(
+            &(1. + 2. * (options.gi_debug as u32 as f32) + camera_input.scenario_blend)
+                .to_le_bytes(),
+        );
+    }
 
     let mut graph = pool.begin()?;
     let uniform = import_frame(&mut graph, workspace, resident)?;
@@ -1545,6 +1550,7 @@ pub(super) fn build(
     let (hdr, depth) = prepared.scene(
         &mut graph,
         recipes::SceneFrame {
+            clear: options.sweep_clear(camera_input.scenario_blend),
             camera: uniform,
             view_projection: camera_matrix,
             lighting: lighting_bindings,
@@ -1806,6 +1812,7 @@ fn finish_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recipe::PipelineMode;
     use renderer_core::graph::SampleCount;
 
     #[test]

@@ -13,6 +13,8 @@ Texture2D<float4> shadow_image2 : register(t2, space3);
 Texture2D<float4> shadow_image3 : register(t3, space3);
 SamplerState shadow_sampler : register(s4, space3);
 
+#include "probe_volume.hlsli"
+
 // Processed environment is top-origin lat-long. Rotate a world direction by
 // inverse source yaw; U wraps while V clamps, including the pole texels.
 float2 environment_uv(float3 direction) {
@@ -102,6 +104,11 @@ BrdfInputs make_brdf_inputs(float3 position, Surface surface) {
 
 float3 evaluate_lighting(float3 position, Surface surface, BrdfInputs brdf_inputs) {
     float3 n = surface.normal;
+    if (baked_debug()>0u) {
+        if(surface.occlusion==0.0)return surface.emissive;
+        float3 value=probe_irradiance(position,n,baked_blend());
+        return baked_debug()==1u ? value/PI : value;
+    }
     float3 v = brdf_inputs.view;
     float3 l = unit_or(camera.light_direction.xyz, n);
     float3 h = unit_or(v + l, n);
@@ -116,9 +123,14 @@ float3 evaluate_lighting(float3 position, Surface surface, BrdfInputs brdf_input
     float environment_strength = max(camera.environment.x, 0.0);
     float3 indirect = 0.0;
     [branch]
-    if (environment_strength > 0.0) {
-        float3 irradiance =
-            irradiance_image.SampleLevel(environment_sampler, environment_uv(n), 0.0).rgb;
+    if (environment_strength > 0.0 || camera.shadow_bias.w >= 1.0) {
+        float3 irradiance;
+        [branch]
+        if (camera.shadow_bias.w >= 1.0) {
+            irradiance = surface.occlusion > 0.0 ? probe_irradiance(position, n, baked_blend()) : 0.0;
+        } else {
+            irradiance = irradiance_image.SampleLevel(environment_sampler, environment_uv(n), 0.0).rgb;
+        }
         float3 reflected = reflect(-v, n);
         float reflection_lod = roughness * max(camera.environment.z, 0.0);
         float3 prefiltered = reflection_image.SampleLevel(
@@ -131,7 +143,9 @@ float3 evaluate_lighting(float3 position, Surface surface, BrdfInputs brdf_input
         // AO attenuates only diffuse environment light.
         float3 indirect_diffuse = irradiance * diffuse_color / PI * surface.occlusion;
         float3 indirect_specular = prefiltered * (f0 * brdf.x + brdf.y);
-        indirect = (indirect_diffuse + indirect_specular) * environment_strength;
+        indirect = camera.shadow_bias.w >= 1.0
+            ? indirect_diffuse + indirect_specular * environment_strength
+            : (indirect_diffuse + indirect_specular) * environment_strength;
     }
     // At exactly zero N dot L, finite shadow visibility can only multiply
     // zero. Shadow sampling uses explicit LOD, so this branch needs no gradients.

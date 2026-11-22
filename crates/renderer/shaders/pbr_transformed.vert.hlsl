@@ -21,6 +21,8 @@ struct PbrVertex {
     BISTRO_LOCATION(2) float4 world_tangent : TEXCOORD2;
     BISTRO_LOCATION(3) float2 texcoord : TEXCOORD3;
     BISTRO_LOCATION(4) nointerpolation uint mirrored : TEXCOORD4;
+    BISTRO_LOCATION(5) float2 lightmap_uv : TEXCOORD5;
+    BISTRO_LOCATION(6) nointerpolation uint lightmap_triangle : TEXCOORD6;
     float4 clip_position : SV_Position;
 };
 
@@ -38,7 +40,7 @@ float3 transform_direction(TransformRows rows, float3 value) {
     return transform_linear(rows, value);
 }
 
-PbrVertex main(MeshVertex vertex, uint instance_id : SV_InstanceID) {
+PbrVertex main(MeshVertex vertex, uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID) {
     uint address = transform_address(parameters.first_transform, instance_id);
     TransformRows model = load_transform_rows(address);
     TransformRows normal = load_transform_rows(address + 48u);
@@ -56,5 +58,7 @@ PbrVertex main(MeshVertex vertex, uint instance_id : SV_InstanceID) {
     float handedness = output.mirrored != 0u ? -vertex.tangent.w : vertex.tangent.w;
     output.world_tangent = float4(transform_direction(model, vertex.tangent.xyz), handedness);
     output.texcoord = vertex.uv;
+    output.lightmap_uv = float2(vertex_id%3u==1u, vertex_id%3u==2u);
+    output.lightmap_triangle = vertex_id;
     return output;
 }

@@ -9,6 +9,10 @@
 [Vulkanベストプラクティス](../guides/vulkan-best-practices.md)へまとめる。
 同ガイドの後続機能は、この文書の現行実装に追加済みとは扱わない。
 
+## オフラインの拡散照明ベイク
+
+`renderer-bake` は両バックエンド共通の管理下 Compute を使用する。読み取り専用のシーン・BVH は完全な RGBA32F 画像ビューに一度アップロードし、各バッチの受光点と出力には範囲指定した別バッファを使う。1 グループが 1 個の受光点を処理する。Graph に upload・dispatch・readback を宣言し、転送と計算の同期を通常の lowering に任せる。CPU が結果を読む前と、アップロードした入力を再利用する前に完了を確認する。ベイク終了時に検証レポートを確認する。これはオフライン処理で、描画中の待機やネイティブ資源作成を追加しない。[実機検証](../verification/current.md#bistro-baked-lighting)
+
 ## 実装境界
 
 `crates/renderer-core`の`vulkan` feature配下に、初期化、診断、VMAによるbuffer／image所有、

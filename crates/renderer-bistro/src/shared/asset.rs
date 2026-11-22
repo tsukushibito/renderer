@@ -79,6 +79,7 @@ impl TextureImage {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Material {
     pub uniform: [u8; 64],
     /// Base, normal, ORM and emissive image indices, with defaults resolved.
@@ -578,9 +579,141 @@ pub(crate) fn material(
 }
 
 impl Scene {
-    /// Apply the explicit Bistro lighting profile before publishing materials.
-    /// Source ORM pixels and texture references stay intact. Generic fixtures
-    /// continue to exercise authored AO, including genuine zero occlusion.
+    /// A white, rough dielectric used to inspect the spatial field. Inserted
+    /// after the bake, so it receives the same lighting as a moving object.
+    pub fn add_white_sphere(&mut self, center: [f32; 3]) {
+        let textures = fallback_images(&mut self.images);
+        let factors = renderer::pbr::MaterialFactors {
+            roughness: 0.85,
+            normal_scale: 0.,
+            ..Default::default()
+        };
+        let material = self.materials.len();
+        self.materials.push(Material {
+            uniform: factors.encode().expect("constant sphere material"),
+            textures,
+            blend: false,
+            alpha_zero: false,
+        });
+        let start = self.vertices.len();
+        let index_start = self.indices.len();
+        const RINGS: u32 = 20;
+        const SLICES: u32 = 32;
+        for y in 0..=RINGS {
+            let (st, ct) = (std::f32::consts::PI * y as f32 / RINGS as f32).sin_cos();
+            for x in 0..=SLICES {
+                let (sp, cp) = (std::f32::consts::TAU * x as f32 / SLICES as f32).sin_cos();
+                let n = [st * cp, ct, st * sp];
+                let p = std::array::from_fn::<_, 3, _>(|i| center[i] + 0.4 * n[i]);
+                self.vertices.extend(
+                    p.into_iter()
+                        .chain(n)
+                        .chain([
+                            -sp,
+                            0.,
+                            cp,
+                            1.,
+                            x as f32 / SLICES as f32,
+                            y as f32 / RINGS as f32,
+                        ])
+                        .flat_map(f32::to_le_bytes),
+                );
+            }
+        }
+        for y in 0..RINGS {
+            for x in 0..SLICES {
+                let a = y * (SLICES + 1) + x;
+                let b = a + SLICES + 1;
+                if y != 0 {
+                    self.indices
+                        .extend([a, a + 1, b].into_iter().flat_map(u32::to_le_bytes));
+                }
+                if y + 1 != RINGS {
+                    self.indices
+                        .extend([a + 1, b + 1, b].into_iter().flat_map(u32::to_le_bytes));
+                }
+            }
+        }
+        self.primitives.push(Primitive {
+            material,
+            vertices: start..self.vertices.len(),
+            indices: index_start..self.indices.len(),
+            index_count: ((self.indices.len() - index_start) / 4) as u32,
+            center,
+        });
+        self.mesh_count += 1;
+    }
+
+    /// Expand each static placement's chart seams once at publication. Its
+    /// original material remains available to dynamic placements and other LODs.
+    pub fn bind_lightmaps(&mut self, entries: &[u8], chart_count: u32, packed: bool) -> Result<()> {
+        let mut previous = None;
+        let mut first = 0u32;
+        for id in entries.as_chunks::<4>().0 {
+            let id = u32::from_le_bytes(*id) as usize;
+            let p = self
+                .primitives
+                .get_mut(id)
+                .ok_or("unknown lightmap placement")?;
+            if previous.is_some_and(|prev| prev >= id) || self.materials[p.material].blend {
+                return Err(invalid("invalid static placement list"));
+            }
+            previous = Some(id);
+            let count = p.index_count / 3;
+            let end = first
+                .checked_add(count)
+                .filter(|n| *n <= chart_count)
+                .ok_or("invalid placement chart range")?;
+            let mut material = self.materials[p.material].clone();
+            let mut factors = renderer::pbr::MaterialFactors::decode(&material.uniform)?;
+            factors.lightmap = Some(renderer::pbr::LightmapBinding {
+                first_chart: first,
+                first_vertex: 0,
+            });
+            material.uniform = factors.encode()?;
+            p.material = self.materials.len();
+            self.materials.push(material);
+            first = end;
+            let start = self.vertices.len();
+            for (index, word) in self.indices[p.indices.clone()]
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .enumerate()
+            {
+                let src = p.vertices.start + u32::from_le_bytes(*word) as usize * 48;
+                self.vertices.extend_from_within(src..src + 48);
+                *word = (index as u32).to_le_bytes();
+            }
+            p.vertices = start..self.vertices.len();
+        }
+        if first != chart_count {
+            return Err(invalid("unbound lightmap charts"));
+        }
+        if packed {
+            // The packed draw layout concatenates opaque members in material order.
+            let mut indices = (0..self.primitives.len())
+                .filter(|&i| !self.materials[self.primitives[i].material].blend)
+                .collect::<Vec<_>>();
+            indices.sort_by_key(|&i| self.primitives[i].material);
+            let mut vertex = 0u32;
+            for i in indices {
+                let p = &self.primitives[i];
+                let m = &mut self.materials[p.material];
+                let mut factors = renderer::pbr::MaterialFactors::decode(&m.uniform)?;
+                if let Some(binding) = &mut factors.lightmap {
+                    binding.first_vertex = vertex;
+                    m.uniform = factors.encode()?;
+                }
+                vertex = vertex
+                    .checked_add(u32::try_from(p.vertices.len() / 48)?)
+                    .ok_or("packed bake vertex overflow")?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply the Bistro AO policy at publication, preserving source ORM pixels.
     pub fn disable_environment_occlusion(&mut self) {
         for material in &mut self.materials {
             material.uniform[40..44].copy_from_slice(&0.0f32.to_le_bytes());

@@ -102,6 +102,7 @@ impl Prepared {
         let [width, height] = config.extent;
         let view_projection = *frame.view.matrix();
         let mut gbuffer = None;
+        let clear = frame.view.clear_override.unwrap_or(config.clear_color);
         let scene = self.common.add_scene_using(graph, frame, |graph, scene| {
             let hdr = graph.image("hdr", ImageDesc::rgba16_float(width, height))?;
             let depth = graph.image("depth", ImageDesc::depth32(width, height))?;
@@ -112,7 +113,7 @@ impl Prepared {
                 passes::Inputs {
                     hdr: hdr_view,
                     depth: depth_view,
-                    clear: config.clear_color,
+                    clear,
                     camera: scene.camera,
                     view_projection,
                     lighting: scene.lighting,

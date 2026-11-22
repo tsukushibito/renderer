@@ -156,6 +156,42 @@ impl Look {
     }
 }
 
+pub(crate) struct BakeScenario {
+    pub sky: [f32; 3],
+    pub direction: [f32; 3],
+    pub sun: [f32; 3],
+}
+pub(crate) const BAKE_SCENARIOS: [BakeScenario; 2] = [
+    BakeScenario {
+        sky: [0.55, 0.68, 0.92],
+        direction: [0.3302644, 0.8244736, -0.459531],
+        sun: [8.4, 8.0, 7.1],
+    },
+    BakeScenario {
+        sky: [0.16, 0.13, 0.20],
+        direction: [-0.8, 0.22, -0.56],
+        sun: [3.8, 1.35, 0.55],
+    },
+];
+
+/// Changing either the geometry cook or a lighting endpoint invalidates the bake.
+pub(crate) fn bake_identity(cook_sha256: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(cook_sha256.as_bytes());
+    for scenario in BAKE_SCENARIOS {
+        for word in scenario
+            .sky
+            .into_iter()
+            .chain(scenario.sun)
+            .chain(scenario.direction)
+        {
+            hash.update(word.to_le_bytes());
+        }
+    }
+    format!("{:x}", hash.finalize())
+}
+
 pub(crate) struct Conditions {
     pub views: Vec<(String, Camera)>,
     pub route: Vec<(usize, Camera)>,
@@ -300,7 +336,7 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
         a[0] * b[1] - a[1] * b[0],
     ]
 }
-fn normalize(a: [f32; 3]) -> Result<[f32; 3], Error> {
+pub(crate) fn normalize(a: [f32; 3]) -> Result<[f32; 3], Error> {
     let length = dot(a, a).sqrt();
     if !length.is_finite() || length < 1e-8 {
         return Err("degenerate camera basis".into());
@@ -381,6 +417,7 @@ impl Camera {
     ) -> Result<CameraInput, Error> {
         let matrix = self.matrix(aspect, near, far)?;
         Ok(CameraInput {
+            scenario_blend: 0.,
             matrix,
             camera: self,
             near,
@@ -392,6 +429,7 @@ impl Camera {
 }
 
 pub(crate) struct CameraInput {
+    pub scenario_blend: f32,
     pub matrix: [[f32; 4]; 4],
     pub camera: Camera,
     pub near: f32,

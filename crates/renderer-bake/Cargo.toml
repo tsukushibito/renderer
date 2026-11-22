@@ -1,0 +1,18 @@
+[package]
+name = "renderer-bake"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Offline diffuse light transport for renderer"
+
+[features]
+vulkan = ["renderer/vulkan"]
+d3d12 = ["renderer/d3d12"]
+development-validation = ["renderer/development-validation"]
+
+[dependencies]
+renderer = { path = "../renderer" }
+
+[lints]
+workspace = true

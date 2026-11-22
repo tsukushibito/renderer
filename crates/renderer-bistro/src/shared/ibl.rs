@@ -26,6 +26,7 @@ pub(crate) struct Environment {
 }
 
 pub(crate) struct Image {
+    pub format: renderer_core::ImageFormat,
     pub width: u32,
     pub height: u32,
     pub mips: Vec<Range<usize>>,
@@ -150,6 +151,7 @@ fn load_image(
         )?;
     }
     Ok(Image {
+        format: renderer_core::ImageFormat::Rgba16Float,
         width,
         height,
         mips,
@@ -282,6 +284,7 @@ impl Environment {
         let diffuse = Image::constant(8, 4, 1, [0x2e08, 0x2e08, 0x2e08, 0x3c00]);
         let specular = Image::constant(8, 4, 4, [0, 0, 0, 0x3c00]);
         let brdf = Image {
+            format: renderer_core::ImageFormat::Rgba16Float,
             width: 16,
             height: 16,
             mips: std::iter::once(0..2048).collect(),
@@ -326,6 +329,7 @@ impl Image {
             mips.push(start..bytes.len());
         }
         Self {
+            format: renderer_core::ImageFormat::Rgba16Float,
             width,
             height,
             mips,

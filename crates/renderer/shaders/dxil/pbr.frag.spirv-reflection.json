@@ -6,7 +6,7 @@
         }
     ],
     "types" : {
-        "_9" : {
+        "_11" : {
             "name" : "type.ConstantBuffer.MaterialData",
             "members" : [
                 {
@@ -31,7 +31,7 @@
                 }
             ]
         },
-        "_18" : {
+        "_20" : {
             "name" : "type.ConstantBuffer.CameraData",
             "members" : [
                 {
@@ -121,6 +121,16 @@
             "type" : "vec2",
             "name" : "in.var.TEXCOORD3",
             "location" : 3
+        },
+        {
+            "type" : "vec2",
+            "name" : "in.var.TEXCOORD5",
+            "location" : 5
+        },
+        {
+            "type" : "uint",
+            "name" : "in.var.TEXCOORD6",
+            "location" : 6
         }
     ],
     "outputs" : [
@@ -220,14 +230,14 @@
     ],
     "ubos" : [
         {
-            "type" : "_9",
+            "type" : "_11",
             "name" : "type.ConstantBuffer.MaterialData",
             "block_size" : 64,
             "set" : 0,
             "binding" : 1
         },
         {
-            "type" : "_18",
+            "type" : "_20",
             "name" : "type.ConstantBuffer.CameraData",
             "block_size" : 464,
             "set" : 0,

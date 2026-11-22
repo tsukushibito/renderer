@@ -472,7 +472,7 @@ impl PreparedScene {
             lighting: if self.opaque_uses_lighting {
                 &extended[..count]
             } else {
-                &[]
+                &extended[..1]
             },
         };
         let transparent_bindings = Bindings::Scene {

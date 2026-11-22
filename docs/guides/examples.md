@@ -4,6 +4,43 @@
 [必要なツール](development.md#必要なツール)、GPUの検証設定は
 [製品・開発用の検証設定](development.md#validation-settings)を参照してください。
 
+<a id="bistro-baked-lighting"></a>
+
+## ライトマップと照度プローブを使う
+
+ゲーム側が用意する入力は、ワールド座標の静的な三角形、線形色の材質とテクスチャ、二つの照明条件です。アセットビルドで一度だけ `renderer-bake` を使います。プローブの位置はジオメトリから自動で決まります。
+
+```rust
+let scene = BakeScene::new(occluders, materials, textures)?;
+let probes = scene.bake_probes([day, dusk], ProbeSettings::default())?;
+let maps = scene.bake_lightmaps(&static_receivers, [day, dusk], LightmapSettings::default())?;
+probes.with_lightmaps(&maps)?.write(output)?;
+```
+
+プローブだけなら `bake_probes` の結果を直接保存できます。ライトマップだけなら `BakedLighting::from_lightmaps(&maps, fallback)` に、範囲外で使う各シナリオの RGB 照度を渡します。配置と LOD ごとに、描画順の三角形を `ReceiverTriangle` として渡してください。各チャートの UV はベイク側が生成します。描画メッシュの各三角形は 3 個の連続する固有頂点を使い、元の UV0 は材質用に保持します。
+
+ロード時に `renderer::pbr::BakedLighting::from_bytes` でアセットを検証します。`image_desc()` で画像を準備し、`upload` の完了後、その画像のスナップショットをシーン入力に渡します。鏡面 IBL が必要な場合は `input.environment` も指定します。静的配置の `MaterialFactors::lightmap` にはゼロ始まりの `first_chart` と描画バッファ内の `first_vertex` を指定します。移動物体や未ベイクの LOD は `None` にすると各ピクセルのワールド位置と法線でプローブを引きます。表面が両面描画の場合、裏側もプローブを使います。
+
+```rust
+input.baked_lighting = Some(BakedLightingInput::new(atlas.snapshot(), time_of_day));
+frame.draw_scene(input, exposure)?;
+```
+
+昼から夕方への係数は 0～1 です。太陽の方位・色、背景、時計の進行はアプリ側で更新します。ベイクは線形の拡散照度を供給し、直接光の影と鏡面 IBL は通常の描画経路を使います。
+
+### Bistro で試す
+
+[Bistro の cook と IBL](development.md#bistro-b3) の後、以下をリポジトリのルートで実行します。
+
+```powershell
+cargo run --release -p renderer-bistro --features bake-tool,vulkan --bin bistro-bake -- --manifest .tools/bistro-cook/full-a3/manifest.json --output .tools/bistro.gi --samples 96
+cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --baked-lighting .tools/bistro.gi --pipeline forward-plus --white-sphere -14 2.7 0.65 --time-sweep --frames 5 --width 800 --height 450 --output .tools/bistro-gi
+```
+
+`--fixture` は配布アセットなしでベイクと描画を試せます。`--backend cpu|vulkan|d3d12|auto` はベイクの実行先を選びます。Auto は利用可能な GPU を準備できなければ CPU を使います。`--spacing`、`--max-depth`、`--lightmap-texels` で密度と面の予算を変更でき、予算 0 ならシーン全体をプローブで描きます。出力には cook と照明プリセットの識別子を保存します。入力を変更したら再ベイクし、新しい出力名を指定してください。
+
+`--scenario-blend 0.5` は中間時刻を固定します。`--time-sweep` のオフスクリーン実行は先頭、中間、末尾を保存します。`--gi-debug sources` はライトマップを橙、プローブを青系で表示し、`irradiance` は拡散照度、`weights` は有効なプローブ重みの合計を表示します。[実機の比較画像](../verification/current.md#bistro-baked-lighting)
+
 ## メッシュと材質からビューを描く
 
 ```powershell

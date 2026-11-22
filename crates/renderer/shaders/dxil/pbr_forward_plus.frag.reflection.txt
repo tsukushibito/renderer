@@ -7,8 +7,10 @@
 ; TEXCOORD                 1   xyz         1     NONE   float   xyz
 ; TEXCOORD                 2   xyzw        2     NONE   float   xyzw
 ; TEXCOORD                 3   xy          3     NONE   float   xy
-; SV_Position              0   xyzw        4      POS   float   xy
-; SV_IsFrontFace           0   x           5    FFACE    uint   x
+; TEXCOORD                 5     zw        3     NONE   float     zw
+; TEXCOORD                 6   x           4     NONE    uint   x
+; SV_IsFrontFace           0    y          4    FFACE    uint    y
+; SV_Position              0   xyzw        5      POS   float   xy
 ;
 ;
 ; Output signature:
@@ -17,7 +19,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: 0973d2333ec9e06a9338b812614473de
+; shader hash: 861330f07b92eb5a9fc01b5ceb1c52a2
 ;
 ; Pipeline Runtime Information:
 ;
@@ -28,7 +30,7 @@
 ; MinimumExpectedWaveLaneCount: 0
 ; MaximumExpectedWaveLaneCount: 4294967295
 ; UsesViewID: false
-; SigInputElements: 6
+; SigInputElements: 8
 ; SigOutputElements: 1
 ; SigPatchConstOrPrimElements: 0
 ; SigInputVectors: 6
@@ -47,6 +49,8 @@
 ; TEXCOORD                 1                 linear
 ; TEXCOORD                 2                 linear
 ; TEXCOORD                 3                 linear
+; TEXCOORD                 5                 linear
+; TEXCOORD                 6        nointerpolation
 ; SV_Position              0          noperspective
 ; SV_IsFrontFace           0        nointerpolation
 ;
@@ -134,11 +138,11 @@
 ;
 ; ViewId state:
 ;
-; Number of inputs: 21, outputs: 4
+; Number of inputs: 24, outputs: 4
 ; Outputs dependent on ViewId: {  }
 ; Inputs contributing to computation of Outputs:
-;   output 0 depends on inputs: { 0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 16, 17, 20 }
-;   output 1 depends on inputs: { 0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 16, 17, 20 }
-;   output 2 depends on inputs: { 0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 16, 17, 20 }
+;   output 0 depends on inputs: { 0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20, 21 }
+;   output 1 depends on inputs: { 0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20, 21 }
+;   output 2 depends on inputs: { 0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20, 21 }
 ;   output 3 depends on inputs: { 12, 13 }
 ;

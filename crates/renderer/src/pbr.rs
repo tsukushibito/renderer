@@ -4,6 +4,8 @@ mod culling;
 mod defaults;
 pub(crate) mod draw;
 mod history;
+mod probes;
+pub use probes::{BakedLighting, BakedLightingView, DiffuseLighting, LightmapChart};
 pub(crate) mod instances;
 mod material;
 pub(crate) mod raster;
@@ -21,7 +23,7 @@ pub use draw::{Draw, GraphMaterial, IndexedDraw, MaterialTextures};
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::Transform;
-pub use material::{MaterialFactors, MaterialUniform, ResidentMaterialUniform};
+pub use material::{LightmapBinding, MaterialFactors, MaterialUniform, ResidentMaterialUniform};
 pub use unshadowed::UnshadowedView;
 pub use vertex::PbrVertex;
 pub use view::{Bounds, Projection, ShadowSettings, Sun, ViewInput};
@@ -98,11 +100,13 @@ pub struct SceneLimits {
 }
 
 /// Graph-local linear HDR environment inputs. Irradiance and reflection are
-/// 2D equirectangular images. Reflection mips are ordered by roughness.
+/// 2D images. Irradiance uses the selected diffuse layout. Reflection is
+/// equirectangular with mips ordered by roughness.
 /// BRDF RG stores the two preintegrated split-sum terms.
 #[derive(Clone, Copy, Debug)]
 pub struct Environment {
     pub irradiance: ImageView,
+    pub diffuse_lighting: DiffuseLighting,
     pub reflection: ImageView,
     pub brdf_lut: ImageView,
     pub strength: f32,
@@ -116,6 +120,7 @@ pub struct PreparedView {
     pub(crate) sort_direction: [f64; 3],
     culling: Option<ViewCulling>,
     uniform: [u8; CAMERA_BYTES],
+    pub(crate) clear_override: Option<[f32; 4]>,
     environment: Environment,
     extent: [u32; 2],
     shadows: Option<ShadowSettings>,
@@ -146,9 +151,12 @@ impl PreparedView {
                 environment.max_prefilter_lod as f32,
             ],
         )?;
+        let mut uniform = data.uniform_bytes();
+        uniform[460..464].copy_from_slice(&environment.diffuse_lighting.uniform()?.to_le_bytes());
         Ok(Self {
             sort_direction: view.forward(),
-            uniform: data.uniform_bytes(),
+            uniform,
+            clear_override: None,
             culling: bounds
                 .map(|bounds| ViewCulling::new(*data.matrix(), data.shadow_matrices(), bounds)),
             data,
@@ -158,6 +166,15 @@ impl PreparedView {
         })
     }
 
+    /// Override this view's HDR clear at frame construction (for example a
+    /// time-varying sky). The prepared target and pipeline are reusable.
+    pub fn with_clear_color(mut self, color: [f32; 4]) -> Result<Self, GraphError> {
+        if !color.into_iter().all(f32::is_finite) {
+            return Err(GraphError::invalid_input("invalid PBR clear color"));
+        }
+        self.clear_override = Some(color);
+        Ok(self)
+    }
     pub(crate) fn matches(&self, extent: [u32; 2], shadows: Option<ShadowSettings>) -> bool {
         self.extent == extent && self.shadows == shadows
     }

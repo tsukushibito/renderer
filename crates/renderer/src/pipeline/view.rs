@@ -165,15 +165,22 @@ impl StandardPipeline {
                 GraphError::invalid_input("initialize the render pipeline before drawing a view")
             })?
             .import(graph)?;
-        let prepared = self.prepare_view(
-            camera.camera,
-            input.sun,
-            input.bounds,
-            match input.environment {
-                Some(env) => env.import(graph)?,
-                None => defaults.environment()?,
+        let mut environment = match (input.environment, input.baked_lighting) {
+            (Some(env), Some(baked)) => env.import_diffuse(graph, baked.atlas)?,
+            (Some(env), None) => env.import(graph)?,
+            (None, Some(baked)) => Environment {
+                irradiance: crate::material::texture_view(graph, baked.atlas)?,
+                ..defaults.environment()?
             },
-        )?;
+            (None, None) => defaults.environment()?,
+        };
+        if let Some(baked) = input.baked_lighting {
+            environment.diffuse_lighting = pbr::DiffuseLighting::BakedLighting {
+                blend: baked.blend,
+                view: baked.view,
+            };
+        }
+        let prepared = self.prepare_view(camera.camera, input.sun, input.bounds, environment)?;
         self.connected.clear();
         for obj in input.objects {
             let mesh = input.import_mesh(graph, obj)?;

@@ -169,6 +169,7 @@ impl DefaultViews {
         let [_, _, _, black] = self.material_maps()?;
         Ok(Environment {
             irradiance: black,
+            diffuse_lighting: Default::default(),
             reflection: black,
             brdf_lut: black,
             strength: 0.0,

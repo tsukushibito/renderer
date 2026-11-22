@@ -9,9 +9,10 @@ description = "Bistro reference scene applications for Renderer"
 
 [features]
 default = []
-vulkan = ["renderer/vulkan"]
-d3d12 = ["renderer/d3d12"]
-development-validation = ["renderer/development-validation"]
+bake-tool = ["dep:renderer-bake"]
+vulkan = ["renderer/vulkan", "renderer-bake?/vulkan"]
+d3d12 = ["renderer/d3d12", "renderer-bake?/d3d12"]
+development-validation = ["renderer/development-validation", "renderer-bake?/development-validation"]
 vulkan-diagnostics = ["renderer/vulkan-diagnostics"]
 d3d12-diagnostics = ["renderer/d3d12-diagnostics"]
 graph-diagnostics = ["renderer/graph-diagnostics"]
@@ -19,7 +20,13 @@ memory-profiling = ["renderer/memory-profiling"]
 presentation = ["renderer/presentation", "dep:winit"]
 tracy = ["renderer/tracy", "dep:tracy-client"]
 
+[[bin]]
+name = "bistro-bake"
+path = "src/bin/bistro-bake.rs"
+required-features = ["bake-tool"]
+
 [dependencies]
+renderer-bake = { path = "../renderer-bake", optional = true }
 renderer-core = { version = "0.1.0", path = "../renderer-core", default-features = false }
 renderer = { version = "0.1.0", path = "../renderer", default-features = false }
 renderer-example-support = { version = "0.1.0", path = "../renderer-example-support" }

@@ -6,7 +6,7 @@
         }
     ],
     "types" : {
-        "_10" : {
+        "_12" : {
             "name" : "type.ConstantBuffer.MaterialData",
             "members" : [
                 {
@@ -30,6 +30,75 @@
                     "offset" : 48
                 }
             ]
+        },
+        "_21" : {
+            "name" : "type.ConstantBuffer.CameraData",
+            "members" : [
+                {
+                    "name" : "view_projection",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "eye",
+                    "type" : "vec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "light_direction",
+                    "type" : "vec4",
+                    "offset" : 80
+                },
+                {
+                    "name" : "light_color",
+                    "type" : "vec4",
+                    "offset" : 96
+                },
+                {
+                    "name" : "environment",
+                    "type" : "vec4",
+                    "offset" : 112
+                },
+                {
+                    "name" : "shadow_view_projection",
+                    "type" : "mat4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 128,
+                    "array_stride" : 64,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "shadow_splits",
+                    "type" : "vec4",
+                    "offset" : 384
+                },
+                {
+                    "name" : "shadow_texel_world",
+                    "type" : "vec4",
+                    "offset" : 400
+                },
+                {
+                    "name" : "shadow_depth_scale",
+                    "type" : "vec4",
+                    "offset" : 416
+                },
+                {
+                    "name" : "camera_forward_blend",
+                    "type" : "vec4",
+                    "offset" : 432
+                },
+                {
+                    "name" : "shadow_bias",
+                    "type" : "vec4",
+                    "offset" : 448
+                }
+            ]
         }
     },
     "inputs" : [
@@ -47,6 +116,16 @@
             "type" : "vec2",
             "name" : "in.var.TEXCOORD3",
             "location" : 3
+        },
+        {
+            "type" : "vec2",
+            "name" : "in.var.TEXCOORD5",
+            "location" : 5
+        },
+        {
+            "type" : "uint",
+            "name" : "in.var.TEXCOORD6",
+            "location" : 6
         }
     ],
     "outputs" : [
@@ -90,6 +169,12 @@
             "name" : "emissive_image",
             "set" : 1,
             "binding" : 3
+        },
+        {
+            "type" : "texture2D",
+            "name" : "irradiance_image",
+            "set" : 2,
+            "binding" : 0
         }
     ],
     "separate_samplers" : [
@@ -102,11 +187,18 @@
     ],
     "ubos" : [
         {
-            "type" : "_10",
+            "type" : "_12",
             "name" : "type.ConstantBuffer.MaterialData",
             "block_size" : 64,
             "set" : 0,
             "binding" : 1
+        },
+        {
+            "type" : "_21",
+            "name" : "type.ConstantBuffer.CameraData",
+            "block_size" : 464,
+            "set" : 0,
+            "binding" : 0
         }
     ]
 }

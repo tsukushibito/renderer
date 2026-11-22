@@ -11,18 +11,16 @@ pub const DEFERRED_RECONSTRUCTION_BYTES: usize = 64;
 pub(in crate::passes::pbr) static GBUFFER: RasterProgramDescriptor = RasterProgramDescriptor {
     color_outputs: &[ImageFormat::Rgba16Float; 3],
     bindings: &[
-        BindingLayout {
-            stages: ShaderStages::VERTEX,
-            ..CAMERA
-        },
+        CAMERA,
         MATERIAL,
         image(1, 0),
         image(1, 1),
         image(1, 2),
         image(1, 3),
         sampler(1, 4),
+        image(2, 0),
     ],
-    binding_bytes: &[CAMERA_BYTES as u64, MATERIAL_BYTES as u64, 0, 0, 0, 0, 0],
+    binding_bytes: &[CAMERA_BYTES as u64, MATERIAL_BYTES as u64, 0, 0, 0, 0, 0, 0],
     sampling_pairs: &[pair(1, 0, 4), pair(1, 1, 4), pair(1, 2, 4), pair(1, 3, 4)],
     shaders: packaged_shaders!(
         vulkan: (

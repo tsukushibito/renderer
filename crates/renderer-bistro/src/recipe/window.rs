@@ -206,7 +206,7 @@ impl State {
             backend::open(options, &budget, Arc::clone(&window), config)?;
         let preparation_ns = ns(started.elapsed());
         let seed = camera_seed(conditions, options)?;
-        let initial = conditions.frame_input(seed, options.width, options.height)?;
+        let initial = options.camera_lighting(conditions, seed, 0)?;
         let started = Instant::now();
         let resident = Resident::upload(&mut backend, scene, environment, &budget, &initial)?;
         let placements = resident.instance_placements(
@@ -479,7 +479,7 @@ impl State {
                 return Ok(());
             }
             let camera = self.camera(conditions, options)?;
-            let input = conditions.frame_input(camera, options.width, options.height)?;
+            let input = options.camera_lighting(conditions, camera, self.accepted)?;
             let resident = &mut self.resident;
             let replay = options.window_smoke && self.accepted < REPLAY_STEPS;
             let started = Instant::now();
@@ -607,7 +607,7 @@ impl State {
             "bloom": options.bloom.name(), "vsync": options.vsync, "aa": options.aa,
             "samples":options.sample_count.as_u32(), "pipeline":options.pipeline.name(),
             "shader_manifest":options.shader_assets.as_ref().map(|selection| &selection.manifest),
-            "local_lights":options.pipeline.uses_local_lights()
+            "local_lights":options.uses_light_grid()
                 .then(|| super::lighting::identity(options.fixture)),
             "instances": options.instances.name(), "instance_draws": options.instances.draws(),
             "submission": options.submission.name(),
@@ -856,7 +856,11 @@ pub(super) fn execute(mut options: Options) -> Result<(), Error> {
                 .ok_or("Windowed Bistro requires --ibl-manifest")?,
         )?
     };
-    let look = options.look.apply(&mut conditions, &mut environment);
+    if let Some(pos) = options.ball {
+        scene.add_white_sphere(pos);
+    }
+    let mut look = options.look.apply(&mut conditions, &mut environment);
+    options.apply_baked_lighting(&mut scene, &mut conditions, &mut environment, &mut look)?;
     let asset_load_ns = ns(load_started.elapsed());
     let inputs = json!({
         "look": look,

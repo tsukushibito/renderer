@@ -108,6 +108,11 @@ struct Options {
     api: String,
     manifest: Option<PathBuf>,
     ibl_manifest: Option<PathBuf>,
+    baked_lighting: Option<PathBuf>,
+    scenario_blend: f32,
+    gi_debug: renderer::pbr::BakedLightingView,
+    sweep: bool,
+    ball: Option<[f32; 3]>,
     fixture: bool,
     look: camera::Look,
     view: String,
@@ -148,6 +153,111 @@ struct Options {
 }
 
 impl Options {
+    fn uses_light_grid(&self) -> bool {
+        self.pipeline == PipelineMode::ForwardReference
+            || (self.pipeline == PipelineMode::ForwardPlus && self.baked_lighting.is_none())
+    }
+    fn diffuse_lighting(&self, blend: f32) -> renderer::pbr::DiffuseLighting {
+        if self.baked_lighting.is_some() {
+            renderer::pbr::DiffuseLighting::BakedLighting {
+                blend,
+                view: self.gi_debug,
+            }
+        } else {
+            renderer::pbr::DiffuseLighting::EnvironmentMap
+        }
+    }
+    fn camera_lighting(
+        &self,
+        conditions: &camera::Conditions,
+        camera: camera::Camera,
+        frame: usize,
+    ) -> Result<camera::CameraInput, Error> {
+        let mut input = conditions.frame_input(camera, self.width, self.height)?;
+        if self.baked_lighting.is_some() {
+            let t = if self.sweep {
+                (frame as f32 / (self.frames.saturating_sub(1).max(1) as f32)).clamp(0., 1.)
+            } else {
+                self.scenario_blend
+            };
+            let [a, b] = camera::BAKE_SCENARIOS;
+            let mix = |a: [f32; 3], b: [f32; 3]| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t);
+            input.direction_to_light = camera::normalize(mix(a.direction, b.direction))?;
+            input.irradiance = mix(a.sun, b.sun);
+            input.scenario_blend = t;
+        }
+        Ok(input)
+    }
+    fn sweep_clear(&self, t: f32) -> Option<[f32; 4]> {
+        self.sweep.then(|| {
+            let [a, b] = camera::BAKE_SCENARIOS;
+            let [r, g, b] = std::array::from_fn(|i| a.sky[i] + (b.sky[i] - a.sky[i]) * t);
+            [r, g, b, 1.]
+        })
+    }
+    fn apply_baked_lighting(
+        &self,
+        scene: &mut asset::Scene,
+        conditions: &mut camera::Conditions,
+        env: &mut ibl::Environment,
+        look: &mut serde_json::Value,
+    ) -> Result<(), Error> {
+        let Some(path) = &self.baked_lighting else {
+            return Ok(());
+        };
+        let bytes = std::fs::read(path)?;
+        let (identity, file) = bytes
+            .split_at_checked(64)
+            .ok_or("invalid Bistro probe asset")?;
+        if identity
+            != camera::bake_identity(&run::loaded_cook_hash(scene, self.fixture)?).as_bytes()
+        {
+            return Err(
+                "baked lighting belongs to a different Bistro cook or lighting preset".into(),
+            );
+        }
+        let (count, payload) = file.split_at_checked(4).ok_or("missing placement count")?;
+        let table_bytes = (u32::from_le_bytes(count.try_into()?) as usize)
+            .checked_mul(4)
+            .ok_or("placement count overflow")?;
+        let (placements, atlas) = payload
+            .split_at_checked(table_bytes)
+            .ok_or("truncated placement table")?;
+        let volume = renderer::pbr::BakedLighting::from_bytes(atlas)?;
+        scene.bind_lightmaps(
+            placements,
+            volume.chart_count(),
+            self.submission != SubmissionMode::Direct,
+        )?;
+        env.identity["static_triangles"] = serde_json::json!(volume.chart_count());
+        let [width, height] = volume.extent();
+        let bytes = volume.rgba32f().to_vec();
+        env.diffuse = ibl::Image {
+            format: renderer_core::ImageFormat::Rgba32Float,
+            width,
+            height,
+            mips: std::iter::once(0..bytes.len()).collect(),
+            bytes,
+        };
+        env.identity["baked_lighting_sha256"] = serde_json::json!(digest(file));
+        env.identity["scenario_blend"] = serde_json::json!(self.scenario_blend);
+        let [day, dusk] = camera::BAKE_SCENARIOS;
+        let mix = |a: [f32; 3], b: [f32; 3]| {
+            std::array::from_fn(|i| a[i] + (b[i] - a[i]) * self.scenario_blend)
+        };
+        conditions.light_direction = mix(day.direction, dusk.direction);
+        conditions.light_color = mix(day.sun, dusk.sun);
+        conditions.background = mix(day.sky, dusk.sky);
+        look["scenario_blend"] = serde_json::json!(self.scenario_blend);
+        look["time_sweep"] = serde_json::json!(self.sweep);
+        look["baked_lighting_sha256"] = env.identity["baked_lighting_sha256"].clone();
+        look["gi_view"] = serde_json::json!(format!("{:?}", self.gi_debug));
+        look["white_sphere"] = serde_json::json!(self.ball);
+        look["direction_to_light"] = serde_json::json!(conditions.light_direction);
+        look["irradiance_rgb"] = serde_json::json!(conditions.light_color);
+        look["background_linear_rgb"] = serde_json::json!(conditions.background);
+        Ok(())
+    }
     #[cfg(feature = "tracy")]
     fn capture_settings(&self) -> trace::CaptureSettings<'_> {
         trace::CaptureSettings {
@@ -217,6 +327,11 @@ impl Options {
             api: DEFAULT_API.into(),
             manifest: None,
             ibl_manifest: None,
+            baked_lighting: None,
+            scenario_blend: 0.,
+            gi_debug: Default::default(),
+            sweep: false,
+            ball: None,
             fixture: false,
             look: camera::Look::Reference,
             view: "street".into(),
@@ -352,6 +467,32 @@ impl Options {
                     result.ibl_manifest =
                         Some(args.next().ok_or("--ibl-manifest needs a path")?.into())
                 }
+                "--gi-debug" => {
+                    result.gi_debug = match args.next().as_deref() {
+                        Some("irradiance") => renderer::pbr::BakedLightingView::Irradiance,
+                        Some("sources") => renderer::pbr::BakedLightingView::Sources,
+                        Some("weights") => renderer::pbr::BakedLightingView::ProbeWeights,
+                        _ => return Err("--gi-debug needs irradiance, sources or weights".into()),
+                    }
+                }
+                "--time-sweep" => result.sweep = true,
+                "--white-sphere" => {
+                    let mut xyz = [0f32; 3];
+                    for v in &mut xyz {
+                        *v = args.next().ok_or("white sphere needs X Y Z")?.parse()?;
+                    }
+                    if xyz.iter().any(|v| !v.is_finite()) {
+                        return Err("invalid white sphere position".into());
+                    }
+                    result.ball = Some(xyz);
+                }
+                "--baked-lighting" => {
+                    result.baked_lighting =
+                        Some(args.next().ok_or("missing baked lighting file")?.into())
+                }
+                "--scenario-blend" => {
+                    result.scenario_blend = args.next().ok_or("missing scenario blend")?.parse()?
+                }
                 "--look" => result.look = args.next().ok_or("--look needs a preset")?.parse()?,
                 "--view" => {
                     result.view = args.next().ok_or("--view needs a fixed name or route")?
@@ -441,6 +582,21 @@ impl Options {
         if result.steady_state_cpu && result.warmup < result.inflight {
             return Err("stationary CPU measurement requires a fully warmed pipeline".into());
         }
+        if !(0.0..=1.0).contains(&result.scenario_blend)
+            || ((result.baked_lighting.is_none() || result.sweep) && result.scenario_blend != 0.)
+            || (result.baked_lighting.is_some() && result.shader_assets.is_some())
+        {
+            return Err(
+                "baked lighting requires built-in shaders and a fixed blend in [0,1] or --time-sweep"
+                    .into(),
+            );
+        }
+        if result.baked_lighting.is_none()
+            && (result.sweep
+                || !matches!(result.gi_debug, renderer::pbr::BakedLightingView::Shaded))
+        {
+            return Err("GI inspection requires --baked-lighting".into());
+        }
         result.validate_lighting_extent()?;
         if result.route_capture.is_some() && result.fixture {
             return Err("route samples require a cooked Bistro scene".into());
@@ -484,6 +640,8 @@ fn print_help() {
 Scenes and output
   --api vulkan|d3d12             Default: {DEFAULT_API}
   --output DIR                   Default: .tools/bistro-runtime
+  --baked-lighting FILE --scenario-blend 0..1     Baked day-to-dusk indirect and direct light
+  --time-sweep | --gi-debug irradiance|sources|weights | --white-sphere X Y Z
   --look reference|lumberyard-day
   --view bistro-corner|street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route
   --width N --height N

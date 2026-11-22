@@ -112,7 +112,7 @@ macro_rules! tier_programs {
                     ..FORWARD_PLUS
                 };
             pub(super) static DEFERRED: RasterProgramDescriptor =
-                descriptor!(GBUFFER, 8, $tier, $gbuffer, "gbuffer_transformed", 4);
+                descriptor!(GBUFFER, 9, $tier, $gbuffer, "gbuffer_transformed", 4);
             pub(super) static CASCADE: RasterProgramDescriptor =
                 descriptor!(SHADOW, 5, $tier, $shadow, "shadow_transformed", 8);
         }
