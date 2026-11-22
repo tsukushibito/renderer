@@ -167,6 +167,16 @@ Bistro はフレームごとにカメラ行列、クリップ距離、太陽の�
 
 両方の実行例で `--look lumberyard-day` を指定できます。日向の石畳と日陰の店舗を一緒に比較できる視点が `bistro-corner` です。太陽、環境光の強さ、背景色はサンプルがロード時に設定し、各視点で共有します。露出は EV +1 です。省略時は検証用の `reference` を使います。
 
+[現行 Bistro と ORCA 公式画像の見開き・拡大比較](../verification/current.md#bistro-daylight)を再生成するには、上記のベイク手順で昼の HDR 環境から作成した 3 時刻の拡散アセットと局所反射アセットを使います。公式画像を `.tools/Bistro_Exterior_1.png` に保存して次を実行します。[ORCA 屋外画像 1](https://d29g4g2dyqv443.cloudfront.net/sites/default/files/akamai/Bistro_Exterior_1.png)
+
+```powershell
+cargo run --release -p renderer-bistro --features bake-tool --bin bistro-bake -- --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --day-only --reflection-probes tools/bistro/reflection-probes.json --output .tools/bistro-hdr-day.reflections
+cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api vulkan --pipeline forward --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --baked-lighting .tools/bistro.gi --reflection-probes .tools/bistro-hdr-day.reflections --look lumberyard-day --view bistro-corner --scenario-blend 0 --width 1920 --height 1061 --output .tools/current-orca-day
+python tools/bistro/compare_daylight.py .tools/Bistro_Exterior_1.png .tools/current-orca-day .tools/orca-day.png --details .tools/orca-details.png
+```
+
+既定の描画設定と昼景プリセットを比較する場合は、次の 960 × 530 の手順を使います。
+
 ```powershell
 target/release/bistro.exe --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --width 960 --height 530 --output .tools/daylight
 ```

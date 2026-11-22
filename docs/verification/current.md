@@ -93,6 +93,14 @@ Vulkan の製品構成＋メモリ計装で、Bistro 街角、800 × 450、Forwa
 
 ## Bistro 屋外の昼景
 
+左は ORCA が公開している Amazon Lumberyard Bistro の屋外画像 1、右は `f3e1694` の Vulkan Forward で描いた昼景。同じ街角を各 1920 × 1061 画素で並べた。右は `bistro-corner`、`lumberyard-day`、露出 EV +1、時刻係数 0。3 時刻の拡散 GI、214 チャートのライトマップ、昼の HDR 空で焼いた局所反射 2 個、太陽と影を有効にした。公式ページには撮影設定の記載がなく、右のカメラと太陽方向は画像の特徴点から合わせた値である。
+
+[![左に ORCA 屋外画像 1、右に現行 Bistro の昼景](bistro-orca-day.png)](bistro-orca-day.png)
+
+看板の足元、ひさし下の客席、石畳に落ちる街灯の影は、両画像の同じ座標を等倍で切り出して比較できる。[等倍の部分比較](bistro-orca-details.png)・[再生成手順](../guides/examples.md#bistro-daylight)
+
+出典は Amazon Lumberyard Bistro, Open Research Content Archive (ORCA), Amazon Lumberyard, 2017。比較図は、左に公式画像、右に同素材からの再描画を置き、ラベルと部分切り出しを加えたもの。[NVIDIA ORCA](https://developer.nvidia.com/orca/amazon-lumberyard-bistro)・[公式画像](https://d29g4g2dyqv443.cloudfront.net/sites/default/files/akamai/Bistro_Exterior_1.png)・[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+
 <a id="bistro-sun-fit"></a>
 
 昼の太陽方向を ORCA の屋外画像 1 に合わせた。左のメニューボードの上端が歩道に落とす影と、街灯から縁石を越えて道路に伸びる影を使った。深度から各受光面の位置を復元し、直接光と拡散ベイクに同じ表面→太陽ベクトル (0.519167, 0.478495, −0.708173) を与えた。太陽高度は約 28.6°。960 × 530 の同じ構図で、街灯の影の二つのふくらみの中心は公式が概ね (455, 447)、(531, 471)、調整後が (452, 444)、(530, 470)。Vulkan Forward の再ベイク・描画で検証警告・エラーは 0 件。[公式画像](https://d29g4g2dyqv443.cloudfront.net/sites/default/files/akamai/Bistro_Exterior_1.png)
