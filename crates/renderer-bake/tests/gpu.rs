@@ -96,6 +96,15 @@ fn compare(backend: BakeBackend) {
         bake(&scene, &receivers, BakeBackend::Cpu, lights[1]),
         bake(&scene, &receivers, backend, lights[1]),
     );
+    let keys = [
+        lights[0],
+        Lighting::uniform_sky([0.07, 0.9, 0.04]),
+        lights[1],
+    ];
+    verify(
+        bake(&scene, &receivers, BakeBackend::Cpu, keys),
+        bake(&scene, &receivers, backend, keys),
+    );
 }
 
 #[cfg(feature = "vulkan")]

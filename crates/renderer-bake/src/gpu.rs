@@ -72,7 +72,8 @@ fn pack<const N: usize>(
     {
         return Err("scene exceeds GPU transport addressing".into());
     }
-    let count = 8
+    let count = 2
+        + 3 * N
         + counts[0] * 3
         + counts[1] * 4
         + counts[2] * 3
@@ -91,8 +92,7 @@ fn pack<const N: usize>(
     };
     push(counts.map(|n| n as f32));
     push([samples as f32, N as f32, 0., 0.]);
-    for i in 0..2 {
-        let light = lights[i.min(N - 1)];
+    for light in lights {
         push(texel(
             light.sky,
             light.environment.map_or(-1., |m| m.texture as f32),
@@ -248,57 +248,81 @@ pub(super) fn integrate<const N: usize>(
     drop(pixels);
     rt.wait_for_frame(uploaded, WAIT)?
         .ok_or("bake upload timed out")?;
-    let mut result = Vec::with_capacity(jobs.len() * 10);
-    for chunk in jobs.chunks(batch) {
-        let mut g = pool.begin()?;
-        let scene = g.import_image("transport scene", image.snapshot())?;
-        let scene = g.image_view(scene, 0, 0)?;
-        let receivers = g.buffer("receivers", input)?;
-        let responses = g.buffer("irradiance", output)?;
-        let bytes = chunk
-            .iter()
-            .flat_map(|s| {
-                texel(s.position, limit)
-                    .into_iter()
-                    .chain(texel(s.normal, 0.))
-            })
-            .flat_map(f32::to_le_bytes)
-            .collect::<Vec<_>>();
-        g.upload_buffer("upload bake receivers", receivers, 0, &bytes)?;
-        let result_size = chunk.len() as u64 * RESPONSE_BYTES;
-        let buffer = |binding, buffer, size| Binding {
-            group: 0,
-            binding,
-            resource: BindingResource::Buffer {
-                buffer,
-                offset: 0,
-                size,
-            },
-        };
-        g.dispatch_buffer_grid(
-            "integrate diffuse transport",
-            &programs[0],
-            &[
-                Binding {
-                    group: 0,
-                    binding: 0,
-                    resource: BindingResource::ImageView(scene),
+    let stride = 2 + N * 4;
+    let mut result = vec![[0.; 4]; jobs.len() * stride];
+    for (chunk, dst) in jobs.chunks(batch).zip(result.chunks_mut(batch * stride)) {
+        for first in (0..N).step_by(2) {
+            let mut g = pool.begin()?;
+            let scene = g.import_image("transport scene", image.snapshot())?;
+            let scene = g.image_view(scene, 0, 0)?;
+            let receivers = g.buffer("receivers", input)?;
+            let responses = g.buffer("irradiance", output)?;
+            let bytes = chunk
+                .iter()
+                .flat_map(|s| {
+                    texel(s.position, limit)
+                        .into_iter()
+                        .chain(texel(s.normal, first as f32))
+                })
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>();
+            g.upload_buffer("upload bake receivers", receivers, 0, &bytes)?;
+            let result_size = chunk.len() as u64 * RESPONSE_BYTES;
+            let buffer = |binding, buffer, size| Binding {
+                group: 0,
+                binding,
+                resource: BindingResource::Buffer {
+                    buffer,
+                    offset: 0,
+                    size,
                 },
-                buffer(1, receivers, bytes.len() as u64),
-                buffer(2, responses, result_size),
-            ],
-            [chunk.len() as u32, 1],
-        )?;
-        let readback = g.readback_buffer("baked samples", responses, 0, result_size)?;
-        let receipt = rt.submit(&g.compile()?)?;
-        let mut completed = rt
-            .wait_for_frame(receipt.id(), WAIT)?
-            .ok_or("bake dispatch timed out")?;
-        let mut bytes = vec![0; result_size as usize];
-        completed.readback_into(readback, &mut bytes)?;
-        result.extend(bytes.as_chunks::<16>().0.iter().map(|w| {
-            std::array::from_fn(|i| f32::from_le_bytes(w[i * 4..i * 4 + 4].try_into().unwrap()))
-        }));
+            };
+            g.dispatch_buffer_grid(
+                "integrate diffuse transport",
+                &programs[0],
+                &[
+                    Binding {
+                        group: 0,
+                        binding: 0,
+                        resource: BindingResource::ImageView(scene),
+                    },
+                    buffer(1, receivers, bytes.len() as u64),
+                    buffer(2, responses, result_size),
+                ],
+                [chunk.len() as u32, 1],
+            )?;
+            let readback = g.readback_buffer("baked samples", responses, 0, result_size)?;
+            let receipt = rt.submit(&g.compile()?)?;
+            let mut completed = rt
+                .wait_for_frame(receipt.id(), WAIT)?
+                .ok_or("bake dispatch timed out")?;
+            let mut bytes = vec![0; result_size as usize];
+            completed.readback_into(readback, &mut bytes)?;
+            for (raw, record) in bytes
+                .as_chunks::<{ RESPONSE_BYTES as usize }>()
+                .0
+                .iter()
+                .zip(dst.chunks_exact_mut(stride))
+            {
+                let source = raw.as_chunks::<16>().0;
+                let decode = |w: &[u8; 16]| {
+                    std::array::from_fn(|i| {
+                        f32::from_le_bytes(w[i * 4..i * 4 + 4].try_into().unwrap())
+                    })
+                };
+                if first == 0 {
+                    record[0] = decode(&source[0]);
+                    record[1] = decode(&source[1]);
+                }
+                let count = 4 * (N - first).min(2);
+                for (target, word) in record[2 + first * 4..]
+                    .iter_mut()
+                    .zip(&source[2..2 + count])
+                {
+                    *target = decode(word);
+                }
+            }
+        }
     }
     drop(image);
     #[cfg(feature = "vulkan")]

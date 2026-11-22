@@ -68,9 +68,16 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
     metal.factors.metallic = 1.;
     let mut matte = PbrParams::color([1.; 4]);
     matte.factors.double_sided = true;
+    let mut charted = PbrParams::color([1.; 4]);
+    charted.factors.lightmap = Some(renderer::pbr::LightmapBinding {
+        first_chart: 0,
+        first_vertex: 0,
+    });
+    charted.factors.double_sided = true;
     let objects = [
         RenderObject::new(mesh, materials.create_pbr(metal)?),
         RenderObject::new(mesh, materials.create_pbr(matte)?),
+        RenderObject::new(mesh, materials.create_pbr(charted)?),
     ];
     let mut renderer = Renderer::headless(
         backend,
@@ -90,7 +97,7 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
                 if include_reflections {
                     &objects[..1]
                 } else {
-                    &objects[1..]
+                    &objects[1..2]
                 },
             )
             .with_probe_lighting(&lighting, 1.),
@@ -105,6 +112,46 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
             "{pixel:?}"
         );
     }
+    // Different surface and volume keys detect both a chart lookup fallback and
+    // an accidental interpolation of the two endpoints at the middle key.
+    let red = [1., 0., 0.];
+    let green = [0., 1., 0.];
+    let blue = [0., 0., 1.];
+    let chart = renderer::pbr::LightmapChart {
+        extent: [2, 2],
+        irradiance: vec![[red, green, blue]; 4],
+    };
+    let sequence = renderer::pbr::BakedLighting::from_lightmaps(&[chart], [blue, red, green])?;
+    let resident = renderer.load_probe_lighting(ProbeLighting {
+        diffuse: Some(&sequence),
+        reflections: None,
+    })?;
+    for (object, channels) in [(1, [2, 0, 1]), (2, [0, 1, 2])] {
+        for (phase, expected) in [
+            (0., [true, false, false]),
+            (0.25, [true, true, false]),
+            (0.5, [false, true, false]),
+            (0.75, [false, true, true]),
+            (1., [false, false, true]),
+        ] {
+            let mut frame = renderer.begin_frame()?;
+            frame.draw_scene(
+                SceneInput::new(&meshes, &materials, &objects[object..=object])
+                    .with_probe_lighting(&resident, phase),
+                1.,
+            )?;
+            let capture = frame.capture()?;
+            let mut pixels = [0; 32 * 32 * 4];
+            assert!(renderer.read_capture(&capture, &mut pixels, Duration::from_secs(15))?);
+            let rgb = &pixels[(16 * 32 + 16) * 4..][..3];
+            assert_eq!(
+                channels.map(|c| rgb[c] > 32),
+                expected,
+                "receiver {object} at {phase}: {rgb:?}"
+            );
+        }
+    }
+    drop(resident);
     let mut runtime = renderer.into_runtime()?;
     meshes.release_gpu(&mut runtime)?;
     materials.clear(&mut runtime)?;

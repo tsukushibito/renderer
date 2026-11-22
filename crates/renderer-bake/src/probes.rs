@@ -92,7 +92,7 @@ impl BakeScene {
         };
         (direction.map(|v| v * distance), true)
     }
-    /// Bake one scenario or two interpolated endpoints into one atlas. All corners shared by adjacent
+    /// Bake equally spaced lighting scenarios into one atlas. All corners shared by adjacent
     /// leaves are integrated once, including corners at different resolutions.
     pub fn bake_probes<const N: usize>(
         &self,
@@ -153,7 +153,7 @@ impl BakeScene {
                     node[1 + i / 4][i % 4] = *id as f32;
                 }
             }
-            if 4 + cells.len() * 3 + positions.len() * (2 + 4 * N) > 256 * 16384 {
+            if 2 + N.max(2) + cells.len() * 3 + positions.len() * (2 + 4 * N) > 256 * 16384 {
                 return Err(BakeError(
                     "probe atlas exceeds capacity; increase spacing or reduce depth",
                 )
@@ -168,10 +168,10 @@ impl BakeScene {
                 records.len() as f32 / 3.,
                 positions.len() as f32,
                 0.,
-                f32::from(N == 1),
+                if N == 2 { 0. } else { N as f32 },
             ],
         ];
-        for i in 0..2 {
+        for i in 0..N.max(2) {
             let sky = self.mean_sky(lights[i.min(N - 1)]);
             texels.push([PI * sky[0], PI * sky[1], PI * sky[2], 0.]);
         }
@@ -199,9 +199,7 @@ impl BakeScene {
                 .backend
                 .integrate(self, &jobs, lights, settings.rays_per_probe, length)?
         {
-            for probe in result.as_chunks::<10>().0 {
-                texels.extend_from_slice(&probe[..stride]);
-            }
+            texels.extend(result);
         } else {
             // Independent receiver work, with fixed per-probe summation order.
             let start = texels.len();

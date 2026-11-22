@@ -17,7 +17,7 @@ pub struct SkyMap {
     pub yaw_radians: f32,
 }
 
-/// Supply one lighting condition directly, or two endpoints for interpolation.
+/// Supply one lighting condition directly, or an array of equally spaced lighting keyframes.
 pub trait LightingScenarios<const N: usize> {
     fn scenarios(self) -> [Lighting; N];
 }
@@ -26,8 +26,8 @@ impl LightingScenarios<1> for Lighting {
         [self]
     }
 }
-impl LightingScenarios<2> for [Lighting; 2] {
-    fn scenarios(self) -> [Lighting; 2] {
+impl<const N: usize> LightingScenarios<N> for [Lighting; N] {
+    fn scenarios(self) -> [Lighting; N] {
         self
     }
 }
@@ -101,8 +101,8 @@ impl BakeScene {
         &self,
         scenarios: impl LightingScenarios<N>,
     ) -> Result<[Lighting; N], BakeError> {
-        if !(1..=2).contains(&N) {
-            return Err(BakeError("expected one or two lighting scenarios"));
+        if !(1..=renderer::pbr::BakedLighting::MAX_SCENARIOS).contains(&N) {
+            return Err(BakeError("unsupported lighting scenario count"));
         }
         let mut lights = scenarios.scenarios();
         for light in &mut lights {

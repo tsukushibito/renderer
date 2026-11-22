@@ -183,14 +183,16 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut layout = None;
     let mut ibl_manifest = None;
     let mut day_only = false;
+    let mut endpoints_only = false;
     let mut manifest = None;
     let mut fixture = false;
     let mut output = None;
     let mut settings = ProbeSettings::default();
-    let mut texel_budget = 16384;
+    let mut texel_budget = 65536;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--day-only" => day_only = true,
+            "--endpoints-only" => endpoints_only = true,
             "--ibl-manifest" => {
                 ibl_manifest = Some(PathBuf::from(args.next().ok_or("missing IBL manifest")?))
             }
@@ -221,12 +223,15 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--day-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--lightmap-texels N] [--reflection-probes LAYOUT.json]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--lightmap-texels N] [--reflection-probes LAYOUT.json]"
                 );
                 return Ok(());
             }
             _ => return Err(format!("unknown bake option {arg}").into()),
         }
+    }
+    if day_only && endpoints_only {
+        return Err("choose either day-only or endpoints-only".into());
     }
     let output = output.ok_or("missing --output")?;
     if output.exists() {
@@ -270,7 +275,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             env.yaw_degrees.to_radians(),
         )?);
     }
-    let lights = BAKE_SCENARIOS.map(|s| Lighting {
+    let lighting = |s: crate::shared::camera::BakeScenario| Lighting {
         environment: panorama,
         sky: if panorama.is_some() {
             std::array::from_fn(|i| {
@@ -281,7 +286,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         },
         sun: s.sun,
         direction_to_sun: s.direction,
-    });
+    };
+    let lights = BAKE_SCENARIOS.map(lighting);
     if let Some(layout) = layout {
         if !matches!(
             settings.backend,
@@ -327,9 +333,18 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let volume = if day_only {
         bake.bake_probes(lights[0], settings)?
             .with_lightmaps(&bake.bake_lightmaps(&triangles, lights[0], surface_settings)?)?
-    } else {
+    } else if endpoints_only {
         bake.bake_probes(lights, settings)?
             .with_lightmaps(&bake.bake_lightmaps(&triangles, lights, surface_settings)?)?
+    } else {
+        let keys = [
+            lights[0],
+            lighting(crate::shared::camera::BakeScenario::at(0.5)),
+            lights[1],
+        ];
+        identity = crate::shared::camera::daylight_sequence_identity(&identity);
+        bake.bake_probes(keys, settings)?
+            .with_lightmaps(&bake.bake_lightmaps(&triangles, keys, surface_settings)?)?
     };
     eprintln!(
         "Baked {} surface charts on {} placements",

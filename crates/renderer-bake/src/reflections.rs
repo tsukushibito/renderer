@@ -88,6 +88,9 @@ impl BakeScene {
         for probe in probes {
             probe.validate()?;
         }
+        if N > 2 {
+            return Err("reflection probes support at most two scenarios".into());
+        }
         let lights = self.lighting(scenarios)?;
         let mut bytes = Vec::with_capacity(W * (1 + 127 * N) * 16 * probes.len());
         let mut capture = vec![[0.; 3]; W * H];

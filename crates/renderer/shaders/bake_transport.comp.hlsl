@@ -12,7 +12,7 @@ StructuredBuffer<Receiver> jobs : register(t1);
 RWStructuredBuffer<float4> result : register(u2);
 static const float PI = 3.14159265359;
 struct Table {
-    uint width, last, nodes, tris, mats, tex, texels;
+    uint width, last, node_base, nodes, tris, mats, tex, texels;
 };
 uint number(float v) {
     return (uint)(v >= 0.0 ? min(v, 16777215.0) : 0.0);
@@ -28,7 +28,8 @@ Table table() {
     t.last = t.width * h - 1;
     float4 counts = fetch(t, 0);
     t.nodes = number(counts.x);
-    t.tris = 8 + 3 * t.nodes;
+    t.node_base = 2 + 3 * clamp(number(fetch(t,1).y),1u,16u);
+    t.tris = t.node_base + 3 * t.nodes;
     t.mats = t.tris + 4 * number(counts.y);
     t.tex = t.mats + 3 * number(counts.z);
     t.texels = t.tex + number(counts.w);
@@ -60,7 +61,7 @@ bool trace_ray(Table t, float3 o, float3 d, float limit, out Hit hit) {
     bool found = false;
     uint i = 0;
     [loop] while (i < t.nodes) {
-        uint p = 8 + 3 * i;
+        uint p = t.node_base + 3 * i;
         float4 a = fetch(t, p), b = fetch(t, p + 1), tail = fetch(t, p + 2);
         float3 inv = 1.0 / select(d == 0.0, 1.0, d);
         float3 low = (a.xyz - o) * inv, high = (b.xyz - o) * inv;
@@ -165,7 +166,9 @@ groupshared float3 sums[32][8];
     if (!volume)
         origin = offset_ray(origin, rec.normal.xyz);
     uint samples = clamp(number(fetch(t, 1).x), 1u, 4096u);
-    uint scenarios = clamp(number(fetch(t,1).y),1u,2u);
+    uint count = clamp(number(fetch(t,1).y),1u,16u);
+    uint first = min(number(rec.normal.w), count-1u);
+    uint scenarios = min(count-first,2u);
     [unroll] for (uint k = 0; k < 8; k++) sums[lane][k] = 0;
     [loop] for (uint j = lane; j < samples; j += 32) {
         float u = (j + 0.5) / samples, v = reversebits(j) * 2.3283064365386963e-10;
@@ -174,7 +177,7 @@ groupshared float3 sums[32][8];
         sincos(2 * PI * v, s, c);
         float3 d = volume ? float3(r * c, z, r * s) : hemisphere(rec.normal.xyz, u, v);
         [loop] for (uint side = 0; side < scenarios; side++) {
-            float3 l = incoming(t, origin, d, side, j) * (PI / samples);
+            float3 l = incoming(t, origin, d, first+side, j) * (PI / samples);
             sums[lane][4 * side] += l;
             [unroll] for (uint axis = 0; axis < 3; axis++) sums[lane][4 * side + axis + 1] +=
                 l * (2 * d[axis]);
@@ -188,7 +191,7 @@ groupshared float3 sums[32][8];
     }
     if (lane < 2) {
         float3 distances = rec.p.w;
-        if (volume) {
+        if (volume && first == 0u) {
             [unroll] for (uint axis = 0; axis < 3; axis++) {
                 float3 d = 0;
                 d[axis] = lane == 0 ? -1 : 1;

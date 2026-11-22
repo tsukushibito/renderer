@@ -13,23 +13,34 @@ float4 probe_load(uint index, uint2 dims) {
 uint probe_index(float value, uint maximum) {
     return (uint)(value >= 0.0 ? min(value, (float)maximum) : 0.0);
 }
+// The original paired layout used tag 0; sequence assets store their key count.
+uint lighting_keys(float tag) {
+    return tag == 0.0 ? 2u : clamp(probe_index(tag,16u),1u,16u);
+}
 float3 probe_irradiance(float3 position, float3 n, float blend) {
     uint2 dims;
     irradiance_image.GetDimensions(dims.x, dims.y);
     uint maximum = dims.x * dims.y - 1u;
     float4 bounds = probe_load(0, dims);
     float3 f = (position - bounds.xyz) / max(bounds.w, 1e-20);
-    if (any(f < 0.0) || any(f > 1.0)) {
-        return lerp(probe_load(2, dims).rgb, probe_load(3, dims).rgb, blend);
-    }
     float4 layout = probe_load(1,dims);
-    uint stride = layout.w == 1.0 ? 6u : 10u;
+    uint count = lighting_keys(layout.w);
+    float phase = saturate(blend) * (count - 1u);
+    uint key = (uint)phase;
+    float mix = frac(phase);
+    uint header = 2u + max(count,2u);
+    if (any(f < 0.0) || any(f > 1.0)) {
+        float3 sky = probe_load(2u+key, dims).rgb;
+        if (mix > 0.0) sky = lerp(sky,probe_load(3u+key,dims).rgb,mix);
+        return sky;
+    }
+    uint stride = 2u + 4u * count;
     uint node_count = probe_index(layout.x, maximum / 3u);
-    uint base = 4u + node_count * 3u;
+    uint base = header + node_count * 3u;
     uint node = 0u;
     float size = bounds.w;
     [loop] for (uint depth = 0u; depth <= 10u; ++depth) {
-        uint at = 4u + node * 3u;
+        uint at = header + node * 3u;
         uint first = probe_index(probe_load(at, dims).x, node_count);
         if (first == 0u) {
             float4 ids0 = probe_load(at + 1u, dims);
@@ -57,9 +68,10 @@ float3 probe_irradiance(float3 position, float3 n, float blend) {
                 weight *= min(visibility.x, min(visibility.y, visibility.z));
                 float3 sh = 0.0;
                 [unroll] for (uint k = 0u; k < 4u; ++k) {
-                    float3 coeff = probe_load(p + 2u + k, dims).rgb;
-                    [branch] if (stride == 10u && blend > 0.0) {
-                        coeff = lerp(coeff, probe_load(p + 6u + k, dims).rgb, blend);
+                    uint at_key = p + 2u + 4u * key + k;
+                    float3 coeff = probe_load(at_key, dims).rgb;
+                    [branch] if (mix > 0.0) {
+                        coeff = lerp(coeff, probe_load(at_key + 4u, dims).rgb, mix);
                     }
                     sh += coeff * float4(1.0, n)[k];
                 }

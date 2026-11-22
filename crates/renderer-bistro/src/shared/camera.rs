@@ -177,6 +177,32 @@ pub(crate) const BAKE_SCENARIOS: [BakeScenario; 2] = [
     },
 ];
 
+impl BakeScenario {
+    /// Shared by the runtime sun, background and offline diffuse keyframes.
+    pub(crate) fn at(t: f32) -> Self {
+        let [day, dusk] = BAKE_SCENARIOS;
+        let mix = |a: [f32; 3], b: [f32; 3]| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t);
+        Self {
+            direction: mix(day.direction, dusk.direction),
+            sun: mix(day.sun, dusk.sun),
+            sky: mix(day.sky, dusk.sky),
+        }
+    }
+}
+
+/// Identify the extra, independently integrated midpoint in a daylight sequence.
+pub(crate) fn daylight_sequence_identity(base: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mid = BakeScenario::at(0.5);
+    let mut hash = Sha256::new();
+    hash.update(base.as_bytes());
+    hash.update(b"daylight-3");
+    for v in mid.direction.into_iter().chain(mid.sky).chain(mid.sun) {
+        hash.update(v.to_le_bytes());
+    }
+    format!("{:x}", hash.finalize())
+}
+
 /// Changing either the geometry cook or a lighting endpoint invalidates the bake.
 pub(crate) fn bake_identity(cook_sha256: &str) -> String {
     use sha2::{Digest, Sha256};

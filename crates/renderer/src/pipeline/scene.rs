@@ -147,7 +147,7 @@ pub struct ResidentProbeLighting {
     pub(super) reflections: Option<renderer_core::runtime::ManagedImage>,
 }
 
-/// A resident diffuse atlas and the two-scenario blend for this view.
+/// A resident diffuse atlas and normalized position across its lighting scenarios for this view.
 #[derive(Clone, Copy)]
 pub struct BakedLightingInput<'a> {
     pub atlas: &'a renderer_core::graph::ImportImage,

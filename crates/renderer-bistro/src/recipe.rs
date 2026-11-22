@@ -184,18 +184,16 @@ impl Options {
             } else {
                 self.scenario_blend
             };
-            let [a, b] = camera::BAKE_SCENARIOS;
-            let mix = |a: [f32; 3], b: [f32; 3]| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t);
-            input.direction_to_light = camera::normalize(mix(a.direction, b.direction))?;
-            input.irradiance = mix(a.sun, b.sun);
+            let light = camera::BakeScenario::at(t);
+            input.direction_to_light = camera::normalize(light.direction)?;
+            input.irradiance = light.sun;
             input.scenario_blend = t;
         }
         Ok(input)
     }
     fn sweep_clear(&self, t: f32) -> Option<[f32; 4]> {
         self.sweep.then(|| {
-            let [a, b] = camera::BAKE_SCENARIOS;
-            let [r, g, b] = std::array::from_fn(|i| a.sky[i] + (b.sky[i] - a.sky[i]) * t);
+            let [r, g, b] = camera::BakeScenario::at(t).sky;
             [r, g, b, 1.]
         })
     }
@@ -242,11 +240,6 @@ impl Options {
             let (identity, file) = bytes
                 .split_at_checked(64)
                 .ok_or("invalid Bistro probe asset")?;
-            if !matches_bake(identity) {
-                return Err(
-                    "baked lighting belongs to a different Bistro cook or lighting preset".into(),
-                );
-            }
             let (count, payload) = file.split_at_checked(4).ok_or("missing placement count")?;
             let table_bytes = (u32::from_le_bytes(count.try_into()?) as usize)
                 .checked_mul(4)
@@ -255,6 +248,19 @@ impl Options {
                 .split_at_checked(table_bytes)
                 .ok_or("truncated placement table")?;
             let volume = renderer::pbr::BakedLighting::from_bytes(atlas)?;
+            let matches = match volume.scenario_count() {
+                1 | 2 => matches_bake(identity),
+                3 => std::iter::once(&base)
+                    .chain(hdr.iter())
+                    .any(|id| camera::daylight_sequence_identity(id).as_bytes() == identity),
+                _ => false,
+            };
+            if !matches {
+                return Err(
+                    "baked lighting belongs to a different Bistro cook or lighting preset".into(),
+                );
+            }
+            env.identity["diffuse_scenarios"] = serde_json::json!(volume.scenario_count());
             scene.bind_lightmaps(
                 placements,
                 volume.chart_count(),
@@ -273,13 +279,10 @@ impl Options {
             env.identity["baked_lighting_sha256"] = serde_json::json!(digest(file));
         }
         env.identity["scenario_blend"] = serde_json::json!(self.scenario_blend);
-        let [day, dusk] = camera::BAKE_SCENARIOS;
-        let mix = |a: [f32; 3], b: [f32; 3]| {
-            std::array::from_fn(|i| a[i] + (b[i] - a[i]) * self.scenario_blend)
-        };
-        conditions.light_direction = mix(day.direction, dusk.direction);
-        conditions.light_color = mix(day.sun, dusk.sun);
-        conditions.background = mix(day.sky, dusk.sky);
+        let light = camera::BakeScenario::at(self.scenario_blend);
+        conditions.light_direction = light.direction;
+        conditions.light_color = light.sun;
+        conditions.background = light.sky;
         look["scenario_blend"] = serde_json::json!(self.scenario_blend);
         look["time_sweep"] = serde_json::json!(self.sweep);
         look["baked_lighting_sha256"] = env.identity["baked_lighting_sha256"].clone();

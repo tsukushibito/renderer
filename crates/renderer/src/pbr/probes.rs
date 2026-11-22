@@ -1,4 +1,4 @@
-//! Cooked first-order spherical harmonic irradiance. One or two scenarios use one
+//! Cooked first-order spherical harmonic irradiance. Lighting scenarios share one
 //! world-space octree, eight corner probes per leaf and visibility data.
 use renderer_core::graph::GraphError;
 
@@ -8,7 +8,7 @@ pub enum DiffuseLighting {
     #[default]
     EnvironmentMap,
     /// Upload the diffuse texture from a validated BakedLighting. Zero selects
-    /// the first baked scenario and one selects the second. A single scenario
+    /// the first baked scenario and one selects the last. Intermediate scenarios are evenly spaced. A single scenario
     /// supplies the same lighting for every blend value.
     BakedLighting { blend: f32, view: BakedLightingView },
 }
@@ -53,21 +53,26 @@ impl BakedLighting {
     const SINGLE_MAGIC: [u8; 8] = *b"RBKLST01";
     pub const MAX_DEPTH: usize = 10;
     pub const NODE_TEXELS: usize = 3;
-    pub const HEADER_TEXELS: usize = 4;
+    pub const MAX_SCENARIOS: usize = 16;
+    const SEQUENCE_MAGIC: [u8; 8] = *b"RBKLTS01";
 
     pub fn from_bytes(file: &[u8]) -> Result<Self, GraphError> {
         let (magic, payload) = file
             .split_at_checked(8)
             .ok_or_else(|| GraphError::invalid_input("truncated diffuse atlas"))?;
-        let expected = if magic == Self::MAGIC {
-            0f32
-        } else if magic == Self::SINGLE_MAGIC {
-            1.
-        } else {
-            return Err(GraphError::invalid_input("unknown diffuse atlas version"));
+        let tag = payload
+            .get(28..32)
+            .and_then(|b| b.try_into().ok())
+            .map(f32::from_le_bytes);
+        let matches = match tag {
+            Some(0.) => magic == Self::MAGIC,
+            Some(1.) => magic == Self::SINGLE_MAGIC,
+            Some(n) if n >= 3. && n <= Self::MAX_SCENARIOS as f32 && n.fract() == 0. => {
+                magic == Self::SEQUENCE_MAGIC
+            }
+            _ => false,
         };
-        if payload.len() > 256 * 16384 * 16 || payload.get(28..32) != Some(&expected.to_le_bytes())
-        {
+        if payload.len() > 256 * 16384 * 16 || !matches {
             return Err(GraphError::invalid_input(
                 "invalid diffuse atlas header or size",
             ));
@@ -96,7 +101,6 @@ impl BakedLighting {
             .iter()
             .all(|b| f32::from_le_bytes(*b).is_finite())
             || word(3) <= 0.
-            || [8, 9, 10, 12, 13, 14].into_iter().any(|i| word(i) < 0.)
         {
             return Err(invalid());
         }
@@ -105,13 +109,18 @@ impl BakedLighting {
         let scenarios = match word(7) {
             0. => 2,
             1. => 1,
+            n if (3.0..=Self::MAX_SCENARIOS as f32).contains(&n) && n.fract() == 0. => n as usize,
             _ => return Err(invalid()),
         };
+        let header = 2 + scenarios.max(2);
         let probe_texels = 2 + 4 * scenarios;
-        let surface_start = Self::HEADER_TEXELS + Self::NODE_TEXELS * nodes + probe_texels * probes;
+        let surface_start = header + Self::NODE_TEXELS * nodes + probe_texels * probes;
         let charts = integer(6)?;
         let count = bytes.len() / 16;
         if nodes == 0 || probes == 0 || surface_start + charts > count {
+            return Err(invalid());
+        }
+        if (2..header).any(|t| (0..3).any(|c| word(t * 4 + c) < 0.)) {
             return Err(invalid());
         }
         // Children are allocated eight at a time in breadth-first order.
@@ -126,7 +135,7 @@ impl BakedLighting {
             if n >= next || depth > Self::MAX_DEPTH {
                 return Err(invalid());
             }
-            let at = (Self::HEADER_TEXELS + n * Self::NODE_TEXELS) * 4;
+            let at = (header + n * Self::NODE_TEXELS) * 4;
             let children = integer(at)?;
             if children == 0 {
                 for i in 4..12 {
@@ -142,7 +151,7 @@ impl BakedLighting {
             }
         }
         for i in 0..probes {
-            let start = 4 * (Self::HEADER_TEXELS + nodes * Self::NODE_TEXELS + i * probe_texels);
+            let start = 4 * (header + nodes * Self::NODE_TEXELS + i * probe_texels);
             if !matches!(word(start + 3), 0. | 1.)
                 || [0, 1, 2, 4, 5, 6].into_iter().any(|c| word(start + c) < 0.)
             {
@@ -233,23 +242,26 @@ impl BakedLighting {
         charts: &[LightmapChart<N>],
         fallback: [[f32; 3]; N],
     ) -> Result<Self, GraphError> {
-        if !(1..=2).contains(&N) || fallback.iter().flatten().any(|v| !v.is_finite() || *v < 0.) {
+        if !(1..=Self::MAX_SCENARIOS).contains(&N)
+            || fallback.iter().flatten().any(|v| !v.is_finite() || *v < 0.)
+        {
             return Err(GraphError::invalid_input("invalid fallback irradiance"));
         }
-        let mut texels = [[0f32; 4]; 17];
+        let header = 2 + N.max(2);
+        let mut texels = vec![[0f32; 4]; header + 5 + 4 * N];
         texels[0][3] = 1.;
-        texels[1] = [1., 1., 0., f32::from(N == 1)];
-        texels[7] = [1.; 4];
-        texels[8] = [1.; 4];
+        texels[1] = [1., 1., 0., if N == 2 { 0. } else { N as f32 }];
+        texels[header + 3] = [1.; 4];
+        texels[header + 4] = [1.; 4];
         for (i, rgb) in fallback.into_iter().enumerate() {
             texels[2 + i][..3].copy_from_slice(&rgb);
-            texels[9 + 4 * i][..3].copy_from_slice(&rgb);
+            texels[header + 5 + 4 * i][..3].copy_from_slice(&rgb);
         }
         if N == 1 {
             texels[3] = texels[2];
         }
         Self::from_texels(
-            texels[..9 + 4 * N]
+            texels
                 .iter()
                 .copied()
                 .flatten()
@@ -280,10 +292,9 @@ impl BakedLighting {
         )
     }
     pub fn scenario_count(&self) -> usize {
-        if self.bytes[28..32] == 1f32.to_le_bytes() {
-            1
-        } else {
-            2
+        match f32::from_le_bytes(self.bytes[28..32].try_into().unwrap()) as usize {
+            0 => 2,
+            count => count,
         }
     }
     pub fn chart_count(&self) -> u32 {
@@ -299,10 +310,10 @@ impl BakedLighting {
         &self.bytes
     }
     pub fn write(&self, mut output: impl std::io::Write) -> std::io::Result<()> {
-        output.write_all(if self.scenario_count() == 1 {
-            &Self::SINGLE_MAGIC
-        } else {
-            &Self::MAGIC
+        output.write_all(match self.scenario_count() {
+            1 => &Self::SINGLE_MAGIC,
+            2 => &Self::MAGIC,
+            _ => &Self::SEQUENCE_MAGIC,
         })?;
         output.write_all(&self.bytes[..self.payload_len])
     }
@@ -311,6 +322,27 @@ impl BakedLighting {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequence_roundtrips_and_rejects_mismatched_or_truncated_keys() {
+        let atlas =
+            BakedLighting::from_lightmaps(&[], [[0.; 3]; BakedLighting::MAX_SCENARIOS]).unwrap();
+        let mut file = Vec::new();
+        atlas.write(&mut file).unwrap();
+        assert_eq!(
+            BakedLighting::from_bytes(&file).unwrap().scenario_count(),
+            BakedLighting::MAX_SCENARIOS
+        );
+        let mut bad = file.clone();
+        bad[..8].copy_from_slice(&BakedLighting::MAGIC);
+        assert!(BakedLighting::from_bytes(&bad).is_err());
+        for tag in [0., 1., 2., 3.5, 17., f32::NAN] {
+            bad.copy_from_slice(&file);
+            bad[36..40].copy_from_slice(&tag.to_le_bytes());
+            assert!(BakedLighting::from_bytes(&bad).is_err());
+        }
+        assert!(BakedLighting::from_bytes(&file[..file.len() - 16]).is_err());
+    }
 
     #[test]
     fn surface_only_archive_round_trips_and_rejects_negative_irradiance() {

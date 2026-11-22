@@ -8,12 +8,13 @@
 
 ## ライトマップと照度プローブを使う
 
-ゲーム側が用意する入力は、ワールド座標の静的な三角形、線形色の材質とテクスチャ、一つまたは二つの照明条件です。アセットビルドで一度だけ `renderer-bake` を使います。プローブの位置はジオメトリから自動で決まります。
+ゲーム側が用意する入力は、ワールド座標の静的な三角形、線形色の材質とテクスチャ、時刻ごとの照明条件です。アセットビルドで一度だけ `renderer-bake` を使います。プローブの位置はジオメトリから自動で決まります。
 
 ```rust
 let scene = BakeScene::new(occluders, materials, textures)?;
-let probes = scene.bake_probes([day, dusk], ProbeSettings::default())?;
-let maps = scene.bake_lightmaps(&static_receivers, [day, dusk], LightmapSettings::default())?;
+let daylight = [day, afternoon, dusk];
+let probes = scene.bake_probes(daylight, ProbeSettings::default())?;
+let maps = scene.bake_lightmaps(&static_receivers, daylight, LightmapSettings::default())?;
 probes.with_lightmaps(&maps)?.write(output)?;
 ```
 
@@ -41,18 +42,18 @@ let lighting = renderer.load_probe_lighting(ProbeLighting {
 frame.draw_scene(input.with_probe_lighting(&lighting, time_of_day), exposure)?;
 ```
 
-昼から夕方への係数は 0～1 です。太陽の方位・色、背景、時計の進行はアプリ側で更新します。ベイクは線形の拡散照度を供給し、直接光の影と鏡面 IBL は通常の描画経路を使います。
+拡散照明には 1～16 条件を渡せます。係数は全区間で 0～1 です。この 3 条件の例では 0.5 が独立してベイクした午後、0.75 が午後と夕方の中間です。キーは等間隔です。鏡面プローブには固定条件または両端の 2 条件を渡します。太陽の方位・色、背景、時計の進行はアプリ側で更新します。ベイクは線形の拡散照度を供給し、直接光の影と鏡面 IBL は通常の描画経路を使います。
 
 ### Bistro で試す
 
 [Bistro の cook と IBL](development.md#bistro-b3) の後、以下をリポジトリのルートで実行します。
 
 ```powershell
-cargo run --release -p renderer-bistro --features bake-tool,vulkan --bin bistro-bake -- --manifest .tools/bistro-cook/full-a3/manifest.json --output .tools/bistro.gi --samples 96
+cargo run --release -p renderer-bistro --features bake-tool,vulkan --bin bistro-bake -- --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --output .tools/bistro.gi --samples 96
 cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --baked-lighting .tools/bistro.gi --pipeline forward-plus --white-sphere -14 2.7 0.65 --time-sweep --frames 5 --width 800 --height 450 --output .tools/bistro-gi
 ```
 
-`--fixture` は配布アセットなしでベイクと描画を試せます。`--backend cpu|vulkan|d3d12|auto` はベイクの実行先を選びます。Auto は利用可能な GPU を準備できなければ CPU を使います。`--spacing`、`--max-depth`、`--lightmap-texels` で密度と面の予算を変更でき、予算 0 ならシーン全体をプローブで描きます。出力には cook と照明プリセットの識別子を保存します。入力を変更したら再ベイクし、新しい出力名を指定してください。
+`--fixture` は配布アセットなしでベイクと描画を試せます。`--backend cpu|vulkan|d3d12|auto` はベイクの実行先を選びます。Auto は利用可能な GPU を準備できなければ CPU を使います。`--spacing`、`--max-depth`、`--lightmap-texels` で密度と面の予算を変更でき、予算 0 ならシーン全体をプローブで描きます。Bistro の既定は昼・中間・夕方の 3 条件、静的な面のライトマップ予算は 65,536 テクセルです。`--endpoints-only` で同じ配置に昼と夕方だけを焼いて比較できます。出力には cook と照明プリセットの識別子を保存します。入力を変更したら再ベイクし、新しい出力名を指定してください。
 
 `--scenario-blend 0.5` は中間時刻を固定します。`--time-sweep` のオフスクリーン実行は先頭、中間、末尾を保存します。`--gi-debug sources` はライトマップを橙、プローブを青系で表示し、`irradiance` は拡散照度、`weights` は有効なプローブ重みの合計を表示します。[実機の比較画像](../verification/current.md#bistro-baked-lighting)
 

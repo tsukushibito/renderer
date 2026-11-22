@@ -87,9 +87,7 @@ impl BakeScene {
                 .backend
                 .integrate(self, &jobs, lights, settings.rays_per_texel, 0.)?
         {
-            gpu.as_chunks::<10>()
-                .0
-                .iter()
+            gpu.chunks_exact(2 + 4 * N)
                 .map(|p| std::array::from_fn(|i| p[2 + 4 * i][..3].try_into().unwrap()))
                 .collect()
         } else {
