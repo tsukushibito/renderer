@@ -22,6 +22,8 @@ use renderer_example_support::{window_camera, window_input};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 mod backend;
 mod lifecycle;
+mod lighting_pass;
+use lighting_pass::LightingPass;
 #[cfg(test)]
 #[allow(
     clippy::duplicate_mod,
@@ -114,6 +116,7 @@ struct Options {
     reflection_spheres_to: Option<[f32; 3]>,
     baked_lighting: Option<PathBuf>,
     scenario_blend: f32,
+    lighting_pass: LightingPass,
     gi_debug: renderer::pbr::BakedLightingView,
     sweep: bool,
     ball: Option<[f32; 3]>,
@@ -189,13 +192,39 @@ impl Options {
             input.irradiance = light.sun;
             input.scenario_blend = t;
         }
+        if !self.lighting_pass.has_sun() {
+            input.irradiance = [0.; 3];
+        }
         Ok(input)
     }
     fn sweep_clear(&self, t: f32) -> Option<[f32; 4]> {
+        if self.lighting_pass != LightingPass::Beauty {
+            return Some([0., 0., 0., 1.]);
+        }
         self.sweep.then(|| {
             let [r, g, b] = camera::BakeScenario::at(t).sky;
             [r, g, b, 1.]
         })
+    }
+    fn prepare_lighting(
+        &self,
+        scene: &mut asset::Scene,
+        conditions: &mut camera::Conditions,
+        env: &mut ibl::Environment,
+        look: &mut serde_json::Value,
+    ) -> Result<(), Error> {
+        self.apply_baked_lighting(scene, conditions, env, look)?;
+        self.lighting_pass
+            .apply(scene, env, self.baked_lighting.is_some())?;
+        look["lighting_pass"] = serde_json::json!(format!("{:?}", self.lighting_pass));
+        if self.lighting_pass != LightingPass::Beauty {
+            look["ibl_strength"] = serde_json::json!(env.strength);
+            look["background_linear_rgb"] = serde_json::json!([0.0, 0.0, 0.0]);
+            if !self.lighting_pass.has_sun() {
+                look["irradiance_rgb"] = serde_json::json!([0.0, 0.0, 0.0]);
+            }
+        }
+        Ok(())
     }
     fn apply_baked_lighting(
         &self,
@@ -370,6 +399,7 @@ impl Options {
             reflection_spheres_to: None,
             baked_lighting: None,
             scenario_blend: 0.,
+            lighting_pass: LightingPass::Beauty,
             gi_debug: Default::default(),
             sweep: false,
             ball: None,
@@ -507,6 +537,9 @@ impl Options {
                 "--ibl-manifest" => {
                     result.ibl_manifest =
                         Some(args.next().ok_or("--ibl-manifest needs a path")?.into())
+                }
+                "--lighting-pass" => {
+                    result.lighting_pass = args.next().ok_or("missing lighting pass")?.parse()?
                 }
                 "--gi-debug" => {
                     result.gi_debug = match args.next().as_deref() {
@@ -689,6 +722,17 @@ impl Options {
         {
             return Err("GI inspection requires --baked-lighting".into());
         }
+        if result.lighting_pass != LightingPass::Beauty
+            && (result.pipeline != PipelineMode::Forward
+                || result.shader_assets.is_some()
+                || !matches!(result.gi_debug, renderer::pbr::BakedLightingView::Shaded)
+                || result.reflection_debug != renderer::pbr::ReflectionProbeView::Shaded)
+        {
+            return Err(
+                "lighting passes require standard forward shading without other inspection views"
+                    .into(),
+            );
+        }
         result.validate_lighting_extent()?;
         if result.route_capture.is_some() && result.fixture {
             return Err("route samples require a cooked Bistro scene".into());
@@ -734,6 +778,7 @@ Scenes and output
   --output DIR                   Default: .tools/bistro-runtime
   --baked-lighting FILE --scenario-blend 0..1     Baked day-to-dusk indirect and direct light
   --reflection-probes FILE [--reflection-debug weights|radiance] [--reflection-spheres X Y Z] [--reflection-spheres-to X Y Z]
+  --lighting-pass beauty|base-color|direct|diffuse|diffuse-no-ao|specular|local-specular|emissive
   --time-sweep | --gi-debug irradiance|sources|weights | --white-sphere X Y Z
   --look reference|lumberyard-day
   --view bistro-corner|street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route

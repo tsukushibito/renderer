@@ -539,7 +539,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
             scene.add_inspection_sphere([pos[0], pos[1], pos[2] + dz], roughness, 1.);
         }
     }
-    options.apply_baked_lighting(&mut scene, &mut conditions, &mut environment, &mut look)?;
+    options.prepare_lighting(&mut scene, &mut conditions, &mut environment, &mut look)?;
     let environment_identity = environment.identity.clone();
     // Hash the same manifest bytes that Scene::load parsed. A separate read
     // could otherwise identify a different revision from the loaded contents.

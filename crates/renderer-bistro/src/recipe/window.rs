@@ -866,7 +866,7 @@ pub(super) fn execute(mut options: Options) -> Result<(), Error> {
             scene.add_inspection_sphere([pos[0], pos[1], pos[2] + dz], roughness, 1.);
         }
     }
-    options.apply_baked_lighting(&mut scene, &mut conditions, &mut environment, &mut look)?;
+    options.prepare_lighting(&mut scene, &mut conditions, &mut environment, &mut look)?;
     let asset_load_ns = ns(load_started.elapsed());
     let inputs = json!({
         "look": look,

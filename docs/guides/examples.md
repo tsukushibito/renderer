@@ -175,6 +175,17 @@ cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api v
 python tools/bistro/compare_daylight.py .tools/Bistro_Exterior_1.png .tools/current-orca-day .tools/orca-day.png --details .tools/orca-details.png
 ```
 
+<a id="bistro-lighting-debug"></a>
+
+照明を分離するには、標準 Forward の `bistro` に `--lighting-pass base-color|direct|diffuse|diffuse-no-ao|specular|local-specular|emissive` のいずれかを指定します。省略時は通常の合成です。ロード時に入力を切り替え、通常と同じ標準シェーダーで材質、アルファ、影を評価します。間接照度を白い拡散面で見るには既存の `--gi-debug irradiance` を使います。各成分の比較にはトーンマッピング前の `hdr.bin` を使います。
+
+次のコマンドは同じカメラ・時刻で 10 回撮影し、照明の内訳、同じ HDR を使った露出とトーンカーブの比較、グローバル鏡面の寄与を変えた部分比較を保存します。標準出力に線形 RGB・輝度と表示 RGB・輝度の領域統計、成分再合成誤差を出します。既存キャプチャから再集計するときは最初の 3 引数だけを渡します。
+
+```powershell
+cargo build --release -p renderer-bistro --features vulkan --bin bistro
+python tools/bistro/diagnose_daylight.py .tools/Bistro_Exterior_1.png .tools/bistro-passes .tools/bistro-debug --bistro target/release/bistro.exe --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --baked-lighting .tools/bistro.gi --reflection-probes .tools/bistro-hdr-day.reflections
+```
+
 既定の描画設定と昼景プリセットを比較する場合は、次の 960 × 530 の手順を使います。
 
 ```powershell
