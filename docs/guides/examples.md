@@ -195,6 +195,21 @@ cargo build --locked --release -p renderer-bistro --features bake-tool --bin bis
 python tools/bistro/awning_reference.py .tools/bistro-cook/full-a3/manifest.json .tools/b3/ibl-final/manifest.json .tools/bistro-passes target/release/bistro-bake.exe .tools/Bistro_Exterior_1.png .tools/awning-reference
 ```
 
+<a id="bistro-upper-probe"></a>
+
+ひさし上面の局所反射を試すには、元の 2 個に上面用を加えた配置から昼のアトラスを焼きます。次の例は上で作った `.tools/bistro-passes` を比較元に使い、通常色・鏡面・重みを 1920 × 1061 で取得します。比較ツールは GPU の深度・アセット識別子を照合し、3 地点の鏡面輝度、周辺の表示色差、比較図を出力します。[比較図と実測値](../verification/current.md#bistro-awning-probe-trial)
+
+```powershell
+$trial = '.tools/bistro-upper-awning'
+New-Item -ItemType Directory -Force -Path $trial | Out-Null
+target/release/bistro-bake.exe --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --day-only --reflection-probes tools/bistro/reflection-probes-awning.json --output "$trial/day.reflections"
+$common = @('--api','vulkan','--pipeline','forward','--manifest','.tools/bistro-cook/full-a3/manifest.json','--ibl-manifest','.tools/b3/ibl-final/manifest.json','--baked-lighting','.tools/bistro.gi','--reflection-probes',"$trial/day.reflections",'--view','bistro-corner','--look','lumberyard-day','--width','1920','--height','1061','--warmup','1','--frames','1','--inflight','1','--aa-off')
+target/release/bistro.exe @common --lighting-pass beauty --output "$trial/beauty"
+target/release/bistro.exe @common --lighting-pass specular --output "$trial/specular"
+target/release/bistro.exe @common --reflection-debug weights --output "$trial/weights"
+python tools/bistro/compare_awning_probe.py .tools/Bistro_Exterior_1.png .tools/bistro-passes $trial docs/verification/bistro-awning-rays.json "$trial/comparison.jpg"
+```
+
 既定の描画設定と昼景プリセットを比較する場合は、次の 960 × 530 の手順を使います。
 
 ```powershell
