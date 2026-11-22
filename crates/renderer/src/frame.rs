@@ -87,7 +87,7 @@ impl Renderer {
         let mut setup = RendererSetup::new(group);
         // Small scenes commonly load the first models after showing their UI.
         // Reserve instance operands here; geometry sizes are known at model load.
-        setup.additional_objects = 16usize.saturating_sub(assets.objects.len());
+        setup.additional_objects = 16usize.saturating_sub(assets.draws);
         let mut plan = setup.prepare(assets)?;
         let [w, h] = camera.extent;
         let target = ImageDesc::rgba8(w, h);
@@ -235,7 +235,13 @@ impl Renderer {
 
     /// Prepare geometry and materials at a load boundary. Supply the active
     /// model selection. Subsequent pose changes use only the scene input.
-    pub fn prepare_assets(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
+    pub fn prepare_assets(
+        &mut self,
+        assets: SceneAssets<'_>,
+    ) -> Result<(), crate::AssetPrepareError> {
+        self.prepare_assets_inner(assets).map_err(Into::into)
+    }
+    pub(crate) fn prepare_assets_inner(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
         use crate::material::MaterialInstance;
         use std::collections::HashSet;
         let mut meshes = HashSet::new();
@@ -244,17 +250,28 @@ impl Renderer {
         let mut transforms = 0;
         let mut casters = 0;
         let mut new_program = false;
-        for object in assets.objects {
+        for object in assets.objects.iter() {
             meshes.insert(object.mesh);
-            let first = materials.insert(object.material);
             casters += usize::from(object.casts_shadow);
-            match assets.materials.get(object.material)? {
-                MaterialInstance::Pbr(_) => {
-                    uniforms += usize::from(first);
-                    transforms += 1;
-                }
-                MaterialInstance::Custom(m) if first => {
-                    new_program |= !self.drawing.definitions.contains(m.definition());
+            transforms += usize::from(matches!(
+                assets.materials.get(object.material)?,
+                MaterialInstance::Pbr(_)
+            ));
+        }
+        meshes.extend(assets.extra_meshes.iter().copied());
+        for material in assets
+            .objects
+            .iter()
+            .map(|o| o.material)
+            .chain(assets.extra_materials.iter().copied())
+        {
+            if !materials.insert(material) {
+                continue;
+            }
+            match assets.materials.get(material)? {
+                MaterialInstance::Pbr(_) => uniforms += 1,
+                MaterialInstance::Custom(m) => {
+                    new_program |= !self.drawing.definitions.contains(m.definition())
                 }
                 _ => {}
             }
@@ -263,10 +280,10 @@ impl Renderer {
         // than the initial scene. Negotiate the change before publishing its assets.
         let limits = self.drawing.limits;
         if new_program
-            || assets.objects.len() > limits.max_draws
+            || assets.draws > limits.max_draws
             || materials.len() > limits.max_materials
-            || transforms > limits.max_transforms
-            || casters > limits.max_casters_per_cascade
+            || transforms.min(assets.draws) > limits.max_transforms
+            || casters.min(assets.draws) > limits.max_casters_per_cascade
             || assets.lights.len() > limits.max_point_lights
         {
             return self.reconfigure(self.camera, assets);
@@ -282,7 +299,7 @@ impl Renderer {
         assets
             .meshes
             .reserve_selection(&mut active, meshes.into_iter())?;
-        assets.meshes.reserve_poses(&mut active, assets.objects)?;
+        assets.meshes.reserve_poses(&mut active, &assets.objects)?;
         active.reserve_buffer(crate::pbr::MaterialUniform::DESC, uniforms)?;
         assets.meshes.collect_gpu(self.drawing.runtime())?;
         assets.materials.collect_gpu(self.drawing.runtime())?;
@@ -298,7 +315,7 @@ impl Renderer {
             ..Default::default()
         })?;
         self.drawing.prepare_native_set(active, transfer)?;
-        self.drawing.prepare_assets(assets)
+        self.drawing.prepare_assets_inner(assets)
     }
 
     pub fn begin_frame(&mut self) -> PipelineResult<Frame<'_>> {

@@ -13,8 +13,8 @@ use crate::passes::{
 };
 
 use super::{
-    AlphaMode, Bounds, CASCADE_COUNT, CameraStorage, Config, Draw, Environment, Frame,
-    FrameShadows, PreparedInstances, PreparedView, SceneImages, SceneLimits, ShadowSettings,
+    AlphaMode, Bounds, CASCADE_COUNT, CameraStorage, Config, Draw, Environment, FrameShadows,
+    PbrDrawInput, PreparedInstances, PreparedView, SceneImages, SceneLimits, ShadowSettings,
     ShadowSource, Sun, ViewInput,
     draw::{Batch, Bindings, image_binding, sampler_binding},
     instances::{InstanceBuffer, InstanceTier},
@@ -403,7 +403,7 @@ impl PreparedScene {
     pub(crate) fn add_scene_using(
         &mut self,
         graph: &mut Graph,
-        frame: Frame<'_>,
+        frame: PbrDrawInput<'_>,
         append_scene: impl FnOnce(
             &mut Graph,
             RasterScene<'_>,
@@ -544,7 +544,7 @@ impl PreparedScene {
         Ok((output, PreparedOutput::validate_exposure(exposure)?))
     }
 
-    fn check_frame(&self, graph: &Graph, frame: &Frame<'_>) -> Result<usize, GraphError> {
+    fn check_frame(&self, graph: &Graph, frame: &PbrDrawInput<'_>) -> Result<usize, GraphError> {
         if !frame.view.matches(self.config.extent, self.config.shadows) {
             return Err(GraphError::invalid_input(
                 "PBR view is incompatible with the prepared recipe",
@@ -623,7 +623,7 @@ impl PreparedScene {
         &mut self,
         graph: &mut Graph,
         camera: BufferHandle,
-        frame: &Frame<'_>,
+        frame: &PbrDrawInput<'_>,
         settings: ShadowSettings,
         sources: [ShadowSource<'_>; CASCADE_COUNT],
         transforms: Option<InstanceBuffer>,
@@ -764,7 +764,7 @@ fn validate_draws(
     draws: &[Draw],
     mode: DrawMode,
     has_model: bool,
-    frame: &Frame<'_>,
+    frame: &PbrDrawInput<'_>,
     pass: DrawPass,
 ) -> Result<(usize, usize), GraphError> {
     let mut commands = draws.len();

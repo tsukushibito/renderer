@@ -27,7 +27,6 @@ pub struct Yard {
     equipped: Option<RenderObject>,
     pub(crate) load_error: Option<renderer::core::graph::GraphError>,
     poses: [SkinPoseId; 2],
-    assets: Vec<RenderObject>,
     body: MaterialHandle,
     glow: MaterialHandle,
     bounds: Bounds,
@@ -158,12 +157,6 @@ impl Yard {
         for (actor, pose) in actors.iter_mut().zip(poses) {
             actor.set_pose(mesh, Some(pose))?;
         }
-        let mut assets = actors
-            .iter()
-            .flat_map(ModelInstance::asset_draws)
-            .collect::<Vec<_>>();
-        // Load the optional emissive material along with the equipment.
-        assets.push(RenderObject::new(mesh, glow));
         let world_bounds = Bounds::new([-1., -1., 0.], [1., 1., 1.])?;
         let sun = Sun::new([0., 0., -1.], [0.01; 3])?;
 
@@ -178,7 +171,6 @@ impl Yard {
             equipped: None,
             load_error: None,
             poses,
-            assets,
             body,
             glow,
             bounds: world_bounds,
@@ -187,7 +179,19 @@ impl Yard {
     }
 
     pub fn assets(&mut self) -> SceneAssets<'_> {
-        SceneAssets::new(&mut self.meshes, &mut self.materials, &self.assets)
+        self.assets_with(self.equipped)
+    }
+
+    fn assets_with(&mut self, equipment: Option<RenderObject>) -> SceneAssets<'_> {
+        let mut assets = SceneAssets::new(&mut self.meshes, &mut self.materials, &[]);
+        for actor in self.actors.iter().flatten() {
+            assets.add_model(actor);
+        }
+        if let Some(object) = equipment {
+            assets.add_object(object);
+        }
+        assets.preload_pair(self.mesh, self.glow);
+        assets
     }
 
     pub fn extract<'a>(
@@ -246,7 +250,6 @@ impl Yard {
     }
 
     fn release_armor(&mut self, armor: RenderObject) -> PipelineResult<()> {
-        self.assets.retain(|o| o.mesh != armor.mesh);
         self.meshes.remove(armor.mesh)?;
         self.materials.remove(armor.material)?;
         Ok(())
@@ -266,8 +269,7 @@ impl Yard {
             }
         };
         let armor = RenderObject::new(mesh, material);
-        self.assets.push(armor);
-        if let Err(error) = prepare(self.assets()) {
+        if let Err(error) = prepare(self.assets_with(Some(armor))) {
             self.release_armor(armor)?;
             return Err(error);
         }

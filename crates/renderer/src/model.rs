@@ -124,6 +124,15 @@ impl ModelInstance {
         Ok(())
     }
 
+    pub(crate) fn max_parts(&self) -> usize {
+        self.model
+            .lods
+            .iter()
+            .map(|lod| lod.parts.len())
+            .max()
+            .unwrap_or(0)
+    }
+
     fn object(&self, part: ModelPart) -> RenderObject {
         let slot = part.material_slot;
         let material = self.overrides[slot].unwrap_or(self.model.materials[slot]);
@@ -134,7 +143,7 @@ impl ModelInstance {
     }
 
     /// Enumerate all selected mesh/material pairs for asset preparation, including other LODs.
-    pub fn asset_draws(&self) -> impl Iterator<Item = RenderObject> + '_ {
+    pub(crate) fn asset_draws(&self) -> impl Iterator<Item = RenderObject> + '_ {
         self.model
             .lods
             .iter()

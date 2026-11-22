@@ -20,8 +20,8 @@ use crate::{
         },
     },
     pbr::{
-        Bounds, Environment, Frame, FrameImages, PreparedView, SceneImages, SceneLimits, Sun,
-        ViewInput,
+        Bounds, Environment, FrameImages, PbrDrawInput, PreparedView, SceneImages, SceneLimits,
+        Sun, ViewInput,
         scene::{DrawMode, PreparedScene, Programs},
     },
 };
@@ -85,7 +85,7 @@ impl Prepared {
     pub fn add_scene(
         &mut self,
         graph: &mut Graph,
-        frame: Frame<'_>,
+        frame: PbrDrawInput<'_>,
     ) -> Result<SceneImages, GraphError> {
         self.add_scene_with_gbuffer(graph, frame, |_, _| Ok(()))
     }
@@ -95,7 +95,7 @@ impl Prepared {
     pub fn add_scene_with_gbuffer(
         &mut self,
         graph: &mut Graph,
-        frame: Frame<'_>,
+        frame: PbrDrawInput<'_>,
         consume: impl FnOnce(&mut Graph, GBuffer) -> Result<(), GraphError>,
     ) -> Result<SceneImages, GraphError> {
         let config = self.common.config();
@@ -167,7 +167,7 @@ impl Prepared {
     pub fn add_scene_and_sdr_output(
         &mut self,
         graph: &mut Graph,
-        frame: Frame<'_>,
+        frame: PbrDrawInput<'_>,
         exposure: f32,
     ) -> Result<FrameImages, GraphError> {
         let (output, exposure) = self.common.checked_output(exposure)?;

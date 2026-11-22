@@ -11,7 +11,7 @@ use renderer_core::{
     runtime::{FrameId, FrameSubmission, ManagedImage, Runtime, RuntimeConfig, RuntimeLimits},
 };
 use std::{
-    borrow::BorrowMut,
+    borrow::{BorrowMut, Cow},
     collections::BTreeSet,
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
@@ -23,10 +23,13 @@ pub use build::RendererBuild;
 
 /// Registries remain engine-owned and are borrowed exclusively only during setup.
 pub struct SceneAssets<'a> {
-    pub meshes: &'a mut Meshes,
-    pub materials: &'a mut Materials,
-    pub objects: &'a [RenderObject],
-    pub lights: &'a [PointLight],
+    pub(crate) meshes: &'a mut Meshes,
+    pub(crate) materials: &'a mut Materials,
+    pub(crate) objects: Cow<'a, [RenderObject]>,
+    pub(crate) draws: usize,
+    pub(crate) extra_meshes: Cow<'a, [MeshHandle]>,
+    pub(crate) extra_materials: Cow<'a, [MaterialHandle]>,
+    pub(crate) lights: &'a [PointLight],
 }
 impl<'a> SceneAssets<'a> {
     pub fn new(
@@ -37,9 +40,33 @@ impl<'a> SceneAssets<'a> {
         Self {
             meshes,
             materials,
-            objects,
+            objects: objects.into(),
+            draws: objects.len(),
+            extra_meshes: Cow::Borrowed(&[]),
+            extra_materials: Cow::Borrowed(&[]),
             lights: &[],
         }
+    }
+    /// Include every possible LOD, reserving draws for the largest single LOD.
+    pub fn add_model(&mut self, model: &crate::model::ModelInstance) {
+        self.objects.to_mut().extend(model.asset_draws());
+        self.draws += model.max_parts();
+    }
+    pub fn add_object(&mut self, object: RenderObject) {
+        self.objects.to_mut().push(object);
+        self.draws += 1;
+    }
+    /// Pre-register an alternate pairing for an existing draw slot.
+    pub fn preload_pair(&mut self, mesh: MeshHandle, material: MaterialHandle) {
+        self.objects
+            .to_mut()
+            .push(RenderObject::new(mesh, material));
+    }
+    pub fn preload_mesh(&mut self, mesh: MeshHandle) {
+        self.extra_meshes.to_mut().push(mesh);
+    }
+    pub fn preload_material(&mut self, material: MaterialHandle) {
+        self.extra_materials.to_mut().push(material);
     }
     pub fn with_lights(mut self, lights: &'a [PointLight]) -> Self {
         self.lights = lights;
@@ -47,10 +74,18 @@ impl<'a> SceneAssets<'a> {
     }
     /// Borrow the same working set for a retryable preparation attempt.
     pub fn reborrow(&mut self) -> SceneAssets<'_> {
-        SceneAssets::new(self.meshes, self.materials, self.objects).with_lights(self.lights)
+        SceneAssets {
+            meshes: self.meshes,
+            materials: self.materials,
+            objects: self.objects.as_ref().into(),
+            draws: self.draws,
+            extra_meshes: Cow::Borrowed(&self.extra_meshes),
+            extra_materials: Cow::Borrowed(&self.extra_materials),
+            lights: self.lights,
+        }
     }
     fn input(&self) -> SceneInput<'_> {
-        SceneInput::new(self.meshes, self.materials, self.objects).with_lights(self.lights)
+        SceneInput::new(self.meshes, self.materials, &self.objects).with_lights(self.lights)
     }
 }
 
@@ -161,7 +196,7 @@ impl RendererSetup {
         let mut casters = 0;
         let mut uniforms = 0usize;
         let mut mesh_bytes = 0u64;
-        for object in assets.objects {
+        for object in assets.objects.iter() {
             let geometry = assets.meshes.geometry(object.mesh)?;
             if object
                 .index_range
@@ -169,14 +204,36 @@ impl RendererSetup {
             {
                 return Err("submesh exceeds the staged index buffer".into());
             }
-            if seen.insert(object.mesh) {
-                meshes.push(object.mesh);
+            let instance = assets.materials.get(object.material)?;
+            if matches!(instance, MaterialInstance::Pbr(_)) {
+                pbr_objects += 1;
+            }
+            if object.casts_shadow {
+                casters += 1;
+            }
+        }
+        for mesh in assets
+            .objects
+            .iter()
+            .map(|o| o.mesh)
+            .chain(assets.extra_meshes.iter().copied())
+        {
+            let geometry = assets.meshes.geometry(mesh)?;
+            if seen.insert(mesh) {
+                meshes.push(mesh);
                 mesh_bytes = mesh_bytes
                     .checked_add(geometry.byte_len())
                     .ok_or("geometry size overflow")?;
             }
-            let instance = assets.materials.get(object.material)?;
-            if materials.insert(object.material) {
+        }
+        for material in assets
+            .objects
+            .iter()
+            .map(|o| o.material)
+            .chain(assets.extra_materials.iter().copied())
+        {
+            let instance = assets.materials.get(material)?;
+            if materials.insert(material) {
                 match instance {
                     MaterialInstance::Pbr(p) if !p.is_resident() => uniforms += 1,
                     MaterialInstance::Custom(m)
@@ -187,12 +244,6 @@ impl RendererSetup {
                     _ => {}
                 }
             }
-            if matches!(instance, MaterialInstance::Pbr(_)) {
-                pbr_objects += 1;
-            }
-            if object.casts_shadow {
-                casters += 1;
-            }
         }
         let room = |count: usize| {
             count
@@ -201,10 +252,10 @@ impl RendererSetup {
         };
         let limits = SceneLimits {
             frames_in_flight: self.frames_in_flight,
-            max_draws: room(assets.objects.len())?,
+            max_draws: room(assets.draws)?,
             max_materials: room(materials.len())?,
-            max_transforms: room(pbr_objects)?,
-            max_casters_per_cascade: room(casters)?,
+            max_transforms: room(pbr_objects.min(assets.draws))?,
+            max_casters_per_cascade: room(casters.min(assets.draws))?,
             max_point_lights: assets
                 .lights
                 .len()
@@ -234,7 +285,7 @@ impl RendererSetup {
             .reserve_selection(&mut preparation, meshes.iter().copied())?;
         assets
             .meshes
-            .reserve_poses(&mut preparation, assets.objects)?;
+            .reserve_poses(&mut preparation, &assets.objects)?;
         preparation.add_requirements(
             GraphRequirements {
                 resources: uniforms,

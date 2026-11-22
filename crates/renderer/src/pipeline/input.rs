@@ -92,7 +92,7 @@ impl Draw {
     }
 }
 /// Per-view inputs. Draws may freely mix material families in submission order.
-pub struct Frame<'a> {
+pub struct GeometryDrawInput<'a> {
     pub view: &'a PreparedView,
     pub defaults: DefaultViews,
     pub draws: &'a [Draw],
@@ -101,7 +101,7 @@ pub struct Frame<'a> {
     /// Cascade decisions from the history transaction for this view.
     pub shadow_history: Option<&'a crate::pbr::ShadowFrame>,
 }
-impl<'a> Frame<'a> {
+impl<'a> GeometryDrawInput<'a> {
     pub fn new(view: &'a PreparedView, defaults: DefaultViews, draws: &'a [Draw]) -> Self {
         Self {
             view,

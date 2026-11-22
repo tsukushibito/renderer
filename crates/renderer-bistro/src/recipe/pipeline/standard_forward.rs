@@ -10,7 +10,7 @@ use super::{
     select_draws, shadow_casters,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::pbr::{self, Frame, FrameShadows, IndexedDraw, ShadowSource};
+use renderer::pbr::{self, FrameShadows, IndexedDraw, PbrDrawInput, ShadowSource};
 
 use renderer::material::{
     MaterialHandle, MaterialInstance, MaterialTextures, Materials, PbrMaterial,
@@ -279,7 +279,7 @@ pub(super) fn build(
                 .unshadowed()?,
         )
     };
-    let mut frame = Frame::with_shadows(
+    let mut frame = PbrDrawInput::with_shadows(
         &view,
         &inputs.materials,
         &inputs.opaque,

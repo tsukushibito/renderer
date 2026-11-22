@@ -93,7 +93,7 @@ pub enum Draw {
         material: usize,
         transform: u32,
     },
-    /// An ordered nonempty range in [`super::Frame::transforms`]. Use the same
+    /// An ordered nonempty range in [`super::PbrDrawInput::transforms`]. Use the same
     /// range in every renderable cascade that contains these instances.
     Instanced {
         geometry: IndexedDraw,

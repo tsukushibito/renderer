@@ -2390,3 +2390,9 @@ GPU検証ができない場合は、実行済みの確認と未検証項目を�
 [^d3dbarriercall]: Microsoft「ID3D12GraphicsCommandList::ResourceBarrier」。配列の件数はUINT、指定順の個別呼出しと同じ意味を持つ。戻り値はなく、runtime検証の失敗は後続のCloseへ報告される。`https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12graphicscommandlist-resourcebarrier`
 
 [^metal]: Apple「Metal」。AppleプラットフォームとAPI／shader検証・診断ツールの概要。`https://developer.apple.com/metal/`
+
+### 動的な資産準備と描画入力
+
+標準描画は `Renderer` / `WindowRenderer` と `Frame`、ホスト所有の Graph は `pipeline`、個別技法は `ViewPipeline`・レシピ・`passes` を使う。装備の採否はアプリが決める。
+
+変更境界で `SceneAssets` にモデルを追加すると全 LOD と個体の姿勢・材質を収集し、描画枠は個体ごとの最大部位数を合計する。独立した資産の先読みとメッシュ・材質の組の事前登録は区別する。装備交換は候補の準備成功後に公開する。保持結果の返却や再構成は呼び出し側が `AssetPrepareError` の容量情報から判断する。

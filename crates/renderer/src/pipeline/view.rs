@@ -198,7 +198,7 @@ impl StandardPipeline {
             None
         };
         let connected = std::mem::take(&mut self.connected);
-        let mut frame = Frame::new(&prepared, defaults, &connected);
+        let mut frame = GeometryDrawInput::new(&prepared, defaults, &connected);
         frame.shadow_history = shadow.as_ref();
         frame.lights = input.lights;
         let scene = match consume {

@@ -24,7 +24,7 @@ mod history;
 pub use geometry::{GeometryPipeline, Technique};
 mod input;
 mod view;
-pub use input::{Draw, Frame, Mesh};
+pub use input::{Draw, GeometryDrawInput, Mesh};
 pub use view::{StandardViewOutput, StandardViewState};
 mod scene;
 pub use scene::{EnvironmentMaps, MeshIndexRange, RenderObject, SceneInput};
@@ -271,7 +271,7 @@ impl StandardPipeline {
         &mut self,
         graph: &mut Graph,
         materials: &Materials,
-        frame: Frame<'_>,
+        frame: GeometryDrawInput<'_>,
     ) -> Result<SceneImages, GraphError> {
         self.declare(graph, materials, frame, GeometryPipeline::draw_hdr)
     }
@@ -281,7 +281,7 @@ impl StandardPipeline {
         &mut self,
         graph: &mut Graph,
         materials: &Materials,
-        frame: Frame<'_>,
+        frame: GeometryDrawInput<'_>,
         consume: impl FnOnce(&mut Graph, pbr::GBuffer) -> Result<(), GraphError>,
     ) -> Result<SceneImages, GraphError> {
         if self.recipe.technique() != Technique::Deferred {
@@ -301,14 +301,14 @@ impl StandardPipeline {
         &mut self,
         graph: &mut Graph,
         materials: &Materials,
-        frame: Frame<'_>,
+        frame: GeometryDrawInput<'_>,
         append: impl FnOnce(
             &mut GeometryPipeline,
             &mut Graph,
-            pbr::Frame<'_>,
+            pbr::PbrDrawInput<'_>,
         ) -> Result<SceneImages, GraphError>,
     ) -> Result<SceneImages, GraphError> {
-        let Frame {
+        let GeometryDrawInput {
             view,
             defaults,
             draws,
@@ -383,7 +383,7 @@ impl StandardPipeline {
             )?;
         }
         self.forward.pbr_blends = self.transparent.len();
-        let mut frame = pbr::Frame::new(
+        let mut frame = pbr::PbrDrawInput::new(
             view,
             &self.materials,
             &self.opaque,

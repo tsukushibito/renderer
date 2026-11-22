@@ -15,8 +15,8 @@ use crate::{
         pbr::{TransformTechnique, blend_program, opaque_program, shadow_program},
     },
     pbr::{
-        Bounds, Environment, Frame, FrameImages, PreparedView, SceneImages, SceneLimits, Sun,
-        ViewInput,
+        Bounds, Environment, FrameImages, PbrDrawInput, PreparedView, SceneImages, SceneLimits,
+        Sun, ViewInput,
         scene::{DrawMode, PreparedScene},
     },
 };
@@ -131,7 +131,7 @@ impl Prepared {
     pub fn add_scene_and_sdr_output(
         &mut self,
         graph: &mut Graph,
-        frame: Frame<'_>,
+        frame: PbrDrawInput<'_>,
         exposure: f32,
     ) -> Result<FrameImages, GraphError> {
         let (output, exposure) = self.common.checked_output(exposure)?;
@@ -145,7 +145,7 @@ impl Prepared {
     pub fn add_scene(
         &mut self,
         graph: &mut Graph,
-        frame: Frame<'_>,
+        frame: PbrDrawInput<'_>,
     ) -> Result<SceneImages, GraphError> {
         let Config {
             extent,

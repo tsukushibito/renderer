@@ -11,7 +11,7 @@ use renderer::{
     },
     pbr::{
         Bounds, CASCADE_COUNT, CameraStorage, Config, DefaultResources, DefaultViews, Defaults,
-        Draw, Frame, FrameShadows, GraphMaterial, IndexedDraw, MaterialFactors, PbrVertex,
+        Draw, FrameShadows, GraphMaterial, IndexedDraw, MaterialFactors, PbrDrawInput, PbrVertex,
         PointLight, PreparedDefaults, Projection, SceneLimits, ShadowHistory, ShadowSettings,
         ShadowUpdates, Sun, ViewInput,
     },
@@ -446,7 +446,7 @@ pub fn build_graph(
         } else {
             (draws, &[][..])
         };
-    let mut frame = Frame::new(&view, &materials, opaque, transparent, opaque, defaults)?;
+    let mut frame = PbrDrawInput::new(&view, &materials, opaque, transparent, opaque, defaults)?;
     #[cfg(test)]
     let mut paged_transforms;
     #[cfg(test)]

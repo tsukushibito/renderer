@@ -169,10 +169,7 @@ pub(crate) fn squad<P: Viewport>(
         #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
         let before = renderer::core::measurement::Snapshot::now();
         if let Some(action) = replay_action(step) {
-            yard.apply(action, |assets| {
-                assets.materials.collect_gpu(drawing.runtime())?;
-                drawing.prepare_assets(assets)
-            })?;
+            yard.apply(action, |assets| Ok(drawing.prepare_assets(assets)?))?;
         }
         if step == 8 || step == 9 {
             if step == 8 {

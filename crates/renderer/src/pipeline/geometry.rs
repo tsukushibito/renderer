@@ -8,8 +8,8 @@ use renderer_core::{
 use crate::{passes::output::OutputImages, pbr_deferred, pbr_forward, pbr_forward_plus};
 
 use crate::pbr::{
-    Bounds, Config, Environment, Frame, FrameImages, PreparedView, SceneImages, SceneLimits, Sun,
-    ViewInput,
+    Bounds, Config, Environment, FrameImages, PbrDrawInput, PreparedView, SceneImages, SceneLimits,
+    Sun, ViewInput,
 };
 
 /// Select the standard PBR technique at preparation time.
@@ -96,7 +96,7 @@ impl GeometryPipeline {
     pub fn draw_hdr(
         &mut self,
         graph: &mut Graph,
-        frame: Frame<'_>,
+        frame: PbrDrawInput<'_>,
     ) -> Result<SceneImages, GraphError> {
         match self {
             Self::Forward(recipe) | Self::ForwardPlus(recipe) => recipe.add_scene(graph, frame),
@@ -120,7 +120,7 @@ impl GeometryPipeline {
     pub fn add_scene_and_sdr_output(
         &mut self,
         graph: &mut Graph,
-        frame: Frame<'_>,
+        frame: PbrDrawInput<'_>,
         exposure: f32,
     ) -> Result<FrameImages, GraphError> {
         match self {

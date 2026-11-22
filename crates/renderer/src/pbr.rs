@@ -224,7 +224,7 @@ pub enum FrameShadows<'a> {
     Disabled(UnshadowedView),
 }
 
-pub struct Frame<'a> {
+pub struct PbrDrawInput<'a> {
     pub(crate) forward_draws: Option<&'a crate::pipeline::ForwardDraws>,
     pub view: &'a PreparedView,
     pub lights: &'a [PointLight],
@@ -241,7 +241,7 @@ pub struct Frame<'a> {
     pub transforms: &'a [Transform],
 }
 
-impl<'a> Frame<'a> {
+impl<'a> PbrDrawInput<'a> {
     /// Supply the same point lights to any of the standard PBR techniques.
     #[must_use]
     pub fn with_lights(mut self, lights: &'a [PointLight]) -> Self {

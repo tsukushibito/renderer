@@ -207,13 +207,13 @@ Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受�
 表示待ちの再試行では、すでに受理した画像を提示する。UI だけを描くフレームでは `draw_overlay` から開始できる。
 
 空からモデルを追加するときは、ロードの境界で `renderer.prepare_assets(SceneAssets::new(&mut meshes, &mut materials, scene.objects()))?` を呼ぶ。
-標準 `Renderer` はこの一覧から独立に動かせる個体数と必要なシェーダーを求め、同じデバイス上で必要な分を準備する。読取中の画像が変更を妨げる場合は、その結果を回収して再試行する。ホストが固定した GPU 予算を使う場合は `SceneRenderer::replace_working_set` で上限超過を受け取れる。
+標準 `Renderer` はこの一覧から独立に動かせる個体数と必要なシェーダーを求め、同じデバイス上で必要な分を準備する。読取中の画像が変更を妨げる場合は、`error.capacity().map(|c| c.recovery())` が `Some(renderer::CapacityRecovery::ReleaseOwners)` なら、その結果を回収して再試行する。ホストが固定した GPU 予算を使う場合は `SceneRenderer::replace_working_set` で上限超過を受け取れる。
 転送が完了したら同じビューで描画できる。準備した個体を動かすフレームは描画入力の変換だけを更新する。
 画面内の端末のように自作のパスを組み込む場合は、`headless_with` または `WindowRenderer::new_with` でパスの資源を予約し、`frame.graph()` に記録する。
 そこで描いた画像ビューはそのフレーム内の Canvas に渡せる。[端末の奥行きと HUD 合成の実行例](../../crates/training-yard/tests/world_panel.rs)
 
 同じモデルを複数の位置に置くときは、`model::Model` に部位ごとのメッシュ範囲、共有材質スロット、LOD の最小画素サイズをまとめる。
-`instantiate` で作った個体には変換と材質の上書きを保持する。ロード時に `asset_draws()` で全 LOD の資産を準備し、描画時に `draws(&camera)` でそのビューの部位を抽出する。
+`instantiate` で作った個体には変換と材質の上書きを保持する。ロード時に `assets.add_model(&actor)` で全 LOD の資産を準備し、描画時に `draws(&camera)` でそのビューの部位を抽出する。
 個体の `set_material(slot, Some(handle))` はその個体に効き、`None` は共有材質に戻す。共有材質自体の変更は `Materials::update_pbr` で行う。[隊員のモデルと更新操作](../../crates/training-yard/src/yard.rs)
 
 スキニングを使うメッシュは、ロード時に `MeshData::skinned_pbr` に頂点と各頂点の最大 4 関節分の重みを渡す。
@@ -382,7 +382,7 @@ GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resid
 描画寸法・出力条件と、同時フレーム・材質・描画・各カスケードのキャスターの上限を渡す。
 `Technique` で使用できるサンプル数、深度、G-bufferの有無を確認できる。
 標準3方式で点光源を使うには `SceneLimits::max_point_lights` にビュー当たりの上限を指定する。
-フレームの光源は `pbr::Frame::with_lights(&point_lights)` で渡す。上限0では点光源の資源を予約せず、空の入力では転送やタイル判定を省く。
+フレームの光源は `pbr::PbrDrawInput::with_lights(&point_lights)` で渡す。上限0では点光源の資源を予約せず、空の入力では転送やタイル判定を省く。
 
 準備済みレシピと必要な既定画像の要求を`Preparation`へ集約し、`Runtime`と`GraphPool`を作る。
 追加パスの宣言、アップロード、表示やGPUの完了待ちまで保持する資源の容量もアプリの構成に沿って指定する。
@@ -409,7 +409,7 @@ Runtime作成後に`defaults.initialize`を一度呼び、アプリのフレー�
 マスク材質が影を描くときも、同じサンプラーでベースカラーのアルファを読む。
 同じ係数から得たアルファ分類に従い、Opaque／Maskは不透明・影リストへ、Blendは奥から手前に並べた半透明リストへ入れる。
 毎フレーム、アプリ側でカメラを更新し、最終的なビュー投影行列と視点・投影情報を`pbr::ViewInput`で渡す。
-`prepare_view`でその入力と太陽光・シーンの範囲・環境照明を組み合わせ、`pbr::Frame::new`に
+`prepare_view`でその入力と太陽光・シーンの範囲・環境照明を組み合わせ、`pbr::PbrDrawInput::new`に
 Graph内の材質、不透明・半透明・影を落とす描画の各スライス、既定画像のビューを渡す。
 フレームは準備済みビューの設定に従ってカスケードまたは共有の影なし深度を選ぶ。
 カメラバッファは準備時に`CameraStorage`で選ぶ。
@@ -442,7 +442,7 @@ Graphへのレシピ追加が途中で失敗した場合は、そのフレーム
 独自の影パスを組み立てる場合は`begin_frame`にカスケード行列と世代から作った`ShadowKey`を渡す。
 キャスターの集合・形状・変換、アルファマスク、影の描画設定など、深度画像に効く入力が変わるときに世代を変える。
 履歴は前の画像を取り込み、カスケードごとに再利用できるかを返す。`ShadowFrame::source`から
-`Frame::shadows`を作り、再描画するカスケードのキャスターを渡す。
+`PbrDrawInput::shadows`を作り、再描画するカスケードのキャスターを渡す。
 
 描画を宣言した後、`ShadowFrame::export`で更新画像をexportする。Graphをcompileして`ShadowHistory::submit`に渡すと、
 Runtimeが投入を受理した時点で履歴が反映される。アプリが複数ビューのGraphを直接投入する場合は、受理済みの

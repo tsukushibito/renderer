@@ -65,8 +65,12 @@ impl WindowRenderer {
         })
     }
 
-    pub fn prepare_assets(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
-        self.ready_for_change()?;
+    pub fn prepare_assets(
+        &mut self,
+        assets: SceneAssets<'_>,
+    ) -> Result<(), crate::AssetPrepareError> {
+        self.ready_for_change()
+            .map_err(crate::AssetPrepareError::from)?;
         self.renderer.prepare_assets(assets)
     }
 

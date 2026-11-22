@@ -119,11 +119,19 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     /// Publish changed asset revisions within the prepared limits. Invoke after
     /// submitting or discarding graphs that refer to previous revisions. Accepted
     /// uploads survive errors so this maintenance operation can be retried.
-    pub fn prepare_assets(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
+    pub fn prepare_assets(
+        &mut self,
+        assets: SceneAssets<'_>,
+    ) -> Result<(), crate::AssetPrepareError> {
+        assets.meshes.collect_gpu(self.runtime())?;
+        assets.materials.collect_gpu(self.runtime())?;
+        self.prepare_assets_inner(assets).map_err(Into::into)
+    }
+    pub(crate) fn prepare_assets_inner(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
         let mut meshes = Vec::new();
         let mut seen = HashSet::new();
         let mut materials = BTreeSet::new();
-        for object in assets.objects {
+        for object in assets.objects.iter() {
             assets.meshes.geometry(object.mesh)?;
             assets.materials.get(object.material)?;
             if seen.insert(object.mesh) {
@@ -131,6 +139,13 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
             }
             materials.insert(object.material);
         }
+        for &mesh in assets.extra_meshes.iter() {
+            assets.meshes.geometry(mesh)?;
+            if seen.insert(mesh) {
+                meshes.push(mesh);
+            }
+        }
+        materials.extend(assets.extra_materials.iter().copied());
         let budget = self.mesh_budget;
         let (driver, pool, runtime) = self.parts_mut();
         assets.meshes.check_runtime(&meshes, runtime)?;

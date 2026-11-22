@@ -41,15 +41,12 @@ pub fn headless(config: RuntimeConfig, output: Option<&Path>) -> PipelineResult<
         if let Some(action) = replay_action(step) {
             yard.apply(action, |mut assets| {
                 if let Err(error) = renderer.prepare_assets(assets.reborrow()) {
-                    let recovery = error
-                        .downcast_ref::<renderer::core::runtime::ExecutionError>()
-                        .and_then(|e| e.capacity())
-                        .map(|c| c.recovery);
-                    if recovery != Some(renderer::core::capacity::CapacityRecovery::ReleaseOwners) {
-                        return Err(error);
+                    let recovery = error.capacity().map(|c| c.recovery());
+                    if recovery != Some(renderer::CapacityRecovery::ReleaseOwners) {
+                        return Err(error.into());
                     }
                     let Some((previous, capture)) = delayed.take() else {
-                        return Err(error);
+                        return Err(error.into());
                     };
                     consume(&mut renderer, capture, &mut pixels, previous, output)?;
                     renderer.prepare_assets(assets)?;
