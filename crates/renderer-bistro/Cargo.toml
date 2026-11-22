@@ -26,7 +26,7 @@ path = "src/bin/bistro-bake.rs"
 required-features = ["bake-tool"]
 
 [dependencies]
-renderer-bake = { path = "../renderer-bake", optional = true }
+renderer-bake = { version = "0.1.0", path = "../renderer-bake", optional = true }
 renderer-core = { version = "0.1.0", path = "../renderer-core", default-features = false }
 renderer = { version = "0.1.0", path = "../renderer", default-features = false }
 renderer-example-support = { version = "0.1.0", path = "../renderer-example-support" }
