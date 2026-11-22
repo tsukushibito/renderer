@@ -43,7 +43,7 @@ float4 main(PixelInput input) : SV_Target0 {
 #else
     float2 pixel_center = 0.0;
 #endif
-    if(baked_debug()==0u)color += local_light_radiance(
+    if (baked_debug() == 0u && abs(camera.environment.w) < 4.0) color += local_light_radiance(
         pixel_center, input.world_position, surface.normal, brdf.view, brdf.f0, brdf.diffuse_color, surface.roughness);
 #endif
     // The ideal low-roughness peak may exceed binary16's finite range. Preserve

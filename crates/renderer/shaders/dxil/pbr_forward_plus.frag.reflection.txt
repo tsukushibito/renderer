@@ -19,7 +19,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: 861330f07b92eb5a9fc01b5ceb1c52a2
+; shader hash: fc8fcb643e03649d4258d55aace9b1fa
 ;
 ; Pipeline Runtime Information:
 ;
@@ -132,8 +132,9 @@
 ; shadow_image1                     texture     f32          2d      T8      t1,space3     1
 ; shadow_image2                     texture     f32          2d      T9      t2,space3     1
 ; shadow_image3                     texture     f32          2d     T10      t3,space3     1
-; local_lights                      texture     f32          2d     T11             t2     1
-; tile_masks                        texture     f32          2d     T12             t3     1
+; reflection_probes                 texture     f32          2d     T11      t4,space2     1
+; local_lights                      texture     f32          2d     T12             t2     1
+; tile_masks                        texture     f32          2d     T13             t3     1
 ;
 ;
 ; ViewId state:

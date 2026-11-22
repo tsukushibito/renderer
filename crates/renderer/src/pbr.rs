@@ -5,7 +5,11 @@ mod defaults;
 pub(crate) mod draw;
 mod history;
 mod probes;
+mod reflections;
 pub use probes::{BakedLighting, BakedLightingView, DiffuseLighting, LightmapChart};
+pub use reflections::{
+    LocalReflections, ReflectionProbeDesc, ReflectionProbeView, ReflectionProbes,
+};
 pub(crate) mod instances;
 mod material;
 pub(crate) mod raster;
@@ -108,6 +112,7 @@ pub struct Environment {
     pub irradiance: ImageView,
     pub diffuse_lighting: DiffuseLighting,
     pub reflection: ImageView,
+    pub local_reflections: Option<LocalReflections>,
     pub brdf_lut: ImageView,
     pub strength: f32,
     pub yaw_radians: f32,
@@ -152,6 +157,14 @@ impl PreparedView {
             ],
         )?;
         let mut uniform = data.uniform_bytes();
+        if let Some(local) = environment.local_reflections {
+            uniform[124..128].copy_from_slice(
+                &local
+                    .view
+                    .camera_parameter(local.blend, shadows.is_some())?
+                    .to_le_bytes(),
+            );
+        }
         uniform[460..464].copy_from_slice(&environment.diffuse_lighting.uniform()?.to_le_bytes());
         Ok(Self {
             sort_direction: view.forward(),

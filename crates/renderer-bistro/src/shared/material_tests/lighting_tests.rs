@@ -99,6 +99,7 @@ fn constant_levels(width: u32, height: u32, colors: &[V3]) -> ibl::Image {
 fn environment(diffuse: ibl::Image, specular: ibl::Image) -> ibl::Environment {
     let max_prefilter_lod = (specular.mips.len() - 1) as u32;
     ibl::Environment {
+        reflection_probes: None,
         diffuse,
         specular,
         brdf: constant_levels(2, 2, &[[0.5, 0.125, 0.]]),

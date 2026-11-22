@@ -37,7 +37,7 @@ pub struct Inputs {
     pub clear: [f32; 4],
     pub camera: BufferHandle,
     pub view_projection: [[f32; 4]; 4],
-    pub lighting: [Binding; 9],
+    pub lighting: [Binding; 10],
     /// Optional graph-local table encoded by [PointLightLayout](crate::pbr_forward_plus::PointLightLayout).
     pub point_lights: Option<ImageView>,
 }
@@ -191,11 +191,11 @@ pub fn append(
             resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
         },
     ];
-    let mut bindings = [inverse; 17];
+    let mut bindings = [inverse; 18];
     bindings[..gbuffer.len()].copy_from_slice(&gbuffer);
-    bindings[gbuffer.len()..16].copy_from_slice(&scene.lighting);
+    bindings[gbuffer.len()..17].copy_from_slice(&scene.lighting);
     let program = if let Some(lights) = scene.point_lights {
-        bindings[16] = crate::passes::pbr::forward_plus::light_binding(lights);
+        bindings[17] = crate::passes::pbr::forward_plus::light_binding(lights);
         crate::passes::pbr::deferred::deferred_local_lighting_program()
     } else {
         deferred_lighting_program()

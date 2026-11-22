@@ -54,8 +54,8 @@ const fn pbr_bindings<const N: usize>() -> [BindingLayout; N] {
         bindings[index] = OPAQUE.bindings[index];
         index += 1;
     }
-    if N == 18 {
-        bindings[17] = buffer_slot(TILES, BindingType::SampledImage, ShaderStages::FRAGMENT, 0);
+    if N == 19 {
+        bindings[18] = buffer_slot(TILES, BindingType::SampledImage, ShaderStages::FRAGMENT, 0);
     }
     bindings
 }
@@ -72,8 +72,8 @@ const fn pbr_bytes<const N: usize>() -> [u64; N] {
 
 pub(in crate::passes::pbr) static REFERENCE_OPAQUE: RasterProgramDescriptor =
     RasterProgramDescriptor {
-        bindings: &pbr_bindings::<17>(),
-        binding_bytes: &pbr_bytes::<17>(),
+        bindings: &pbr_bindings::<18>(),
+        binding_bytes: &pbr_bytes::<18>(),
         shaders: packaged_shaders!(
             vulkan: (
                 include_bytes!("../../../../shaders/pbr.vert.spv"),
@@ -93,8 +93,8 @@ static REFERENCE_BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
     ..REFERENCE_OPAQUE
 };
 pub(in crate::passes::pbr) static TILED_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
-    bindings: &pbr_bindings::<18>(),
-    binding_bytes: &pbr_bytes::<18>(),
+    bindings: &pbr_bindings::<19>(),
+    binding_bytes: &pbr_bytes::<19>(),
     shaders: packaged_shaders!(
         vulkan: (
             include_bytes!("../../../../shaders/pbr.vert.spv"),

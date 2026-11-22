@@ -340,7 +340,11 @@ impl Budget {
         for image in &scene.images {
             add_image(image_desc(image), 1);
         }
-        for image in environment.images() {
+        for image in environment
+            .images()
+            .into_iter()
+            .chain(&environment.reflection_probes)
+        {
             add_image(environment_desc(image), 1);
         }
         let mut check_images = 0;
@@ -368,12 +372,13 @@ impl Budget {
         let requirements = prepared.reservation.graph_requirements();
         let resources = buffer_count
             + scene.images.len()
-            + 3 // IBL
+            + 3 + usize::from(environment.reflection_probes.is_some()) // IBL
             + shadow::CASCADE_COUNT // cached imports
             + requirements.resources;
         let physical_resources = buffer_count
             + scene.images.len()
             + 3
+            + usize::from(environment.reflection_probes.is_some())
             + frame_instances
             + frame_buffers
             + check_images
@@ -438,6 +443,7 @@ impl Budget {
                 environment
                     .images()
                     .into_iter()
+                    .chain(&environment.reflection_probes)
                     .map(|image| {
                         let mut end = 0usize;
                         for mip in 0..image.mips.len() {
@@ -533,6 +539,7 @@ pub(super) struct Resident {
     pub materials: Vec<ResidentMaterialUniform>,
     surfaces: standard_forward::SurfaceTable,
     pub images: Vec<ManagedImage>,
+    pub reflection_probes: Option<ManagedImage>,
     pub environment: [ManagedImage; 3],
     pub environment_mips: [u32; 3],
     pub environment_parameters: [f32; 3],
@@ -876,6 +883,11 @@ impl Resident {
             materials,
             surfaces,
             images,
+            reflection_probes: environment
+                .reflection_probes
+                .as_ref()
+                .map(upload_environment)
+                .transpose()?,
             environment: environment_images,
             environment_mips: [
                 environment.diffuse.mips.len() as u32,
@@ -1297,17 +1309,36 @@ fn import_environment(
     Ok(environment.map(Option::unwrap))
 }
 
+fn import_reflections(
+    graph: &mut Graph,
+    resident: &Resident,
+) -> Result<Option<ImageView>, GraphError> {
+    resident
+        .reflection_probes
+        .as_ref()
+        .map(|texture| {
+            let image = graph.import_image("local reflections", texture.snapshot())?;
+            graph.sampled_image_view(image, 0, 1)
+        })
+        .transpose()
+}
+
 fn lighting_bindings(
     graph: &mut Graph,
     resident: &Resident,
     shadows: [ImageView; shadow::CASCADE_COUNT],
-) -> Result<[Binding; 9], GraphError> {
+) -> Result<[Binding; 10], GraphError> {
     let [irradiance, reflection, brdf] = import_environment(graph, resident)?;
     Ok([
         image_binding(2, 0, irradiance),
         image_binding(2, 1, reflection),
         image_binding(2, 2, brdf),
         sampler_binding(2, 3, SamplerDescriptor::LinearRepeatUClampV),
+        image_binding(
+            2,
+            4,
+            import_reflections(graph, resident)?.unwrap_or(reflection),
+        ),
         image_binding(3, 0, shadows[0]),
         image_binding(3, 1, shadows[1]),
         image_binding(3, 2, shadows[2]),
@@ -1325,7 +1356,7 @@ fn scene_bindings(
     scene: &Scene,
     prepared: &recipes::Reference,
     materials: MaterialBindings<'_>,
-    lighting: &[Binding; 9],
+    lighting: &[Binding; 10],
     local: Option<FrameLights>,
     instance_material: Option<usize>,
     bindings: &mut Vec<RasterBindings>,
@@ -1399,6 +1430,7 @@ pub(super) fn build(
     scene: &Scene,
     options: &Options,
     camera_input: &crate::shared::camera::CameraInput,
+    frame_index: usize,
     capture: bool,
 ) -> Result<Built, Error> {
     let camera = camera_input.camera;
@@ -1410,6 +1442,7 @@ pub(super) fn build(
             scene,
             options,
             camera_input,
+            frame_index,
             capture,
         );
     }
@@ -1439,6 +1472,14 @@ pub(super) fn build(
         .enumerate()
     {
         frame_uniform[112 + word * 4..116 + word * 4].copy_from_slice(&value.to_le_bytes());
+    }
+    if options.reflection_probes.is_some() {
+        frame_uniform[124..128].copy_from_slice(
+            &options
+                .reflection_debug
+                .camera_parameter(camera_input.scenario_blend, options.shadows)?
+                .to_le_bytes(),
+        );
     }
     frame_uniform[128..].copy_from_slice(&shadow_data.uniform_bytes());
     if options.baked_lighting.is_some() {

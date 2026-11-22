@@ -107,6 +107,7 @@ pub(super) fn build(
     scene: &Scene,
     options: &Options,
     camera_input: &crate::shared::camera::CameraInput,
+    frame_index: usize,
     capture: bool,
 ) -> Result<Built, Error> {
     let camera = camera_input.camera;
@@ -115,6 +116,42 @@ pub(super) fn build(
     let [irradiance, reflection, brdf_lut] = import_environment(&mut graph, resident)?;
     let [strength, yaw_radians, max_prefilter_lod] = resident.environment_parameters;
     let (recipe, bloom) = workspace.prepared.select(options).standard();
+    let mut scene_bounds = workspace
+        .placements
+        .as_ref()
+        .map_or(resident.standard_bounds, |p| p.shadow_bounds);
+    let progress = (frame_index as f32 / options.frames.saturating_sub(1).max(1) as f32).min(1.);
+    let displacement = options
+        .reflection_spheres
+        .zip(options.reflection_spheres_to)
+        .map(|(start, end)| std::array::from_fn::<_, 3, _>(|i| (end[i] - start[i]) * progress));
+    // The two inspection spheres are appended after the cooked primitives.
+    let sphere_start = scene.primitives.len().saturating_sub(2);
+    let mut moving_bounds = [scene_bounds; 2];
+    let mut motion = None;
+    if let Some([x, y, z]) = displacement {
+        motion = Some(pbr::Transform::new([
+            [1., 0., 0., x],
+            [0., 1., 0., y],
+            [0., 0., 1., z],
+        ])?);
+        for (index, bounds) in moving_bounds.iter_mut().enumerate() {
+            let source = resident.standard_primitive_bounds[sphere_start + index];
+            let translated = |point: [f32; 3]| [point[0] + x, point[1] + y, point[2] + z];
+            *bounds = pbr::Bounds::new(translated(source.min()), translated(source.max()))?;
+            scene_bounds = pbr::Bounds::new(
+                std::array::from_fn(|i| scene_bounds.min()[i].min(bounds.min()[i])),
+                std::array::from_fn(|i| scene_bounds.max()[i].max(bounds.max()[i])),
+            )?;
+        }
+    }
+    let bounds = |i: usize| {
+        if motion.is_some() && i >= sphere_start {
+            moving_bounds[i - sphere_start]
+        } else {
+            resident.standard_primitive_bounds[i]
+        }
+    };
     let view = recipe.prepare_view(
         pbr::ViewInput::new(
             camera_input.matrix,
@@ -129,13 +166,15 @@ pub(super) fn build(
             },
         )?,
         pbr::Sun::from_normalized(camera_input.direction_to_light, camera_input.irradiance)?,
-        workspace
-            .placements
-            .as_ref()
-            .map_or(resident.standard_bounds, |placements| {
-                placements.shadow_bounds
-            }),
+        scene_bounds,
         pbr::Environment {
+            local_reflections: super::import_reflections(&mut graph, resident)?.map(|atlas| {
+                pbr::LocalReflections {
+                    atlas,
+                    blend: camera_input.scenario_blend,
+                    view: options.reflection_debug,
+                }
+            }),
             diffuse_lighting: options.diffuse_lighting(camera_input.scenario_blend),
             irradiance,
             reflection,
@@ -160,7 +199,7 @@ pub(super) fn build(
         )?;
     }
     let include_material = |material| material_visible(options, scene, material);
-    let visible = |index: usize| view.visible(resident.standard_primitive_bounds[index]);
+    let visible = |index: usize| view.visible(bounds(index));
     let packed = resident
         .packed
         .as_ref()
@@ -197,7 +236,17 @@ pub(super) fn build(
         index_count: scene.primitives[index].index_count,
         material: scene.primitives[index].material,
     };
-    let draw = |index| Draw::WorldSpaceIndexed(geometry(index));
+    let draw = |index| {
+        if motion.is_some() && index >= sphere_start {
+            Draw::Instanced {
+                geometry: geometry(index),
+                first_transform: 0,
+                instance_count: 1,
+            }
+        } else {
+            Draw::WorldSpaceIndexed(geometry(index))
+        }
+    };
 
     inputs.opaque.clear();
     let indirect = if let Some(packed) = &packed {
@@ -226,12 +275,11 @@ pub(super) fn build(
             .shadow_reuse
             .as_ref()
             .map(|reuse| {
-                // The workspace retains the same scene and instance grid.
-                reuse.history.begin_view(
-                    &mut graph,
-                    &view,
-                    [caster_revision(options); pbr::CASCADE_COUNT],
-                )
+                let pose_revision = motion.map_or(0, |_| u64::from(progress.to_bits()) << 32);
+                let revision = caster_revision(options) | pose_revision;
+                reuse
+                    .history
+                    .begin_view(&mut graph, &view, [revision; pbr::CASCADE_COUNT])
             })
             .transpose()?;
         for (cascade, casters) in inputs.casters.iter_mut().enumerate() {
@@ -242,7 +290,7 @@ pub(super) fn build(
             {
                 casters.extend(
                     shadow_casters(scene, options, |index| {
-                        view.cascade_overlaps(cascade, resident.standard_primitive_bounds[index])
+                        view.cascade_overlaps(cascade, bounds(index))
                             .unwrap_or(true)
                     })
                     .map(draw),
@@ -290,7 +338,7 @@ pub(super) fn build(
     frame.transforms = workspace
         .placements
         .as_ref()
-        .map_or(&[], |p| &p.transforms[..]);
+        .map_or(motion.as_slice(), |p| &p.transforms[..]);
     let lights = resident
         .local_lights
         .as_ref()

@@ -75,7 +75,7 @@
                 }
             ]
         },
-        "_19" : {
+        "_20" : {
             "name" : "type.Reconstruction",
             "members" : [
                 {
@@ -139,6 +139,12 @@
         },
         {
             "type" : "texture2D",
+            "name" : "reflection_probes",
+            "set" : 2,
+            "binding" : 4
+        },
+        {
+            "type" : "texture2D",
             "name" : "local_lights",
             "set" : 0,
             "binding" : 2
@@ -197,7 +203,7 @@
             "binding" : 0
         },
         {
-            "type" : "_19",
+            "type" : "_20",
             "name" : "type.Reconstruction",
             "block_size" : 64,
             "set" : 0,

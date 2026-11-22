@@ -171,6 +171,16 @@ fn receivers(
 }
 
 pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Placement {
+        name: String,
+        position: [f32; 3],
+        min: [f32; 3],
+        max: [f32; 3],
+        blend_distance: f32,
+    }
+    let mut layout = None;
     let mut manifest = None;
     let mut fixture = false;
     let mut output = None;
@@ -178,6 +188,11 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut texel_budget = 16384;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--reflection-probes" => {
+                layout = Some(PathBuf::from(
+                    args.next().ok_or("missing reflection layout")?,
+                ))
+            }
             "--manifest" => manifest = Some(PathBuf::from(args.next().ok_or("missing manifest")?)),
             "--fixture" => fixture = true,
             "--output" => output = Some(PathBuf::from(args.next().ok_or("missing output")?)),
@@ -200,7 +215,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--lightmap-texels N]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--lightmap-texels N] [--reflection-probes LAYOUT.json]"
                 );
                 return Ok(());
             }
@@ -225,6 +240,41 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             .to_string()
     };
     let bake = import(&scene)?;
+    let lights = BAKE_SCENARIOS.map(|s| Lighting {
+        sky: s.sky,
+        sun: s.sun,
+        direction_to_sun: s.direction,
+    });
+    if let Some(layout) = layout {
+        if !matches!(
+            settings.backend,
+            renderer_bake::BakeBackend::Auto | renderer_bake::BakeBackend::Cpu
+        ) {
+            return Err("reflection capture currently uses the CPU bake backend".into());
+        }
+        let placements: Vec<Placement> = serde_json::from_slice(&std::fs::read(layout)?)?;
+        let probes = placements
+            .into_iter()
+            .map(|p| {
+                let desc = renderer_bake::ReflectionProbeDesc {
+                    position: p.position,
+                    min: p.min,
+                    max: p.max,
+                    blend_distance: p.blend_distance,
+                };
+                desc.validate().map_err(|e| format!("{}: {e}", p.name))?;
+                Ok(desc)
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        drop(scene);
+        let atlas = bake.bake_reflection_probes(&probes, lights)?;
+        let mut file = std::io::BufWriter::new(std::fs::File::create_new(output)?);
+        file.write_all(crate::shared::camera::bake_identity(&identity).as_bytes())?;
+        atlas.write(&mut file)?;
+        file.flush()?;
+        eprintln!("Baked {} local reflection probes", probes.len());
+        return Ok(());
+    }
     let surface_settings = renderer_bake::LightmapSettings {
         backend: settings.backend,
         rays_per_texel: settings.rays_per_probe,
@@ -233,11 +283,6 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let (placements, triangles) = receivers(&scene, surface_settings, texel_budget)?;
     drop(scene);
     let started = std::time::Instant::now();
-    let lights = BAKE_SCENARIOS.map(|s| Lighting {
-        sky: s.sky,
-        sun: s.sun,
-        direction_to_sun: s.direction,
-    });
     let volume = bake.bake_probes(lights, settings)?;
     let maps = bake.bake_lightmaps(&triangles, lights, surface_settings)?;
     eprintln!(

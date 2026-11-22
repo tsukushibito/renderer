@@ -150,6 +150,7 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, GraphMaterial,
             Bounds::new([-1.0; 3], [1.0; 3]).unwrap(),
             Environment {
                 irradiance: environment,
+                local_reflections: None,
                 diffuse_lighting: Default::default(),
                 reflection: environment,
                 brdf_lut: environment,

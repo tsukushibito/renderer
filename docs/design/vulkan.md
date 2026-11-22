@@ -277,7 +277,7 @@ Rasterのfragmentなしは深度専用パスの一形態であり、Vulkan用バ
 
 標準PBRのモデル空間描画は、`SceneLimits::max_transforms`に合わせて64件の小テーブル、または
 1,024件のStorageReadページを必要数含むバッファを準備する。Forward+のライトとタイルを含むモデル空間Programは
-19 bindingを使う。デバイスのdescriptor上限は従来どおりProgram準備で照合する。
+ローカル鏡面反射用のサンプル画像を含めて20 bindingを使う。デバイスのdescriptor上限は従来どおりProgram準備で照合する。
 ホストは有効な描画と再描画するカスケードから変換の範囲を確定し、変換を参照しないフレームでは
 転送を省く。参照があるときは最後に必要なページまでを初期化して転送する。各descriptorの
 オフセットはページ先頭、範囲は6 KiBまたは96 KiBで、shaderはその範囲内にインデックスを制限する。

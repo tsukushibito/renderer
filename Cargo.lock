@@ -1160,6 +1160,7 @@ dependencies = [
  "renderer-bake",
  "renderer-core",
  "renderer-example-support",
+ "serde",
  "serde_json",
  "sha2",
  "tracy-client",

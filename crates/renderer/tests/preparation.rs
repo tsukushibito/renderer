@@ -96,7 +96,7 @@ const IDENTITY: [[f32; 4]; 4] = [
     [0.0, 0.0, 0.0, 1.0],
 ];
 
-fn deferred_lighting(environment: ImageView, shadow: ImageView) -> [Binding; 9] {
+fn deferred_lighting(environment: ImageView, shadow: ImageView) -> [Binding; 10] {
     let image = |group, binding, view| Binding {
         group,
         binding,
@@ -112,6 +112,7 @@ fn deferred_lighting(environment: ImageView, shadow: ImageView) -> [Binding; 9] 
         image(2, 1, environment),
         image(2, 2, environment),
         sampler(2, 3),
+        image(2, 4, environment),
         image(3, 0, shadow),
         image(3, 1, shadow),
         image(3, 2, shadow),

@@ -79,7 +79,7 @@ impl Prepared {
                 max_transforms: if options.instances.enabled() {
                     crate::shared::instancing::COUNT
                 } else {
-                    0
+                    usize::from(options.reflection_spheres_to.is_some())
                 },
             };
             let standard = match options.pipeline {
@@ -430,7 +430,7 @@ pub(super) struct SceneFrame {
     pub clear: Option<[f32; 4]>,
     pub camera: BufferHandle,
     pub view_projection: [[f32; 4]; 4],
-    pub lighting: [Binding; 9],
+    pub lighting: [Binding; 10],
     pub has_transparency: bool,
 }
 

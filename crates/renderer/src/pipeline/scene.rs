@@ -123,6 +123,7 @@ impl EnvironmentMaps {
         };
         Ok(Environment {
             irradiance: import(irradiance)?,
+            local_reflections: None,
             diffuse_lighting: crate::pbr::DiffuseLighting::EnvironmentMap,
             reflection: import(&self.reflection)?,
             brdf_lut: import(&self.brdf_lut)?,
@@ -150,6 +151,23 @@ impl<'a> BakedLightingInput<'a> {
     }
 }
 
+/// Resident specular atlas. Supply the split-sum BRDF LUT via the scene environment.
+#[derive(Clone, Copy)]
+pub struct ReflectionProbeInput<'a> {
+    pub atlas: &'a renderer_core::graph::ImportImage,
+    pub blend: f32,
+    pub view: crate::pbr::ReflectionProbeView,
+}
+impl<'a> ReflectionProbeInput<'a> {
+    pub fn new(atlas: &'a renderer_core::graph::ImportImage, blend: f32) -> Self {
+        Self {
+            atlas,
+            blend,
+            view: Default::default(),
+        }
+    }
+}
+
 /// Borrow the same object list for any number of cameras.
 #[derive(Clone, Copy)]
 pub struct SceneInput<'a> {
@@ -167,6 +185,7 @@ pub struct SceneInput<'a> {
     pub environment: Option<&'a EnvironmentMaps>,
     /// Baked diffuse can be used on its own or with the environment's specular maps.
     pub baked_lighting: Option<BakedLightingInput<'a>>,
+    pub reflection_probes: Option<ReflectionProbeInput<'a>>,
 }
 impl<'a> SceneInput<'a> {
     pub fn new(meshes: &'a Meshes, materials: &'a Materials, objects: &'a [RenderObject]) -> Self {
@@ -180,6 +199,7 @@ impl<'a> SceneInput<'a> {
             bounds: None,
             environment: None,
             baked_lighting: None,
+            reflection_probes: None,
         }
     }
     /// Resolve this frame's posed vertices and the object's selected index range.

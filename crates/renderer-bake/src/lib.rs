@@ -41,8 +41,10 @@ impl BakeBackend {
 mod bvh;
 mod lightmaps;
 mod probes;
+mod reflections;
 pub use lightmaps::{LightmapSettings, ReceiverTriangle};
 pub use probes::ProbeSettings;
+pub use renderer::pbr::ReflectionProbeDesc;
 mod transport;
 
 use bvh::Bvh;

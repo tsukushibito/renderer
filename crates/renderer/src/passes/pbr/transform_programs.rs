@@ -78,7 +78,7 @@ macro_rules! tier_programs {
             use super::*;
 
             pub(super) static FORWARD: RasterProgramDescriptor =
-                descriptor!(OPAQUE, 17, $tier, $vertex, "pbr_transformed", 4);
+                descriptor!(OPAQUE, 18, $tier, $vertex, "pbr_transformed", 4);
             pub(super) static FORWARD_BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
                 blend: BLEND.blend,
                 depth: BLEND.depth,
@@ -86,7 +86,7 @@ macro_rules! tier_programs {
             };
             pub(super) static ALL_LIGHTS: RasterProgramDescriptor = descriptor!(
                 REFERENCE_OPAQUE,
-                18,
+                19,
                 $tier,
                 $vertex,
                 "pbr_all_lights_transformed",
@@ -99,7 +99,7 @@ macro_rules! tier_programs {
             };
             pub(super) static FORWARD_PLUS: RasterProgramDescriptor = descriptor!(
                 TILED_OPAQUE,
-                19,
+                20,
                 $tier,
                 $vertex,
                 "pbr_forward_plus_transformed",

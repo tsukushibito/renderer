@@ -209,6 +209,12 @@
         },
         {
             "type" : "texture2D",
+            "name" : "reflection_probes",
+            "set" : 2,
+            "binding" : 4
+        },
+        {
+            "type" : "texture2D",
             "name" : "local_lights",
             "set" : 0,
             "binding" : 2

@@ -124,7 +124,8 @@ fn build_frame(
         resident,
         scene,
         options,
-        &conditions.frame_input(camera, options.width, options.height)?,
+        &options.camera_lighting(conditions, camera, 0)?,
+        0,
         true,
     )
 }

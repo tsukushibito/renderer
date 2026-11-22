@@ -579,12 +579,13 @@ pub(crate) fn material(
 }
 
 impl Scene {
-    /// A white, rough dielectric used to inspect the spatial field. Inserted
+    /// A sphere of known material used to inspect spatial lighting. Inserted
     /// after the bake, so it receives the same lighting as a moving object.
-    pub fn add_white_sphere(&mut self, center: [f32; 3]) {
+    pub fn add_inspection_sphere(&mut self, center: [f32; 3], roughness: f32, metallic: f32) {
         let textures = fallback_images(&mut self.images);
         let factors = renderer::pbr::MaterialFactors {
-            roughness: 0.85,
+            roughness,
+            metallic,
             normal_scale: 0.,
             ..Default::default()
         };

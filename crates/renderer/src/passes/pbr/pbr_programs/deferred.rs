@@ -59,6 +59,7 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         image(2, 1),
         image(2, 2),
         sampler(2, 3),
+        image(2, 4),
         image(3, 0),
         image(3, 1),
         image(3, 2),
@@ -82,6 +83,7 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         0,
         0,
         0,
+        0,
     ],
     sampling_pairs: &[
         pair(1, 0, 4),
@@ -91,6 +93,7 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         pair(2, 0, 3),
         pair(2, 1, 3),
         pair(2, 2, 3),
+        pair(2, 4, 3),
         pair(3, 0, 4),
         pair(3, 1, 4),
         pair(3, 2, 4),
@@ -113,7 +116,7 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
 
 static LOCAL_LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
     bindings: &{
-        let mut slots = [image(0, 2); 17];
+        let mut slots = [image(0, 2); 18];
         let mut i = 0;
         while i < LIGHTING.bindings.len() {
             slots[i] = LIGHTING.bindings[i];
@@ -122,7 +125,7 @@ static LOCAL_LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         slots
     },
     binding_bytes: &{
-        let mut bytes = [0; 17];
+        let mut bytes = [0; 18];
         bytes[0] = CAMERA_BYTES as u64;
         bytes[1] = DEFERRED_RECONSTRUCTION_BYTES as u64;
         bytes

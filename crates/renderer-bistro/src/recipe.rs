@@ -108,6 +108,10 @@ struct Options {
     api: String,
     manifest: Option<PathBuf>,
     ibl_manifest: Option<PathBuf>,
+    reflection_probes: Option<PathBuf>,
+    reflection_debug: renderer::pbr::ReflectionProbeView,
+    reflection_spheres: Option<[f32; 3]>,
+    reflection_spheres_to: Option<[f32; 3]>,
     baked_lighting: Option<PathBuf>,
     scenario_blend: f32,
     gi_debug: renderer::pbr::BakedLightingView,
@@ -174,7 +178,7 @@ impl Options {
         frame: usize,
     ) -> Result<camera::CameraInput, Error> {
         let mut input = conditions.frame_input(camera, self.width, self.height)?;
-        if self.baked_lighting.is_some() {
+        if self.baked_lighting.is_some() || self.reflection_probes.is_some() {
             let t = if self.sweep {
                 (frame as f32 / (self.frames.saturating_sub(1).max(1) as f32)).clamp(0., 1.)
             } else {
@@ -202,44 +206,71 @@ impl Options {
         env: &mut ibl::Environment,
         look: &mut serde_json::Value,
     ) -> Result<(), Error> {
-        let Some(path) = &self.baked_lighting else {
-            return Ok(());
-        };
-        let bytes = std::fs::read(path)?;
-        let (identity, file) = bytes
-            .split_at_checked(64)
-            .ok_or("invalid Bistro probe asset")?;
-        if identity
-            != camera::bake_identity(&run::loaded_cook_hash(scene, self.fixture)?).as_bytes()
-        {
-            return Err(
-                "baked lighting belongs to a different Bistro cook or lighting preset".into(),
-            );
+        if let Some(path) = &self.reflection_probes {
+            let bytes = std::fs::read(path)?;
+            let (identity, file) = bytes
+                .split_at_checked(64)
+                .ok_or("truncated reflection probe asset")?;
+            if identity
+                != camera::bake_identity(&run::loaded_cook_hash(scene, self.fixture)?).as_bytes()
+            {
+                return Err(
+                    "reflection probes belong to a different Bistro cook or lighting preset".into(),
+                );
+            }
+            let atlas = renderer::pbr::ReflectionProbes::from_bytes(file)?;
+            let [width, height] = atlas.extent();
+            let bytes = atlas.rgba32f().to_vec();
+            env.reflection_probes = Some(ibl::Image {
+                format: renderer_core::ImageFormat::Rgba32Float,
+                width,
+                height,
+                mips: std::iter::once(0..bytes.len()).collect(),
+                bytes,
+            });
+            env.identity["reflection_probes_sha256"] = serde_json::json!(digest(file));
+            look["reflection_probes_sha256"] = env.identity["reflection_probes_sha256"].clone();
+            look["reflection_view"] = serde_json::json!(format!("{:?}", self.reflection_debug));
         }
-        let (count, payload) = file.split_at_checked(4).ok_or("missing placement count")?;
-        let table_bytes = (u32::from_le_bytes(count.try_into()?) as usize)
-            .checked_mul(4)
-            .ok_or("placement count overflow")?;
-        let (placements, atlas) = payload
-            .split_at_checked(table_bytes)
-            .ok_or("truncated placement table")?;
-        let volume = renderer::pbr::BakedLighting::from_bytes(atlas)?;
-        scene.bind_lightmaps(
-            placements,
-            volume.chart_count(),
-            self.submission != SubmissionMode::Direct,
-        )?;
-        env.identity["static_triangles"] = serde_json::json!(volume.chart_count());
-        let [width, height] = volume.extent();
-        let bytes = volume.rgba32f().to_vec();
-        env.diffuse = ibl::Image {
-            format: renderer_core::ImageFormat::Rgba32Float,
-            width,
-            height,
-            mips: std::iter::once(0..bytes.len()).collect(),
-            bytes,
-        };
-        env.identity["baked_lighting_sha256"] = serde_json::json!(digest(file));
+        if let Some(path) = &self.baked_lighting {
+            let bytes = std::fs::read(path)?;
+            let (identity, file) = bytes
+                .split_at_checked(64)
+                .ok_or("invalid Bistro probe asset")?;
+            if identity
+                != camera::bake_identity(&run::loaded_cook_hash(scene, self.fixture)?).as_bytes()
+            {
+                return Err(
+                    "baked lighting belongs to a different Bistro cook or lighting preset".into(),
+                );
+            }
+            let (count, payload) = file.split_at_checked(4).ok_or("missing placement count")?;
+            let table_bytes = (u32::from_le_bytes(count.try_into()?) as usize)
+                .checked_mul(4)
+                .ok_or("placement count overflow")?;
+            let (placements, atlas) = payload
+                .split_at_checked(table_bytes)
+                .ok_or("truncated placement table")?;
+            let volume = renderer::pbr::BakedLighting::from_bytes(atlas)?;
+            scene.bind_lightmaps(
+                placements,
+                volume.chart_count(),
+                self.submission != SubmissionMode::Direct,
+            )?;
+            env.identity["static_triangles"] = serde_json::json!(volume.chart_count());
+            let [width, height] = volume.extent();
+            let bytes = volume.rgba32f().to_vec();
+            env.diffuse = ibl::Image {
+                format: renderer_core::ImageFormat::Rgba32Float,
+                width,
+                height,
+                mips: std::iter::once(0..bytes.len()).collect(),
+                bytes,
+            };
+            env.identity["baked_lighting_sha256"] = serde_json::json!(digest(file));
+        } else if self.reflection_probes.is_none() {
+            return Ok(());
+        }
         env.identity["scenario_blend"] = serde_json::json!(self.scenario_blend);
         let [day, dusk] = camera::BAKE_SCENARIOS;
         let mix = |a: [f32; 3], b: [f32; 3]| {
@@ -252,6 +283,8 @@ impl Options {
         look["time_sweep"] = serde_json::json!(self.sweep);
         look["baked_lighting_sha256"] = env.identity["baked_lighting_sha256"].clone();
         look["gi_view"] = serde_json::json!(format!("{:?}", self.gi_debug));
+        look["reflection_spheres"] = serde_json::json!(self.reflection_spheres);
+        look["reflection_spheres_to"] = serde_json::json!(self.reflection_spheres_to);
         look["white_sphere"] = serde_json::json!(self.ball);
         look["direction_to_light"] = serde_json::json!(conditions.light_direction);
         look["irradiance_rgb"] = serde_json::json!(conditions.light_color);
@@ -327,6 +360,10 @@ impl Options {
             api: DEFAULT_API.into(),
             manifest: None,
             ibl_manifest: None,
+            reflection_probes: None,
+            reflection_debug: Default::default(),
+            reflection_spheres: None,
+            reflection_spheres_to: None,
             baked_lighting: None,
             scenario_blend: 0.,
             gi_debug: Default::default(),
@@ -486,6 +523,34 @@ impl Options {
                     }
                     result.ball = Some(xyz);
                 }
+                "--reflection-probes" => {
+                    result.reflection_probes =
+                        Some(args.next().ok_or("missing reflection asset")?.into())
+                }
+                "--reflection-debug" => {
+                    result.reflection_debug = match args.next().as_deref() {
+                        Some("weights") => renderer::pbr::ReflectionProbeView::Weights,
+                        Some("radiance") => renderer::pbr::ReflectionProbeView::Radiance,
+                        _ => return Err("expected reflection weights or radiance".into()),
+                    }
+                }
+                "--reflection-spheres" | "--reflection-spheres-to" => {
+                    let mut pos = [0f32; 3];
+                    for v in &mut pos {
+                        *v = args
+                            .next()
+                            .ok_or("reflection spheres need X Y Z")?
+                            .parse()?;
+                    }
+                    if !pos.into_iter().all(f32::is_finite) {
+                        return Err("invalid sphere position".into());
+                    }
+                    if argument == "--reflection-spheres" {
+                        result.reflection_spheres = Some(pos);
+                    } else {
+                        result.reflection_spheres_to = Some(pos);
+                    }
+                }
                 "--baked-lighting" => {
                     result.baked_lighting =
                         Some(args.next().ok_or("missing baked lighting file")?.into())
@@ -582,17 +647,40 @@ impl Options {
         if result.steady_state_cpu && result.warmup < result.inflight {
             return Err("stationary CPU measurement requires a fully warmed pipeline".into());
         }
+        if result.reflection_spheres_to.is_some()
+            && (result.reflection_spheres.is_none()
+                || result.instances.enabled()
+                || result.submission != SubmissionMode::Direct
+                || result.pipeline == PipelineMode::ForwardReference
+                || result.frames < 2
+                || result.shader_assets.is_some())
+        {
+            return Err("moving inspection spheres require a start position, at least two frames and the standard direct pipeline without the instance grid".into());
+        }
         if !(0.0..=1.0).contains(&result.scenario_blend)
-            || ((result.baked_lighting.is_none() || result.sweep) && result.scenario_blend != 0.)
-            || (result.baked_lighting.is_some() && result.shader_assets.is_some())
+            || (((result.baked_lighting.is_none() && result.reflection_probes.is_none())
+                || result.sweep)
+                && result.scenario_blend != 0.)
+            || ((result.baked_lighting.is_some() || result.reflection_probes.is_some())
+                && result.shader_assets.is_some())
         {
             return Err(
                 "baked lighting requires built-in shaders and a fixed blend in [0,1] or --time-sweep"
                     .into(),
             );
         }
+        if !matches!(result.gi_debug, renderer::pbr::BakedLightingView::Shaded)
+            && result.reflection_debug != renderer::pbr::ReflectionProbeView::Shaded
+        {
+            return Err("select one lighting inspection view at a time".into());
+        }
+        if result.reflection_probes.is_none()
+            && result.reflection_debug != renderer::pbr::ReflectionProbeView::Shaded
+        {
+            return Err("reflection inspection requires --reflection-probes".into());
+        }
         if result.baked_lighting.is_none()
-            && (result.sweep
+            && ((result.sweep && result.reflection_probes.is_none())
                 || !matches!(result.gi_debug, renderer::pbr::BakedLightingView::Shaded))
         {
             return Err("GI inspection requires --baked-lighting".into());
@@ -641,6 +729,7 @@ Scenes and output
   --api vulkan|d3d12             Default: {DEFAULT_API}
   --output DIR                   Default: .tools/bistro-runtime
   --baked-lighting FILE --scenario-blend 0..1     Baked day-to-dusk indirect and direct light
+  --reflection-probes FILE [--reflection-debug weights|radiance] [--reflection-spheres X Y Z] [--reflection-spheres-to X Y Z]
   --time-sweep | --gi-debug irradiance|sources|weights | --white-sphere X Y Z
   --look reference|lumberyard-day
   --view bistro-corner|street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route
@@ -759,6 +848,7 @@ mod tests {
             scene,
             options,
             uniform,
+            0,
             true,
         )?;
         Ok((backend, resident, built))

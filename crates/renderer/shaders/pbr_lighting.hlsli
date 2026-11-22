@@ -14,6 +14,7 @@ Texture2D<float4> shadow_image3 : register(t3, space3);
 SamplerState shadow_sampler : register(s4, space3);
 
 #include "probe_volume.hlsli"
+#include "reflection_probes.hlsli"
 
 // Processed environment is top-origin lat-long. Rotate a world direction by
 // inverse source yaw; U wraps while V clamps, including the pole texels.
@@ -123,7 +124,7 @@ float3 evaluate_lighting(float3 position, Surface surface, BrdfInputs brdf_input
     float environment_strength = max(camera.environment.x, 0.0);
     float3 indirect = 0.0;
     [branch]
-    if (environment_strength > 0.0 || camera.shadow_bias.w >= 1.0) {
+    if (environment_strength > 0.0 || camera.shadow_bias.w >= 1.0 || abs(camera.environment.w) >= 2.0) {
         float3 irradiance;
         [branch]
         if (camera.shadow_bias.w >= 1.0) {
@@ -142,10 +143,23 @@ float3 evaluate_lighting(float3 position, Surface surface, BrdfInputs brdf_input
         float2 brdf = brdf_image.SampleLevel(environment_sampler, lut_uv, 0.0).rg;
         // AO attenuates only diffuse environment light.
         float3 indirect_diffuse = irradiance * diffuse_color / PI * surface.occlusion;
-        float3 indirect_specular = prefiltered * (f0 * brdf.x + brdf.y);
+        float3 split_sum = f0 * brdf.x + brdf.y;
+        float3 indirect_specular = prefiltered * split_sum;
         indirect = camera.shadow_bias.w >= 1.0
             ? indirect_diffuse + indirect_specular * environment_strength
             : (indirect_diffuse + indirect_specular) * environment_strength;
+        float probe_parameter = abs(camera.environment.w);
+        if (probe_parameter >= 2.0) {
+            float3 weights;
+            float3 radiance = local_specular(position, reflected, roughness,
+                prefiltered * environment_strength, probe_parameter, weights);
+            if (probe_parameter >= 6.0) return radiance;
+            if (probe_parameter >= 4.0) return weights;
+            if (weights.z < 1.0) {
+                indirect = indirect_diffuse * (camera.shadow_bias.w >= 1.0 ? 1.0 : environment_strength)
+                    + radiance * split_sum;
+            }
+        }
     }
     // At exactly zero N dot L, finite shadow visibility can only multiply
     // zero. Shadow sampling uses explicit LOD, so this branch needs no gradients.

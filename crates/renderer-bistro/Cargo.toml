@@ -9,7 +9,7 @@ description = "Bistro reference scene applications for Renderer"
 
 [features]
 default = []
-bake-tool = ["dep:renderer-bake"]
+bake-tool = ["dep:renderer-bake", "dep:serde"]
 vulkan = ["renderer/vulkan", "renderer-bake?/vulkan"]
 d3d12 = ["renderer/d3d12", "renderer-bake?/d3d12"]
 development-validation = ["renderer/development-validation", "renderer-bake?/development-validation"]
@@ -30,6 +30,7 @@ renderer-bake = { version = "0.1.0", path = "../renderer-bake", optional = true 
 renderer-core = { version = "0.1.0", path = "../renderer-core", default-features = false }
 renderer = { version = "0.1.0", path = "../renderer", default-features = false }
 renderer-example-support = { version = "0.1.0", path = "../renderer-example-support" }
+serde = { version = "1", features = ["derive"], optional = true }
 serde_json = "1.0"
 sha2 = "0.10.9"
 tracy-client = { workspace = true, optional = true }

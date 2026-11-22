@@ -211,6 +211,12 @@
             "name" : "shadow_image3",
             "set" : 3,
             "binding" : 3
+        },
+        {
+            "type" : "texture2D",
+            "name" : "reflection_probes",
+            "set" : 2,
+            "binding" : 4
         }
     ],
     "separate_samplers" : [

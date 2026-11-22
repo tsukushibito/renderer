@@ -1214,6 +1214,15 @@ pub(super) fn build(
             resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeatUClampV),
         },
         Binding {
+            group: 2,
+            binding: 4,
+            resource: BindingResource::ImageView(graph.sampled_image_view(
+                environment[1],
+                0,
+                resident.environment_mips[1],
+            )?),
+        },
+        Binding {
             group: 3,
             binding: 0,
             resource: BindingResource::ImageView(shadow_views[0]),

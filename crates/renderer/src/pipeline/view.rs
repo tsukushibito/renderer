@@ -174,6 +174,18 @@ impl StandardPipeline {
             },
             (None, None) => defaults.environment()?,
         };
+        if let Some(local) = input.reflection_probes {
+            if input.environment.is_none() {
+                return Err(GraphError::invalid_input(
+                    "reflection probes require an environment BRDF LUT",
+                ));
+            }
+            environment.local_reflections = Some(pbr::LocalReflections {
+                atlas: crate::material::texture_view(graph, local.atlas)?,
+                blend: local.blend,
+                view: local.view,
+            });
+        }
         if let Some(baked) = input.baked_lighting {
             environment.diffuse_lighting = pbr::DiffuseLighting::BakedLighting {
                 blend: baked.blend,

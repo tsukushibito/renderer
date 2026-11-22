@@ -110,6 +110,7 @@ pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         image(2, 1),
         image(2, 2),
         sampler(2, 3),
+        image(2, 4),
         image(3, 0),
         image(3, 1),
         image(3, 2),
@@ -133,6 +134,7 @@ pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         0,
         0,
         0,
+        0,
     ],
     sampling_pairs: &[
         pair(1, 0, 4),
@@ -142,6 +144,7 @@ pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         pair(2, 0, 3),
         pair(2, 1, 3),
         pair(2, 2, 3),
+        pair(2, 4, 3),
         pair(3, 0, 4),
         pair(3, 1, 4),
         pair(3, 2, 4),
@@ -226,7 +229,7 @@ pub(super) static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
 /// HDR PBR Program for opaque and alpha-mask geometry.
 pub const fn opaque_program() -> ManagedRasterProgram {
     // SAFETY: Pinned modules/reflection exactly match the declared 48-byte stream,
-    // 464/64-byte UBO prefixes, 16 bindings and every image/sampler pairing.
+    // 464/64-byte UBO prefixes, 17 bindings and every image/sampler pairing.
     // All dynamic shadow indices are clamped to four matrices/vectors. Sampling
     // uses normalized coordinates/explicit LOD and native-bounded selected Views.
     // Gradients precede any discard. Arithmetic has guarded normalization and
@@ -450,6 +453,7 @@ mod tests {
                     "t1,space2",
                     "t2,space2",
                     "s3,space2",
+                    "t4,space2",
                     "t0,space3",
                     "t1,space3",
                     "t2,space3",

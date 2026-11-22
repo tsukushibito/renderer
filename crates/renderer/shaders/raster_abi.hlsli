@@ -14,7 +14,7 @@ struct CameraData {
     float4 eye;
     float4 light_direction;
     float4 light_color; // linear sun RGB, orthographic view flag
-    float4 environment; // strength, inverse-yaw input radians, specular max LOD, shadows enabled
+    float4 environment; // strength, inverse-yaw input radians, specular max LOD, positive W enables shadows; abs(W)>=2 encodes local probe mode and scenario blend
     row_major float4x4 shadow_view_projection[4];
     float4 shadow_splits;
     float4 shadow_texel_world;

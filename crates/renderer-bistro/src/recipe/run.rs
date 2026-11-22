@@ -143,7 +143,9 @@ fn frames(
             #[cfg(feature = "tracy")]
             let _build = tracy_client::Client::running()
                 .map(|client| client.span(tracy_client::span_location!("bistro.build"), 0));
-            pipeline::build(pool, workspace, resident, scene, options, &input, false)?
+            pipeline::build(
+                pool, workspace, resident, scene, options, &input, frame, false,
+            )?
         };
         let build = stage.elapsed().as_nanos() as u64;
         let stage = Instant::now();
@@ -283,7 +285,9 @@ fn capture_planes(
 ) -> Result<Value, Error> {
     std::fs::create_dir_all(&options.output)?;
     let input = frame_input(conditions, options, frame)?;
-    let built = pipeline::build(pool, workspace, resident, scene, options, &input, true)?;
+    let built = pipeline::build(
+        pool, workspace, resident, scene, options, &input, frame, true,
+    )?;
     let shadow_reuse_hits = built
         .shadow_updates
         .as_ref()
@@ -527,9 +531,14 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
             )?)?
         };
     if let Some(pos) = options.ball {
-        scene.add_white_sphere(pos);
+        scene.add_inspection_sphere(pos, 0.85, 0.);
     }
     let mut look = options.look.apply(&mut conditions, &mut environment);
+    if let Some(pos) = options.reflection_spheres {
+        for (dz, roughness) in [(-0.5, 0.08), (0.5, 0.55)] {
+            scene.add_inspection_sphere([pos[0], pos[1], pos[2] + dz], roughness, 1.);
+        }
+    }
     options.apply_baked_lighting(&mut scene, &mut conditions, &mut environment, &mut look)?;
     let environment_identity = environment.identity.clone();
     // Hash the same manifest bytes that Scene::load parsed. A separate read
@@ -761,10 +770,13 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         &mut workspace,
         0,
     )?;
-    if options.sweep && options.frames > 1 {
+    if (options.sweep || options.reflection_spheres_to.is_some()) && options.frames > 1 {
         for (label, frame) in [
             ("midpoint", (options.frames - 1) / 2),
-            ("dusk", options.frames - 1),
+            (
+                if options.sweep { "dusk" } else { "end" },
+                options.frames - 1,
+            ),
         ] {
             let mut at = options.clone();
             at.output = options.output.join(label);

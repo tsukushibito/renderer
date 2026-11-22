@@ -27,7 +27,10 @@ mod view;
 pub use input::{Draw, GeometryDrawInput, Mesh};
 pub use view::{StandardViewOutput, StandardViewState};
 mod scene;
-pub use scene::{BakedLightingInput, EnvironmentMaps, MeshIndexRange, RenderObject, SceneInput};
+pub use scene::{
+    BakedLightingInput, EnvironmentMaps, MeshIndexRange, ReflectionProbeInput, RenderObject,
+    SceneInput,
+};
 mod scene_pairs;
 pub use scene_pairs::{FrameScene, PipelineId};
 mod contract;
