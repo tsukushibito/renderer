@@ -17,24 +17,14 @@ uint probe_index(float value, uint maximum) {
 uint lighting_keys(float tag) {
     return tag == 0.0 ? 2u : clamp(probe_index(tag,16u),1u,16u);
 }
-float3 probe_irradiance(float3 position, float3 n, float blend) {
-    uint2 dims;
-    irradiance_image.GetDimensions(dims.x, dims.y);
+float3 sample_probe_volume(uint2 dims, float4 bounds, float3 f, float3 n, float4 layout,
+                           uint header, uint stride, uint key, float mix) {
     uint maximum = dims.x * dims.y - 1u;
-    float4 bounds = probe_load(0, dims);
-    float3 f = (position - bounds.xyz) / max(bounds.w, 1e-20);
-    float4 layout = probe_load(1,dims);
-    uint count = lighting_keys(layout.w);
-    float phase = saturate(blend) * (count - 1u);
-    uint key = (uint)phase;
-    float mix = frac(phase);
-    uint header = 2u + max(count,2u);
     if (any(f < 0.0) || any(f > 1.0)) {
         float3 sky = probe_load(2u+key, dims).rgb;
         if (mix > 0.0) sky = lerp(sky,probe_load(3u+key,dims).rgb,mix);
         return sky;
     }
-    uint stride = 2u + 4u * count;
     uint node_count = probe_index(layout.x, maximum / 3u);
     uint base = header + node_count * 3u;
     uint node = 0u;
@@ -90,4 +80,24 @@ float3 probe_irradiance(float3 position, float3 n, float blend) {
         size *= 0.5;
     }
     return 0.0;
+}
+
+float3 probe_irradiance(float3 position, float3 n, float blend) {
+    uint2 dims;
+    irradiance_image.GetDimensions(dims.x, dims.y);
+    float4 bounds = probe_load(0, dims);
+    float3 f = (position - bounds.xyz) / max(bounds.w, 1e-20);
+    float4 layout = probe_load(1,dims);
+    uint count = lighting_keys(layout.w);
+    float phase = saturate(blend) * (count - 1u);
+    uint key = (uint)phase;
+    float mix = frac(phase);
+    uint header = 2u + max(count,2u);
+    uint stride = 2u + 4u * count;
+    // At the first key, load SH from the same texels as the relocation vector.
+    // Select once before traversal so every corner can reuse the same fetches.
+    [branch] if (phase == 0.0) {
+        return sample_probe_volume(dims,bounds,f,n,layout,header,stride,0u,0.0);
+    }
+    return sample_probe_volume(dims,bounds,f,n,layout,header,stride,key,mix);
 }
