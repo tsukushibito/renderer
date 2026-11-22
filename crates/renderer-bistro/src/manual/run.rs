@@ -236,9 +236,10 @@ fn identity(
     cook_hash: &str,
     conditions_hash: &str,
     environment: &Value,
+    look: &Value,
 ) -> Value {
     let shadow = super::shadow::Parameters::default();
-    let identity = json!({"cook_manifest_sha256":cook_hash,"conditions_sha256":conditions_hash,
+    let identity = json!({"look":look,"cook_manifest_sha256":cook_hash,"conditions_sha256":conditions_hash,
         "shaders_sha256":super::digest(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../renderer/shaders/manifest.json"))),
         "view":if options.fixture {"fixture"}else{options.view.as_str()},"width":options.width,"height":options.height,
         "inflight":options.inflight,"alpha_only":options.alpha_only,"alpha_override":options.force_opaque,
@@ -524,7 +525,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         "/../../tools/bistro/conditions.json"
     ));
     let conditions_hash = super::digest(condition_bytes);
-    let conditions = Conditions::parse(&serde_json::from_slice(condition_bytes)?)?;
+    let mut conditions = Conditions::parse(&serde_json::from_slice(condition_bytes)?)?;
     eprintln!("Bistro asset load boundary");
     let mut scene = if let Some(path) = &options.manifest {
         Scene::load(path, options.force_opaque)?
@@ -549,6 +550,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
                 "B3 full-scene rendering requires --ibl-manifest from tools/bistro/ibl.py",
             )?)?
         };
+    let look = options.look.apply(&mut conditions, &mut environment);
     let environment_identity = environment.identity.clone();
     // Hash the same manifest bytes that Scene::load parsed. A separate read
     // could otherwise identify a different revision from the loaded contents.
@@ -653,7 +655,13 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     if options.capture_handshake {
         super::trace::ready(
             options.capture_settings(),
-            &identity(options, &cook_hash, &conditions_hash, &environment_identity),
+            &identity(
+                options,
+                &cook_hash,
+                &conditions_hash,
+                &environment_identity,
+                &look,
+            ),
             tracy_capture_id.as_deref(),
         )?;
     }
@@ -832,7 +840,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
             } else {
                 None
             };
-            let report = json!({"schema_version":1,"identity":identity(&view,&cook_hash,&conditions_hash,&environment_identity),"runtime":runtime,
+            let report = json!({"schema_version":1,"identity":identity(&view,&cook_hash,&conditions_hash,&environment_identity, &look),"runtime":runtime,
                 "scene":counts,"capture_only":true,"measurement":Value::Null,"captures":captured_view["captures"],
                 "shadow_captures":captured_view["shadow_captures"],"aa_off":aa_off,
                 "depth_coverage_pixels":captured_view["depth_coverage_pixels"],"draw_count":captured_view["draw_count"],"readback_outside_measurement":true});
@@ -840,12 +848,17 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         }
     }
     let mut captured_route = Vec::new();
-    if options.capture_route_samples {
+    if let Some(selection) = options.route_capture {
         let mut route = options.clone();
         route.view = "route".into();
-        let mut route_identity =
-            identity(&route, &cook_hash, &conditions_hash, &environment_identity);
-        for frame in [0, 300, 600, 900, 1200, 1500, 1799] {
+        let mut route_identity = identity(
+            &route,
+            &cook_hash,
+            &conditions_hash,
+            &environment_identity,
+            &look,
+        );
+        for frame in selection.frames() {
             route.output = options.output.join("route").join(frame.to_string());
             let mut report = capture(
                 &mut backend,
@@ -909,7 +922,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         "scope":"Graph build/compile/submit/poll/retire/result return; no capture/file I/O; setup/shutdown separate positive controls"});
     #[cfg(not(feature = "memory-profiling"))]
     let memory_json = Value::Null;
-    let report = json!({"schema_version":1,"identity":identity(options,&cook_hash,&conditions_hash,&environment_identity),"runtime":runtime,
+    let report = json!({"schema_version":1,"identity":identity(options,&cook_hash,&conditions_hash,&environment_identity, &look),"runtime":runtime,
         "scene":counts,"prepared":prepared,"setup_ns":setup_ns,
         "setup_phases_ns":{"asset_load":asset_load_ns,"budget":budget_ns,"native_prepare":native_prepare_ns,"upload":upload_ns,
             "frame_storage_and_profiling_prepare":frame_storage_and_profiling_prepare_ns,"warmup":warmup_ns},
@@ -973,7 +986,13 @@ mod tests {
         scene.source["cooked_manifest_sha256"] = json!(loaded);
         let hash = loaded_cook_hash(&scene, false).unwrap();
         assert_eq!(
-            identity(&fixture_options(), &hash, "conditions", &Value::Null)["cook_manifest_sha256"],
+            identity(
+                &fixture_options(),
+                &hash,
+                "conditions",
+                &Value::Null,
+                &Value::Null
+            )["cook_manifest_sha256"],
             loaded
         );
         scene

@@ -97,6 +97,65 @@ impl Frustum {
     }
 }
 
+/// Offscreen captures use the route's 60 Hz frame indices.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum RouteCapture {
+    Samples,
+    Clip,
+}
+
+impl RouteCapture {
+    pub fn frames(self) -> Vec<usize> {
+        match self {
+            Self::Samples => vec![0, 300, 600, 900, 1200, 1500, 1799],
+            Self::Clip => (0..120).step_by(2).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Look {
+    Reference,
+    LumberyardDay,
+}
+
+impl std::str::FromStr for Look {
+    type Err = Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "reference" => Ok(Self::Reference),
+            "lumberyard-day" => Ok(Self::LumberyardDay),
+            _ => Err(format!("unknown Bistro look: {value}").into()),
+        }
+    }
+}
+
+impl Look {
+    pub fn apply(
+        self,
+        conditions: &mut Conditions,
+        environment: &mut super::ibl::Environment,
+    ) -> Value {
+        let name = match self {
+            Self::Reference => "reference",
+            Self::LumberyardDay => {
+                conditions.light_direction = [0.3302644, 0.8244736, -0.459531];
+                conditions.light_color = [8.4, 8.0, 7.1];
+                conditions.background = [0.55, 0.68, 0.92];
+                environment.strength = 0.92;
+                "lumberyard-day"
+            }
+        };
+        serde_json::json!({
+            "name": name, "direction_to_light": conditions.light_direction,
+            "irradiance_rgb": conditions.light_color, "background_linear_rgb": conditions.background,
+            "ibl_strength": environment.strength, "ibl_yaw_degrees": environment.yaw_degrees,
+            "exposure_ev": 1
+        })
+    }
+}
+
 pub(crate) struct Conditions {
     pub views: Vec<(String, Camera)>,
     pub route: Vec<(usize, Camera)>,
@@ -188,6 +247,14 @@ impl Conditions {
     }
 
     pub fn camera(&self, view: &str, frame: usize) -> Result<Camera, Error> {
+        // ORCA exterior plate 1, fitted from the scooter, street posts and manhole.
+        if view == "bistro-corner" {
+            return Ok(Camera {
+                position: [-23.01494, 6.42312, -0.15436],
+                target: [-13.36295, 3.82032, 0.09966],
+                fov: 37.83862,
+            });
+        }
         if view != "route" {
             return self
                 .views

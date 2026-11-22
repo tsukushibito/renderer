@@ -847,7 +847,7 @@ pub(super) fn execute(mut options: Options) -> Result<(), Error> {
         env!("CARGO_MANIFEST_DIR"),
         "/../../tools/bistro/conditions.json"
     ));
-    let conditions = Conditions::parse(&serde_json::from_slice(condition_bytes)?)?;
+    let mut conditions = Conditions::parse(&serde_json::from_slice(condition_bytes)?)?;
     let mut scene = if let Some(path) = &options.manifest {
         Scene::load(path, false)?
     } else {
@@ -856,7 +856,7 @@ pub(super) fn execute(mut options: Options) -> Result<(), Error> {
     if !options.fixture && !conditions.ambient_occlusion {
         scene.disable_environment_occlusion();
     }
-    let environment = if options.fixture {
+    let mut environment = if options.fixture {
         Environment::fixture()
     } else {
         Environment::load(
@@ -866,8 +866,10 @@ pub(super) fn execute(mut options: Options) -> Result<(), Error> {
                 .ok_or("Windowed Bistro requires --ibl-manifest")?,
         )?
     };
+    let look = options.look.apply(&mut conditions, &mut environment);
     let asset_load_ns = ns(load_started.elapsed());
     let inputs = json!({
+        "look": look,
         "cook_manifest_sha256": super::run::loaded_cook_hash(&scene, options.fixture)?,
         "ibl_manifest_sha256": environment.identity["manifest_sha256"],
         "conditions_sha256": super::digest(condition_bytes),

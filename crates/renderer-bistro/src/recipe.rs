@@ -109,6 +109,7 @@ struct Options {
     manifest: Option<PathBuf>,
     ibl_manifest: Option<PathBuf>,
     fixture: bool,
+    look: camera::Look,
     view: String,
     width: u32,
     height: u32,
@@ -120,7 +121,7 @@ struct Options {
     alpha_only: bool,
     force_opaque: bool,
     capture_all_views: bool,
-    capture_route_samples: bool,
+    route_capture: Option<camera::RouteCapture>,
     capture_bloom_bypass: bool,
     windowed: bool,
     window_smoke: bool,
@@ -217,6 +218,7 @@ impl Options {
             manifest: None,
             ibl_manifest: None,
             fixture: false,
+            look: camera::Look::Reference,
             view: "street".into(),
             width: 1920,
             height: 1080,
@@ -228,7 +230,7 @@ impl Options {
             alpha_only: false,
             force_opaque: false,
             capture_all_views: false,
-            capture_route_samples: false,
+            route_capture: None,
             capture_bloom_bypass: false,
             windowed: false,
             window_smoke: false,
@@ -263,7 +265,10 @@ impl Options {
                 "--steady-state-cpu" => result.steady_state_cpu = true,
                 "--alpha-only" => result.alpha_only = true,
                 "--capture-all-views" => result.capture_all_views = true,
-                "--capture-route-samples" => result.capture_route_samples = true,
+                "--capture-route-samples" => {
+                    result.route_capture = Some(camera::RouteCapture::Samples)
+                }
+                "--capture-route-clip" => result.route_capture = Some(camera::RouteCapture::Clip),
                 "--capture-bloom-bypass" => result.capture_bloom_bypass = true,
                 "--windowed" => result.windowed = true,
                 "--window-smoke" => {
@@ -347,6 +352,7 @@ impl Options {
                     result.ibl_manifest =
                         Some(args.next().ok_or("--ibl-manifest needs a path")?.into())
                 }
+                "--look" => result.look = args.next().ok_or("--look needs a preset")?.parse()?,
                 "--view" => {
                     result.view = args.next().ok_or("--view needs a fixed name or route")?
                 }
@@ -414,6 +420,9 @@ impl Options {
         if result.instances.enabled() && result.omit_material.is_some() {
             return Err("--instances requires all original materials".into());
         }
+        if result.fixture && result.look != camera::Look::Reference {
+            return Err("--look lumberyard-day requires the exterior scene".into());
+        }
         if result.fixture && !specified_size {
             result.width = 128;
             result.height = 96;
@@ -433,7 +442,7 @@ impl Options {
             return Err("stationary CPU measurement requires a fully warmed pipeline".into());
         }
         result.validate_lighting_extent()?;
-        if result.capture_route_samples && result.fixture {
+        if result.route_capture.is_some() && result.fixture {
             return Err("route samples require a cooked Bistro scene".into());
         }
         if result.capture_bloom_bypass && result.bloom == Bloom::Off {
@@ -441,7 +450,7 @@ impl Options {
         }
         if result.windowed
             && (result.capture_all_views
-                || result.capture_route_samples
+                || result.route_capture.is_some()
                 || result.capture_bloom_bypass
                 || result.capture_shadows
                 || result.resource_checks
@@ -475,7 +484,8 @@ fn print_help() {
 Scenes and output
   --api vulkan|d3d12             Default: {DEFAULT_API}
   --output DIR                   Default: .tools/bistro-runtime
-  --view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route
+  --look reference|lumberyard-day
+  --view bistro-corner|street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route
   --width N --height N
   --windowed | --window-smoke    Requires Windows and the presentation feature
   --vsync on|off                 Default: on
@@ -494,7 +504,7 @@ Measurement and captures
   --gpu-timing
   --steady-state-cpu             Requires warmup >= inflight
   --resource-checks              Requires memory-profiling and inflight >= 2
-  --capture-all-views --capture-route-samples
+  --capture-all-views --capture-route-samples | --capture-route-clip (2 seconds, 30 fps)
   --capture-bloom-bypass --capture-shadow-maps
   --alpha-only --alpha-override opaque"
     );
