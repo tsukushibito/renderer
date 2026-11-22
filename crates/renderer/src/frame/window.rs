@@ -65,6 +65,15 @@ impl WindowRenderer {
         })
     }
 
+    /// Prepare baked diffuse and specular lighting on this renderer's device.
+    pub fn load_probe_lighting(
+        &mut self,
+        assets: crate::pipeline::ProbeLighting<'_>,
+    ) -> PipelineResult<crate::pipeline::ResidentProbeLighting> {
+        self.ready_for_change()?;
+        self.renderer.load_probe_lighting(assets)
+    }
+
     pub fn prepare_assets(
         &mut self,
         assets: SceneAssets<'_>,

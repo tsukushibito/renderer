@@ -18,10 +18,21 @@ fn compare(backend: BakeBackend) {
             emission: [0.6, 0.2, 0.],
             ..Default::default()
         }],
-        vec![],
+        vec![
+            renderer_bake::Texture::new(
+                4,
+                2,
+                (0..8).map(|i| [0.1 * i as f32, 0.3, 0.7, 1.]).collect(),
+            )
+            .unwrap(),
+        ],
     )
     .unwrap();
     let lights = [[0.25, 0.5, 0.75], [0.1, 0.05, 0.02]].map(|sky| Lighting {
+        environment: Some(renderer_bake::SkyMap {
+            texture: 0,
+            yaw_radians: 0.4,
+        }),
         sky,
         direction_to_sun: [0., 1., 0.],
         sun: [1.; 3],
@@ -30,7 +41,12 @@ fn compare(backend: BakeBackend) {
         positions: [[-1., 0., -1.], [1., 0., -1.], [0., 0., 1.]],
         normals: [[0., 1., 0.]; 3],
     }];
-    let bake = |backend| {
+    fn bake<const N: usize>(
+        scene: &BakeScene,
+        receivers: &[ReceiverTriangle],
+        backend: BakeBackend,
+        lights: impl renderer_bake::LightingScenarios<N> + Copy,
+    ) -> renderer::pbr::BakedLighting {
         let probes = scene
             .bake_probes(
                 lights,
@@ -44,7 +60,7 @@ fn compare(backend: BakeBackend) {
             .unwrap();
         let charts = scene
             .bake_lightmaps(
-                &receivers,
+                receivers,
                 lights,
                 LightmapSettings {
                     backend,
@@ -54,24 +70,32 @@ fn compare(backend: BakeBackend) {
             )
             .unwrap();
         probes.with_lightmaps(&charts).unwrap()
-    };
-    let reference = bake(BakeBackend::Cpu);
-    let native = bake(backend);
-    assert_eq!(reference.extent(), native.extent());
-    for (i, (a, b)) in reference
-        .rgba32f()
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(native.rgba32f().as_chunks::<4>().0)
-        .enumerate()
-    {
-        let (a, b) = (f32::from_le_bytes(*a), f32::from_le_bytes(*b));
-        assert!(
-            (a - b).abs() < 0.0005,
-            "{backend:?} atlas word {i}: CPU {a}, GPU {b}"
-        );
     }
+    let verify = |reference: renderer::pbr::BakedLighting, native: renderer::pbr::BakedLighting| {
+        assert_eq!(reference.extent(), native.extent());
+        for (i, (a, b)) in reference
+            .rgba32f()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(native.rgba32f().as_chunks::<4>().0)
+            .enumerate()
+        {
+            let (a, b) = (f32::from_le_bytes(*a), f32::from_le_bytes(*b));
+            assert!(
+                (a - b).abs() < 0.0005,
+                "{backend:?} atlas word {i}: CPU {a}, GPU {b}"
+            );
+        }
+    };
+    verify(
+        bake(&scene, &receivers, BakeBackend::Cpu, lights),
+        bake(&scene, &receivers, backend, lights),
+    );
+    verify(
+        bake(&scene, &receivers, BakeBackend::Cpu, lights[1]),
+        bake(&scene, &receivers, backend, lights[1]),
+    );
 }
 
 #[cfg(feature = "vulkan")]

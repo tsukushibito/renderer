@@ -122,15 +122,24 @@ float3 hemisphere(float3 n, float u, float v) {
     sincos(2 * PI * v, s, c);
     return sqrt(u) * (c * tangent + s * cross(n, tangent)) + sqrt(saturate(1 - u)) * n;
 }
+float3 sky_radiance(Table t, float3 d, float4 sky, float yaw) {
+    if (sky.w < 0.0) return sky.rgb;
+    float height = max(1.0,fetch(t,t.tex+number(sky.w)).y);
+    float longitude = dot(d.xz,d.xz) > 0.0 ? atan2(d.z,d.x) : 0.0;
+    float u = 0.5 + (longitude+yaw)/(2.0*PI);
+    float v = clamp(acos(clamp(d.y,-1.0,1.0))/PI,0.5/height,1.0-0.5/height);
+    return sky.rgb * texture_color(t,sky.w,float2(u,v)).rgb;
+}
 float3 incoming(Table t, float3 o, float3 d, uint scenario, uint seed) {
-    float3 sky = fetch(t, 2 + 3 * scenario).rgb;
+    float4 sky = fetch(t, 2 + 3 * scenario);
+    float yaw = fetch(t, 3 + 3 * scenario).w;
     float3 sun = fetch(t, 3 + 3 * scenario).rgb;
     float3 light = fetch(t, 4 + 3 * scenario).xyz;
     float3 val = 0, weight = 1;
     Hit hit;
     [loop] for (uint bounce = 0; bounce < 2; bounce++) {
         if (!trace_ray(t, o, d, 3.402823e38, hit))
-            return val + weight * sky;
+            return val + weight * sky_radiance(t,d,sky,yaw);
         o = offset_ray(o + d * hit.dist, hit.n);
         float cosine = max(dot(hit.n, light), 0);
         Hit blocker;
@@ -142,7 +151,7 @@ float3 incoming(Table t, float3 o, float3 d, uint scenario, uint seed) {
         float v = random(seed);
         d = hemisphere(hit.n, u, v);
     }
-    return val + (trace_ray(t, o, d, 3.402823e38, hit) ? 0 : weight * sky);
+    return val + (trace_ray(t, o, d, 3.402823e38, hit) ? 0 : weight * sky_radiance(t,d,sky,yaw));
 }
 groupshared float3 sums[32][8];
 [numthreads(32, 1, 1)] void main(uint3 group
@@ -156,6 +165,7 @@ groupshared float3 sums[32][8];
     if (!volume)
         origin = offset_ray(origin, rec.normal.xyz);
     uint samples = clamp(number(fetch(t, 1).x), 1u, 4096u);
+    uint scenarios = clamp(number(fetch(t,1).y),1u,2u);
     [unroll] for (uint k = 0; k < 8; k++) sums[lane][k] = 0;
     [loop] for (uint j = lane; j < samples; j += 32) {
         float u = (j + 0.5) / samples, v = reversebits(j) * 2.3283064365386963e-10;
@@ -163,7 +173,7 @@ groupshared float3 sums[32][8];
         float s, c;
         sincos(2 * PI * v, s, c);
         float3 d = volume ? float3(r * c, z, r * s) : hemisphere(rec.normal.xyz, u, v);
-        [loop] for (uint side = 0; side < 2; side++) {
+        [loop] for (uint side = 0; side < scenarios; side++) {
             float3 l = incoming(t, origin, d, side, j) * (PI / samples);
             sums[lane][4 * side] += l;
             [unroll] for (uint axis = 0; axis < 3; axis++) sums[lane][4 * side + axis + 1] +=

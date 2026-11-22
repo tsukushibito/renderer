@@ -133,9 +133,17 @@ impl StandardPipeline {
     ) -> Result<(), GraphError> {
         let mut aggregate = Preparation::new(preparation.frames_in_flight());
         aggregate.add_alternatives(&[self.preparation()])?;
+        let imports = renderer_core::capacity::GraphRequirements {
+            resources: 2,
+            initial_ranges: 2,
+            name_bytes: 2 * "material texture".len(),
+            ..Default::default()
+        };
+        aggregate.add_graph_requirements(imports)?;
         // Runtime registrations for meshes, materials and defaults are shared.
         // Only transient targets and view Graph declarations repeat per camera.
         for _ in 1..count.get() {
+            aggregate.add_graph_requirements(imports)?;
             aggregate.add_requirements(
                 self.preparation().graph_requirements(),
                 self.recipe.preparation().working_set(),
@@ -175,11 +183,6 @@ impl StandardPipeline {
             (None, None) => defaults.environment()?,
         };
         if let Some(local) = input.reflection_probes {
-            if input.environment.is_none() {
-                return Err(GraphError::invalid_input(
-                    "reflection probes require an environment BRDF LUT",
-                ));
-            }
             environment.local_reflections = Some(pbr::LocalReflections {
                 atlas: crate::material::texture_view(graph, local.atlas)?,
                 blend: local.blend,

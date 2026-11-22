@@ -181,6 +181,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         blend_distance: f32,
     }
     let mut layout = None;
+    let mut ibl_manifest = None;
+    let mut day_only = false;
     let mut manifest = None;
     let mut fixture = false;
     let mut output = None;
@@ -188,6 +190,10 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut texel_budget = 16384;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--day-only" => day_only = true,
+            "--ibl-manifest" => {
+                ibl_manifest = Some(PathBuf::from(args.next().ok_or("missing IBL manifest")?))
+            }
             "--reflection-probes" => {
                 layout = Some(PathBuf::from(
                     args.next().ok_or("missing reflection layout")?,
@@ -215,7 +221,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--lightmap-texels N] [--reflection-probes LAYOUT.json]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--day-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--lightmap-texels N] [--reflection-probes LAYOUT.json]"
                 );
                 return Ok(());
             }
@@ -239,9 +245,40 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             .ok_or("missing scene identity")?
             .to_string()
     };
-    let bake = import(&scene)?;
+    let mut bake = import(&scene)?;
+    let mut identity = crate::shared::camera::bake_identity(&identity);
+    let mut panorama = None;
+    if let Some(path) = ibl_manifest {
+        let mut env = crate::shared::ibl::Environment::load(&path)?;
+        env.strength = crate::shared::camera::DAY_IBL_STRENGTH;
+        identity = crate::shared::camera::environment_bake_identity(&identity, &env)
+            .ok_or("missing IBL identity")?;
+        // Level zero is the sharp linear HDR map used by runtime reflections.
+        let image = env.specular;
+        let texels = image.bytes[image.mips[0].clone()]
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|pixel| {
+                std::array::from_fn(|i| {
+                    half::f16::from_le_bytes([pixel[i * 2], pixel[i * 2 + 1]]).to_f32()
+                })
+            })
+            .collect();
+        panorama = Some(bake.add_sky_map(
+            Texture::new(image.width as usize, image.height as usize, texels)?,
+            env.yaw_degrees.to_radians(),
+        )?);
+    }
     let lights = BAKE_SCENARIOS.map(|s| Lighting {
-        sky: s.sky,
+        environment: panorama,
+        sky: if panorama.is_some() {
+            std::array::from_fn(|i| {
+                crate::shared::camera::DAY_IBL_STRENGTH * s.sky[i] / BAKE_SCENARIOS[0].sky[i]
+            })
+        } else {
+            s.sky
+        },
         sun: s.sun,
         direction_to_sun: s.direction,
     });
@@ -267,9 +304,13 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             })
             .collect::<Result<Vec<_>, Error>>()?;
         drop(scene);
-        let atlas = bake.bake_reflection_probes(&probes, lights)?;
+        let atlas = if day_only {
+            bake.bake_reflection_probes(&probes, lights[0])?
+        } else {
+            bake.bake_reflection_probes(&probes, lights)?
+        };
         let mut file = std::io::BufWriter::new(std::fs::File::create_new(output)?);
-        file.write_all(crate::shared::camera::bake_identity(&identity).as_bytes())?;
+        file.write_all(identity.as_bytes())?;
         atlas.write(&mut file)?;
         file.flush()?;
         eprintln!("Baked {} local reflection probes", probes.len());
@@ -283,16 +324,20 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let (placements, triangles) = receivers(&scene, surface_settings, texel_budget)?;
     drop(scene);
     let started = std::time::Instant::now();
-    let volume = bake.bake_probes(lights, settings)?;
-    let maps = bake.bake_lightmaps(&triangles, lights, surface_settings)?;
+    let volume = if day_only {
+        bake.bake_probes(lights[0], settings)?
+            .with_lightmaps(&bake.bake_lightmaps(&triangles, lights[0], surface_settings)?)?
+    } else {
+        bake.bake_probes(lights, settings)?
+            .with_lightmaps(&bake.bake_lightmaps(&triangles, lights, surface_settings)?)?
+    };
     eprintln!(
         "Baked {} surface charts on {} placements",
-        maps.len(),
+        volume.chart_count(),
         placements.len()
     );
-    let volume = volume.with_lightmaps(&maps)?;
     let mut file = std::fs::File::create_new(output)?;
-    file.write_all(crate::shared::camera::bake_identity(&identity).as_bytes())?;
+    file.write_all(identity.as_bytes())?;
     file.write_all(&u32::try_from(placements.len())?.to_le_bytes())?;
     for id in placements {
         file.write_all(&id.to_le_bytes())?;

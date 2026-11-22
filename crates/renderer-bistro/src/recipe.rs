@@ -206,21 +206,26 @@ impl Options {
         env: &mut ibl::Environment,
         look: &mut serde_json::Value,
     ) -> Result<(), Error> {
+        if self.reflection_probes.is_none() && self.baked_lighting.is_none() {
+            return Ok(());
+        }
+        let base = camera::bake_identity(&run::loaded_cook_hash(scene, self.fixture)?);
+        let hdr = camera::environment_bake_identity(&base, env);
+        let matches_bake =
+            |id: &[u8]| base.as_bytes() == id || hdr.as_ref().is_some_and(|s| s.as_bytes() == id);
         if let Some(path) = &self.reflection_probes {
             let bytes = std::fs::read(path)?;
             let (identity, file) = bytes
                 .split_at_checked(64)
                 .ok_or("truncated reflection probe asset")?;
-            if identity
-                != camera::bake_identity(&run::loaded_cook_hash(scene, self.fixture)?).as_bytes()
-            {
+            if !matches_bake(identity) {
                 return Err(
                     "reflection probes belong to a different Bistro cook or lighting preset".into(),
                 );
             }
             let atlas = renderer::pbr::ReflectionProbes::from_bytes(file)?;
             let [width, height] = atlas.extent();
-            let bytes = atlas.rgba32f().to_vec();
+            let bytes = atlas.into_rgba32f();
             env.reflection_probes = Some(ibl::Image {
                 format: renderer_core::ImageFormat::Rgba32Float,
                 width,
@@ -237,9 +242,7 @@ impl Options {
             let (identity, file) = bytes
                 .split_at_checked(64)
                 .ok_or("invalid Bistro probe asset")?;
-            if identity
-                != camera::bake_identity(&run::loaded_cook_hash(scene, self.fixture)?).as_bytes()
-            {
+            if !matches_bake(identity) {
                 return Err(
                     "baked lighting belongs to a different Bistro cook or lighting preset".into(),
                 );
@@ -259,7 +262,7 @@ impl Options {
             )?;
             env.identity["static_triangles"] = serde_json::json!(volume.chart_count());
             let [width, height] = volume.extent();
-            let bytes = volume.rgba32f().to_vec();
+            let bytes = volume.into_rgba32f();
             env.diffuse = ibl::Image {
                 format: renderer_core::ImageFormat::Rgba32Float,
                 width,
@@ -268,8 +271,6 @@ impl Options {
                 bytes,
             };
             env.identity["baked_lighting_sha256"] = serde_json::json!(digest(file));
-        } else if self.reflection_probes.is_none() {
-            return Ok(());
         }
         env.identity["scenario_blend"] = serde_json::json!(self.scenario_blend);
         let [day, dusk] = camera::BAKE_SCENARIOS;

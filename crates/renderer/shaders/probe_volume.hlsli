@@ -22,7 +22,9 @@ float3 probe_irradiance(float3 position, float3 n, float blend) {
     if (any(f < 0.0) || any(f > 1.0)) {
         return lerp(probe_load(2, dims).rgb, probe_load(3, dims).rgb, blend);
     }
-    uint node_count = probe_index(probe_load(1, dims).x, maximum / 3u);
+    float4 layout = probe_load(1,dims);
+    uint stride = layout.w == 1.0 ? 6u : 10u;
+    uint node_count = probe_index(layout.x, maximum / 3u);
     uint base = 4u + node_count * 3u;
     uint node = 0u;
     float size = bounds.w;
@@ -38,8 +40,8 @@ float3 probe_irradiance(float3 position, float3 n, float blend) {
                 float3 corner = float3(i & 1u, (i >> 1u) & 1u, i >> 2u);
                 float3 trilinear = lerp(1.0 - f, f, corner);
                 float weight = trilinear.x * trilinear.y * trilinear.z;
-                uint id = probe_index(i < 4u ? ids0[i & 3u] : ids1[i & 3u], maximum / 10u);
-                uint p = base + 10u * id;
+                uint id = probe_index(i < 4u ? ids0[i & 3u] : ids1[i & 3u], maximum / stride);
+                uint p = base + stride * id;
                 float3 delta = (f - corner) * size;
                 delta -= float3(probe_load(p + 2u, dims).w, probe_load(p + 3u, dims).w,
                                 probe_load(p + 4u, dims).w);
@@ -55,9 +57,11 @@ float3 probe_irradiance(float3 position, float3 n, float blend) {
                 weight *= min(visibility.x, min(visibility.y, visibility.z));
                 float3 sh = 0.0;
                 [unroll] for (uint k = 0u; k < 4u; ++k) {
-                    float3 a = probe_load(p + 2u + k, dims).rgb;
-                    float3 b = probe_load(p + 6u + k, dims).rgb;
-                    sh += lerp(a, b, blend) * float4(1.0, n)[k];
+                    float3 coeff = probe_load(p + 2u + k, dims).rgb;
+                    [branch] if (stride == 10u && blend > 0.0) {
+                        coeff = lerp(coeff, probe_load(p + 6u + k, dims).rgb, blend);
+                    }
+                    sh += coeff * float4(1.0, n)[k];
                 }
                 sum += sh * weight;
                 weights += weight;

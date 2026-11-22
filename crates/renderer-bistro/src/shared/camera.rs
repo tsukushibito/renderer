@@ -131,6 +131,8 @@ impl std::str::FromStr for Look {
     }
 }
 
+pub(crate) const DAY_IBL_STRENGTH: f32 = 0.92;
+
 impl Look {
     pub fn apply(
         self,
@@ -143,7 +145,7 @@ impl Look {
                 conditions.light_direction = BAKE_SCENARIOS[0].direction;
                 conditions.light_color = [8.4, 8.0, 7.1];
                 conditions.background = [0.55, 0.68, 0.92];
-                environment.strength = 0.92;
+                environment.strength = DAY_IBL_STRENGTH;
                 "lumberyard-day"
             }
         };
@@ -191,6 +193,21 @@ pub(crate) fn bake_identity(cook_sha256: &str) -> String {
         }
     }
     format!("{:x}", hash.finalize())
+}
+
+/// An environment-lit bake must match the source panorama and its world orientation.
+pub(crate) fn environment_bake_identity(
+    base: &str,
+    env: &super::ibl::Environment,
+) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let manifest = env.identity["manifest_sha256"].as_str()?;
+    let mut hash = Sha256::new();
+    hash.update(base.as_bytes());
+    hash.update(manifest.as_bytes());
+    hash.update(env.strength.to_le_bytes());
+    hash.update(env.yaw_degrees.to_le_bytes());
+    Some(format!("{:x}", hash.finalize()))
 }
 
 pub(crate) struct Conditions {

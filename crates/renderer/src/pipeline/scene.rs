@@ -134,6 +134,19 @@ impl EnvironmentMaps {
     }
 }
 
+/// Baked scene assets to upload together at a load or level-change boundary.
+#[derive(Default, Clone, Copy)]
+pub struct ProbeLighting<'a> {
+    pub diffuse: Option<&'a crate::pbr::BakedLighting>,
+    pub reflections: Option<&'a crate::pbr::ReflectionProbes>,
+}
+
+/// Owns the GPU registrations until dropped. Share across cameras on the same renderer.
+pub struct ResidentProbeLighting {
+    pub(super) diffuse: Option<renderer_core::runtime::ManagedImage>,
+    pub(super) reflections: Option<renderer_core::runtime::ManagedImage>,
+}
+
 /// A resident diffuse atlas and the two-scenario blend for this view.
 #[derive(Clone, Copy)]
 pub struct BakedLightingInput<'a> {
@@ -151,7 +164,7 @@ impl<'a> BakedLightingInput<'a> {
     }
 }
 
-/// Resident specular atlas. Supply the split-sum BRDF LUT via the scene environment.
+/// Resident specular atlas. The standard PBR LUT is used without a global environment.
 #[derive(Clone, Copy)]
 pub struct ReflectionProbeInput<'a> {
     pub atlas: &'a renderer_core::graph::ImportImage,
@@ -201,6 +214,18 @@ impl<'a> SceneInput<'a> {
             baked_lighting: None,
             reflection_probes: None,
         }
+    }
+    /// Apply the same scenario interpolation to diffuse and specular lighting.
+    pub fn with_probe_lighting(mut self, lighting: &'a ResidentProbeLighting, blend: f32) -> Self {
+        self.baked_lighting = lighting
+            .diffuse
+            .as_ref()
+            .map(|asset| BakedLightingInput::new(asset.snapshot(), blend));
+        self.reflection_probes = lighting
+            .reflections
+            .as_ref()
+            .map(|asset| ReflectionProbeInput::new(asset.snapshot(), blend));
+        self
     }
     /// Resolve this frame's posed vertices and the object's selected index range.
     /// All camera and shadow passes reference the same uploaded pose revision.

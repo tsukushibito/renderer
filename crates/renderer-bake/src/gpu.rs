@@ -53,7 +53,11 @@ fn program() -> ManagedProgram {
 fn texel(rgb: [f32; 3], w: f32) -> [f32; 4] {
     [rgb[0], rgb[1], rgb[2], w]
 }
-fn pack(scene: &BakeScene, lights: [Lighting; 2], samples: u32) -> Result<(ImageDesc, Vec<u8>)> {
+fn pack<const N: usize>(
+    scene: &BakeScene,
+    lights: [Lighting; N],
+    samples: u32,
+) -> Result<(ImageDesc, Vec<u8>)> {
     let counts = [
         scene.bvh.0.len(),
         scene.triangles.len(),
@@ -86,11 +90,18 @@ fn pack(scene: &BakeScene, lights: [Lighting; 2], samples: u32) -> Result<(Image
         }
     };
     push(counts.map(|n| n as f32));
-    push([samples as f32, 0., 0., 0.]);
-    for light in lights {
-        for v in [light.sky, light.sun, light.direction_to_sun] {
-            push(texel(v, 0.));
-        }
+    push([samples as f32, N as f32, 0., 0.]);
+    for i in 0..2 {
+        let light = lights[i.min(N - 1)];
+        push(texel(
+            light.sky,
+            light.environment.map_or(-1., |m| m.texture as f32),
+        ));
+        push(texel(
+            light.sun,
+            light.environment.map_or(0., |m| m.yaw_radians),
+        ));
+        push(texel(light.direction_to_sun, 0.));
     }
     for n in &scene.bvh.0 {
         push(texel(n.lo, n.start as f32));
@@ -131,11 +142,11 @@ fn pack(scene: &BakeScene, lights: [Lighting; 2], samples: u32) -> Result<(Image
     bytes.resize(width * height * 16, 0);
     Ok((ImageDesc::rgba32_float(width as u32, height as u32), bytes))
 }
-pub(super) fn integrate(
+pub(super) fn integrate<const N: usize>(
     choice: BakeBackend,
     scene: &BakeScene,
     jobs: &[SurfaceSample],
-    lights: [Lighting; 2],
+    lights: [Lighting; N],
     samples: u32,
     limit: f32,
 ) -> Result<Option<Vec<[f32; 4]>>> {

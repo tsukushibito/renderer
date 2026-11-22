@@ -8,7 +8,7 @@
 
 ## ライトマップと照度プローブを使う
 
-ゲーム側が用意する入力は、ワールド座標の静的な三角形、線形色の材質とテクスチャ、二つの照明条件です。アセットビルドで一度だけ `renderer-bake` を使います。プローブの位置はジオメトリから自動で決まります。
+ゲーム側が用意する入力は、ワールド座標の静的な三角形、線形色の材質とテクスチャ、一つまたは二つの照明条件です。アセットビルドで一度だけ `renderer-bake` を使います。プローブの位置はジオメトリから自動で決まります。
 
 ```rust
 let scene = BakeScene::new(occluders, materials, textures)?;
@@ -17,13 +17,28 @@ let maps = scene.bake_lightmaps(&static_receivers, [day, dusk], LightmapSettings
 probes.with_lightmaps(&maps)?.write(output)?;
 ```
 
-プローブだけなら `bake_probes` の結果を直接保存できます。ライトマップだけなら `BakedLighting::from_lightmaps(&maps, fallback)` に、範囲外で使う各シナリオの RGB 照度を渡します。配置と LOD ごとに、描画順の三角形を `ReceiverTriangle` として渡してください。各チャートの UV はベイク側が生成します。描画メッシュの各三角形は 3 個の連続する固有頂点を使い、元の UV0 は材質用に保持します。
-
-ロード時に `renderer::pbr::BakedLighting::from_bytes` でアセットを検証します。`image_desc()` で画像を準備し、`upload` の完了後、その画像のスナップショットをシーン入力に渡します。鏡面 IBL が必要な場合は `input.environment` も指定します。静的配置の `MaterialFactors::lightmap` にはゼロ始まりの `first_chart` と描画バッファ内の `first_vertex` を指定します。移動物体や未ベイクの LOD は `None` にすると各ピクセルのワールド位置と法線でプローブを引きます。表面が両面描画の場合、裏側もプローブを使います。
+時刻が固定なら三つのベイク関数に `day` を直接渡します。単一シナリオ用の照度・反射だけを計算し、保存します。HDR の空には、描画と同じ線形経緯度画像と回転角を渡せます。
 
 ```rust
-input.baked_lighting = Some(BakedLightingInput::new(atlas.snapshot(), time_of_day));
-frame.draw_scene(input, exposure)?;
+let mut scene = BakeScene::new(occluders, materials, textures)?;
+let map = scene.add_sky_map(panorama, yaw_radians)?;
+let day = Lighting::environment_map(map, [strength; 3]).with_sun(direction, sun_irradiance);
+let diffuse = scene.bake_probes(day, ProbeSettings::default())?;
+let reflections = scene.bake_reflection_probes(&boxes, day)?;
+```
+
+プローブだけなら `bake_probes` の結果を直接保存できます。ライトマップだけなら `BakedLighting::from_lightmaps(&maps, fallback)` に、範囲外で使う各シナリオの RGB 照度を渡します。配置と LOD ごとに、描画順の三角形を `ReceiverTriangle` として渡してください。各チャートの UV はベイク側が生成します。描画メッシュの各三角形は 3 個の連続する固有頂点を使い、元の UV0 は材質用に保持します。
+
+ロード時に `renderer::pbr::BakedLighting::from_bytes` でアセットを検証します。`Renderer`、`WindowRenderer`、`SceneRenderer` のいずれも `load_probe_lighting` が転送容量を準備して完了を待ちます。返り値を描画する間保持します。大域 IBL を使う場合は `input.environment` も指定します。静的配置の `MaterialFactors::lightmap` にはゼロ始まりの `first_chart` と描画バッファ内の `first_vertex` を指定します。移動物体や未ベイクの LOD は `None` にすると各ピクセルのワールド位置と法線でプローブを引きます。表面が両面描画の場合、裏側もプローブを使います。
+
+```rust
+// レベルのロード時
+let lighting = renderer.load_probe_lighting(ProbeLighting {
+    diffuse: Some(&diffuse), reflections: Some(&reflections),
+})?;
+
+// 描画時。複数ビューで同じ lighting を共有できる
+frame.draw_scene(input.with_probe_lighting(&lighting, time_of_day), exposure)?;
 ```
 
 昼から夕方への係数は 0～1 です。太陽の方位・色、背景、時計の進行はアプリ側で更新します。ベイクは線形の拡散照度を供給し、直接光の影と鏡面 IBL は通常の描画経路を使います。
@@ -50,13 +65,9 @@ cargo run --release -p renderer-bistro --features bake-tool --bin bistro-bake --
 cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --reflection-probes .tools/bistro.reflections --baked-lighting .tools/bistro.gi --frames 5 --width 960 --height 530 --output .tools/bistro-local
 ```
 
-`--baked-lighting` は任意です。アプリではロード時に `pbr::ReflectionProbes::from_bytes`、`image_desc()`、`upload` を使い、転送完了後の画像を保持します。各フレームで既存の BRDF LUT と範囲外の反射を持つ環境に組み合わせます。
+拡散と鏡面は個別に有効化できます。局所反射だけなら `ProbeLighting { diffuse: None, reflections: Some(&reflections) }` をロードします。標準 PBR が BRDF LUT を用意します。大域反射も使う場合は `input.environment` を指定します。
 
-```rust
-input.environment = Some(&environment_maps);
-input.reflection_probes = Some(ReflectionProbeInput::new(reflections.snapshot(), time_of_day));
-frame.draw_scene(input, exposure)?;
-```
+ベイク時の `--day-only` は昼だけを保存します。`--ibl-manifest FILE` は `lumberyard-day` の大域反射と同じ経緯度画像の先頭 mip と強度を使います。昼夕をベイクする場合、夕方の空は昼からの RGB 比で着色します。実行時は同じ IBL と look を指定してください。画像・向き・強度はロード時に照合されます。
 
 `--reflection-debug weights` は第 1 箱を赤、第 2 箱を緑、グローバル寄与を青で表示します。`--reflection-debug radiance --time-sweep` は材質 BRDF を掛ける前の HDR を昼・中間・夕方で保存します。`--reflection-spheres -10 0.85 0 --reflection-spheres-to 7 0.85 7` を標準の direct 描画に追加すると、粗さ 0.08 と 0.55 の金属球が路上からひさし下を通って客席へ移動します。通常表示、プローブ無効、重み表示、radiance の各出力を使う[数値比較と実機画像](../verification/current.md#bistro-local-reflections)も参照してください。
 

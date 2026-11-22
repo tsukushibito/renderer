@@ -1,4 +1,4 @@
-use crate::{BakeScene, Lighting, Vec3, cross, dot, unit};
+use crate::{BakeScene, Vec3, cross, dot, unit};
 use renderer::pbr::{ReflectionProbeDesc, ReflectionProbes};
 use std::f32::consts::{PI, TAU};
 
@@ -59,13 +59,28 @@ fn filter(capture: &[Vec3], n: Vec3, roughness: f32) -> Vec3 {
     color.map(|v| v / weight)
 }
 
+fn parallel_pixels(output: &mut [Vec3], sample: impl Fn(usize) -> Vec3 + Sync) {
+    let workers = std::thread::available_parallelism().map_or(1, usize::from);
+    let chunk = output.len().div_ceil(workers).max(128);
+    std::thread::scope(|scope| {
+        for (i, pixels) in output.chunks_mut(chunk).enumerate() {
+            let sample = &sample;
+            scope.spawn(move || {
+                for (j, value) in pixels.iter_mut().enumerate() {
+                    *value = sample(i * chunk + j);
+                }
+            });
+        }
+    });
+}
+
 impl BakeScene {
-    /// Capture static transport for two lighting scenarios and GGX-filter each
+    /// Capture static transport for one lighting condition or two endpoints and GGX-filter each
     /// capture. Matched ray sequences keep scenario interpolation coherent.
-    pub fn bake_reflection_probes(
+    pub fn bake_reflection_probes<const N: usize>(
         &self,
         probes: &[ReflectionProbeDesc],
-        scenarios: [Lighting; 2],
+        scenarios: impl crate::LightingScenarios<N>,
     ) -> Result<ReflectionProbes, Box<dyn std::error::Error>> {
         if !(1..=ReflectionProbes::MAX_COUNT).contains(&probes.len()) {
             return Err("invalid reflection probe count".into());
@@ -73,9 +88,10 @@ impl BakeScene {
         for probe in probes {
             probe.validate()?;
         }
-        let [a, b] = scenarios;
-        let lights = [a.normalized()?, b.normalized()?];
-        let mut bytes = Vec::with_capacity(W * ReflectionProbes::ROWS * 16 * probes.len());
+        let lights = self.lighting(scenarios)?;
+        let mut bytes = Vec::with_capacity(W * (1 + 127 * N) * 16 * probes.len());
+        let mut capture = vec![[0.; 3]; W * H];
+        let mut filtered = vec![[0.; 3]; W * (H / 2)];
         for p in probes {
             let start = bytes.len();
             for (values, w) in [(p.position, p.blend_distance), (p.min, 0.), (p.max, 0.)] {
@@ -85,33 +101,35 @@ impl BakeScene {
             }
             bytes.resize(start + W * 16, 0);
             for light in lights {
-                let capture: Vec<_> = (0..W * H)
-                    .map(|i| {
-                        let ray = direction(i % W, i / W, H);
-                        let mut sum = [0.; 3];
-                        for j in 0..8 {
-                            let mut seed = (i as u32).wrapping_mul(8) + j;
-                            let color = self.incoming(p.position, ray, light, &mut seed);
-                            for k in 0..3 {
-                                sum[k] += color[k] / 8.;
-                            }
+                parallel_pixels(&mut capture, |i| {
+                    let ray = direction(i % W, i / W, H);
+                    let mut sum = [0.; 3];
+                    for j in 0..8 {
+                        let mut seed = i as u32 * 8 + j;
+                        let color = self.incoming(p.position, ray, light, &mut seed);
+                        for k in 0..3 {
+                            sum[k] += color[k] / 8.;
                         }
-                        sum
-                    })
-                    .collect();
+                    }
+                    sum
+                });
                 for level in 0..ReflectionProbes::LEVELS {
                     let height = H >> level;
-                    for i in 0..W * height {
-                        let color = if level == 0 {
-                            capture[i]
-                        } else {
+                    let colors = if level == 0 {
+                        capture.as_slice()
+                    } else {
+                        let values = &mut filtered[..W * height];
+                        parallel_pixels(values, |i| {
                             filter(
                                 &capture,
                                 direction(i % W, i / W, height),
                                 level as f32 / (ReflectionProbes::LEVELS - 1) as f32,
                             )
-                        };
-                        for v in color.into_iter().chain([1.]) {
+                        });
+                        &*values
+                    };
+                    for color in colors {
+                        for v in color.iter().copied().chain([1.]) {
                             bytes.extend(v.to_le_bytes());
                         }
                     }
@@ -125,6 +143,7 @@ impl BakeScene {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Lighting;
     #[test]
     fn increasing_roughness_spreads_a_compact_highlight() {
         let direction_to_emitter = [1., 0., 0.];
@@ -153,6 +172,7 @@ mod tests {
             blend_distance: 0.5,
         };
         let sky = |v| Lighting {
+            environment: None,
             sky: [v; 3],
             sun: [0.; 3],
             direction_to_sun: [0., 1., 0.],

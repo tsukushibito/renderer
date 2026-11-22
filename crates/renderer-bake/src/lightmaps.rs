@@ -1,6 +1,4 @@
-use crate::{
-    BakeBackend, BakeError, BakeScene, Lighting, SurfaceSample, Vec3, dot, finite, sub, unit,
-};
+use crate::{BakeBackend, BakeError, BakeScene, SurfaceSample, Vec3, dot, finite, sub, unit};
 use renderer::pbr::LightmapChart;
 use std::error::Error;
 
@@ -47,23 +45,22 @@ impl ReceiverTriangle {
 impl BakeScene {
     /// Generate independent bilinear charts. Edge extension projects unused
     /// texels onto the nearest triangle edge, so filtering never crosses charts.
-    pub fn bake_lightmaps(
+    pub fn bake_lightmaps<const N: usize>(
         &self,
         triangles: &[ReceiverTriangle],
-        scenarios: [Lighting; 2],
+        scenarios: impl crate::LightingScenarios<N>,
         settings: LightmapSettings,
-    ) -> Result<Vec<LightmapChart>, Box<dyn Error>> {
+    ) -> Result<Vec<LightmapChart<N>>, Box<dyn Error>> {
         if settings.rays_per_texel == 0 {
             return Err(BakeError("zero surface rays").into());
         }
-        let [a, b] = scenarios;
-        let lights = [a.normalized()?, b.normalized()?];
+        let lights = self.lighting(scenarios)?;
         let mut jobs = Vec::new();
         let mut extents = Vec::with_capacity(triangles.len());
         for tri in triangles {
             let extent = tri.chart_extent(settings)?;
             let [w, h] = extent;
-            if jobs.len() + usize::from(w) * usize::from(h) > 256 * 16384 / 2 {
+            if jobs.len() + usize::from(w) * usize::from(h) > 256 * 16384 / N {
                 return Err(BakeError("lightmap atlas exceeds capacity").into());
             }
             let [a, b, c] = tri.normals;
@@ -93,14 +90,20 @@ impl BakeScene {
             gpu.as_chunks::<10>()
                 .0
                 .iter()
-                .map(|p| [p[2][..3].try_into().unwrap(), p[6][..3].try_into().unwrap()])
+                .map(|p| std::array::from_fn(|i| p[2 + 4 * i][..3].try_into().unwrap()))
                 .collect()
         } else {
-            self.bake_irradiance(&jobs, lights[0], settings.rays_per_texel)?
-                .into_iter()
-                .zip(self.bake_irradiance(&jobs, lights[1], settings.rays_per_texel)?)
-                .map(|(a, b)| [a, b])
-                .collect()
+            let mut output = vec![[[0.; 3]; N]; jobs.len()];
+            for (i, light) in lights.into_iter().enumerate() {
+                for (texel, rgb) in output.iter_mut().zip(self.bake_irradiance(
+                    &jobs,
+                    light,
+                    settings.rays_per_texel,
+                )?) {
+                    texel[i] = rgb;
+                }
+            }
+            output
         };
         let mut samples = irradiance.into_iter();
         Ok(extents
@@ -118,6 +121,7 @@ impl BakeScene {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Lighting;
     #[test]
     fn independent_chart_extents_and_two_linear_scenarios() {
         let scene = BakeScene::new(vec![], vec![], vec![]).unwrap();
@@ -126,6 +130,7 @@ mod tests {
             normals: [[0., 1., 0.]; 3],
         };
         let light = Lighting {
+            environment: None,
             sky: [1.; 3],
             sun: [10.; 3],
             direction_to_sun: [0., 1., 0.],

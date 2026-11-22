@@ -1156,6 +1156,7 @@ dependencies = [
 name = "renderer-bistro"
 version = "0.1.0"
 dependencies = [
+ "half",
  "renderer",
  "renderer-bake",
  "renderer-core",

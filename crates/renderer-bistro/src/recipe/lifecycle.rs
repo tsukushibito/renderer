@@ -35,12 +35,15 @@ pub(super) const MIP_PROBE_SDR: SdrOutput = SdrOutput {
 /// shown by the audited material-detail camera. Other fixtures prefer a frequently
 /// used opaque material. The GPU pixel-change gate rejects an invisible choice.
 pub(super) fn selection(scene: &Scene) -> Result<(usize, usize), Error> {
-    if scene.mesh_count == 1296 && scene.primitives.len() == 1591 && scene.materials.len() == 132 {
-        let material = &scene.materials[4];
+    // The material-detail camera sees the Vespa in cooked primitive 16.
+    // Lightmap binding can clone a material and inspection spheres append draws.
+    if scene.mesh_count >= 1296 && scene.source["primitive_count"].as_u64() == Some(1591) {
+        let index = scene.primitives[16].material;
+        let material = &scene.materials[index];
         if material.alpha_zero || material.uniform[48..52] != 0u32.to_le_bytes() {
             return Err("audited Bistro replacement material is no longer opaque".into());
         }
-        return Ok((4, material.textures[0]));
+        return Ok((index, material.textures[0]));
     }
     let mut counts = vec![0usize; scene.materials.len()];
     for primitive in &scene.primitives {

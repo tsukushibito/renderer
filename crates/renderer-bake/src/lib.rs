@@ -16,11 +16,11 @@ pub enum BakeBackend {
 }
 
 impl BakeBackend {
-    fn integrate(
+    fn integrate<const N: usize>(
         self,
         scene: &BakeScene,
         jobs: &[SurfaceSample],
-        lights: [Lighting; 2],
+        lights: [Lighting; N],
         samples: u32,
         limit: f32,
     ) -> Result<Option<Vec<[f32; 4]>>, Box<dyn std::error::Error>> {
@@ -49,7 +49,7 @@ mod transport;
 
 use bvh::Bvh;
 use std::fmt;
-pub use transport::{Lighting, SurfaceSample};
+pub use transport::{Lighting, LightingScenarios, SkyMap, SurfaceSample};
 
 pub type Vec3 = [f32; 3];
 
@@ -168,6 +168,19 @@ pub struct BakeScene {
 }
 
 impl BakeScene {
+    /// Add a top-origin latitude-longitude sky at the bake boundary.
+    pub fn add_sky_map(&mut self, texture: Texture, yaw_radians: f32) -> Result<SkyMap, BakeError> {
+        if !yaw_radians.is_finite() {
+            return Err(BakeError("invalid sky yaw"));
+        }
+        let map = SkyMap {
+            texture: self.textures.len(),
+            yaw_radians,
+        };
+        self.textures.push(texture);
+        Ok(map)
+    }
+
     pub fn new(
         mut triangles: Vec<Triangle>,
         materials: Vec<Material>,

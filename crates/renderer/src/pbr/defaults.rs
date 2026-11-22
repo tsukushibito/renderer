@@ -13,30 +13,35 @@ use super::{
     unshadowed::{NAME as SHADOW_NAME, desc as shadow_desc},
 };
 
-const MATERIAL_NAMES: [&str; 4] = [
+const MATERIAL_NAMES: [&str; 5] = [
     "PBR default sRGB white",
     "PBR default normal",
     "PBR default ORM",
     "PBR disabled IBL",
+    "PBR split-sum BRDF",
 ];
 const MATERIAL_NAME_BYTES: usize = MATERIAL_NAMES[0].len()
     + MATERIAL_NAMES[1].len()
     + MATERIAL_NAMES[2].len()
-    + MATERIAL_NAMES[3].len();
-const PIXELS: [&[u8]; 4] = [
+    + MATERIAL_NAMES[3].len()
+    + MATERIAL_NAMES[4].len();
+const PIXELS: [&[u8]; 5] = [
     &[255, 255, 255, 255],
     // RGBA16F encodes a flat normal exactly: (0.5, 0.5, 1.0, 1.0).
     &[0, 0x38, 0, 0x38, 0, 0x3c, 0, 0x3c],
     &[255, 255, 255, 255],
     &[0, 0, 0, 0, 0, 0, 0, 0x3c],
+    // tools/bistro/ibl.py: rgba16_bytes([brdf_lut(32, 32, 1024)]), correlated Smith GGX.
+    include_bytes!("brdf-lut.rgba16f"),
 ];
 
-fn material_descriptions() -> [ImageDesc; 4] {
+fn material_descriptions() -> [ImageDesc; 5] {
     [
         ImageDesc::rgba8_srgb(1, 1),
         ImageDesc::rgba16_float(1, 1),
         ImageDesc::rgba8(1, 1),
         ImageDesc::rgba16_float(1, 1),
+        ImageDesc::rgba16_float(32, 32),
     ]
 }
 
@@ -73,12 +78,12 @@ impl Defaults {
     /// Runtime limits must include all registrations and the startup work
     /// described by [`Self::upload_requirements`].
     pub fn prepare(self, preparation: &mut Preparation) -> Result<PreparedDefaults, GraphError> {
-        let [color, normal, orm, ibl] = material_descriptions();
-        let resources = [color, normal, orm, ibl, shadow_desc()]
+        let [color, normal, orm, ibl, brdf] = material_descriptions();
+        let resources = [color, normal, orm, ibl, brdf, shadow_desc()]
             .map(|desc| ResourceClass::Image { desc, count: 1 });
         let resources = match self {
-            Self::Materials => &resources[..4],
-            Self::Unshadowed => &resources[4..],
+            Self::Materials => &resources[..5],
+            Self::Unshadowed => &resources[5..],
             Self::MaterialsAndUnshadowed => &resources[..],
         };
         let name_bytes = usize::from(self.materials()) * MATERIAL_NAME_BYTES
@@ -121,7 +126,7 @@ impl Defaults {
     /// classes for the submissions that may overlap when using this route.
     pub fn upload(self, graph: &mut Graph) -> Result<DefaultViews, GraphError> {
         let materials = if self.materials() {
-            let mut images = [None; 4];
+            let mut images = [None; 5];
             for (index, desc) in material_descriptions().into_iter().enumerate() {
                 let image = graph.image(MATERIAL_NAMES[index], desc)?;
                 graph.upload_image(MATERIAL_NAMES[index], image, PIXELS[index])?;
@@ -145,7 +150,7 @@ impl Defaults {
 /// Views of the defaults selected for the current Graph.
 #[derive(Clone, Copy, Debug)]
 pub struct DefaultViews {
-    materials: Option<[ImageView; 4]>,
+    materials: Option<[ImageView; 5]>,
     unshadowed: Option<UnshadowedView>,
 }
 
@@ -155,7 +160,7 @@ impl DefaultViews {
         self,
         textures: MaterialTextures<Option<ImageView>>,
     ) -> Result<MaterialTextures, GraphError> {
-        let [white, normal, orm, _] = self.material_maps()?;
+        let [white, normal, orm, _, _] = self.material_maps()?;
         Ok(MaterialTextures {
             base_color: textures.base_color.unwrap_or(white),
             normal: textures.normal.unwrap_or(normal),
@@ -166,13 +171,13 @@ impl DefaultViews {
 
     /// Build a disabled IBL environment for a directly lit scene.
     pub fn environment(self) -> Result<Environment, GraphError> {
-        let [_, _, _, black] = self.material_maps()?;
+        let [_, _, _, black, brdf] = self.material_maps()?;
         Ok(Environment {
             irradiance: black,
             local_reflections: None,
             diffuse_lighting: Default::default(),
             reflection: black,
-            brdf_lut: black,
+            brdf_lut: brdf,
             strength: 0.0,
             yaw_radians: 0.0,
             max_prefilter_lod: 0,
@@ -185,20 +190,21 @@ impl DefaultViews {
             .ok_or_else(|| GraphError::invalid_input("unshadowed PBR defaults were not prepared"))
     }
 
-    fn material_maps(self) -> Result<[ImageView; 4], GraphError> {
+    fn material_maps(self) -> Result<[ImageView; 5], GraphError> {
         self.materials
             .ok_or_else(|| GraphError::invalid_input("PBR material defaults were not prepared"))
     }
 
-    fn images(self) -> [Option<ImageHandle>; 5] {
-        let [white, normal, orm, ibl] = self
+    fn images(self) -> [Option<ImageHandle>; 6] {
+        let [white, normal, orm, ibl, brdf] = self
             .materials
-            .map_or([None; 4], |views| views.map(|view| Some(view.image())));
+            .map_or([None; 5], |views| views.map(|view| Some(view.image())));
         [
             white,
             normal,
             orm,
             ibl,
+            brdf,
             self.unshadowed.map(|view| view.view().image()),
         ]
     }
@@ -247,21 +253,22 @@ impl PreparedDefaults {
 /// application no longer needs the Runtime registrations.
 pub struct DefaultResources {
     selection: Defaults,
-    images: [Option<ImportImage>; 5],
+    images: [Option<ImportImage>; 6],
 }
 
 impl DefaultResources {
     /// Import the selected immutable defaults into this Graph.
     pub fn import(&self, graph: &mut Graph) -> Result<DefaultViews, GraphError> {
-        let [white, normal, orm, ibl, shadow] = &self.images;
+        let [white, normal, orm, ibl, brdf, shadow] = &self.images;
         let missing = || GraphError::invalid_input("PBR default resources have been released");
         let materials = if self.selection.materials() {
-            let [Some(white), Some(normal), Some(orm), Some(ibl)] = [white, normal, orm, ibl]
+            let [Some(white), Some(normal), Some(orm), Some(ibl), Some(brdf)] =
+                [white, normal, orm, ibl, brdf]
             else {
                 return Err(missing());
             };
-            let mut views = [None; 4];
-            for (index, snapshot) in [white, normal, orm, ibl].into_iter().enumerate() {
+            let mut views = [None; 5];
+            for (index, snapshot) in [white, normal, orm, ibl, brdf].into_iter().enumerate() {
                 let handle = graph.import_image(MATERIAL_NAMES[index], snapshot)?;
                 views[index] = Some(graph.image_view(handle, 0, 0)?);
             }
@@ -393,7 +400,7 @@ mod tests {
         );
         let environment = views.environment().unwrap();
         assert_eq!(environment.irradiance, environment.reflection);
-        assert_eq!(environment.irradiance, environment.brdf_lut);
+        assert_ne!(environment.irradiance, environment.brdf_lut);
         assert_eq!(environment.strength, 0.0);
         assert_eq!(
             graph
@@ -404,7 +411,7 @@ mod tests {
         for image in views.images().into_iter().flatten() {
             graph.export_image(image).unwrap();
         }
-        assert_eq!(graph.compile().unwrap().pass_count(), 5);
+        assert_eq!(graph.compile().unwrap().pass_count(), 6);
     }
 
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]

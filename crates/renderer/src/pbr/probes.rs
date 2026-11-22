@@ -1,4 +1,4 @@
-//! Cooked first-order spherical harmonic irradiance. Two scenarios share one
+//! Cooked first-order spherical harmonic irradiance. One or two scenarios use one
 //! world-space octree, eight corner probes per leaf and visibility data.
 use renderer_core::graph::GraphError;
 
@@ -8,7 +8,8 @@ pub enum DiffuseLighting {
     #[default]
     EnvironmentMap,
     /// Upload the diffuse texture from a validated BakedLighting. Zero selects
-    /// the first baked scenario and one selects the second.
+    /// the first baked scenario and one selects the second. A single scenario
+    /// supplies the same lighting for every blend value.
     BakedLighting { blend: f32, view: BakedLightingView },
 }
 /// Diagnostic outputs from the same material and spatial lookup as shading.
@@ -36,9 +37,9 @@ impl DiffuseLighting {
 
 /// A private UV chart with an independent bilinear footprint. Corner UVs are
 /// (0,0), (1,0), (0,1) in triangle order; material UVs are independent.
-pub struct LightmapChart {
+pub struct LightmapChart<const N: usize = 2> {
     pub extent: [u16; 2],
-    pub irradiance: Vec<[[f32; 3]; 2]>,
+    pub irradiance: Vec<[[f32; 3]; N]>,
 }
 
 /// Resident-ready linear RGBA32F texture. All structural checks run at import.
@@ -49,18 +50,29 @@ pub struct BakedLighting {
 }
 impl BakedLighting {
     pub const MAGIC: [u8; 8] = *b"RBKLGI01";
+    const SINGLE_MAGIC: [u8; 8] = *b"RBKLST01";
     pub const MAX_DEPTH: usize = 10;
     pub const NODE_TEXELS: usize = 3;
-    pub const PROBE_TEXELS: usize = 10;
     pub const HEADER_TEXELS: usize = 4;
 
     pub fn from_bytes(file: &[u8]) -> Result<Self, GraphError> {
-        if !file.starts_with(&Self::MAGIC) || file.len() - 8 > 256 * 16384 * 16 {
+        let (magic, payload) = file
+            .split_at_checked(8)
+            .ok_or_else(|| GraphError::invalid_input("truncated diffuse atlas"))?;
+        let expected = if magic == Self::MAGIC {
+            0f32
+        } else if magic == Self::SINGLE_MAGIC {
+            1.
+        } else {
+            return Err(GraphError::invalid_input("unknown diffuse atlas version"));
+        };
+        if payload.len() > 256 * 16384 * 16 || payload.get(28..32) != Some(&expected.to_le_bytes())
+        {
             return Err(GraphError::invalid_input(
-                "invalid probe volume header or size",
+                "invalid diffuse atlas header or size",
             ));
         }
-        Self::from_texels(file[8..].to_vec())
+        Self::from_texels(payload.to_vec())
     }
 
     /// GPU-order RGBA32F little-endian texels, without final row padding.
@@ -90,8 +102,13 @@ impl BakedLighting {
         }
         let nodes = integer(4)?;
         let probes = integer(5)?;
-        let surface_start =
-            Self::HEADER_TEXELS + Self::NODE_TEXELS * nodes + Self::PROBE_TEXELS * probes;
+        let scenarios = match word(7) {
+            0. => 2,
+            1. => 1,
+            _ => return Err(invalid()),
+        };
+        let probe_texels = 2 + 4 * scenarios;
+        let surface_start = Self::HEADER_TEXELS + Self::NODE_TEXELS * nodes + probe_texels * probes;
         let charts = integer(6)?;
         let count = bytes.len() / 16;
         if nodes == 0 || probes == 0 || surface_start + charts > count {
@@ -125,8 +142,7 @@ impl BakedLighting {
             }
         }
         for i in 0..probes {
-            let start =
-                4 * (Self::HEADER_TEXELS + nodes * Self::NODE_TEXELS + i * Self::PROBE_TEXELS);
+            let start = 4 * (Self::HEADER_TEXELS + nodes * Self::NODE_TEXELS + i * probe_texels);
             if !matches!(word(start + 3), 0. | 1.)
                 || [0, 1, 2, 4, 5, 6].into_iter().any(|c| word(start + c) < 0.)
             {
@@ -141,7 +157,7 @@ impl BakedLighting {
             if integer(at)? != end || !(2..=256).contains(&w) || !(2..=256).contains(&h) {
                 return Err(invalid());
             }
-            end += 2 * w * h;
+            end += scenarios * w * h;
             if end > count {
                 return Err(invalid());
             }
@@ -162,10 +178,13 @@ impl BakedLighting {
         })
     }
     /// Attach RGB irradiance for static charts, in baked triangle order. Each
-    /// row-major texel has one RGB value for each of the two scenarios.
-    pub fn with_lightmaps(mut self, charts: &[LightmapChart]) -> Result<Self, GraphError> {
+    /// row-major texel has one RGB value per lighting scenario.
+    pub fn with_lightmaps<const N: usize>(
+        mut self,
+        charts: &[LightmapChart<N>],
+    ) -> Result<Self, GraphError> {
         let invalid = || GraphError::invalid_input("invalid static lightmap atlas");
-        if self.bytes[24..28] != 0f32.to_le_bytes() {
+        if self.bytes[24..28] != 0f32.to_le_bytes() || self.scenario_count() != N {
             return Err(invalid());
         }
         self.bytes.truncate(self.payload_len);
@@ -187,7 +206,7 @@ impl BakedLighting {
                     .into_iter()
                     .flat_map(f32::to_le_bytes),
             );
-            end += 2 * c.irradiance.len();
+            end += N * c.irradiance.len();
             if end > 256 * 16384 {
                 return Err(invalid());
             }
@@ -210,25 +229,29 @@ impl BakedLighting {
     }
     /// Build a surface-only atlas. Unmapped surfaces use the specified uniform
     /// fallback irradiance for each scenario.
-    pub fn from_lightmaps(
-        charts: &[LightmapChart],
-        fallback: [[f32; 3]; 2],
+    pub fn from_lightmaps<const N: usize>(
+        charts: &[LightmapChart<N>],
+        fallback: [[f32; 3]; N],
     ) -> Result<Self, GraphError> {
-        if fallback.iter().flatten().any(|v| !v.is_finite() || *v < 0.) {
+        if !(1..=2).contains(&N) || fallback.iter().flatten().any(|v| !v.is_finite() || *v < 0.) {
             return Err(GraphError::invalid_input("invalid fallback irradiance"));
         }
         let mut texels = [[0f32; 4]; 17];
         texels[0][3] = 1.;
-        texels[1] = [1., 1., 0., 0.];
+        texels[1] = [1., 1., 0., f32::from(N == 1)];
         texels[7] = [1.; 4];
         texels[8] = [1.; 4];
         for (i, rgb) in fallback.into_iter().enumerate() {
             texels[2 + i][..3].copy_from_slice(&rgb);
             texels[9 + 4 * i][..3].copy_from_slice(&rgb);
         }
+        if N == 1 {
+            texels[3] = texels[2];
+        }
         Self::from_texels(
-            texels
-                .into_iter()
+            texels[..9 + 4 * N]
+                .iter()
+                .copied()
                 .flatten()
                 .flat_map(f32::to_le_bytes)
                 .collect(),
@@ -256,17 +279,31 @@ impl BakedLighting {
             self.rgba32f(),
         )
     }
+    pub fn scenario_count(&self) -> usize {
+        if self.bytes[28..32] == 1f32.to_le_bytes() {
+            1
+        } else {
+            2
+        }
+    }
     pub fn chart_count(&self) -> u32 {
         f32::from_le_bytes(self.bytes[24..28].try_into().unwrap()) as u32
     }
     pub fn extent(&self) -> [u32; 2] {
         self.extent
     }
+    pub fn into_rgba32f(self) -> Vec<u8> {
+        self.bytes
+    }
     pub fn rgba32f(&self) -> &[u8] {
         &self.bytes
     }
     pub fn write(&self, mut output: impl std::io::Write) -> std::io::Result<()> {
-        output.write_all(&Self::MAGIC)?;
+        output.write_all(if self.scenario_count() == 1 {
+            &Self::SINGLE_MAGIC
+        } else {
+            &Self::MAGIC
+        })?;
         output.write_all(&self.bytes[..self.payload_len])
     }
 }

@@ -233,6 +233,14 @@ impl Renderer {
         Ok(base)
     }
 
+    /// Prepare baked diffuse and specular lighting on this renderer's device.
+    pub fn load_probe_lighting(
+        &mut self,
+        assets: crate::pipeline::ProbeLighting<'_>,
+    ) -> PipelineResult<crate::pipeline::ResidentProbeLighting> {
+        self.drawing.load_probe_lighting(assets)
+    }
+
     /// Prepare geometry and materials at a load boundary. Supply the active
     /// model selection. Subsequent pose changes use only the scene input.
     pub fn prepare_assets(

@@ -202,6 +202,62 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     pub fn finish_submission(&mut self) -> PipelineResult<FrameSubmission> {
         self.driver.finish_submission()
     }
+    /// Upload immutable scene lighting at an explicit change boundary. The temporary
+    /// upload arena is released before normal frame recording resumes.
+    pub fn load_probe_lighting(
+        &mut self,
+        assets: ProbeLighting<'_>,
+    ) -> PipelineResult<ResidentProbeLighting> {
+        if assets.diffuse.is_none() && assets.reflections.is_none() {
+            return Ok(ResidentProbeLighting {
+                diffuse: None,
+                reflections: None,
+            });
+        }
+        let diffuse = assets.diffuse.map(|a| (a.image_desc(), a.rgba32f()));
+        let reflections = assets.reflections.map(|a| (a.image_desc(), a.rgba32f()));
+        let mut startup = Preparation::new(self.configured.frames_in_flight());
+        startup.add_working_set(self.configured.working_set())?;
+        let mut bytes = 0;
+        let mut footprint = 0;
+        for (desc, data) in [diffuse, reflections].into_iter().flatten() {
+            startup.add_working_set(WorkingSet {
+                resources: &[ResourceClass::Image { desc, count: 1 }],
+                ..Default::default()
+            })?;
+            bytes = bytes.max(data.len());
+            footprint = footprint.max(super::transfer_footprint(desc)?);
+        }
+        startup.add_graph_requirements(GraphRequirements {
+            resources: 1,
+            passes: 1,
+            accesses: 1,
+            upload_bytes: bytes,
+            name_bytes: 64,
+            ..Default::default()
+        })?;
+        let mut pool = GraphPool::new(startup.graph_capacity(Default::default())?, 1)?;
+        let runtime = self.runtime();
+        runtime.prepare_fitted_working_set(&startup, footprint, 0)?;
+        let mut upload =
+            |name: &str, (desc, data): (ImageDesc, &[u8])| -> PipelineResult<ManagedImage> {
+                let (frame, image) = runtime.upload_texture(&mut pool, name, desc, data)?;
+                while runtime
+                    .wait_for_frame(frame, Duration::from_secs(1))?
+                    .is_none()
+                {}
+                Ok(image)
+            };
+        Ok(ResidentProbeLighting {
+            diffuse: diffuse
+                .map(|image| upload("baked diffuse lighting", image))
+                .transpose()?,
+            reflections: reflections
+                .map(|image| upload("reflection probes", image))
+                .transpose()?,
+        })
+    }
+
     pub fn upload_texture(
         &mut self,
         name: &str,

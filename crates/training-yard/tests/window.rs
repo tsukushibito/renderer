@@ -88,6 +88,11 @@ fn present_before_and_after_suspension_and_resize() -> PipelineResult<()> {
             camera,
             SceneAssets::new(&mut meshes, &mut materials, &[]),
         )?;
+        let diffuse = renderer::pbr::BakedLighting::from_lightmaps(&[], [[0.4; 3]])?;
+        let lighting = view.load_probe_lighting(renderer::pipeline::ProbeLighting {
+            diffuse: Some(&diffuse),
+            ..Default::default()
+        })?;
         let mut presented = 0;
         let mut resized = false;
         while presented < 6 {
@@ -118,7 +123,10 @@ fn present_before_and_after_suspension_and_resize() -> PipelineResult<()> {
             }
             events.pump_app_events(Some(Duration::from_millis(1)), &mut host);
             match view.draw(|frame| {
-                frame.draw_scene(SceneInput::new(&meshes, &materials, &[]), 1.)?;
+                frame.draw_scene(
+                    SceneInput::new(&meshes, &materials, &[]).with_probe_lighting(&lighting, 0.),
+                    1.,
+                )?;
                 Ok(())
             })? {
                 PresentOutcome::Presented { .. } => presented += 1,
@@ -127,6 +135,7 @@ fn present_before_and_after_suspension_and_resize() -> PipelineResult<()> {
             }
             assert!(Instant::now() < deadline, "presentation timed out");
         }
+        drop(lighting);
         validation::check_validation(view.into_runtime()?)?;
     }
     Ok(())

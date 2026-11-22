@@ -1,4 +1,4 @@
-use crate::{BakeError, BakeScene, Lighting, Vec3};
+use crate::{BakeError, BakeScene, Vec3};
 use renderer::pbr::BakedLighting;
 use std::{
     collections::HashMap,
@@ -92,15 +92,14 @@ impl BakeScene {
         };
         (direction.map(|v| v * distance), true)
     }
-    /// Bake two scenarios into one atlas. All corners shared by adjacent
+    /// Bake one scenario or two interpolated endpoints into one atlas. All corners shared by adjacent
     /// leaves are integrated once, including corners at different resolutions.
-    pub fn bake_probes(
+    pub fn bake_probes<const N: usize>(
         &self,
-        scenarios: [Lighting; 2],
+        scenarios: impl crate::LightingScenarios<N>,
         settings: ProbeSettings,
     ) -> Result<BakedLighting, Box<dyn std::error::Error>> {
-        let [a, b] = scenarios;
-        let lights = [a.normalized()?, b.normalized()?];
+        let lights = self.lighting(scenarios)?;
         if !settings.spacing.is_normal()
             || settings.spacing <= 0.
             || settings.max_depth as usize > BakedLighting::MAX_DEPTH
@@ -154,7 +153,7 @@ impl BakeScene {
                     node[1 + i / 4][i % 4] = *id as f32;
                 }
             }
-            if 4 + cells.len() * 3 + positions.len() * 10 > 256 * 16384 {
+            if 4 + cells.len() * 3 + positions.len() * (2 + 4 * N) > 256 * 16384 {
                 return Err(BakeError(
                     "probe atlas exceeds capacity; increase spacing or reduce depth",
                 )
@@ -165,10 +164,16 @@ impl BakeScene {
         }
         let mut texels = vec![
             [origin[0], origin[1], origin[2], length],
-            [records.len() as f32 / 3., positions.len() as f32, 0., 0.],
+            [
+                records.len() as f32 / 3.,
+                positions.len() as f32,
+                0.,
+                f32::from(N == 1),
+            ],
         ];
-        for l in lights {
-            texels.push([PI * l.sky[0], PI * l.sky[1], PI * l.sky[2], 0.]);
+        for i in 0..2 {
+            let sky = self.mean_sky(lights[i.min(N - 1)]);
+            texels.push([PI * sky[0], PI * sky[1], PI * sky[2], 0.]);
         }
         texels.extend(records);
         let offsets = positions
@@ -181,6 +186,7 @@ impl BakeScene {
             })
             .collect::<Vec<_>>();
         let probe_start = texels.len();
+        let stride = 2 + 4 * N;
         let jobs = positions
             .iter()
             .map(|&position| crate::SurfaceSample {
@@ -193,11 +199,13 @@ impl BakeScene {
                 .backend
                 .integrate(self, &jobs, lights, settings.rays_per_probe, length)?
         {
-            texels.extend(result);
+            for probe in result.as_chunks::<10>().0 {
+                texels.extend_from_slice(&probe[..stride]);
+            }
         } else {
             // Independent receiver work, with fixed per-probe summation order.
             let start = texels.len();
-            texels.resize(start + positions.len() * 10, [0.; 4]);
+            texels.resize(start + positions.len() * stride, [0.; 4]);
             let threads = std::thread::available_parallelism()
                 .map_or(1, usize::from)
                 .min(positions.len());
@@ -205,10 +213,10 @@ impl BakeScene {
             std::thread::scope(|scope| {
                 for (receivers, out) in positions
                     .chunks(chunk)
-                    .zip(texels[start..].chunks_mut(chunk * 10))
+                    .zip(texels[start..].chunks_mut(chunk * stride))
                 {
                     scope.spawn(move || {
-                        for (&p, data) in receivers.iter().zip(out.as_chunks_mut::<10>().0) {
+                        for (&p, data) in receivers.iter().zip(out.chunks_exact_mut(stride)) {
                             for axis in 0..3 {
                                 for (side, sign) in [(0, -1.), (1, 1.)] {
                                     let mut d = [0.; 3];
@@ -245,7 +253,7 @@ impl BakeScene {
         }
         for ((offset, valid), p) in offsets
             .into_iter()
-            .zip(texels[probe_start..].as_chunks_mut::<10>().0)
+            .zip(texels[probe_start..].chunks_exact_mut(stride))
         {
             p[0][3] = f32::from(valid);
             for i in 0..3 {
@@ -264,11 +272,13 @@ impl BakeScene {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Lighting;
     #[test]
     fn sky_scenarios_share_a_leaf_and_survive_serialization() {
         let scene = BakeScene::new(vec![], vec![], vec![]).unwrap();
         let sky = Lighting {
             sun: [0.; 3],
+            environment: None,
             sky: [1.; 3],
             direction_to_sun: [0., 1., 0.],
         };
