@@ -722,7 +722,7 @@ impl Resident {
         scene: &Scene,
         environment: &ibl::Environment,
         budget: &Budget,
-        camera: &[u8; 128],
+        camera: &crate::shared::camera::CameraInput,
     ) -> Result<Self, Error> {
         let mut pool = budget.upload_pool()?;
         let mut geometry_pool = GraphPool::new(
@@ -812,7 +812,7 @@ impl Resident {
             )?);
         }
         let mut initial_uniform = [0; program::CAMERA_BYTES];
-        initial_uniform[..128].copy_from_slice(camera);
+        initial_uniform[..128].copy_from_slice(&camera.uniform_bytes());
         let camera = upload_buffer(backend, &mut upload_owners, &initial_uniform)?;
         let local_lights = budget
             .pipeline
@@ -1399,10 +1399,10 @@ pub(super) fn build(
     resident: &Resident,
     scene: &Scene,
     options: &Options,
-    camera: Camera,
-    camera_bytes: &[u8; 128],
+    camera_input: &crate::shared::camera::CameraInput,
     capture: bool,
 ) -> Result<Built, Error> {
+    let camera = camera_input.camera;
     if workspace.prepared.select(options).uses_standard() {
         return standard_forward::build(
             pool,
@@ -1410,19 +1410,16 @@ pub(super) fn build(
             resident,
             scene,
             options,
-            camera,
-            camera_bytes,
+            camera_input,
             capture,
         );
     }
-    let read_word =
-        |word: usize| f32::from_le_bytes(camera_bytes[word * 4..word * 4 + 4].try_into().unwrap());
     let shadow_data = shadow::calculate(
         camera,
         options.width as f32 / options.height as f32,
-        read_word(19),
-        read_word(23),
-        [read_word(20), read_word(21), read_word(22)],
+        camera_input.near,
+        camera_input.far,
+        camera_input.direction_to_light,
         resident.scene_bounds,
         resident.shadow_parameters,
     )?;
@@ -1435,7 +1432,7 @@ pub(super) fn build(
         data
     };
     let mut frame_uniform = [0u8; program::CAMERA_BYTES];
-    frame_uniform[..128].copy_from_slice(camera_bytes);
+    frame_uniform[..128].copy_from_slice(&camera_input.uniform_bytes());
     for (word, value) in resident
         .environment_parameters
         .into_iter()
@@ -1490,8 +1487,7 @@ pub(super) fn build(
         &mut workspace.bindings,
     )?;
 
-    let camera_matrix =
-        std::array::from_fn(|column| std::array::from_fn(|row| read_word(column * 4 + row)));
+    let camera_matrix = camera_input.matrix;
     let frustum = Frustum::new(camera_matrix, resident.scene_bounds);
     let include_material = |index| material_visible(options, scene, index);
     let packed = resident
@@ -1950,8 +1946,16 @@ mod tests {
         let environment = ibl::Environment::fixture();
         let budget = Budget::new(&scene, &environment, &options, [0.0; 3]).unwrap();
         let mut backend = super::super::backend::create(&options, &budget).unwrap();
-        let resident =
-            Resident::upload(&mut backend, &scene, &environment, &budget, &[0; 128]).unwrap();
+        let resident = Resident::upload(
+            &mut backend,
+            &scene,
+            &environment,
+            &budget,
+            &Camera::fixture()
+                .frame_input(1., 0.02, 500., [0., 1., 0.], [1.; 3])
+                .unwrap(),
+        )
+        .unwrap();
         drop(resident);
         assert_eq!(
             super::super::backend::close(backend).unwrap()["clean"],

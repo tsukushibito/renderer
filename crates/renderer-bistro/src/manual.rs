@@ -513,8 +513,7 @@ mod tests {
         scene: &asset::Scene,
         environment: &ibl::Environment,
         options: &Options,
-        camera: camera::Camera,
-        uniform: &[u8; 128],
+        uniform: &crate::shared::camera::CameraInput,
         background: [f32; 3],
     ) -> Result<
         (
@@ -536,7 +535,6 @@ mod tests {
             &resident,
             scene,
             options,
-            camera,
             uniform,
             background,
             true,

@@ -5,7 +5,7 @@ use renderer::pbr::{Draw, GraphMaterial};
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::{
-    Built, Camera, Error, GraphPool, Options, Resident, SceneImages, SubmissionMode, Workspace,
+    Built, Error, GraphPool, Options, Resident, SceneImages, SubmissionMode, Workspace,
     caster_revision, finish_frame, import_environment, import_frame, material_visible,
     select_draws, shadow_casters,
 };
@@ -106,35 +106,29 @@ pub(super) fn build(
     resident: &Resident,
     scene: &Scene,
     options: &Options,
-    camera: Camera,
-    camera_bytes: &[u8; 128],
+    camera_input: &crate::shared::camera::CameraInput,
     capture: bool,
 ) -> Result<Built, Error> {
+    let camera = camera_input.camera;
     let mut graph = pool.begin()?;
     let camera_target = import_frame(&mut graph, workspace, resident)?;
     let [irradiance, reflection, brdf_lut] = import_environment(&mut graph, resident)?;
     let [strength, yaw_radians, max_prefilter_lod] = resident.environment_parameters;
     let (recipe, bloom) = workspace.prepared.select(options).standard();
-    let word = |index: usize| {
-        f32::from_le_bytes(camera_bytes[index * 4..index * 4 + 4].try_into().unwrap())
-    };
     let view = recipe.prepare_view(
         pbr::ViewInput::new(
-            std::array::from_fn(|column| std::array::from_fn(|row| word(column * 4 + row))),
+            camera_input.matrix,
             camera.position,
             std::array::from_fn(|axis| {
                 f64::from(camera.target[axis]) - f64::from(camera.position[axis])
             }),
-            [word(19), word(23)],
+            [camera_input.near, camera_input.far],
             pbr::Projection::SymmetricPerspective {
                 vertical_fov_degrees: camera.fov,
                 aspect: options.width as f32 / options.height as f32,
             },
         )?,
-        pbr::Sun::from_normalized(
-            [word(20), word(21), word(22)],
-            [word(24), word(25), word(26)],
-        )?,
+        pbr::Sun::from_normalized(camera_input.direction_to_light, camera_input.irradiance)?,
         workspace
             .placements
             .as_ref()

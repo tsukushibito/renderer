@@ -43,22 +43,13 @@ fn camera(conditions: &Conditions, options: &Options, frame: usize) -> Result<Ca
         conditions.camera(&options.view, frame)
     }
 }
-fn uniform(
+fn frame_input(
     conditions: &Conditions,
     options: &Options,
     frame: usize,
-) -> Result<(Camera, [u8; 128]), Error> {
+) -> Result<crate::shared::camera::CameraInput, Error> {
     let camera = camera(conditions, options, frame)?;
-    Ok((
-        camera,
-        camera.uniform(
-            options.width as f32 / options.height as f32,
-            conditions.near,
-            conditions.far,
-            conditions.light_direction,
-            conditions.light_color,
-        )?,
-    ))
+    conditions.frame_input(camera, options.width, options.height)
 }
 
 #[allow(
@@ -142,11 +133,11 @@ fn frames(
         }
         let started = Instant::now();
         let stage = Instant::now();
-        let (camera, bytes) = {
+        let input = {
             #[cfg(feature = "tracy")]
             let _uniform = tracy_client::Client::running()
                 .map(|client| client.span(tracy_client::span_location!("bistro.uniform"), 0));
-            uniform(conditions, options, frame)?
+            frame_input(conditions, options, frame)?
         };
         let built = {
             #[cfg(feature = "tracy")]
@@ -158,8 +149,7 @@ fn frames(
                 resident,
                 scene,
                 options,
-                camera,
-                &bytes,
+                &input,
                 conditions.background,
                 false,
             )?
@@ -300,15 +290,14 @@ fn capture_planes(
     sdr_only: bool,
 ) -> Result<Value, Error> {
     std::fs::create_dir_all(&options.output)?;
-    let (camera, bytes) = uniform(conditions, options, frame)?;
+    let input = frame_input(conditions, options, frame)?;
     let built = pipeline::build(
         pool,
         workspace,
         resident,
         scene,
         options,
-        camera,
-        &bytes,
+        &input,
         conditions.background,
         true,
     )?;
@@ -563,7 +552,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     let stage = Instant::now();
     let budget = Budget::new(&scene, &environment, options)?;
     let budget_ns = stage.elapsed().as_nanos() as u64;
-    let (first_camera, first_uniform) = uniform(&conditions, options, 0)?;
+    let first_input = frame_input(&conditions, options, 0)?;
     eprintln!(
         "Bistro explicit GPU preparation: {} resources",
         budget.physical_resources
@@ -582,8 +571,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         runtime["main_thread_id"] = json!(super::clock::thread_id());
     }
     let stage = Instant::now();
-    let mut resident =
-        Resident::upload(&mut backend, &scene, &environment, &budget, &first_uniform)?;
+    let mut resident = Resident::upload(&mut backend, &scene, &environment, &budget, &first_input)?;
     environment.release_pixels();
     if options.resource_checks {
         resource_stages["uploaded"] = backend::memory_snapshot(&backend)?;
@@ -600,7 +588,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     let placements = resident.instance_placements(
         &scene,
         options,
-        first_camera,
+        first_input.camera,
         [conditions.near, conditions.far],
     )?;
     scene.vertices = Vec::new();

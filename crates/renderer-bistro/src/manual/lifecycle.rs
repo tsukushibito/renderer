@@ -97,17 +97,6 @@ impl Capture {
     }
 }
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-fn uniform(camera: Camera, options: &Options, conditions: &Conditions) -> Result<[u8; 128], Error> {
-    camera.uniform(
-        options.width as f32 / options.height as f32,
-        conditions.near,
-        conditions.far,
-        conditions.light_direction,
-        conditions.light_color,
-    )
-}
-
 #[allow(
     clippy::too_many_arguments,
     reason = "one explicit consumer acceptance context"
@@ -128,8 +117,7 @@ fn build_frame(
         resident,
         scene,
         options,
-        camera,
-        &uniform(camera, options, conditions)?,
+        &conditions.frame_input(camera, options.width, options.height)?,
         conditions.background,
         true,
     )

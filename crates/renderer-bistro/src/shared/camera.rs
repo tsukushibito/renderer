@@ -183,6 +183,21 @@ fn vector(value: &Value) -> Result<[f32; 3], Error> {
 }
 
 impl Conditions {
+    pub fn frame_input(
+        &self,
+        camera: Camera,
+        width: u32,
+        height: u32,
+    ) -> Result<CameraInput, Error> {
+        camera.frame_input(
+            width as f32 / height as f32,
+            self.near,
+            self.far,
+            self.light_direction,
+            self.light_color,
+        )
+    }
+
     pub fn parse(value: &Value) -> Result<Self, Error> {
         let mut views = Vec::new();
         for view in value["views"].as_array().ok_or("missing fixed views")? {
@@ -356,29 +371,51 @@ impl Camera {
             std::array::from_fn(|row| (0..4).map(|i| projection[i][row] * view[column][i]).sum())
         }))
     }
-    pub fn uniform(
+    pub fn frame_input(
         self,
         aspect: f32,
         near: f32,
         far: f32,
         light: [f32; 3],
         color: [f32; 3],
-    ) -> Result<[u8; 128], Error> {
+    ) -> Result<CameraInput, Error> {
         let matrix = self.matrix(aspect, near, far)?;
+        Ok(CameraInput {
+            matrix,
+            camera: self,
+            near,
+            far,
+            direction_to_light: normalize(light)?,
+            irradiance: color,
+        })
+    }
+}
+
+pub(crate) struct CameraInput {
+    pub matrix: [[f32; 4]; 4],
+    pub camera: Camera,
+    pub near: f32,
+    pub far: f32,
+    pub direction_to_light: [f32; 3],
+    pub irradiance: [f32; 3],
+}
+
+impl CameraInput {
+    pub fn uniform_bytes(&self) -> [u8; 128] {
         let mut words = [0.0f32; 32];
-        words[..16].copy_from_slice(matrix.as_flattened());
-        words[16..19].copy_from_slice(&self.position);
-        words[19] = near;
-        words[20..23].copy_from_slice(&normalize(light)?);
-        words[23] = far;
-        words[24..27].copy_from_slice(&color);
+        words[..16].copy_from_slice(self.matrix.as_flattened());
+        words[16..19].copy_from_slice(&self.camera.position);
+        words[19] = self.near;
+        words[20..23].copy_from_slice(&self.direction_to_light);
+        words[23] = self.far;
+        words[24..27].copy_from_slice(&self.irradiance);
         // The frame builder fills the environment and shadow appendix from
         // prepared immutable assets; this helper only emits the camera prefix.
         let mut bytes = [0; 128];
         for (out, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
             *out = value.to_le_bytes();
         }
-        Ok(bytes)
+        bytes
     }
 }
 

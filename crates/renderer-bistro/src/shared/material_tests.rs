@@ -592,7 +592,7 @@ fn capture_lighting(
     options.capture_shadows = lighting.capture_shadows;
     let camera = Camera::fixture();
     let uniform = camera
-        .uniform(
+        .frame_input(
             width as f32 / height as f32,
             NEAR,
             FAR,
@@ -600,15 +600,9 @@ fn capture_lighting(
             lighting.light_color,
         )
         .unwrap();
-    let (mut backend, resident, built) = build_material_test_frame(
-        scene,
-        &lighting.environment,
-        &options,
-        camera,
-        &uniform,
-        BACKGROUND,
-    )
-    .unwrap();
+    let (mut backend, resident, built) =
+        build_material_test_frame(scene, &lighting.environment, &options, &uniform, BACKGROUND)
+            .unwrap();
     assert_eq!(built.draws, Some(scene.primitives.len()));
     let plan = built.graph.compile().unwrap();
     let pending = backend.submit(&plan).unwrap();

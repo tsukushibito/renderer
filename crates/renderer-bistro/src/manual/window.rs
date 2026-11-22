@@ -206,7 +206,7 @@ impl State {
             backend::open(options, &budget, Arc::clone(&window), config)?;
         let preparation_ns = ns(started.elapsed());
         let seed = camera_seed(conditions, options)?;
-        let initial = uniform(seed, conditions, options)?;
+        let initial = conditions.frame_input(seed, options.width, options.height)?;
         let started = Instant::now();
         let resident = Resident::upload(&mut backend, scene, environment, &budget, &initial)?;
         let placements = resident.instance_placements(
@@ -476,7 +476,7 @@ impl State {
                 return Ok(());
             }
             let camera = self.camera(conditions, options)?;
-            let bytes = uniform(camera, conditions, options)?;
+            let input = conditions.frame_input(camera, options.width, options.height)?;
             let resident = &mut self.resident;
             let replay = options.window_smoke && self.accepted < REPLAY_STEPS;
             let started = Instant::now();
@@ -486,8 +486,7 @@ impl State {
                 resident,
                 scene,
                 options,
-                camera,
-                &bytes,
+                &input,
                 conditions.background,
                 replay,
             )?;
@@ -650,16 +649,6 @@ fn camera_seed(conditions: &Conditions, options: &Options) -> Result<Camera, Err
     } else {
         conditions.camera(&options.view, 0)
     }
-}
-
-fn uniform(camera: Camera, conditions: &Conditions, options: &Options) -> Result<[u8; 128], Error> {
-    camera.uniform(
-        options.width as f32 / options.height as f32,
-        conditions.near,
-        conditions.far,
-        conditions.light_direction,
-        conditions.light_color,
-    )
 }
 
 fn backpressure(error: &ExecutionError) -> bool {
