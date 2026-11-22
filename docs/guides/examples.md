@@ -186,6 +186,15 @@ cargo build --release -p renderer-bistro --features vulkan --bin bistro
 python tools/bistro/diagnose_daylight.py .tools/Bistro_Exterior_1.png .tools/bistro-passes .tools/bistro-debug --bistro target/release/bistro.exe --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --baked-lighting .tools/bistro.gi --reflection-probes .tools/bistro-hdr-day.reflections
 ```
 
+<a id="bistro-awning-reference"></a>
+
+中央のひさしの鏡面反射を実形状に照らして検証するには、上で撮った `beauty`、`base-color`、`specular` のキャプチャを使います。次のツールは同じ画素の受光位置と材質を復元し、CPU ベイカーで昼の HDR・太陽を使って鏡面を積分します。出力は 3 測定域の表示色見本と、空・形状別の線形 RGB、現行 GPU、形状なし対照、半分のサンプル数との比較を収めた JSON です。[実測結果](../verification/current.md#bistro-awning-rays)
+
+```powershell
+cargo build --locked --release -p renderer-bistro --features bake-tool --bin bistro-bake
+python tools/bistro/awning_reference.py .tools/bistro-cook/full-a3/manifest.json .tools/b3/ibl-final/manifest.json .tools/bistro-passes target/release/bistro-bake.exe .tools/Bistro_Exterior_1.png .tools/awning-reference
+```
+
 既定の描画設定と昼景プリセットを比較する場合は、次の 960 × 530 の手順を使います。
 
 ```powershell

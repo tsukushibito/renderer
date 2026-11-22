@@ -37,7 +37,7 @@ pub struct SurfaceSample {
     pub normal: Vec3,
 }
 
-fn offset(p: Vec3, n: Vec3) -> Vec3 {
+pub(crate) fn offset(p: Vec3, n: Vec3) -> Vec3 {
     let epsilon = p.iter().fold(1f32, |scale, x| scale.max(x.abs())) * 4. * f32::EPSILON;
     std::array::from_fn(|i| p[i] + epsilon * n[i])
 }
@@ -111,7 +111,7 @@ impl BakeScene {
         Ok(lights)
     }
 
-    fn sky_radiance(&self, light: Lighting, ray: Vec3) -> Vec3 {
+    pub(crate) fn sky_radiance(&self, light: Lighting, ray: Vec3) -> Vec3 {
         let Some(map) = light.environment else {
             return light.sky;
         };
@@ -145,21 +145,32 @@ impl BakeScene {
 
     pub(crate) fn incoming(
         &self,
+        origin: Vec3,
+        ray: Vec3,
+        light: Lighting,
+        state: &mut u32,
+    ) -> Vec3 {
+        self.incoming_classified(origin, ray, light, state).0
+    }
+
+    /// Incident radiance and whether the initial ray hit static geometry.
+    pub(crate) fn incoming_classified(
+        &self,
         mut origin: Vec3,
         mut ray: Vec3,
         light: Lighting,
         state: &mut u32,
-    ) -> Vec3 {
+    ) -> (Vec3, bool) {
         let mut result = [0.; 3];
         let mut weight = [1.; 3];
         // Two diffuse surface reflections, with next-event estimation for sunlight.
-        for _ in 0..2 {
+        for bounce in 0..2 {
             let Some(hit) = self.trace(origin, ray, f32::INFINITY) else {
                 let sky = self.sky_radiance(light, ray);
                 for i in 0..3 {
                     result[i] += weight[i] * sky[i];
                 }
-                return result;
+                return (result, bounce != 0);
             };
             origin = offset(
                 std::array::from_fn(|i| origin[i] + ray[i] * hit.distance),
@@ -186,7 +197,7 @@ impl BakeScene {
                 result[i] += weight[i] * sky[i];
             }
         }
-        result
+        (result, true)
     }
 
     /// Integrate diffuse irradiance at surface samples. The receiver material

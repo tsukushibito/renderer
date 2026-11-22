@@ -181,6 +181,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         blend_distance: f32,
     }
     let mut layout = None;
+    let mut reference = None;
     let mut ibl_manifest = None;
     let mut day_only = false;
     let mut endpoints_only = false;
@@ -191,6 +192,11 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut texel_budget = 65536;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--reflection-reference" => {
+                reference = Some(PathBuf::from(
+                    args.next().ok_or("missing surface sample file")?,
+                ));
+            }
             "--day-only" => day_only = true,
             "--endpoints-only" => endpoints_only = true,
             "--ibl-manifest" => {
@@ -223,7 +229,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--lightmap-texels N] [--reflection-probes LAYOUT.json]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--lightmap-texels N] [--reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json]"
                 );
                 return Ok(());
             }
@@ -232,6 +238,17 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     }
     if day_only && endpoints_only {
         return Err("choose either day-only or endpoints-only".into());
+    }
+    if reference.is_some()
+        && (layout.is_some()
+            || endpoints_only
+            || ibl_manifest.is_none()
+            || !matches!(
+                settings.backend,
+                renderer_bake::BakeBackend::Auto | renderer_bake::BakeBackend::Cpu
+            ))
+    {
+        return Err("reflection references require the CPU daylight path, an IBL manifest and no probe layout".into());
     }
     let output = output.ok_or("missing --output")?;
     if output.exists() {
@@ -288,6 +305,46 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         direction_to_sun: s.direction,
     };
     let lights = BAKE_SCENARIOS.map(lighting);
+    if let Some(path) = reference {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Input {
+            position: [f32; 3],
+            geometric_normal: [f32; 3],
+            shading_normal: [f32; 3],
+            view: [f32; 3],
+            f0: [f32; 3],
+            roughness: f32,
+        }
+        let receivers: Vec<Input> = serde_json::from_slice(&std::fs::read(path)?)?;
+        let mut results = Vec::with_capacity(receivers.len());
+        for s in receivers {
+            let r = bake.reflection_reference(
+                &renderer_bake::ReflectionReceiver {
+                    position: s.position,
+                    geometric_normal: s.geometric_normal,
+                    shading_normal: s.shading_normal,
+                    view: s.view,
+                    f0: s.f0,
+                    roughness: s.roughness,
+                },
+                lights[0],
+                settings.rays_per_probe,
+            )?;
+            results.push(
+                serde_json::json!({"sky":r.from_sky,"geometry":r.from_geometry,
+                "unobstructed":r.unobstructed,"sky_rays":r.sky_rays,"surface_rays":r.surface_rays}),
+            );
+        }
+        let mut file = std::io::BufWriter::new(std::fs::File::create_new(output)?);
+        serde_json::to_writer(
+            &mut file,
+            &serde_json::json!({"identity":identity,
+            "samples":settings.rays_per_probe,"results":results}),
+        )?;
+        file.flush()?;
+        return Ok(());
+    }
     if let Some(layout) = layout {
         if !matches!(
             settings.backend,
