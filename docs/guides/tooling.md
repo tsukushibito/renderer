@@ -381,8 +381,33 @@ GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resid
 `renderer::pipeline::GeometryPipeline::new(technique, config, scene_limits)`でForward、Forward+、Deferredから選ぶ。
 描画寸法・出力条件と、同時フレーム・材質・描画・各カスケードのキャスターの上限を渡す。
 `Technique` で使用できるサンプル数、深度、G-bufferの有無を確認できる。
-標準3方式で点光源を使うには `SceneLimits::max_point_lights` にビュー当たりの上限を指定する。
-フレームの光源は `pbr::PbrDrawInput::with_lights(&point_lights)` で渡す。上限0では点光源の資源を予約せず、空の入力では転送やタイル判定を省く。
+標準3方式で局所光源を使うには `SceneLimits::max_local_lights` にビュー当たりの上限を指定する。
+フレームの光源は `pbr::PbrDrawInput::with_lights(&lights)` で渡す。上限0では局所光源の資源を予約せず、空の入力では転送やタイル判定を省く。
+
+ゲーム側の標準経路では、点光源と矩形光源を同じスライスに入れ、`SceneInput::with_lights` でビューに渡す。
+初期化時に `SceneAssets::with_lights` へ同じスライスを渡すと、その件数が自動で予約される。
+次は Sponza の中庭で使った下向きの面光源。長さの単位はメートルで、半辺の外積が発光面の表を向く。
+
+```rust
+use renderer::pbr::{LocalLight, RectLight};
+
+let panel = |x| RectLight::new(
+    [x, 10.431109, -0.559192], [2.5, 0.0, 0.0], [0.0, 0.0, 0.5],
+    [0.7557183, 0.8001526, 0.9096513], 300.0, 48.947266,
+);
+let panels = [panel(-4.739024)?, panel(2.899622)?];
+let lights = panels.map(LocalLight::Rect);
+let input = input.with_lights(&lights);
+
+// 静的な光源を間接光に含める場合、オフラインの準備時に同じ形状と光束を渡す。
+bake_scene.set_rect_lights(panels.to_vec());
+```
+
+各灯の光束を面積と π で割った値に線形 RGB を掛けて面輝度を求める。到達距離は矩形上の最近点から測る。
+直接光では面が占める立体角から拡散を積分し、GGX の鏡面反射には LTC 近似を使う。
+実行時の局所光源には物体による遮蔽・ソフトシャドウは未実装。ベイクは静的な遮蔽物を考慮する。
+ベイクした拡散プローブ・ライトマップ・反射プローブには、矩形光が他の面で反射した寄与が入る。
+矩形を変えた場合はそのデータを再ベイクする。ベイク中のシナリオ間で矩形光源のリストは共通となる。
 
 準備済みレシピと必要な既定画像の要求を`Preparation`へ集約し、`Runtime`と`GraphPool`を作る。
 追加パスの宣言、アップロード、表示やGPUの完了待ちまで保持する資源の容量もアプリの構成に沿って指定する。
@@ -462,9 +487,9 @@ Runtimeが投入を受理した時点で履歴が反映される。アプリが�
 | Forward+ | 1×／4× | Indexed／Indirect／Instanced | Indexed／Instanced | Indexed／Instanced | 組み込み |
 | Deferred | 1× | Indexed／Indirect／Instanced | Indexed／Instanced | Indexed／Instanced | 組み込み |
 
-- Forwardは各画素で点光源を順に評価する。Forward+は16×16画素のタイルごとに候補を絞る。
-  タイル数の上限は65,536で、タイルごとのマスク容量は準備した点光源数に応じて増える。
-  DeferredはG-buffer照明と後段の半透明合成で点光源を評価する。独自Programを渡す `prepare_with_programs` のForward ABIでは `max_point_lights` を0にする。
+- Forwardは各画素で局所光源を順に評価する。Forward+は16×16画素のタイルごとに候補を絞る。
+  タイル数の上限は65,536で、タイルごとのマスク容量は準備した局所光源数に応じて増える。
+  DeferredはG-buffer照明と後段の半透明合成で局所光源を評価する。独自Programを渡す `prepare_with_programs` のForward ABIでは `max_local_lights` を0にする。
 - `pbr_deferred`は1×のG-bufferにベースカラー／メタリック、法線／粗さ、発光／AOとD32深度を保持する。
   照明後に、アプリが並べた半透明描画をHDRに合成する。
 - 標準の3方式では、`SceneLimits::max_transforms`を正の値にするとモデル空間の`Draw::Instanced`と

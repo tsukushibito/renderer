@@ -46,7 +46,7 @@ mod reflections;
 pub use lightmaps::{LightmapSettings, ReceiverTriangle};
 pub use probes::ProbeSettings;
 pub use reflection_reference::{ReflectionReceiver, ReflectionReference};
-pub use renderer::pbr::ReflectionProbeDesc;
+pub use renderer::pbr::{RectLight, ReflectionProbeDesc};
 mod transport;
 
 use bvh::Bvh;
@@ -167,9 +167,16 @@ pub struct BakeScene {
     materials: Vec<Material>,
     textures: Vec<Texture>,
     bvh: Bvh,
+    rect_lights: Vec<RectLight>,
 }
 
 impl BakeScene {
+    /// Replace static rectangular emitters for all baked scenarios. Direct light
+    /// at the final receiver is evaluated by the runtime from the same descriptors.
+    pub fn set_rect_lights(&mut self, lights: Vec<RectLight>) {
+        self.rect_lights = lights;
+    }
+
     /// Add a top-origin latitude-longitude sky at the bake boundary.
     pub fn add_sky_map(&mut self, texture: Texture, yaw_radians: f32) -> Result<SkyMap, BakeError> {
         if !yaw_radians.is_finite() {
@@ -218,6 +225,7 @@ impl BakeScene {
             materials,
             textures,
             bvh,
+            rect_lights: Vec::new(),
         })
     }
 }

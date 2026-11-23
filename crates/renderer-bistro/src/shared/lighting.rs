@@ -1,13 +1,13 @@
 //! Bistro's deterministic light workload and its explicitly composed Graph input.
 
-use renderer::pbr_forward_plus::{self, PointLight, PointLightLayout, TILE_SIZE};
+use renderer::pbr_forward_plus::{self, LocalLight, LocalLightLayout, TILE_SIZE};
 use renderer_core::graph::{BufferHandle, Graph, GraphError, ImageDesc, ImageView};
 
 pub(crate) const PRESET_LEN: usize = 64;
-pub(crate) type Preset = [PointLight; PRESET_LEN];
+pub(crate) type Preset = [LocalLight; PRESET_LEN];
 
-pub(crate) fn layout() -> PointLightLayout {
-    PointLightLayout::new(PRESET_LEN).expect("fixed Bistro light grid fits a point-light table")
+pub(crate) fn layout() -> LocalLightLayout {
+    LocalLightLayout::new(PRESET_LEN).expect("fixed Bistro light grid fits a local-light table")
 }
 /// Additional staging space for D3D12's 256-byte row and 512-byte placement alignments.
 pub(crate) fn upload_padding() -> usize {
@@ -43,7 +43,7 @@ pub(crate) fn preset(fixture: bool) -> Preset {
                 15.0,
             )
         };
-        PointLight {
+        LocalLight::Point {
             position,
             radius,
             intensity,
@@ -54,7 +54,7 @@ pub(crate) fn preset(fixture: bool) -> Preset {
 
 /// Prepared once per viewport for the manual and comparison passes.
 pub(crate) struct LightTable {
-    layout: PointLightLayout,
+    layout: LocalLightLayout,
     bytes: Box<[u8]>,
     masks: Option<ImageDesc>,
 }
@@ -106,6 +106,10 @@ mod tests {
         );
         assert_ne!(full.bytes, fixture.bytes);
         assert_eq!(fixture.bytes.len(), layout().byte_len());
-        assert!(preset(true).iter().all(|light| light.intensity > 0.0));
+        assert!(
+            preset(true)
+                .iter()
+                .all(|light| matches!(light, LocalLight::Point {intensity,..} if *intensity > 0.))
+        );
     }
 }

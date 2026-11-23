@@ -11,8 +11,8 @@ use renderer::{
     },
     pbr::{
         Bounds, CASCADE_COUNT, CameraStorage, Config, DefaultResources, DefaultViews, Defaults,
-        Draw, FrameShadows, GraphMaterial, IndexedDraw, MaterialFactors, PbrDrawInput, PbrVertex,
-        PointLight, PreparedDefaults, Projection, SceneLimits, ShadowHistory, ShadowSettings,
+        Draw, FrameShadows, GraphMaterial, IndexedDraw, LocalLight, MaterialFactors, PbrDrawInput,
+        PbrVertex, PreparedDefaults, Projection, SceneLimits, ShadowHistory, ShadowSettings,
         ShadowUpdates, Sun, ViewInput,
     },
 };
@@ -201,16 +201,16 @@ impl Placement {
 }
 
 #[derive(Clone, Copy)]
-pub struct Settings {
-    pub frame_lights: &'static [&'static [PointLight]],
+pub struct Settings<'a> {
+    pub frame_lights: &'a [&'a [LocalLight]],
     pub technique: Technique,
     pub samples: SampleCount,
     pub placement: Placement,
     pub view: ViewFixture,
 }
 
-impl Settings {
-    fn point_lights(self) -> &'static [PointLight] {
+impl<'a> Settings<'a> {
+    fn local_lights(self) -> &'a [LocalLight] {
         self.frame_lights
             .first()
             .copied()
@@ -232,7 +232,7 @@ impl Settings {
     }
 }
 
-pub const POINT_LIGHTS: [PointLight; 1] = [PointLight {
+pub const POINT_LIGHTS: [LocalLight; 1] = [LocalLight::Point {
     position: [0.1, 0.3, 1.5],
     radius: 3.0,
     color: [0.9, 0.6, 0.2],
@@ -345,12 +345,12 @@ pub fn prepare(frames_in_flight: NonZeroUsize, settings: Settings) -> Result<Pre
         frames_in_flight,
         max_draws: count,
         max_materials: 1,
-        max_point_lights: settings
+        max_local_lights: settings
             .frame_lights
             .iter()
             .map(|lights| lights.len())
             .max()
-            .unwrap_or_else(|| settings.point_lights().len()),
+            .unwrap_or_else(|| settings.local_lights().len()),
         max_casters_per_cascade: count,
         max_transforms: match settings.placement {
             #[cfg(test)]
@@ -469,7 +469,7 @@ pub fn build_graph(
             shadows.source(cascade, opaque)
         }));
     }
-    let lights = settings.point_lights();
+    let lights = settings.local_lights();
     let (sdr, scene_depth, shadow_images) = if post.copy_hdr || post.bloom.is_some() {
         let exposure = 1.0;
         let scene = prepared.draw_hdr(&mut graph, frame.with_lights(lights))?;

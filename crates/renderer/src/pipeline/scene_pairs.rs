@@ -129,7 +129,7 @@ mod tests {
                 frames_in_flight: NonZeroUsize::MIN,
                 max_draws: 3,
                 max_materials: 2,
-                max_point_lights: 0,
+                max_local_lights: 0,
                 max_casters_per_cascade: 0,
                 max_transforms: 0,
             },

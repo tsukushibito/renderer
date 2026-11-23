@@ -68,7 +68,7 @@ pub(crate) enum DrawMode {
 }
 
 struct LocalLights {
-    layout: crate::pbr_forward_plus::PointLightLayout,
+    layout: crate::pbr_forward_plus::LocalLightLayout,
     bytes: Vec<u8>,
     mask: Option<ImageDesc>,
     programs: ScenePrograms,
@@ -87,7 +87,7 @@ impl LocalLights {
             forward_plus::{CULL_PASS, compute_program, raster_program},
             shadow_program,
         };
-        let layout = crate::pbr_forward_plus::PointLightLayout::new(limits.max_point_lights)?;
+        let layout = crate::pbr_forward_plus::LocalLightLayout::new(limits.max_local_lights)?;
         let tiled = matches!(technique, TransformTechnique::ForwardPlus);
         let deferred = matches!(technique, TransformTechnique::Deferred);
         let lit = if deferred {
@@ -125,7 +125,7 @@ impl LocalLights {
                 compute_dispatches: usize::from(tiled),
                 accesses: 1 + 3 * usize::from(tiled),
                 bindings: 3 * usize::from(tiled),
-                name_bytes: "local point lightslocal point light update".len()
+                name_bytes: "local lightslocal light update".len()
                     + usize::from(tiled) * ("tile light masks".len() + CULL_PASS.len()),
                 upload_bytes: layout.byte_len(),
                 ..Default::default()
@@ -139,7 +139,7 @@ impl LocalLights {
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(layout.byte_len())
-            .map_err(|_| GraphError::invalid_input("point-light table allocation failed"))?;
+            .map_err(|_| GraphError::invalid_input("local-light table allocation failed"))?;
         bytes.resize(layout.byte_len(), 0);
         Ok(Self {
             layout,
@@ -192,9 +192,9 @@ impl PreparedScene {
             return Err(GraphError::invalid_input("PBR clear color must be finite"));
         }
         let mut preparation = Preparation::new(limits.frames_in_flight);
-        let local_lights = if limits.max_point_lights > 0 {
+        let local_lights = if limits.max_local_lights > 0 {
             let technique = model_technique.ok_or_else(|| {
-                GraphError::invalid_input("custom Forward shader ABI does not bind point lights")
+                GraphError::invalid_input("custom Forward shader ABI does not bind local lights")
             })?;
             Some(LocalLights::new(
                 &mut preparation,
@@ -413,7 +413,7 @@ impl PreparedScene {
             let state = self
                 .local_lights
                 .as_mut()
-                .ok_or_else(|| GraphError::invalid_input("point lights were not reserved"))?;
+                .ok_or_else(|| GraphError::invalid_input("local lights were not reserved"))?;
             state
                 .layout
                 .encode(self.config.extent, frame.lights, &mut state.bytes)?;
@@ -504,7 +504,7 @@ impl PreparedScene {
             RasterScene {
                 camera,
                 lighting,
-                point_lights,
+                local_lights: point_lights,
                 has_transparency: !frame.transparent.is_empty()
                     || frame.forward_draws.is_some_and(|draws| draws.has_blend()),
                 forward_draws: frame.forward_draws,
@@ -672,7 +672,7 @@ impl PreparedScene {
 pub(crate) struct RasterScene<'a> {
     pub(crate) camera: BufferHandle,
     pub(crate) lighting: [Binding; 10],
-    pub(crate) point_lights: Option<ImageView>,
+    pub(crate) local_lights: Option<ImageView>,
     pub(crate) has_transparency: bool,
     forward_draws: Option<&'a crate::pipeline::ForwardDraws>,
     opaque: &'a Batch,

@@ -180,12 +180,14 @@ mod gpu {
     };
 
     use super::scene::POINT_LIGHTS;
-    use renderer::pbr::PointLight;
+    use renderer::pbr::LocalLight;
 
-    const LATE_POINT_LIGHTS: [PointLight; 257] = {
-        let mut lights = [PointLight {
+    static LATE_POINT_LIGHTS: [LocalLight; 257] = {
+        let mut lights = [LocalLight::Point {
             intensity: 0.0,
-            ..POINT_LIGHTS[0]
+            position: [0., 0., 1.],
+            radius: 3.,
+            color: [1.; 3],
         }; 257];
         lights[256] = POINT_LIGHTS[0];
         lights
@@ -237,6 +239,64 @@ mod gpu {
     #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
     fn d3d12_late_point_light_matches_single_light() {
         late_point_light_matches_single_light(Api::D3D12);
+    }
+
+    fn one_sided_rectangle(api: Api) {
+        let light = |y| {
+            LocalLight::Rect(
+                renderer::pbr::RectLight::new(
+                    [0.1, 0.3, 1.5],
+                    [0.5, 0., 0.],
+                    [0., y, 0.],
+                    [1., 0.3, 0.1],
+                    80.,
+                    5.,
+                )
+                .unwrap(),
+            )
+        };
+        let front = [light(-0.25)];
+        let back = [light(0.25)];
+        for technique in [
+            Technique::Forward,
+            Technique::ForwardPlus,
+            Technique::Deferred,
+        ] {
+            let frames = render(
+                api,
+                Settings {
+                    technique,
+                    frame_lights: &[&[], &front, &back],
+                    ..Settings::new(SampleCount::X1)
+                },
+                false,
+                Bloom::Off,
+                &[],
+            )
+            .unwrap();
+            assert!(
+                frames[1].output.sdr != frames[0].output.sdr,
+                "{technique:?} front face"
+            );
+            assert!(
+                frames[2].output.sdr == frames[0].output.sdr,
+                "{technique:?} back face"
+            );
+        }
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    #[ignore = "requires a hardware Vulkan adapter and requested native validation"]
+    fn vulkan_one_sided_rectangle() {
+        one_sided_rectangle(Api::Vulkan);
+    }
+
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
+    fn d3d12_one_sided_rectangle() {
+        one_sided_rectangle(Api::D3D12);
     }
 
     fn compare(api: Api) {

@@ -12,6 +12,7 @@ StructuredBuffer<Receiver> jobs : register(t1);
 RWStructuredBuffer<float4> result : register(u2);
 static const float PI = 3.14159265359;
 struct Table {
+    uint rect_base, rect_count;
     uint width, last, node_base, nodes, tris, mats, tex, texels;
 };
 uint number(float v) {
@@ -28,7 +29,9 @@ Table table() {
     t.last = t.width * h - 1;
     float4 counts = fetch(t, 0);
     t.nodes = number(counts.x);
-    t.node_base = 2 + 3 * clamp(number(fetch(t,1).y),1u,16u);
+    t.rect_base = 2 + 3 * clamp(number(fetch(t,1).y),1u,16u);
+    t.rect_count = min(number(fetch(t,1).z), t.last / 4u);
+    t.node_base = t.rect_base + 4 * t.rect_count;
     t.tris = t.node_base + 3 * t.nodes;
     t.mats = t.tris + 4 * number(counts.y);
     t.tex = t.mats + 3 * number(counts.z);
@@ -131,6 +134,35 @@ float3 sky_radiance(Table t, float3 d, float4 sky, float yaw) {
     float v = clamp(acos(clamp(d.y,-1.0,1.0))/PI,0.5/height,1.0-0.5/height);
     return sky.rgb * texture_color(t,sky.w,float2(u,v)).rgb;
 }
+float3 rect_irradiance(Table t, float3 o, float3 n, uint seed) {
+    float3 sum = 0;
+    [loop] for (uint i=0; i<t.rect_count; ++i) {
+        uint base = t.rect_base + 4*i;
+        float4 center_range = fetch(t,base);
+        float4 u = fetch(t,base+1);
+        float3 v = fetch(t,base+2).xyz;
+        float3 center = center_range.xyz-o;
+        float3 nearest = center - u.xyz*clamp(dot(center,u.xyz)/dot(u.xyz,u.xyz),-1.0,1.0)
+                                - v*clamp(dot(center,v)/dot(v,v),-1.0,1.0);
+        float radial = dot(nearest,nearest)/(center_range.w*center_range.w);
+        if (radial >= 1) continue;
+        float x = 2*random(seed)-1;
+        float y = 2*random(seed)-1;
+        float3 delta = center + x*u.xyz + y*v;
+        float d2 = dot(delta,delta);
+        if (d2 <= 1e-12) continue;
+        float dist = sqrt(d2);
+        float3 l = delta/dist;
+        float cosine = max(dot(l,n),0)*max(dot(-l,normalize(cross(u.xyz,v))),0);
+        Hit blocker;
+        if (cosine > 0 && !trace_ray(t,o,l,dist,blocker)) {
+            float window = 1-radial*radial;
+            sum += fetch(t,base+3).rgb*(u.w*cosine/d2*window*window);
+        }
+    }
+    return sum;
+}
+
 float3 incoming(Table t, float3 o, float3 d, uint scenario, uint seed) {
     float4 sky = fetch(t, 2 + 3 * scenario);
     float yaw = fetch(t, 3 + 3 * scenario).w;
@@ -146,7 +178,7 @@ float3 incoming(Table t, float3 o, float3 d, uint scenario, uint seed) {
         Hit blocker;
         if (cosine > 0 && trace_ray(t, o, light, 3.402823e38, blocker))
             cosine = 0;
-        val += weight * (hit.emission + hit.diffuse * sun * cosine / PI);
+        val += weight * (hit.emission + hit.diffuse * (sun * cosine + rect_irradiance(t,o,hit.n,seed ^ 0x9e3779b9u)) / PI);
         weight *= hit.diffuse;
         float u = random(seed);
         float v = random(seed);

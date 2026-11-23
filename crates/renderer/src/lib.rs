@@ -41,7 +41,7 @@
 //! without transform operands keep their world-space vertex contract.
 //! Transparent draws are supplied in back-to-front order. A 4× scene resolves
 //! its color to a single-sample HDR image and has no scene depth output.
-//! Set [`pbr::SceneLimits::max_point_lights`] for Forward, Forward+ or Deferred.
+//! Set [`pbr::SceneLimits::max_local_lights`] for Forward, Forward+ or Deferred.
 //! Forward+ culls lights by screen tile. Deferred shades its G-buffer before
 //! compositing transparent draws.
 //!

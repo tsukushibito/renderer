@@ -7,7 +7,7 @@ use renderer_bake::{
 };
 
 fn compare(backend: BakeBackend) {
-    let scene = BakeScene::new(
+    let mut scene = BakeScene::new(
         vec![Triangle {
             positions: [[-1.3, 1., -1.2], [1.7, 1., -1.2], [0.1, 1., 1.7]],
             uv: [[0.; 2]; 3],
@@ -28,6 +28,17 @@ fn compare(backend: BakeBackend) {
         ],
     )
     .unwrap();
+    scene.set_rect_lights(vec![
+        renderer_bake::RectLight::new(
+            [0., 0.25, 0.],
+            [0.4, 0., 0.],
+            [0., 0., -0.25],
+            [0.2, 0.6, 1.],
+            2.,
+            6.,
+        )
+        .unwrap(),
+    ]);
     let lights = [[0.25, 0.5, 0.75], [0.1, 0.05, 0.02]].map(|sky| Lighting {
         environment: Some(renderer_bake::SkyMap {
             texture: 0,

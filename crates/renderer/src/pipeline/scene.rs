@@ -1,5 +1,5 @@
 //! Inputs borrowed from the application.
-use super::{Bounds, Environment, PointLight, Sun, Transform};
+use super::{Bounds, Environment, LocalLight, Sun, Transform};
 use crate::{
     material::{MaterialHandle, Materials},
     mesh::{MeshHandle, Meshes},
@@ -188,7 +188,7 @@ pub struct SceneInput<'a> {
     pub meshes: &'a Meshes,
     pub materials: &'a Materials,
     pub objects: &'a [RenderObject],
-    pub lights: &'a [PointLight],
+    pub lights: &'a [LocalLight],
     /// Directional light for standard shading. Defaults to zero radiance.
     pub sun: Sun,
     /// World bounds for conservative culling and fitting directional shadows.
@@ -259,7 +259,7 @@ impl<'a> SceneInput<'a> {
     }
 
     #[must_use]
-    pub fn with_lights(mut self, lights: &'a [PointLight]) -> Self {
+    pub fn with_lights(mut self, lights: &'a [LocalLight]) -> Self {
         self.lights = lights;
         self
     }

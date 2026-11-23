@@ -1,9 +1,25 @@
 # 現行実装の検証状況
 
-最終確認日は2026-11-22。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
+最終確認日は2026-11-23。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
 現在の契約は[RenderGraph](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
+
+## Sponza の矩形エリアライト
+
+実機の Vulkan と D3D12 で、Forward・Forward+・Deferred の各方式で矩形の表が受光面を照らし、裏返すと光源なしの出力に戻ることを検証した。ベイクは両 GPU バックエンドで同じシーンの CPU 結果と照合した。
+
+1152×888 の Vulkan キャプチャで、同じ中庭を従来の補助点光源3灯と矩形2灯で比較した。太陽、空、カメラ、露出、材質、プローブ配置を固定し、矩形を含む間接光を再ベイクした。位置は O3DE の Z-up から `(x,z,-y)` に変換した。各灯は下向きの 5×1 m、300 lm。比較対象のレベルには別にディスク光源もある。[O3DE のレベルデータ](https://github.com/aws-lumberyard-dev/o3de-atomtest/blob/aae8e6098ecb4f5ef3e358f2fbd3d4036f0025e9/Levels/SponzaDiffuseGI/Layers/Lights.layer)
+
+![Sponza の点光源3灯と矩形光源2灯の比較](sponza-rect-lights.jpg)
+
+| 領域（左上 x,y、幅×高さ） | 参考画像 RGB | 従来の点光源 RGB | 矩形と再ベイク RGB |
+|---|---|---|---|
+| 左壁（91,248、56×104） | 72,70,73 | 71,86,112 | 87,107,129 |
+| 右壁（1131,234、20×88） | 105,75,58 | 71,72,85 | 79,91,104 |
+| 日陰の床（585,770、95×72） | 76,82,93 | 81,76,75 | 114,116,114 |
+
+RGB は表示画像の領域平均（0–255）。日陰の床では、矩形なしからの線形 HDR の増分は直接光で `(0.0858,0.0761,0.0630)`、再ベイクで `(0.0037,0.0029,0.0017)`。同じ矩形ベイクを使って直接光を切り替え、両方を切った対照には従来の太陽と空だけのベイクを使った。3キャプチャとも Vulkan の検証警告・エラーは0。参考画像は SIGGRAPH 2021 講演スライドの別キャプチャで、スライド撮影時の露出や照明設定との一致は未確認。[参考画像（18ページ）](https://www.tobias-franke.eu/publications/franke21sgifo/franke21sgifo_slides.pdf#page=18)
 
 <a id="bistro-local-reflections"></a>
 

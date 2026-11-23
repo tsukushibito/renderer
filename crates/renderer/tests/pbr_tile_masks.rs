@@ -1,15 +1,15 @@
-use renderer::pbr_forward_plus::{PointLight, PointLightLayout, active_tile_count, append_culling};
+use renderer::pbr_forward_plus::{LocalLight, LocalLightLayout, active_tile_count, append_culling};
 use renderer_core::graph::{BufferDesc, CompiledGraph, GraphCapacity, GraphPool, PassHandle};
 
 const CAMERA: BufferDesc = BufferDesc { size: 64 };
 const CAPACITY: usize = 129;
 const WORDS: usize = CAPACITY.div_ceil(32);
-fn layout() -> PointLightLayout {
-    PointLightLayout::new(CAPACITY).unwrap()
+fn layout() -> LocalLightLayout {
+    LocalLightLayout::new(CAPACITY).unwrap()
 }
 
-fn light(position: [f32; 3], radius: f32) -> PointLight {
-    PointLight {
+fn light(position: [f32; 3], radius: f32) -> LocalLight {
+    LocalLight::Point {
         position,
         radius,
         color: [1.0, 0.5, 0.25],
@@ -21,7 +21,7 @@ fn fixture(
     pool: &mut GraphPool,
     width: u32,
     height: u32,
-    lights: &[PointLight],
+    lights: &[LocalLight],
 ) -> (CompiledGraph, PassHandle) {
     let mut graph = pool.begin().unwrap();
     let camera = graph.buffer("fixture view", CAMERA).unwrap();
@@ -71,7 +71,7 @@ fn variable_extents_size_and_initialize_the_whole_view_without_imports() {
             graph.ordered_pass_names().collect::<Vec<_>>(),
             [
                 "view",
-                "local point light update",
+                "local light update",
                 "Forward+ tile light masks",
                 "tile capture"
             ]
@@ -110,7 +110,7 @@ mod native {
         ((exponent as u16 + 15) << 10) | ((value << (10 - exponent)) & 1023)
     }
 
-    fn check_tiles(width: u32, height: u32, lights: &[PointLight], bytes: &[u8]) {
+    fn check_tiles(width: u32, height: u32, lights: &[LocalLight], bytes: &[u8]) {
         let columns = width.div_ceil(TILE_SIZE);
         let to_clip = |px: u32, extent: u32| 2.0 * f64::from(px) / f64::from(extent) - 1.0;
         for (tile, encoded) in bytes.as_chunks::<{ WORDS * 8 }>().0.iter().enumerate() {
@@ -130,9 +130,14 @@ mod native {
             // Under identity projection the six planes are three intervals.
             let mut masks = [0u32; WORDS];
             for (id, light) in lights.iter().enumerate() {
-                let radius = f64::from(light.radius);
-                if light
-                    .position
+                let LocalLight::Point {
+                    position, radius, ..
+                } = *light
+                else {
+                    unreachable!()
+                };
+                let radius = f64::from(radius);
+                if position
                     .into_iter()
                     .zip(bounds)
                     .all(|(p, [lo, hi])| f64::from(p) + radius > lo && f64::from(p) - radius < hi)

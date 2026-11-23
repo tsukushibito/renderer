@@ -142,7 +142,7 @@ static LOCAL_LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
 
 pub const fn deferred_local_lighting_program() -> ManagedRasterProgram {
     // SAFETY: Same fullscreen and G-buffer contract as LIGHTING, with one
-    // additional read-only image. GetDimensions bounds all point-light reads.
+    // additional read-only image. GetDimensions bounds all local-light reads.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&LOCAL_LIGHTING) }
 }
 

@@ -70,7 +70,7 @@ impl Prepared {
                 frames_in_flight: concurrent,
                 max_draws,
                 max_materials: scene.materials.len(),
-                max_point_lights: if options.pipeline.uses_local_lights() {
+                max_local_lights: if options.pipeline.uses_local_lights() {
                     super::lighting::PRESET_LEN
                 } else {
                     0
@@ -388,7 +388,7 @@ impl Reference {
         deferred::append(
             graph,
             deferred::Inputs {
-                point_lights: None,
+                local_lights: None,
                 hdr: hdr_view,
                 depth: depth_view,
                 clear: frame.clear.unwrap_or(self.clear),

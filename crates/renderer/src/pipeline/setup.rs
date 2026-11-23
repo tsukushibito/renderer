@@ -29,7 +29,7 @@ pub struct SceneAssets<'a> {
     pub(crate) draws: usize,
     pub(crate) extra_meshes: Cow<'a, [MeshHandle]>,
     pub(crate) extra_materials: Cow<'a, [MaterialHandle]>,
-    pub(crate) lights: &'a [PointLight],
+    pub(crate) lights: &'a [LocalLight],
 }
 impl<'a> SceneAssets<'a> {
     pub fn new(
@@ -68,7 +68,7 @@ impl<'a> SceneAssets<'a> {
     pub fn preload_material(&mut self, material: MaterialHandle) {
         self.extra_materials.to_mut().push(material);
     }
-    pub fn with_lights(mut self, lights: &'a [PointLight]) -> Self {
+    pub fn with_lights(mut self, lights: &'a [LocalLight]) -> Self {
         self.lights = lights;
         self
     }
@@ -256,7 +256,7 @@ impl RendererSetup {
             max_materials: room(materials.len())?,
             max_transforms: room(pbr_objects.min(assets.draws))?,
             max_casters_per_cascade: room(casters.min(assets.draws))?,
-            max_point_lights: assets
+            max_local_lights: assets
                 .lights
                 .len()
                 .checked_add(self.additional_lights)

@@ -60,7 +60,7 @@ pub fn prepare(config: Config, limits: SceneLimits) -> Result<Prepared, GraphErr
         common.preparation_mut(),
         config.extent,
         true,
-        limits.max_point_lights > 0,
+        limits.max_local_lights > 0,
     )?;
     Ok(Prepared { common })
 }
@@ -117,7 +117,7 @@ impl Prepared {
                     camera: scene.camera,
                     view_projection,
                     lighting: scene.lighting,
-                    point_lights: scene.point_lights,
+                    local_lights: scene.local_lights,
                 },
                 |pass, _| scene.draw_pbr_opaque(pass),
             )?;

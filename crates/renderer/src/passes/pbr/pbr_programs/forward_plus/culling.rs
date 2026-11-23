@@ -1,4 +1,4 @@
-//! Forward+ tile culling and the shared point-light table layout.
+//! Forward+ tile culling and the shared local-light table layout.
 
 use crate::shader_binaries::packaged_shaders;
 use renderer_core::ImageFormat;
@@ -19,15 +19,7 @@ const MAX_EXTENT: u32 = 65_535;
 pub(super) const LIGHTS: u32 = 2;
 pub(super) const TILES: u32 = 3;
 
-/// A local light in world space. Radius must be positive. RGB and intensity
-/// are linear, finite and nonnegative.
-#[derive(Clone, Copy, Debug)]
-pub struct PointLight {
-    pub position: [f32; 3],
-    pub radius: f32,
-    pub color: [f32; 3],
-    pub intensity: f32,
-}
+pub use crate::pbr::LocalLight;
 
 pub fn active_tile_count(width: u32, height: u32) -> Result<u32, GraphError> {
     let cells = width
@@ -41,29 +33,29 @@ pub fn active_tile_count(width: u32, height: u32) -> Result<u32, GraphError> {
     Ok(cells)
 }
 
-/// Layout for a prepared, caller-sized point-light table. The first pair of
-/// RGBA32F texels holds the viewport and active count. Each light occupies
-/// one more pair (position/radius, linear RGB/intensity).
+/// Layout for a prepared, caller-sized local-light table. The first four
+/// RGBA32F texels hold the viewport and active count. Each light occupies
+/// four texels (bounds, emission, and two rectangle half-edges).
 #[derive(Clone, Copy, Debug)]
-pub struct PointLightLayout {
+pub struct LocalLightLayout {
     capacity: usize,
     desc: ImageDesc,
     bytes: usize,
 }
 
-impl PointLightLayout {
+impl LocalLightLayout {
     pub fn new(capacity: usize) -> Result<Self, GraphError> {
         let slots = u32::try_from(capacity)
             .ok()
             .and_then(|n| n.checked_add(1))
             .filter(|_| capacity != 0)
-            .ok_or_else(|| GraphError::invalid_input("invalid point-light table capacity"))?;
+            .ok_or_else(|| GraphError::invalid_input("invalid local-light table capacity"))?;
         let columns = slots.min(256);
-        let desc = ImageDesc::rgba32_float(2 * columns, slots.div_ceil(columns));
+        let desc = ImageDesc::rgba32_float(4 * columns, slots.div_ceil(columns));
         let bytes = desc
             .byte_len()
             .and_then(|n| usize::try_from(n).ok())
-            .ok_or_else(|| GraphError::invalid_input("point-light table size overflow"))?;
+            .ok_or_else(|| GraphError::invalid_input("local-light table size overflow"))?;
         Ok(Self {
             capacity,
             desc,
@@ -86,7 +78,7 @@ impl PointLightLayout {
         let columns = width
             .div_ceil(TILE_SIZE)
             .checked_mul((self.capacity as u32).div_ceil(32))
-            .ok_or_else(|| GraphError::invalid_input("point-light mask width overflow"))?;
+            .ok_or_else(|| GraphError::invalid_input("local-light mask width overflow"))?;
         Ok(ImageDesc::rgba16_float(columns, height.div_ceil(TILE_SIZE)))
     }
 
@@ -95,15 +87,15 @@ impl PointLightLayout {
     pub fn encode(
         self,
         [width, height]: [u32; 2],
-        lights: &[PointLight],
+        lights: &[LocalLight],
         bytes: &mut [u8],
     ) -> Result<(), GraphError> {
         if width == 0 || height == 0 || width > MAX_EXTENT || height > MAX_EXTENT {
-            return Err(GraphError::invalid_input("invalid point-light viewport"));
+            return Err(GraphError::invalid_input("invalid local-light viewport"));
         }
         if bytes.len() != self.bytes || lights.len() > self.capacity {
             return Err(GraphError::invalid_input(
-                "point-light table capacity exceeded",
+                "local-light table capacity exceeded",
             ));
         }
         let count = lights.len() as u32;
@@ -111,25 +103,41 @@ impl PointLightLayout {
         for (word, value) in bytes[..16].as_chunks_mut::<4>().0.iter_mut().zip(header) {
             *word = (value as f32).to_le_bytes();
         }
-        for (record, light) in bytes[32..].as_chunks_mut::<32>().0.iter_mut().zip(lights) {
-            let values = [
-                light.position[0],
-                light.position[1],
-                light.position[2],
-                light.radius,
-                light.color[0],
-                light.color[1],
-                light.color[2],
-                light.intensity,
-            ];
-            if values.iter().any(|value| !value.is_finite())
-                || light.radius <= 0.0
-                || light.color.iter().any(|v| *v < 0.0)
-                || light.intensity < 0.0
-            {
-                return Err(GraphError::invalid_input("invalid PBR point light"));
+        for (record, light) in bytes[64..].as_chunks_mut::<64>().0.iter_mut().zip(lights) {
+            let mut words = [0.; 16];
+            match *light {
+                LocalLight::Point {
+                    position,
+                    radius,
+                    color,
+                    intensity,
+                } => {
+                    if !position.into_iter().all(f32::is_finite)
+                        || !radius.is_finite()
+                        || radius <= 0.
+                        || color
+                            .into_iter()
+                            .chain([intensity])
+                            .any(|v| !v.is_finite() || v < 0.)
+                    {
+                        return Err(GraphError::invalid_input("invalid PBR point light"));
+                    }
+                    words[..3].copy_from_slice(&position);
+                    words[3] = radius;
+                    words[4..7].copy_from_slice(&color);
+                    words[7] = intensity;
+                }
+                LocalLight::Rect(rect) => {
+                    let [u, v] = rect.half_edges();
+                    words[..3].copy_from_slice(&rect.center());
+                    words[3] = rect.bound_radius;
+                    words[4..7].copy_from_slice(&rect.radiance());
+                    words[8..11].copy_from_slice(&u);
+                    words[11] = rect.range();
+                    words[12..15].copy_from_slice(&v);
+                }
             }
-            for (word, value) in record.as_chunks_mut::<4>().0.iter_mut().zip(values) {
+            for (word, value) in record.as_chunks_mut::<4>().0.iter_mut().zip(words) {
                 *word = value.to_le_bytes();
             }
         }
@@ -137,8 +145,8 @@ impl PointLightLayout {
     }
 
     pub fn upload(self, graph: &mut Graph, bytes: &[u8]) -> Result<ImageView, GraphError> {
-        let image = graph.image("local point lights", self.desc)?;
-        graph.upload_image("local point light update", image, bytes)?;
+        let image = graph.image("local lights", self.desc)?;
+        graph.upload_image("local light update", image, bytes)?;
         graph.image_view(image, 0, 0)
     }
 }
@@ -191,7 +199,7 @@ static CULL_PROGRAM: ComputeProgramDescriptor = ComputeProgramDescriptor {
 
 pub const fn compute_program() -> ManagedProgram {
     // SAFETY: Image2d covers the bound view. Each in-range invocation writes
-    // exactly its own texel. Counts and point-light loads are bounded by
+    // exactly its own texel. Counts and local-light loads are bounded by
     // the actual sampled view; arbitrary header values cannot enlarge it.
     unsafe { ManagedProgram::from_trusted_descriptor(&CULL_PROGRAM) }
 }
@@ -224,7 +232,7 @@ pub(super) fn tile_binding(view: ImageView) -> Binding {
     }
 }
 
-/// Initialize the complete tile mask view from the camera and point-light table.
+/// Initialize the complete tile mask view from the camera and local-light table.
 pub fn append_culling(
     graph: &mut Graph,
     camera: BufferHandle,

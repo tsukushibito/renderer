@@ -1,5 +1,6 @@
 #include "local_lights.hlsli"
 #include "pbr_math.hlsli"
+#include "rect_light.hlsli"
 
 #if BISTRO_LOCAL_LIGHTS == 2
 Texture2D<float4> tile_masks : register(t3, space0);
@@ -17,10 +18,12 @@ uint read_tile_mask(uint2 texel) {
 }
 #endif
 
-float3 point_light_radiance(
+float3 evaluate_local_light(
     uint index, float3 position, float3 n, float3 v, float3 f0, float3 diffuse_color, float roughness
 ) {
-    PointLight light = load_point_light(index);
+    LocalLight light = load_local_light(index);
+    if (light.half_width_range.w > 0.0)
+        return rect_radiance(light, position, n, v, f0, diffuse_color, roughness);
     float3 delta = light.position_radius.xyz - position;
     float squared_distance = dot(delta, delta);
     float radius = light.position_radius.w;
@@ -63,13 +66,13 @@ float3 local_light_radiance(
             uint index = half_index * 32u + (uint)firstbitlow(mask);
             mask &= mask - 1u;
             if (index < light_count) {
-                result += point_light_radiance(index, position, n, v, f0, diffuse_color, roughness);
+                result += evaluate_local_light(index, position, n, v, f0, diffuse_color, roughness);
             }
         }
     }
 #else
     for (uint index = 0u; index < light_count; ++index) {
-        result += point_light_radiance(index, position, n, v, f0, diffuse_color, roughness);
+        result += evaluate_local_light(index, position, n, v, f0, diffuse_color, roughness);
     }
 #endif
     return result;

@@ -1,4 +1,4 @@
-use super::{DefaultViews, MaterialHandle, PointLight, PreparedView, Transform};
+use super::{DefaultViews, LocalLight, MaterialHandle, PreparedView, Transform};
 use renderer_core::graph::{BufferHandle, GraphError};
 
 /// A graph-local indexed mesh range. Vertex records must match the material's program.
@@ -96,7 +96,7 @@ pub struct GeometryDrawInput<'a> {
     pub view: &'a PreparedView,
     pub defaults: DefaultViews,
     pub draws: &'a [Draw],
-    pub lights: &'a [PointLight],
+    pub lights: &'a [LocalLight],
     pub camera: Option<BufferHandle>,
     /// Cascade decisions from the history transaction for this view.
     pub shadow_history: Option<&'a crate::pbr::ShadowFrame>,

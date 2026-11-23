@@ -38,8 +38,8 @@ pub struct Inputs {
     pub camera: BufferHandle,
     pub view_projection: [[f32; 4]; 4],
     pub lighting: [Binding; 10],
-    /// Optional graph-local table encoded by [PointLightLayout](crate::pbr_forward_plus::PointLightLayout).
-    pub point_lights: Option<ImageView>,
+    /// Optional graph-local table encoded by [LocalLightLayout](crate::pbr_forward_plus::LocalLightLayout).
+    pub local_lights: Option<ImageView>,
 }
 
 /// The typed RGBA16F material planes and their single-sample D32 depth.
@@ -194,7 +194,7 @@ pub fn append(
     let mut bindings = [inverse; 18];
     bindings[..gbuffer.len()].copy_from_slice(&gbuffer);
     bindings[gbuffer.len()..17].copy_from_slice(&scene.lighting);
-    let program = if let Some(lights) = scene.point_lights {
+    let program = if let Some(lights) = scene.local_lights {
         bindings[17] = crate::passes::pbr::forward_plus::light_binding(lights);
         crate::passes::pbr::deferred::deferred_local_lighting_program()
     } else {

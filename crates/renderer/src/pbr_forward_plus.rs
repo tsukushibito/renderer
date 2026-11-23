@@ -1,6 +1,6 @@
-//! Forward PBR with conservative per-tile, variable-length point-light masks.
+//! Forward PBR with conservative per-tile, variable-length local-light masks.
 pub use crate::passes::pbr::forward_plus::{
-    MAX_TILES, PointLight, PointLightLayout, TILE_SIZE, active_tile_count, append_culling,
+    LocalLight, LocalLightLayout, MAX_TILES, TILE_SIZE, active_tile_count, append_culling,
     compute_program, raster_bindings, raster_program,
 };
 use crate::{

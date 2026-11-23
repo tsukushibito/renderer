@@ -53,7 +53,7 @@ void main(uint3 dispatch_id : SV_DispatchThreadID) {
         float4 far_plane = w - z;
         uint end_light = min(first_light + 32u, local_light_count());
         for (uint index = first_light; index < end_light; ++index) {
-            float4 sphere = load_point_light(index).position_radius;
+            float4 sphere = load_local_light(index).position_radius;
             if (sphere.w > 0.0
                 && sphere_touches(left, sphere.xyz, sphere.w)
                 && sphere_touches(right, sphere.xyz, sphere.w)

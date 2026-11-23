@@ -292,7 +292,7 @@ impl Renderer {
             || materials.len() > limits.max_materials
             || transforms.min(assets.draws) > limits.max_transforms
             || casters.min(assets.draws) > limits.max_casters_per_cascade
-            || assets.lights.len() > limits.max_point_lights
+            || assets.lights.len() > limits.max_local_lights
         {
             return self.reconfigure(self.camera, assets);
         }

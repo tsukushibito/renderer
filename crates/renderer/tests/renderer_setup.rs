@@ -1,7 +1,7 @@
 use renderer::{
     material::{Materials, PbrParams},
     mesh::{MeshCapacity, MeshData, Meshes},
-    pbr::{PbrVertex, PointLight, Projection, Transform, ViewInput},
+    pbr::{LocalLight, PbrVertex, Projection, Transform, ViewInput},
     pipeline::{
         CameraGroup, CameraView, PipelineResult, RenderObject, RendererSetup, SceneAssets,
         StandardConfig, Technique, ViewId,
@@ -43,7 +43,7 @@ fn plan_counts_shared_assets_and_per_view_work_separately() -> PipelineResult<()
             ..instance
         },
     ];
-    let lights = [PointLight {
+    let lights = [LocalLight::Point {
         position: [0.; 3],
         radius: 1.,
         color: [1.; 3],
@@ -67,7 +67,7 @@ fn plan_counts_shared_assets_and_per_view_work_separately() -> PipelineResult<()
             limits.max_materials,
             limits.max_transforms,
             limits.max_casters_per_cascade,
-            limits.max_point_lights
+            limits.max_local_lights
         ),
         (5, 4, 5, 4, 259)
     );

@@ -42,7 +42,7 @@ fn limits() -> SceneLimits {
         frames_in_flight: NonZeroUsize::MIN,
         max_draws: 2,
         max_materials: 2,
-        max_point_lights: 0,
+        max_local_lights: 0,
         max_casters_per_cascade: 1,
         max_transforms: 0,
     }
@@ -261,7 +261,7 @@ fn disabled_shadows_omit_maps_and_reject_cascade_inputs() {
 #[test]
 fn standard_techniques_accept_point_lights_and_share_output() {
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
-    let lights = [pbr::PointLight {
+    let lights = [pbr::LocalLight::Point {
         position: [0.0, 0.0, 1.0],
         radius: 2.0,
         color: [1.0; 3],
@@ -276,7 +276,7 @@ fn standard_techniques_accept_point_lights_and_share_output() {
             technique,
             config(),
             SceneLimits {
-                max_point_lights: lights.len(),
+                max_local_lights: lights.len(),
                 ..limits()
             },
         )

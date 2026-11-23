@@ -25,7 +25,7 @@ pub use culling::MAX_TILES;
 )]
 pub use culling::compute_program;
 pub(crate) use culling::{CULL_PASS, light_binding};
-pub use culling::{PointLight, PointLightLayout, TILE_SIZE, active_tile_count, append_culling};
+pub use culling::{LocalLight, LocalLightLayout, TILE_SIZE, active_tile_count, append_culling};
 
 #[allow(
     dead_code,

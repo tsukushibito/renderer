@@ -1,6 +1,8 @@
 //! Material, draw and view inputs shared by the standard PBR recipes.
 
 mod culling;
+mod lights;
+pub use lights::{LocalLight, RectLight};
 mod defaults;
 pub(crate) mod draw;
 mod history;
@@ -40,7 +42,7 @@ use renderer_core::graph::{BufferHandle, GraphError, ImageHandle, ImageView, Sam
 
 use crate::passes::{output::SdrOutput, pbr::CAMERA_BYTES};
 
-pub use crate::{pbr_deferred::GBuffer, pbr_forward_plus::PointLight};
+pub use crate::pbr_deferred::GBuffer;
 
 pub const CASCADE_COUNT: usize = 4;
 
@@ -95,8 +97,8 @@ pub struct SceneLimits {
     pub frames_in_flight: NonZeroUsize,
     pub max_draws: usize,
     pub max_materials: usize,
-    /// Maximum point lights per view. Zero reserves no light data or programs.
-    pub max_point_lights: usize,
+    /// Maximum local lights per view. Zero reserves no light data or programs.
+    pub max_local_lights: usize,
     pub max_casters_per_cascade: usize,
     /// Maximum model transforms across all draws in one view (u32 addressing).
     /// Zero reserves no table. Larger tables use bounded descriptor pages.
@@ -257,7 +259,7 @@ pub enum FrameShadows<'a> {
 pub struct PbrDrawInput<'a> {
     pub(crate) forward_draws: Option<&'a crate::pipeline::ForwardDraws>,
     pub view: &'a PreparedView,
-    pub lights: &'a [PointLight],
+    pub lights: &'a [LocalLight],
     pub materials: &'a [GraphMaterial],
     /// Draws with Opaque or Mask materials in submission order.
     pub opaque: &'a [Draw],
@@ -272,9 +274,9 @@ pub struct PbrDrawInput<'a> {
 }
 
 impl<'a> PbrDrawInput<'a> {
-    /// Supply the same point lights to any of the standard PBR techniques.
+    /// Supply the same local lights to any of the standard PBR techniques.
     #[must_use]
-    pub fn with_lights(mut self, lights: &'a [PointLight]) -> Self {
+    pub fn with_lights(mut self, lights: &'a [LocalLight]) -> Self {
         self.lights = lights;
         self
     }

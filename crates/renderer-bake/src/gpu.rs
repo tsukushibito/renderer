@@ -64,7 +64,8 @@ fn pack<const N: usize>(
         scene.materials.len(),
         scene.textures.len(),
     ];
-    if counts.iter().any(|&n| n > 0xffffff)
+    if scene.rect_lights.len() > 0xffffff
+        || counts.iter().any(|&n| n > 0xffffff)
         || scene
             .textures
             .iter()
@@ -73,6 +74,7 @@ fn pack<const N: usize>(
         return Err("scene exceeds GPU transport addressing".into());
     }
     let count = 2
+        + 4 * scene.rect_lights.len()
         + 3 * N
         + counts[0] * 3
         + counts[1] * 4
@@ -91,7 +93,7 @@ fn pack<const N: usize>(
         }
     };
     push(counts.map(|n| n as f32));
-    push([samples as f32, N as f32, 0., 0.]);
+    push([samples as f32, N as f32, scene.rect_lights.len() as f32, 0.]);
     for light in lights {
         push(texel(
             light.sky,
@@ -102,6 +104,13 @@ fn pack<const N: usize>(
             light.environment.map_or(0., |m| m.yaw_radians),
         ));
         push(texel(light.direction_to_sun, 0.));
+    }
+    for rect in &scene.rect_lights {
+        let [u, v] = rect.half_edges();
+        push(texel(rect.center(), rect.range()));
+        push(texel(u, rect.area()));
+        push(texel(v, 0.));
+        push(texel(rect.radiance(), 0.));
     }
     for n in &scene.bvh.0 {
         push(texel(n.lo, n.start as f32));

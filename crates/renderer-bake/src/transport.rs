@@ -153,6 +153,39 @@ impl BakeScene {
         self.incoming_classified(origin, ray, light, state).0
     }
 
+    // Uniform area sampling with an explicit visibility ray. This is evaluated
+    // at secondary surface hits only, including those in reflection captures.
+    fn rect_irradiance(&self, origin: Vec3, normal: Vec3, mut seed: u32) -> Vec3 {
+        let mut sum = [0.; 3];
+        for rect in &self.rect_lights {
+            let [u, v] = rect.half_edges();
+            let center = crate::sub(rect.center(), origin);
+            let coordinate = |edge| (dot(center, edge) / dot(edge, edge)).clamp(-1., 1.);
+            let (x, y) = (coordinate(u), coordinate(v));
+            let nearest = std::array::from_fn(|i| center[i] - x * u[i] - y * v[i]);
+            let radial = dot(nearest, nearest) / rect.range().powi(2);
+            if radial >= 1. {
+                continue;
+            }
+            let (x, y) = (2. * random(&mut seed) - 1., 2. * random(&mut seed) - 1.);
+            let delta = std::array::from_fn(|i| center[i] + x * u[i] + y * v[i]);
+            let d2 = dot(delta, delta);
+            if d2 <= 1e-12 {
+                continue;
+            }
+            let dist = d2.sqrt();
+            let l = delta.map(|c| c / dist);
+            let cosine = dot(normal, l).max(0.) * (-dot(rect.normal(), l)).max(0.);
+            if cosine > 0. && self.trace(origin, l, dist).is_none() {
+                let scale = rect.area() * cosine / d2 * (1. - radial * radial).powi(2);
+                for (channel, radiance) in sum.iter_mut().zip(rect.radiance()) {
+                    *channel += radiance * scale;
+                }
+            }
+        }
+        sum
+    }
+
     /// Incident radiance and whether the initial ray hit static geometry.
     pub(crate) fn incoming_classified(
         &self,
@@ -184,9 +217,10 @@ impl BakeScene {
             {
                 cosine = 0.;
             }
+            let rect = self.rect_irradiance(origin, hit.normal, *state ^ 0x9e3779b9);
             for i in 0..3 {
-                result[i] +=
-                    weight[i] * (hit.emission[i] + hit.diffuse[i] * light.sun[i] * cosine / PI);
+                result[i] += weight[i]
+                    * (hit.emission[i] + hit.diffuse[i] * (light.sun[i] * cosine + rect[i]) / PI);
                 weight[i] *= hit.diffuse[i];
             }
             ray = hemisphere(hit.normal, random(state), random(state));
@@ -286,6 +320,46 @@ mod tests {
             assert!((v - PI * sky).abs() < 1e-5);
         }
     }
+    #[test]
+    fn rectangle_illuminates_visible_bounce_surfaces_only() {
+        let rect = crate::RectLight::new(
+            [0., 2., 0.],
+            [0.5, 0., 0.],
+            [0., 0., 0.25],
+            [1., 0., 0.],
+            20.,
+            8.,
+        )
+        .unwrap();
+        let mut scene = BakeScene::new(vec![], vec![], vec![]).unwrap();
+        scene.set_rect_lights(vec![rect]);
+        let dark = Lighting::uniform_sky([0.; 3]);
+        assert_eq!(
+            scene.bake_irradiance(&[surface()], dark, 32).unwrap()[0],
+            [0.; 3]
+        );
+        assert!(scene.rect_irradiance([0.; 3], surface().normal, 1)[0] > 0.);
+        let plane = |y| Triangle {
+            positions: [[-10., y, -10.], [10., y, -10.], [0., y, 10.]],
+            uv: [[0.; 2]; 3],
+            material: 0,
+        };
+        let mut scene = BakeScene::new(vec![plane(0.)], vec![Material::default()], vec![]).unwrap();
+        scene.set_rect_lights(vec![rect]);
+        let bounce = scene
+            .incoming_classified([0., 1., 0.], [0., -1., 0.], dark, &mut 1)
+            .0;
+        assert!(bounce[0] > 0.);
+        assert_eq!(bounce[1..], [0.; 2]);
+        let mut blocked =
+            BakeScene::new(vec![plane(1.)], vec![Material::default()], vec![]).unwrap();
+        blocked.set_rect_lights(vec![rect]);
+        assert_eq!(
+            blocked.rect_irradiance([0.; 3], surface().normal, 1),
+            [0.; 3]
+        );
+    }
+
     #[test]
     fn masked_ceiling_transmits_sky_while_opaque_ceiling_emits_red() {
         let tri = Triangle {

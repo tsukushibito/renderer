@@ -1,6 +1,6 @@
 //! Draw mixed materials into one scene-linear HDR view.
 pub use crate::pbr::{
-    Bounds, CameraStorage, Config, Environment, PointLight, PreparedView, Projection, SceneImages,
+    Bounds, CameraStorage, Config, Environment, LocalLight, PreparedView, Projection, SceneImages,
     SceneLimits, ShadowSettings, Sun, Transform, ViewInput,
 };
 use crate::{

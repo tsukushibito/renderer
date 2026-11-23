@@ -193,7 +193,7 @@ fn deferred_pass_fits_its_advertised_reservations() {
     let planes = deferred::append(
         &mut graph,
         deferred::Inputs {
-            point_lights: Some(environment),
+            local_lights: Some(environment),
             hdr: hdr_view,
             depth: depth_view,
             clear: [0.0; 4],
@@ -253,7 +253,7 @@ fn deferred_pass_rejects_invalid_targets_before_consuming_graph_capacity() {
         let error = deferred::append(
             &mut graph,
             deferred::Inputs {
-                point_lights: None,
+                local_lights: None,
                 hdr,
                 depth,
                 clear: [0.0; 4],
