@@ -363,6 +363,9 @@ impl Options {
         if result.instances.enabled() && result.omit_material.is_some() {
             return Err("--instances requires all original materials".into());
         }
+        if result.look == camera::Look::O3deAtrium {
+            return Err("use the bistro sample for the o3de-atrium rectangle lights".into());
+        }
         if result.fixture && result.look != camera::Look::Reference {
             return Err("--look lumberyard-day requires the exterior scene".into());
         }

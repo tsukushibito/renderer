@@ -18,6 +18,8 @@ RTX 3060、Vulkan、Forward で同じ2灯を「消灯」「点灯・影なし」
 | 側廊の床 960×540、(160,425)–(230,478) | 0.073011 | 0 | 0% |
 | 中央通路の床 1152×888、(585,770)–(680,842) | 0.077197 | 0.077197 | 100% |
 
+同じ6枚を D3D12（Debug Layer・GPU-based validation 有効）でも撮影した。側廊の残存率は0%、中央通路は100%、警告・エラーは0だった。表と比較画像は Vulkan の結果。
+
 同じGPU、側廊960×540、1フレーム・イン・フライト、厳格検証ありの**フレーム全体**のGPUタイムスタンプを測った。初回以外はウォームアップ8フレーム後、24フレームの中央値。移動条件には同じ2個の検査球を追加し、開始位置 `(-6,1.5,1)` から終了位置 `(-4,1.5,1)` へ動かした。
 
 | 条件 | 矩形影なし | 矩形影あり | 影ありで描いた面数 |
@@ -34,7 +36,7 @@ RTX 3060、Vulkan、Forward で同じ2灯を「消灯」「点灯・影なし」
 python tools/sponza/compare_rect_shadows.py --binary target/release/bistro.exe --manifest COOK/manifest.json --ibl-manifest IBL/manifest.json --baked-lighting light.gi --reflection-probes light.reflections --output captures
 ```
 
-実GPUの `moving_rectangle_blocker` テストではVulkan・D3D12のForward・Forward+・Deferredで、中心投影の面境界をまたぐ受光面、変換付きキャスターが移動した後の復光、アルファマスクの開口を検証した。`mixed_materials` は両APIでカスタムキャスターの材質更新時の失効と静止時の再利用を検査する。
+実GPUの `moving_rectangle_blocker` テストではVulkan・D3D12のForward・Forward+・Deferredで、中心投影の面境界をまたぐ受光面、変換付きキャスターが移動した後の復光、アルファマスクの開口を検証した。両APIで同じテストを開発用検証を外した最適化ビルドでも実行した。`mixed_materials` は両APIでカスタムキャスターの材質更新時の失効と静止時の再利用を検査する。
 
 ### 従来の補助点光源との比較
 

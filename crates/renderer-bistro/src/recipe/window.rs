@@ -845,10 +845,7 @@ pub(super) fn execute(mut options: Options) -> Result<(), Error> {
         options.warmup = 0;
     }
     let load_started = Instant::now();
-    let condition_bytes = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tools/bistro/conditions.json"
-    ));
+    let condition_bytes = options.condition_bytes();
     let mut conditions = Conditions::parse(&serde_json::from_slice(condition_bytes)?)?;
     let mut scene = if let Some(path) = &options.manifest {
         Scene::load(path, false)?

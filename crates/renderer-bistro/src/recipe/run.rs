@@ -500,11 +500,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     let setup_memory = renderer_core::measurement::Snapshot::now();
     let setup = Instant::now();
     let stage = Instant::now();
-    let condition_bytes: &[u8] = if options.look == crate::shared::camera::Look::O3deAtrium {
-        include_bytes!("../../../../tools/sponza/conditions.json")
-    } else {
-        include_bytes!("../../../../tools/bistro/conditions.json")
-    };
+    let condition_bytes: &[u8] = options.condition_bytes();
     let conditions_hash = super::digest(condition_bytes);
     let mut conditions = Conditions::parse(&serde_json::from_slice(condition_bytes)?)?;
     eprintln!("Bistro asset load boundary");

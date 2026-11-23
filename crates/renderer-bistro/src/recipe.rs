@@ -167,6 +167,12 @@ enum RectLights {
     Shadowed,
 }
 impl Options {
+    fn condition_bytes(&self) -> &'static [u8] {
+        match self.look {
+            camera::Look::O3deAtrium => include_bytes!("../../../tools/sponza/conditions.json"),
+            _ => include_bytes!("../../../tools/bistro/conditions.json"),
+        }
+    }
     fn uses_light_grid(&self) -> bool {
         self.pipeline == PipelineMode::ForwardReference
             || (self.pipeline == PipelineMode::ForwardPlus && self.baked_lighting.is_none())
@@ -419,7 +425,7 @@ impl Options {
             ball: None,
             fixture: false,
             look: camera::Look::Reference,
-            view: "street".into(),
+            view: String::new(),
             width: 1920,
             height: 1080,
             frames: 120,
@@ -457,6 +463,7 @@ impl Options {
             output: PathBuf::from(".tools/bistro-runtime"),
         };
         let mut args = arguments.into_iter();
+        let mut selected_view = None;
         let mut specified_size = false;
         let mut shader_manifest = None;
         while let Some(argument) = args.next() {
@@ -620,7 +627,7 @@ impl Options {
                 }
                 "--look" => result.look = args.next().ok_or("--look needs a preset")?.parse()?,
                 "--view" => {
-                    result.view = args.next().ok_or("--view needs a fixed name or route")?
+                    selected_view = Some(args.next().ok_or("--view needs a fixed name or route")?);
                 }
                 "--width" => {
                     result.width = args.next().ok_or("missing width")?.parse()?;
@@ -646,6 +653,10 @@ impl Options {
                 _ => return Err(format!("unknown option: {argument}").into()),
             }
         }
+        result.view = selected_view.unwrap_or_else(|| match result.look {
+            camera::Look::O3deAtrium => "renderer".into(),
+            _ => "street".into(),
+        });
         if !matches!(result.api.as_str(), "vulkan" | "d3d12") {
             return Err("API must be vulkan or d3d12".into());
         }
@@ -692,7 +703,7 @@ impl Options {
             return Err("Sponza rectangles require a standard PBR pipeline".into());
         }
         if result.fixture && result.look != camera::Look::Reference {
-            return Err("--look lumberyard-day requires the exterior scene".into());
+            return Err("the selected lighting preset requires a scene manifest".into());
         }
         if result.fixture && !specified_size {
             result.width = 128;
@@ -937,6 +948,29 @@ mod tests {
     fn default_api_is_compiled_into_the_example() {
         let defaults = options(&["--fixture"]).unwrap();
         require_backend(&defaults.api).unwrap();
+    }
+
+    #[test]
+    fn scene_presets_supply_the_default_and_explicit_camera() {
+        for args in [
+            vec!["--fixture"],
+            vec!["--manifest", "sponza", "--look", "o3de-atrium"],
+            vec![
+                "--manifest",
+                "sponza",
+                "--look",
+                "o3de-atrium",
+                "--view",
+                "gallery",
+            ],
+        ] {
+            let selected = options(&args).unwrap();
+            let conditions = camera::Conditions::parse(
+                &serde_json::from_slice(selected.condition_bytes()).unwrap(),
+            )
+            .unwrap();
+            conditions.camera(&selected.view, 0).unwrap();
+        }
     }
 
     #[test]
