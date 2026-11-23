@@ -327,6 +327,25 @@ impl Budget {
             + frame_buffers
             + check_images
             + usize::from(options.resource_checks);
+        let shadow_bindings = program::shadow_program().bindings().len();
+        let opaque_bindings = if deferred != 0 {
+            program::deferred::gbuffer_program().bindings().len()
+        } else {
+            options.pipeline.forward_program(false).bindings().len()
+        };
+        let blend_bindings = options.pipeline.forward_program(true).bindings().len();
+        let material_bindings = scene
+            .materials
+            .iter()
+            .map(|m| {
+                shadow_bindings
+                    + if m.blend {
+                        blend_bindings
+                    } else {
+                        opaque_bindings
+                    }
+            })
+            .sum::<usize>();
         let bloom_bindings = bloom_passes * 2 + usize::from(bloom_passes != 0);
         let accesses = scene.primitives.len() * 64 + 256 + bloom_bindings + 8 * groups;
         let shadow_words = scene
@@ -355,12 +374,16 @@ impl Budget {
             accesses,
             draws: scene.primitives.len() * 5 + 2 + deferred + options.instances.draws(),
             raster_constant_words: Some(raster_constant_words),
-            bindings: scene.materials.len() * (20 + 2 * local_lights + tiled_lights)
+            bindings: material_bindings
                 + 4
                 + bloom_bindings
-                + deferred * 16
+                + deferred
+                    * program::deferred::deferred_lighting_program()
+                        .bindings()
+                        .len()
                 + tiled_lights * 3
-                + usize::from(options.instances.enabled()) * 16
+                + usize::from(options.instances.enabled())
+                    * program::instancing_program().bindings().len()
                 + 3 * groups
                 + 3 * usize::from(groups != 0),
             attachments: 24 + deferred * deferred::PLANES.len(),
