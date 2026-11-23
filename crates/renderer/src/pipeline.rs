@@ -199,7 +199,7 @@ impl StandardPipeline {
         let max = limits.max_draws;
         let mats = limits.max_materials;
         let shadow_max = if config.shadows.is_some() {
-            limits.max_casters_per_cascade
+            limits.max_shadow_casters
         } else {
             0
         };
@@ -215,7 +215,7 @@ impl StandardPipeline {
         let draws = draws
             .checked_add(
                 rect_faces
-                    .checked_mul(limits.max_casters_per_cascade)
+                    .checked_mul(limits.max_shadow_casters)
                     .ok_or_else(overflow)?,
             )
             .ok_or_else(overflow)?;
@@ -266,7 +266,7 @@ impl StandardPipeline {
             opaque: Vec::with_capacity(max),
             transparent: Vec::with_capacity(max),
             rect_casters: Vec::with_capacity(if rect_faces > 0 {
-                limits.max_casters_per_cascade
+                limits.max_shadow_casters
             } else {
                 0
             }),
@@ -280,7 +280,7 @@ impl StandardPipeline {
                 blend: Vec::with_capacity(max),
                 pbr_blends: 0,
                 rect_shadow: (0..rect_faces)
-                    .map(|_| Vec::with_capacity(limits.max_casters_per_cascade))
+                    .map(|_| Vec::with_capacity(limits.max_shadow_casters))
                     .collect(),
                 shadow: std::array::from_fn(|_| Vec::with_capacity(shadow_max)),
             },
@@ -362,20 +362,14 @@ impl StandardPipeline {
                 Some(draws.len()),
             ));
         }
-        let rect_lights = if rect_target.is_some_and(|(_, reuse)| reuse) {
+        let rect_lights = if rect_target.is_some_and(|t| t.reused()) {
             &[]
         } else {
             lights
         };
-        if rect_lights
-            .iter()
-            .filter_map(LocalLight::shadow_emitter)
-            .count()
-            > self.limits.max_shadowed_rect_lights
-        {
-            return Err(GraphError::invalid_input(
-                "rectangle shadow capacity exceeded",
-            ));
+        self.limits.check_lights(lights)?;
+        if let Some(t) = rect_target {
+            t.check(lights)?;
         }
         self.rect_casters.clear();
         for list in &mut self.forward.rect_shadow {
@@ -433,6 +427,7 @@ impl StandardPipeline {
                     visible,
                     cascades,
                     if rect { rect_lights } else { &[] },
+                    rect_target,
                 )?;
             }
         }
@@ -449,6 +444,7 @@ impl StandardPipeline {
                 true,
                 self.order[index].2,
                 if draw.casts_shadow { rect_lights } else { &[] },
+                rect_target,
             )?;
         }
         self.forward.pbr_blends = self.transparent.len();
@@ -457,11 +453,11 @@ impl StandardPipeline {
             &self.materials,
             &self.opaque,
             &self.transparent,
-            &[],
+            &self.rect_casters,
             defaults,
         )?;
         if self.config.shadows.is_some() {
-            frame.shadows = pbr::FrameShadows::Cascades(std::array::from_fn(|i| {
+            frame.sun_shadows = pbr::SunShadows::Cascades(std::array::from_fn(|i| {
                 let casters = self.casters[i].as_slice();
                 shadow_history.map_or(
                     pbr::ShadowSource::Render {
@@ -472,7 +468,6 @@ impl StandardPipeline {
                 )
             }));
         }
-        frame.rect_casters = &self.rect_casters;
         frame.rect_target = rect_target;
         frame.forward_draws = Some(&self.forward);
         frame.transforms = &self.transforms;
@@ -493,6 +488,7 @@ impl StandardPipeline {
         visible: bool,
         cascades: [bool; pbr::CASCADE_COUNT],
         rect_lights: &[LocalLight],
+        rect_target: Option<pbr::rect_shadows::Targets<'_>>,
     ) -> Result<(), GraphError> {
         let expected = match instance {
             MaterialInstance::Pbr(_) => crate::passes::pbr::VERTEX_BYTES as u32,
@@ -545,7 +541,7 @@ impl StandardPipeline {
                     self.opaque.push(command);
                 }
                 if !rect_lights.is_empty() {
-                    if self.rect_casters.len() == self.limits.max_casters_per_cascade {
+                    if self.rect_casters.len() == self.limits.max_shadow_casters {
                         return Err(GraphError::invalid_input(
                             "rectangle caster capacity exceeded",
                         ));
@@ -619,9 +615,12 @@ impl StandardPipeline {
                     continue;
                 }
                 for face in 0..pbr::rect_shadows::FACES {
+                    if rect_target.is_some_and(|t| !t.dirty(slot, face)) {
+                        continue;
+                    }
                     let list =
                         &mut self.forward.rect_shadow[slot * pbr::rect_shadows::FACES + face];
-                    if list.len() == self.limits.max_casters_per_cascade {
+                    if list.len() == self.limits.max_shadow_casters {
                         return Err(GraphError::invalid_input(
                             "rectangle caster capacity exceeded",
                         ));
@@ -645,10 +644,10 @@ impl StandardPipeline {
     }
     fn check_caster_capacity(&self, cascade: usize) -> Result<(), GraphError> {
         let required = self.casters[cascade].len() + self.forward.shadow[cascade].len() + 1;
-        if required > self.limits.max_casters_per_cascade {
+        if required > self.limits.max_shadow_casters {
             return Err(GraphError::capacity_error(
                 renderer_core::graph::GraphCapacityKind::Draws,
-                self.limits.max_casters_per_cascade,
+                self.limits.max_shadow_casters,
                 Some(required),
             ));
         }

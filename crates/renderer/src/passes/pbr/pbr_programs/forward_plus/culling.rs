@@ -86,9 +86,19 @@ impl LocalLightLayout {
     /// count are ignored by both the culling and lighting shaders.
     pub fn encode(
         self,
+        extent: [u32; 2],
+        lights: &[LocalLight],
+        bytes: &mut [u8],
+    ) -> Result<(), GraphError> {
+        self.encode_slots(extent, lights, bytes, |i| i)
+    }
+
+    pub(crate) fn encode_slots(
+        self,
         [width, height]: [u32; 2],
         lights: &[LocalLight],
         bytes: &mut [u8],
+        slot: impl Fn(usize) -> usize,
     ) -> Result<(), GraphError> {
         if width == 0 || height == 0 || width > MAX_EXTENT || height > MAX_EXTENT {
             return Err(GraphError::invalid_input("invalid local-light viewport"));
@@ -103,7 +113,7 @@ impl LocalLightLayout {
         for (word, value) in bytes[..16].as_chunks_mut::<4>().0.iter_mut().zip(header) {
             *word = (value as f32).to_le_bytes();
         }
-        let mut shadow_slot = 0u32;
+        let mut shadow_slot = 0;
         for (record, light) in bytes[64..].as_chunks_mut::<64>().0.iter_mut().zip(lights) {
             let mut words = [0.; 16];
             match *light {
@@ -130,8 +140,8 @@ impl LocalLightLayout {
                 }
                 LocalLight::Rect(rect) | LocalLight::ShadowedRect(rect) => {
                     if matches!(light, LocalLight::ShadowedRect(_)) {
+                        words[15] = (slot(shadow_slot) + 1) as f32;
                         shadow_slot += 1;
-                        words[15] = shadow_slot as f32;
                     }
                     let [u, v] = rect.half_edges();
                     words[..3].copy_from_slice(&rect.center());

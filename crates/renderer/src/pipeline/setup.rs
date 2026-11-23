@@ -259,7 +259,7 @@ impl RendererSetup {
             max_draws: room(assets.draws)?,
             max_materials: room(materials.len())?,
             max_transforms: room(pbr_objects.min(assets.draws))?,
-            max_casters_per_cascade: room(casters.min(assets.draws))?,
+            max_shadow_casters: room(casters.min(assets.draws))?,
             max_shadowed_rect_lights: assets
                 .lights
                 .iter()

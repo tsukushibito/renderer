@@ -12,6 +12,8 @@ pub enum GraphCapacityKind {
     Slots,
     /// A snapshot's prepared input scratch is already connected.
     SnapshotInputs,
+    /// Named input capacity supplied by a higher-level Graph producer.
+    InputRecords(&'static str),
     Resources,
     Passes,
     Accesses,
@@ -226,6 +228,14 @@ impl GraphError {
 }
 impl fmt::Display for GraphError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(GraphCapacityError {
+            kind: GraphCapacityKind::InputRecords(name),
+            limit,
+            required: Some(required),
+        }) = self.capacity
+        {
+            return write!(f, "{name}: {required} required, {limit} prepared");
+        }
         f.write_str(&self.message)
     }
 }

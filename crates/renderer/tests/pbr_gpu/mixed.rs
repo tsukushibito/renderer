@@ -105,9 +105,9 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             frames_in_flight: NonZeroUsize::MIN,
             max_draws: 8,
             max_materials: 6,
-            max_shadowed_rect_lights: 1,
-            max_local_lights: 1,
-            max_casters_per_cascade: 1,
+            max_shadowed_rect_lights: 2,
+            max_local_lights: 2,
+            max_shadow_casters: 1,
             max_transforms: 1,
         },
         &[opaque, blend, textured.clone()],
@@ -170,6 +170,9 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             .ok_or("texture upload timed out")?,
     );
     drop((pending, plan));
+    let mut masked = brick(AlphaMode::Mask, 1.);
+    masked.textures.base_color = Some(cyan.clone());
+    materials.update_pbr(floor, masked)?;
     let swatch = materials.create_custom(
         &textured,
         &[
@@ -350,6 +353,92 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             );
         }
     }
+    // A single textured caster under the first panel, well outside the second panel's range.
+    let panel = |x, flux| -> Result<_> {
+        Ok(pbr::LocalLight::shadowed_rect(pbr::RectLight::new(
+            [x, 3., 0.],
+            [0.5, 0., 0.],
+            [0., 0., 0.5],
+            [1.; 3],
+            flux,
+            6.,
+        )?))
+    };
+    let near = panel(0., 10.)?;
+    let far = panel(40., 20.)?;
+    let replacement = panel(-40., 20.)?;
+    let oriented = [near, far];
+    let reordered = [far, panel(0., 5.)?];
+    let replaced = [replacement, near];
+    for step in 0..13 {
+        let shift = if matches!(step, 3 | 5..=12) { 1.0 } else { 0.0 };
+        let objects = [
+            RenderObject::new(pbr_mesh, floor).with_transform(pbr::Transform::new([
+                [0.2, 0., 0., shift],
+                [0., 0.2, 0., 0.],
+                [0., 0., 0.2, 0.2],
+            ])?),
+        ];
+        let lights = match step {
+            0 | 1 => &oriented[..],
+            6 => &oriented[..1],
+            7..=12 => &replaced[..],
+            _ => &reordered[..],
+        };
+        let input = SceneInput::new(&meshes, &materials, &objects)
+            .with_lights(lights)
+            .with_bounds(pbr::Bounds::new([-2.; 3], [2.; 3])?);
+        scene.prepare_scene(group, input)?;
+        let mut frame = scene.begin_frame(&mut pool)?;
+        let modified = if matches!(step, 8 | 10) {
+            let g = frame.graph();
+            let image = g.import_image("modified alpha coverage", &cyan)?;
+            let alpha = if step == 8 { 0 } else { 192 };
+            g.upload_image("edit coverage", image, &[0, 255, 255, alpha])?;
+            g.export_image(image)?;
+            Some(image)
+        } else {
+            None
+        };
+        frame.draw_scene(&view, input)?;
+        let faces = frame
+            .standard_output(view.id)
+            .unwrap()
+            .rendered_rectangle_faces();
+        match step {
+            0 => assert_eq!(faces, 10),
+            1 | 2 | 4 | 6 | 9 | 12 => assert_eq!(faces, 0, "step {step}"),
+            7 => assert_eq!(faces, 5),
+            _ => assert_eq!(faces, 1, "step {step}"),
+        }
+        // Abandon the first pose edit and the first alpha upload.
+        if step == 3 || step == 8 {
+            continue;
+        }
+        let submission = frame.submit(&mut runtime)?;
+        if let Some(image) = modified {
+            let updated = submission.export_image(image)?;
+            assert_ne!(updated.revision(), cyan.revision());
+            let mut masked = brick(AlphaMode::Mask, 1.);
+            masked.textures.base_color = Some(updated);
+            materials.update_pbr(floor, masked)?;
+        }
+        drop(
+            runtime
+                .wait_for_frame(submission.id(), Duration::from_secs(10))?
+                .ok_or("shadow frame timed out")?,
+        );
+        if modified.is_some()
+            && let Some(id) =
+                materials.prepare_gpu(&mut runtime, &mut GraphPool::new(capacity, 1)?)?
+        {
+            drop(
+                runtime
+                    .wait_for_frame(id, Duration::from_secs(10))?
+                    .ok_or("mask update timed out")?,
+            );
+        }
+    }
     if technique == pbr::Technique::Forward {
         let floor_quad = RenderObject::new(pbr_mesh, floor).with_transform(pbr::Transform::new([
             [0.5, 0., 0., 0.],
@@ -398,7 +487,7 @@ fn draw_after_resize(
         max_materials: 1,
         max_shadowed_rect_lights: 0,
         max_local_lights: 0,
-        max_casters_per_cascade: 0,
+        max_shadow_casters: 0,
         max_transforms: 1,
     };
     let mut prep = Preparation::new(n);

@@ -367,7 +367,7 @@ HDRはlittle-endian RGBA16F、SDRはRGBA8、depthはlittle-endian FP32で、
 これらは`capture_only: true`／`measurement: null`の診断であり、巡回全frameのcaptureではない。
 この例はoffscreenの材質描画であり、Windows表示・VSync待ちや操作の受入とは区別する。
 B3はGGXのsun＋静的IBL、4分割の影、線形RGBA16Fのblend、EV+1、Neutral、FXAA、sRGB一回を使う。
-`--aa-off`は出力AAを無効にし、`--shadows-off`は影の診断に使う。
+`--aa-off`は出力AAを無効にし、`--sun-shadows-off`は太陽の影だけを無効にする。矩形ライトの直接光と影は `--rect-lights off|unshadowed|shadowed` で指定する。
 通常のAAありrunも測定後に`aa-off/`へ診断画像を保存する。
 `--capture-shadow-maps`は測定後の4枚のD32画像を`shadow_captures`へ保存し、readback容量も準備時に予約する。
 full-sceneのAO適用は固定照明profileに従って無効とし、元ORM・glTF・材質参照を保持する。

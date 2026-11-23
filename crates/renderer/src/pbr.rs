@@ -27,11 +27,12 @@ pub use culling::{CascadeClip, Frustum, ViewCulling};
 pub use defaults::DefaultResourceError;
 pub use defaults::{DefaultResources, DefaultViews, Defaults, PreparedDefaults};
 pub use draw::{Draw, GraphMaterial, IndexedDraw, MaterialTextures};
-pub(crate) use history::{MapHistory, MapUpdates};
-pub use history::{RectShadowFrame, RectShadowHistory, RectShadowUpdates, ShadowHistoryError};
+pub(crate) use history::MapHistory;
+pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::Transform;
 pub use material::{LightmapBinding, MaterialFactors, MaterialUniform, ResidentMaterialUniform};
+pub use rect_shadows::{RectShadowFace, RectShadowFrame, RectShadowHistory, RectShadowUpdates};
 pub use unshadowed::UnshadowedView;
 pub use vertex::PbrVertex;
 pub use view::{Bounds, Projection, ShadowSettings, Sun, ViewInput};
@@ -92,7 +93,7 @@ impl Config {
 }
 
 /// Upper bounds for frame construction. The scene draw count combines opaque
-/// and blended commands, and the shadow draw limit is per cascade. Budget
+/// and blended commands, and the shadow limit bounds the common caster list and each culled list. Budget
 /// instanced ranges using [`Draw::command_count`].
 #[derive(Clone, Copy, Debug)]
 pub struct SceneLimits {
@@ -103,10 +104,35 @@ pub struct SceneLimits {
     pub max_local_lights: usize,
     /// Maximum shadow-casting rectangles in one view.
     pub max_shadowed_rect_lights: usize,
-    pub max_casters_per_cascade: usize,
+    pub max_shadow_casters: usize,
     /// Maximum model transforms across all draws in one view (u32 addressing).
     /// Zero reserves no table. Larger tables use bounded descriptor pages.
     pub max_transforms: usize,
+}
+
+impl SceneLimits {
+    /// The active local lights exceed the prepared count. At a change boundary, call
+    /// [Renderer::prepare_scene](crate::Renderer::prepare_scene) before retrying.
+    pub const LOCAL_LIGHTS: renderer_core::graph::GraphCapacityKind =
+        renderer_core::graph::GraphCapacityKind::InputRecords("local lights");
+    /// The shadowed rectangles exceed the prepared atlas slots.
+    pub const SHADOWED_RECT_LIGHTS: renderer_core::graph::GraphCapacityKind =
+        renderer_core::graph::GraphCapacityKind::InputRecords("shadowed rectangle lights");
+    pub(crate) fn check_lights(&self, lights: &[LocalLight]) -> Result<(), GraphError> {
+        for (kind, limit, required) in [
+            (Self::LOCAL_LIGHTS, self.max_local_lights, lights.len()),
+            (
+                Self::SHADOWED_RECT_LIGHTS,
+                self.max_shadowed_rect_lights,
+                lights.iter().filter_map(LocalLight::shadow_emitter).count(),
+            ),
+        ] {
+            if required > limit {
+                return Err(GraphError::capacity_error(kind, limit, Some(required)));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Graph-local linear HDR environment inputs. Irradiance and reflection are
@@ -255,7 +281,7 @@ pub enum ShadowSource<'a> {
 
 /// Graph-local shadow inputs matching the prepared recipe's shadow setting.
 #[derive(Clone, Copy, Debug)]
-pub enum FrameShadows<'a> {
+pub enum SunShadows<'a> {
     Cascades([ShadowSource<'a>; CASCADE_COUNT]),
     Disabled(UnshadowedView),
 }
@@ -265,14 +291,14 @@ pub struct PbrDrawInput<'a> {
     pub view: &'a PreparedView,
     pub lights: &'a [LocalLight],
     /// Geometry eligible to cast local light shadows, including offscreen objects.
-    pub rect_casters: &'a [Draw],
-    pub(crate) rect_target: Option<(ImageHandle, bool)>,
+    pub(crate) casters: &'a [Draw],
+    pub(crate) rect_target: Option<rect_shadows::Targets<'a>>,
     pub materials: &'a [GraphMaterial],
     /// Draws with Opaque or Mask materials in submission order.
     pub opaque: &'a [Draw],
     /// Indexed draws with Blend materials, already ordered back to front.
     pub transparent: &'a [Draw],
-    pub shadows: FrameShadows<'a>,
+    pub sun_shadows: SunShadows<'a>,
     /// Supply a graph-local target for [`CameraStorage::External`] or
     /// [`CameraStorage::PreUploaded`].
     pub camera_target: Option<BufferHandle>,
@@ -282,8 +308,8 @@ pub struct PbrDrawInput<'a> {
 
 impl<'a> PbrDrawInput<'a> {
     /// Attach the atlas chosen by the current Graph's history transaction.
-    pub fn use_rect_shadow_history(&mut self, frame: &RectShadowFrame) {
-        self.rect_target = Some((frame.target(0), frame.is_reused(0)));
+    pub fn use_rect_shadow_history(&mut self, frame: &RectShadowFrame<'a>) {
+        self.rect_target = Some(frame.targets);
     }
     /// Supply the same local lights to any of the standard PBR techniques.
     #[must_use]
@@ -311,15 +337,19 @@ impl<'a> PbrDrawInput<'a> {
                 casters,
             ))
         } else {
-            let mut frame =
-                Self::unshadowed(view, materials, opaque, transparent, defaults.unshadowed()?);
-            frame.rect_casters = casters;
-            Ok(frame)
+            Ok(Self::with_sun_shadows(
+                view,
+                materials,
+                opaque,
+                transparent,
+                casters,
+                SunShadows::Disabled(defaults.unshadowed()?),
+            ))
         }
     }
 
     /// Render all cascades to transient targets using the same caster list.
-    /// Override `shadows` for per-cascade culling or history reuse.
+    /// Override `sun_shadows` for per-cascade culling or history reuse.
     pub fn with_cascades(
         view: &'a PreparedView,
         materials: &'a [GraphMaterial],
@@ -327,56 +357,42 @@ impl<'a> PbrDrawInput<'a> {
         transparent: &'a [Draw],
         casters: &'a [Draw],
     ) -> Self {
-        let mut frame = Self::with_shadows(
+        Self::with_sun_shadows(
             view,
             materials,
             opaque,
             transparent,
-            FrameShadows::Cascades(
+            casters,
+            SunShadows::Cascades(
                 [ShadowSource::Render {
                     target: None,
                     casters,
                 }; CASCADE_COUNT],
             ),
-        );
-        frame.rect_casters = casters;
-        frame
+        )
     }
 
     /// Compose an advanced frame from per-cascade targets or reused shadow maps.
-    pub fn with_shadows(
+    pub fn with_sun_shadows(
         view: &'a PreparedView,
         materials: &'a [GraphMaterial],
         opaque: &'a [Draw],
         transparent: &'a [Draw],
-        shadows: FrameShadows<'a>,
+        casters: &'a [Draw],
+        sun_shadows: SunShadows<'a>,
     ) -> Self {
         Self {
             view,
             materials,
             opaque,
             transparent,
-            shadows,
+            sun_shadows,
             camera_target: None,
             lights: &[],
-            rect_casters: &[],
+            casters,
             rect_target: None,
             transforms: &[],
             forward_draws: None,
-        }
-    }
-
-    /// Construct a frame for a recipe prepared without shadow settings.
-    pub fn unshadowed(
-        view: &'a PreparedView,
-        materials: &'a [GraphMaterial],
-        opaque: &'a [Draw],
-        transparent: &'a [Draw],
-        placeholder: UnshadowedView,
-    ) -> Self {
-        Self {
-            shadows: FrameShadows::Disabled(placeholder),
-            ..Self::with_cascades(view, materials, opaque, transparent, &[])
         }
     }
 }

@@ -43,6 +43,12 @@ struct ViewSlot<P: ViewPipeline> {
     update: Option<P::Update>,
 }
 
+impl PreparedGroup<StandardPipeline> {
+    pub(super) fn check_lights(&self, lights: &[crate::pbr::LocalLight]) -> Result<(), GraphError> {
+        self.pipeline.limits.check_lights(lights)
+    }
+}
+
 impl<P: ViewPipeline> PreparedGroup<P> {
     pub(super) fn new(pipeline: P, extent: [u32; 2], limit: usize) -> Self {
         Self {

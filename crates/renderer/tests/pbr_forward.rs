@@ -4,9 +4,9 @@ use std::num::NonZeroUsize;
 use renderer::passes::output::SdrOutput;
 use renderer::pbr::{
     self, AlphaMode, Bounds, CASCADE_COUNT, CameraStorage, Defaults, Draw, Environment,
-    FrameShadows, GraphMaterial, IndexedDraw, MaterialFactors, MaterialTextures, MaterialUniform,
-    PbrDrawInput, PreparedView, Projection, SceneLimits, ShadowHistory, ShadowKey, ShadowSettings,
-    ShadowSource, Sun, Transform, VIEW_BYTES, ViewInput,
+    GraphMaterial, IndexedDraw, MaterialFactors, MaterialTextures, MaterialUniform, PbrDrawInput,
+    PreparedView, Projection, SceneLimits, ShadowHistory, ShadowKey, ShadowSettings, ShadowSource,
+    Sun, SunShadows, Transform, VIEW_BYTES, ViewInput,
 };
 use renderer::pbr_forward::{
     Config, Prepared, Programs, add_shadow_pass, prepare, prepare_with_programs,
@@ -44,7 +44,7 @@ fn limits() -> SceneLimits {
         max_materials: 2,
         max_shadowed_rect_lights: 0,
         max_local_lights: 0,
-        max_casters_per_cascade: 1,
+        max_shadow_casters: 1,
         max_transforms: 0,
     }
 }
@@ -359,7 +359,7 @@ fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
         ..draw
     })];
     let mut frame = PbrDrawInput::with_cascades(&view, &materials, &draws, &transparent, &draws);
-    let FrameShadows::Cascades(cascades) = &mut frame.shadows else {
+    let SunShadows::Cascades(cascades) = &mut frame.sun_shadows else {
         unreachable!()
     };
     cascades[0] = ShadowSource::Render {
@@ -370,7 +370,7 @@ fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
     let error = recipe.add_scene(&mut graph, frame).unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
     let mut frame = PbrDrawInput::with_cascades(&view, &materials, &draws, &transparent, &draws);
-    let FrameShadows::Cascades(cascades) = &mut frame.shadows else {
+    let SunShadows::Cascades(cascades) = &mut frame.sun_shadows else {
         unreachable!()
     };
     cascades[1] = ShadowSource::Render {

@@ -15,17 +15,17 @@ VIEWS = [
 ]
 
 
-def capture(args, view, size, mode):
-    directory = args.output / f"{view}-{mode}"
+def capture(args, view, size, mode, *, technique="forward", label=None, options=()):
+    directory = args.output / (label or f"{view}-{mode}")
     subprocess.run([
         str(args.binary.resolve()), "--manifest", str(args.manifest),
         "--ibl-manifest", str(args.ibl_manifest), "--look", "o3de-atrium",
-        "--api", args.api, "--pipeline", "forward", "--view", view,
+        "--api", args.api, "--pipeline", technique, "--view", view,
         "--width", str(size[0]), "--height", str(size[1]), "--inflight", "1",
         "--warmup", "2", "--frames", "4", "--gpu-timing",
         "--baked-lighting", str(args.baked_lighting),
         "--reflection-probes", str(args.reflection_probes),
-        "--rect-lights", mode, "--output", str(directory),
+        "--rect-lights", mode, "--output", str(directory), *options,
     ], check=True)
     report = json.loads((directory / "report.json").read_text())
     if not report["validation"]["clean"]:
@@ -44,13 +44,39 @@ def display_direct(direct):
     return Image.fromarray(np.rint(255 * srgb).astype(np.uint8))
 
 
+def verify_cache(args):
+    view, size, roi = VIEWS[0]
+    x, y, x_end, y_end = roi
+    for technique in ("forward", "forward-plus", "deferred"):
+        def take(mode, label, *options):
+            return capture(args, view, size, mode, technique=technique,
+                           label=f"{technique}-{label}", options=("--sun-shadows-off", *options))[0]
+
+        lit = take("unshadowed", "sun-off-lit")
+        shaded = take("shadowed", "sun-off-shadowed")
+        if (lit[y:y_end, x:x_end] - shaded[y:y_end, x:x_end]).mean() < 0.01:
+            raise ValueError(f"{technique}: missing rectangle shadow with sun shadows off")
+        motion = ("--reflection-spheres", "-6", "1.5", "1", "--reflection-spheres-to", "-4", "1.5", "1")
+        partial = take("shadowed", "partial", *motion)
+        complete = take("shadowed", "full", *motion, "--redraw-shadows")
+        if not np.array_equal(partial, complete):
+            raise ValueError(f"{technique}: partial update differs from full redraw")
+        measurement = json.loads((args.output / f"{technique}-partial/report.json").read_text())["measurement"]
+        faces = measurement["rectangle_shadow_faces_rendered"]
+        if not 0 < faces < 10 * measurement["frames"]:
+            raise ValueError(f"{technique}: unexpected partial update count {faces}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for option in ["binary", "manifest", "ibl-manifest", "baked-lighting", "reflection-probes", "output"]:
         parser.add_argument("--" + option, type=Path, required=True)
     parser.add_argument("--api", choices=["vulkan", "d3d12"], default="vulkan")
+    parser.add_argument("--verify-cache", action="store_true", help="also compare partial and full updates for all PBR techniques")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
+    if args.verify_cache:
+        verify_cache(args)
     sheet = Image.new("RGB", (1280, 568), "#192027")
     draw = ImageDraw.Draw(sheet)
     for column, title in enumerate(["Full / shadows off", "Full / shadows on",

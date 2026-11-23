@@ -394,11 +394,13 @@ impl<'a> ViewFrame<'a> {
         id: PipelineId,
         scene: SceneInput<'s>,
     ) -> Result<FrameScene<'s>, GraphError> {
-        self.renderer
-            .pipeline(id)?
-            .group
-            .pairs()
-            .bind(scene, self.id, id)
+        let group = self.renderer.pipeline(id)?.group.as_ref();
+        if let Some(standard) =
+            (group as &dyn Any).downcast_ref::<PreparedGroup<StandardPipeline>>()
+        {
+            standard.check_lights(scene.lights)?;
+        }
+        group.pairs().bind(scene, self.id, id)
     }
     fn record_with(
         &mut self,

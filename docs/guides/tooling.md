@@ -206,7 +206,7 @@ let ready = renderer.read_capture(&capture, &mut rgba, timeout)?;
 Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受け取り、シーンと HUD を記録する。
 表示待ちの再試行では、すでに受理した画像を提示する。UI だけを描くフレームでは `draw_overlay` から開始できる。
 
-空からモデルを追加するときは、ロードの境界で `renderer.prepare_assets(SceneAssets::new(&mut meshes, &mut materials, scene.objects()))?` を呼ぶ。
+空からモデルを追加するときは、ロードの境界で `renderer.prepare_scene(SceneAssets::new(&mut meshes, &mut materials, scene.objects()))?` を呼ぶ。
 標準 `Renderer` はこの一覧から独立に動かせる個体数と必要なシェーダーを求め、同じデバイス上で必要な分を準備する。読取中の画像が変更を妨げる場合は、`error.capacity().map(|c| c.recovery())` が `Some(renderer::CapacityRecovery::ReleaseOwners)` なら、その結果を回収して再試行する。ホストが固定した GPU 予算を使う場合は `SceneRenderer::replace_working_set` で上限超過を受け取れる。
 転送が完了したら同じビューで描画できる。準備した個体を動かすフレームは描画入力の変換だけを更新する。
 画面内の端末のように自作のパスを組み込む場合は、`headless_with` または `WindowRenderer::new_with` でパスの資源を予約し、`frame.graph()` に記録する。
@@ -352,7 +352,7 @@ Unlit は頂点色、材質色、オブジェクトの tint を乗算する。
 一部のカメラだけ移動して他の履歴を保つ場合は `parts_mut` から `ViewRenderer::reconfigure_view` を使う。
 
 **アセットの更新。** 予約内の変更を公開するには、旧版を使う Graph を投入または破棄し、
-`renderer.prepare_assets(SceneAssets::new(&mut meshes, &mut materials, &changed_objects))?` を呼ぶ。
+`renderer.prepare_scene(SceneAssets::new(&mut meshes, &mut materials, &changed_objects))?` を呼ぶ。
 大きなメッシュは `meshes.stream_gpu(&mut runtime, &mut pool, &selection, byte_budget)` で優先順と1回分の転送量を指定できる。
 完全な新版が受理されるまで既存メッシュを描画できる。旧版を使うGraphと同サイズの更新が重なる場合は `plan.reserve_mesh_replacement(mesh)?` でバッファを追加予約する。
 `Runtime::upload_texture(&mut pool, name, desc, bytes)` は画像を転送し、`(FrameId, ManagedImage)` を返す。
@@ -408,9 +408,9 @@ bake_scene.set_rect_lights(panels.to_vec());
 `LocalLight::shadowed_rect` は中心から見た遮蔽を固定幅 3×3 PCF で求め、矩形の直接拡散・直接鏡面に適用する。
 `LocalLight::Rect` で影を省略できる。太陽のカスケード設定とは独立して使える。
 `RendererSetup::additional_shadowed_rect_lights` は初期登録後に増やしたい影付きの灯数。灯数とアトラスの両方を予約する。
-標準パイプラインは `RenderObject::casts_shadow`、変換、スキン姿勢、材質の更新を追跡する。
-低水準の PBR レシピでカメラ可視判定済みリストを使う場合は、`PbrDrawInput::rect_casters` に画面外を含む影用リストを渡す。
-レシピのフレーム間再利用には `RectShadowHistory::begin_rectangles` と `use_rect_shadow_history` を使う。
+初期化時は使用する光源を `SceneAssets::with_lights` に渡す。起動後に灯数や影付き灯数が増えるときも、同じ指定で `Renderer::prepare_scene` を呼べる。準備済みの範囲内での移動・調光・影の切り替えは、フレームの `SceneInput::with_lights` だけでよい。準備を超えた場合は `GraphError::capacity()` で `SceneLimits::LOCAL_LIGHTS` または `SHADOWED_RECT_LIGHTS` と必要数を判別できる。
+標準パイプラインは画面外の `RenderObject::casts_shadow` も含めて、変換・スキン姿勢・メッシュ・材質・アルファマスクを追跡し、変更が重なる投影面を更新する。
+低水準の `PbrDrawInput::new` は可視リストと別に共通のキャスター列を受け取る。太陽だけを個別にカリングする場合は `SunShadows::Cascades` を指定できる。矩形影をフレーム間で保持する場合は `GeometryPipeline::rect_shadow_history` で用意した履歴の `begin` に面ごとのキャスター版を渡し、`use_rect_shadow_history` で結び、`export` した更新を投入成功後に `accept` する。
 ベイクでは静的な遮蔽物から矩形の発光面への可視性を評価する。
 ベイクした拡散プローブ・ライトマップ・反射プローブには、矩形光が他の面で反射した寄与が入る。
 矩形を変えた場合はそのデータを再ベイクする。ベイク中のシナリオ間で矩形光源のリストは共通となる。

@@ -79,7 +79,7 @@ fn exercise(backend: RuntimeConfig, load_after_start: bool) -> PipelineResult<()
     assert!(view.read_capture(&ticket, &mut ui_pixels, Duration::from_secs(15))?);
     assert_eq!(&ui_pixels[..8], &[0, 0, 0, 255, 137, 0, 0, 255]);
     let actor = scene.spawn(RenderObject::new(pbr, red));
-    view.prepare_assets(SceneAssets::new(
+    view.prepare_scene(SceneAssets::new(
         &mut meshes,
         &mut materials,
         scene.objects(),
@@ -143,7 +143,7 @@ fn exercise(backend: RuntimeConfig, load_after_start: bool) -> PipelineResult<()
             scene.spawn(RenderObject::new(pbr, red).with_transform(pose));
         }
         scene.spawn(RenderObject::new(toon, green));
-        view.prepare_assets(SceneAssets::new(
+        view.prepare_scene(SceneAssets::new(
             &mut meshes,
             &mut materials,
             scene.objects(),
@@ -161,6 +161,43 @@ fn exercise(backend: RuntimeConfig, load_after_start: bool) -> PipelineResult<()
                 .iter()
                 .any(|p| p[1] > p[0] && p[1] > p[2])
         );
+    }
+    // Enable a light after startup, then promote it to a shadow caster.
+    let panel = renderer::pbr::RectLight::new(
+        [0., 2., 0.],
+        [0.5, 0., 0.],
+        [0., 0., 0.5],
+        [1.; 3],
+        15.,
+        4.,
+    )?;
+    let lit = [renderer::pbr::LocalLight::Rect(panel)];
+    let shadowed = [renderer::pbr::LocalLight::shadowed_rect(panel)];
+    for (lights, kind) in [
+        (&lit, renderer::pbr::SceneLimits::LOCAL_LIGHTS),
+        (&shadowed, renderer::pbr::SceneLimits::SHADOWED_RECT_LIGHTS),
+    ] {
+        {
+            let mut frame = view.begin_frame()?;
+            let input = SceneInput::new(&meshes, &materials, scene.objects());
+            let error = frame.draw_scene(input.with_lights(lights), 1.).unwrap_err();
+            let room = error.capacity().unwrap();
+            assert_eq!((room.kind, room.limit, room.required), (kind, 0, Some(1)));
+            frame.draw_scene(input, 1.)?;
+        }
+        view.prepare_scene(
+            SceneAssets::new(&mut meshes, &mut materials, scene.objects()).with_lights(lights),
+        )?;
+    }
+    for lights in [&shadowed, &lit, &shadowed] {
+        let mut frame = view.begin_frame()?;
+        frame.draw_scene(
+            SceneInput::new(&meshes, &materials, scene.objects()).with_lights(lights),
+            1.,
+        )?;
+        let image = frame.capture()?;
+        let mut pixels = [0; 32 * 16 * 4];
+        assert!(view.read_capture(&image, &mut pixels, Duration::from_secs(15))?);
     }
     let mut runtime = view.into_runtime()?;
     meshes.release_gpu(&mut runtime)?;

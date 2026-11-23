@@ -11,9 +11,9 @@ use renderer::{
     },
     pbr::{
         Bounds, CASCADE_COUNT, CameraStorage, Config, DefaultResources, DefaultViews, Defaults,
-        Draw, FrameShadows, GraphMaterial, IndexedDraw, LocalLight, MaterialFactors, PbrDrawInput,
-        PbrVertex, PreparedDefaults, Projection, SceneLimits, ShadowHistory, ShadowSettings,
-        ShadowUpdates, Sun, ViewInput,
+        Draw, GraphMaterial, IndexedDraw, LocalLight, MaterialFactors, PbrDrawInput, PbrVertex,
+        PreparedDefaults, Projection, SceneLimits, ShadowHistory, ShadowSettings, ShadowUpdates,
+        Sun, SunShadows, ViewInput,
     },
 };
 use renderer_core::{
@@ -384,7 +384,7 @@ pub fn prepare(frames_in_flight: NonZeroUsize, settings: Settings) -> Result<Pre
             .map(|lights| lights.len())
             .max()
             .unwrap_or_else(|| settings.local_lights().len()),
-        max_casters_per_cascade: count,
+        max_shadow_casters: count,
         max_transforms: match settings.placement {
             #[cfg(test)]
             _ if !settings.blockers.is_empty() => 1,
@@ -481,7 +481,60 @@ pub fn build_graph(
         } else {
             (draws, &[][..])
         };
-    let mut frame = PbrDrawInput::new(&view, &materials, opaque, transparent, opaque, defaults)?;
+    #[cfg(test)]
+    let (blocker, blocker_transform, cutout_materials);
+    let casters = opaque;
+    let frame_materials = &materials[..];
+    #[cfg(test)]
+    let (casters, frame_materials, transform_override) =
+        if let Some(&ShadowBlocker { x, cutout }) = settings.blockers.first() {
+            let mut geometry = indexed;
+            let frame_materials = if cutout {
+                let texture = graph.image("caster coverage", ImageDesc::rgba8(3, 1))?;
+                graph.upload_image(
+                    "coverage stripes",
+                    texture,
+                    &[255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255],
+                )?;
+                let factors = renderer::pbr::MaterialUniform::upload(
+                    &mut graph,
+                    "masked caster",
+                    MaterialFactors {
+                        alpha_mode: AlphaMode::Mask,
+                        ..Default::default()
+                    },
+                )?;
+                let mut maps = materials[0].textures();
+                maps.base_color = graph.image_view(texture, 0, 0)?;
+                cutout_materials = [
+                    materials[0],
+                    GraphMaterial::new(factors, maps)
+                        .with_sampler(renderer_core::program::SamplerDescriptor::NearestClamp),
+                ];
+                geometry.material = 1;
+                &cutout_materials[..]
+            } else {
+                frame_materials
+            };
+            blocker = [Draw::model(geometry, 0)];
+            blocker_transform = [Transform::new([
+                [1., 0., 0., x],
+                [0., 1., 0., 0.],
+                [0., 0., 1., 0.75],
+            ])?];
+
+            (&blocker[..], frame_materials, Some(&blocker_transform[..]))
+        } else {
+            (casters, frame_materials, None)
+        };
+    let mut frame = PbrDrawInput::new(
+        &view,
+        frame_materials,
+        opaque,
+        transparent,
+        casters,
+        defaults,
+    )?;
     #[cfg(test)]
     let mut paged_transforms;
     #[cfg(test)]
@@ -499,49 +552,14 @@ pub fn build_graph(
     } else if placement.uses_transforms() {
         frame.transforms = &transforms;
     }
+    #[cfg(test)]
+    if let Some(transforms) = transform_override {
+        frame.transforms = transforms;
+    }
     if let Some(shadows) = &shadows {
-        frame.shadows = FrameShadows::Cascades(std::array::from_fn(|cascade| {
+        frame.sun_shadows = SunShadows::Cascades(std::array::from_fn(|cascade| {
             shadows.source(cascade, opaque)
         }));
-    }
-    #[cfg(test)]
-    let (blocker, blocker_transform, cutout_materials);
-    #[cfg(test)]
-    if let Some(&ShadowBlocker { x, cutout }) = settings.blockers.first() {
-        let mut geometry = indexed;
-        if cutout {
-            let texture = graph.image("caster coverage", ImageDesc::rgba8(3, 1))?;
-            graph.upload_image(
-                "coverage stripes",
-                texture,
-                &[255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255],
-            )?;
-            let factors = renderer::pbr::MaterialUniform::upload(
-                &mut graph,
-                "masked caster",
-                MaterialFactors {
-                    alpha_mode: AlphaMode::Mask,
-                    ..Default::default()
-                },
-            )?;
-            let mut maps = materials[0].textures();
-            maps.base_color = graph.image_view(texture, 0, 0)?;
-            cutout_materials = [
-                materials[0],
-                GraphMaterial::new(factors, maps)
-                    .with_sampler(renderer_core::program::SamplerDescriptor::NearestClamp),
-            ];
-            frame.materials = &cutout_materials;
-            geometry.material = 1;
-        }
-        blocker = [Draw::model(geometry, 0)];
-        blocker_transform = [Transform::new([
-            [1., 0., 0., x],
-            [0., 1., 0., 0.],
-            [0., 0., 1., 0.75],
-        ])?];
-        frame.rect_casters = &blocker;
-        frame.transforms = &blocker_transform;
     }
     let lights = settings.local_lights();
     let (sdr, scene_depth, shadow_images) = if post.copy_hdr || post.bloom.is_some() {

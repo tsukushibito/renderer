@@ -302,7 +302,8 @@ impl ImportImage {
     pub fn desc(&self) -> ImageDesc {
         self.desc
     }
-    pub(crate) fn revision(&self) -> u64 {
+    /// Scheduled content revision, scoped to this registration key.
+    pub fn revision(&self) -> u64 {
         self.revision
     }
     /// Whether this mip of a single-layer image is fully initialized.
@@ -373,10 +374,18 @@ pub(crate) struct Resource {
     pub import_revision: u64,
     pub initial: Range<usize>,
     pub read_only_input: bool,
+    pub written_in_graph: bool,
     pub export_mips: u32,
 }
 
 impl Graph {
+    /// Whether an earlier pass may write this image before the next declared pass.
+    pub fn image_has_pending_write(&self, image: &ImportImage) -> bool {
+        self.imports
+            .get(&image.key())
+            .is_some_and(|&i| self.resources[i].written_in_graph)
+    }
+
     fn add_resource(
         &mut self,
         name: &str,
@@ -416,6 +425,7 @@ impl Graph {
             import_revision: revision,
             initial: start..data.initial_ranges.len(),
             read_only_input: false,
+            written_in_graph: false,
             export_mips: 0,
         });
         data.exported.push(false);

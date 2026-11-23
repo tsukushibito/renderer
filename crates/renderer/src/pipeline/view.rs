@@ -4,24 +4,17 @@ use crate::pbr::ShadowUpdates;
 use renderer_core::graph::GraphCapacityKind;
 use renderer_core::runtime::{FrameId, FrameSubmission, Runtime};
 use std::num::NonZeroUsize;
-#[derive(PartialEq, Clone, Copy)]
-struct EmitterGeometry {
-    center: [f32; 3],
-    edges: [[f32; 3]; 2],
-    range: f32,
-}
 /// Standard pipeline storage associated with one registered camera.
 pub struct StandardViewState {
     history: Option<History>,
-    rect_history: Option<History<1>>,
-    emitters: Vec<EmitterGeometry>,
+    rect_history: Option<super::history::RectangleHistory>,
 }
 impl StandardViewState {
     pub(super) fn new(shadow_capacity: Option<usize>, rectangles: usize, casters: usize) -> Self {
         Self {
             history: shadow_capacity.map(History::new),
-            rect_history: (rectangles > 0).then(|| History::new(casters)),
-            emitters: Vec::with_capacity(rectangles),
+            rect_history: (rectangles > 0)
+                .then(|| super::history::RectangleHistory::new(rectangles, casters)),
         }
     }
     pub(super) fn clear_history(
@@ -43,11 +36,14 @@ impl StandardViewState {
 pub struct StandardViewOutput {
     pub scene: SceneImages,
     updates: Option<ShadowUpdates>,
-    rect_updates: Option<pbr::MapUpdates<1>>,
+    rect_updates: Option<pbr::RectShadowUpdates>,
 }
 impl StandardViewOutput {
+    pub fn rendered_rectangle_faces(&self) -> usize {
+        self.rect_updates.as_ref().map_or(0, |u| u.rendered_faces())
+    }
     pub fn reused_rectangle_shadows(&self) -> Option<bool> {
-        self.rect_updates.as_ref().map(|u| u.reused()[0])
+        self.rect_updates.as_ref().map(|u| u.rendered_faces() == 0)
     }
     pub fn reused_shadows(&self) -> Option<[bool; pbr::CASCADE_COUNT]> {
         self.updates.as_ref().map(ShadowUpdates::reused)
@@ -82,7 +78,6 @@ impl StandardViewOutput {
             view.rect_history
                 .as_mut()
                 .ok_or(pbr::ShadowHistoryError::ForeignUpdates)?
-                .maps
                 .accept(receipt, updates)?;
             self.rect_updates = None;
         }
@@ -243,6 +238,7 @@ impl StandardPipeline {
             && prepared.shadow_matrices().is_some()
         {
             history.observe(
+                graph,
                 |i, b| prepared.cascade_overlaps(i, b) != Some(false),
                 input,
                 &self.connected,
@@ -255,45 +251,17 @@ impl StandardPipeline {
         } else {
             None
         };
-        let emitters = || input.lights.iter().filter_map(LocalLight::shadow_emitter);
-        let count = emitters().count();
-        if count > self.limits.max_shadowed_rect_lights {
-            return Err(GraphError::invalid_input(
-                "rectangle shadow capacity exceeded",
-            ));
-        }
-        let rect_frame = if count > 0 {
-            let history = view.rect_history.as_mut().expect("shadow capacity checked");
-            history.observe(
-                |_, b| emitters().any(|light| pbr::rect_shadows::affects(light, b)),
-                input,
-                &self.connected,
-            )?;
-            let geometry = || {
-                emitters().map(|e| EmitterGeometry {
-                    center: e.center(),
-                    edges: e.half_edges(),
-                    range: e.range(),
-                })
-            };
-            if view.emitters.iter().copied().ne(geometry()) {
-                history.revisions[0] = history.revisions[0]
-                    .checked_add(1)
-                    .expect("shadow revisions exhausted");
-                view.emitters.clear();
-                view.emitters.extend(geometry());
-            }
-            Some(history.maps.begin_rectangles(
-                graph,
-                self.limits.max_shadowed_rect_lights,
-                history.revisions[0],
-            )?)
+        let rect_frame = if input.lights.iter().any(|l| l.shadow_emitter().is_some()) {
+            let history = view.rect_history.as_mut().ok_or_else(|| {
+                GraphError::capacity_error(pbr::SceneLimits::SHADOWED_RECT_LIGHTS, 0, Some(1))
+            })?;
+            history.begin(graph, input, &self.connected)?
         } else {
             None
         };
         let connected = std::mem::take(&mut self.connected);
         let mut frame = GeometryDrawInput::new(&prepared, defaults, &connected);
-        frame.rect_target = rect_frame.as_ref().map(|f| (f.target(0), f.is_reused(0)));
+        frame.rect_target = rect_frame.as_ref().map(|f| f.targets);
         frame.shadow_history = shadow.as_ref();
         frame.lights = input.lights;
         let scene = match consume {
@@ -336,11 +304,9 @@ impl ViewPipeline for StandardPipeline {
     }
     fn create_view(&self, _: &CameraView) -> PipelineResult<StandardViewState> {
         Ok(StandardViewState::new(
-            self.config
-                .shadows
-                .map(|_| self.limits.max_casters_per_cascade),
+            self.config.shadows.map(|_| self.limits.max_shadow_casters),
             self.limits.max_shadowed_rect_lights,
-            self.limits.max_casters_per_cascade,
+            self.limits.max_shadow_casters,
         ))
     }
     fn record(

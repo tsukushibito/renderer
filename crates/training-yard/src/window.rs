@@ -166,7 +166,7 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
                 replay_action(step)
             };
             if let Some(action) = action {
-                yard.apply(action, |assets| Ok(renderer.prepare_assets(assets)?))?;
+                yard.apply(action, |assets| Ok(renderer.prepare_scene(assets)?))?;
             }
             advance = false;
         }

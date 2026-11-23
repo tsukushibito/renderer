@@ -74,13 +74,14 @@ impl WindowRenderer {
         self.renderer.load_probe_lighting(assets)
     }
 
-    pub fn prepare_assets(
+    /// Prepare the active geometry, materials and local lights at a scene change.
+    pub fn prepare_scene(
         &mut self,
         assets: SceneAssets<'_>,
     ) -> Result<(), crate::AssetPrepareError> {
         self.ready_for_change()
             .map_err(crate::AssetPrepareError::from)?;
-        self.renderer.prepare_assets(assets)
+        self.renderer.prepare_scene(assets)
     }
 
     /// Set the 3D resolution independently of the window and its HUD.

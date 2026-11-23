@@ -10,7 +10,7 @@ use super::{
     select_draws, shadow_casters,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::pbr::{self, FrameShadows, IndexedDraw, PbrDrawInput, ShadowSource};
+use renderer::pbr::{self, IndexedDraw, PbrDrawInput, ShadowSource, SunShadows};
 
 use renderer::material::{
     MaterialHandle, MaterialInstance, MaterialTextures, Materials, PbrMaterial,
@@ -316,7 +316,7 @@ pub(super) fn build(
         None
     };
     let shadows = if options.shadows {
-        FrameShadows::Cascades(std::array::from_fn(|cascade| match &history_frame {
+        SunShadows::Cascades(std::array::from_fn(|cascade| match &history_frame {
             Some(frame) => frame.source(cascade, &inputs.casters[cascade]),
             None => ShadowSource::Render {
                 target: None,
@@ -324,7 +324,7 @@ pub(super) fn build(
             },
         }))
     } else {
-        FrameShadows::Disabled(
+        SunShadows::Disabled(
             resident
                 .defaults
                 .as_ref()
@@ -333,45 +333,41 @@ pub(super) fn build(
                 .unshadowed()?,
         )
     };
-    let mut frame = PbrDrawInput::with_shadows(
-        &view,
-        &inputs.materials,
-        &inputs.opaque,
-        &inputs.transparent,
-        shadows,
-    );
-    frame.camera_target = Some(camera_target);
-    frame.transforms = workspace
-        .placements
-        .as_ref()
-        .map_or(motion.as_slice(), |p| &p.transforms[..]);
     let lights = resident
         .local_lights
         .as_ref()
         .map_or(&[][..], |preset| &preset[..]);
-    let rect_frame = if lights
+    let has_shadowed_rect = lights
         .iter()
-        .any(|l| matches!(l, pbr::LocalLight::ShadowedRect(_)))
-    {
-        let revision =
-            caster_revision(options) | motion.map_or(0, |_| u64::from(progress.to_bits()) << 32);
+        .any(|l| matches!(l, pbr::LocalLight::ShadowedRect(_)));
+    let rect_frame = if has_shadowed_rect {
+        let revision = caster_revision(options);
         workspace
             .shadow_reuse
-            .as_ref()
-            .map(|h| h.rect_history.begin_rectangles(&mut graph, 2, revision))
+            .as_mut()
+            .map(|h| {
+                h.rect_history.begin(&mut graph, lights, |face, _| {
+                    let moving =
+                        motion.is_some() && moving_bounds.iter().any(|&b| face.overlaps(b));
+                    revision
+                        | if moving {
+                            u64::from(progress.to_bits()) << 32 | 8
+                        } else {
+                            0
+                        }
+                })
+            })
             .transpose()?
+            .flatten()
     } else {
         None
     };
-    if let Some(history) = &rect_frame {
-        frame.use_rect_shadow_history(history);
-    }
-    if lights
-        .iter()
-        .any(|l| matches!(l, pbr::LocalLight::ShadowedRect(_)))
-        && !rect_frame.as_ref().is_some_and(|h| h.is_reused(0))
+    inputs.rect_casters.clear();
+    if has_shadowed_rect
+        && !rect_frame
+            .as_ref()
+            .is_some_and(|h| h.faces_to_render() == 0)
     {
-        inputs.rect_casters.clear();
         inputs
             .rect_casters
             .extend(shadow_casters(scene, options, |_| true).map(draw));
@@ -382,7 +378,22 @@ pub(super) fn build(
                 &mut inputs.rect_casters,
             );
         }
-        frame.rect_casters = &inputs.rect_casters;
+    }
+    let mut frame = PbrDrawInput::with_sun_shadows(
+        &view,
+        &inputs.materials,
+        &inputs.opaque,
+        &inputs.transparent,
+        &inputs.rect_casters,
+        shadows,
+    );
+    frame.camera_target = Some(camera_target);
+    frame.transforms = workspace
+        .placements
+        .as_ref()
+        .map_or(motion.as_slice(), |p| &p.transforms[..]);
+    if let Some(history) = &rect_frame {
+        frame.use_rect_shadow_history(history);
     }
     let images = recipe.draw_hdr(&mut graph, frame.with_lights(lights))?;
     let processed = bloom.add_passes(&mut graph, images.hdr)?;

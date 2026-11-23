@@ -70,6 +70,11 @@ impl GeometryPipeline {
         }
     }
 
+    /// Allocate per-view rectangle history from this recipe's prepared light capacity.
+    pub fn rect_shadow_history(&self) -> crate::pbr::RectShadowHistory {
+        crate::pbr::RectShadowHistory::new(self.common().limits.max_shadowed_rect_lights)
+    }
+
     pub const fn technique(&self) -> Technique {
         match self {
             Self::Forward(_) => Technique::Forward,

@@ -286,10 +286,38 @@ impl TransferPayload for GraphWork {
                         device.raw().cmd_end_rendering(command);
                     }
                     PreparedOperation::ClearAttachments { colors, depth } => {
-                        let attachments = rendering_attachments(self, colors, *depth);
-                        device
-                            .raw()
-                            .cmd_begin_rendering(command, &attachments.info());
+                        let mut attachments = rendering_attachments(self, colors, *depth);
+                        let rect = depth.and_then(|index| {
+                            self.plan
+                                .as_ref()
+                                .unwrap()
+                                .raster_attachment(index)
+                                .depth_clear_rect
+                        });
+                        if rect.is_some() {
+                            let depth = attachments.depth.as_mut().expect("depth clear target");
+                            depth.load_op = vk::AttachmentLoadOp::CLEAR;
+                            depth.clear_value = vk::ClearValue {
+                                depth_stencil: vk::ClearDepthStencilValue {
+                                    depth: 1.0,
+                                    stencil: 0,
+                                },
+                            };
+                        }
+                        let mut info = attachments.info();
+                        if let Some(rect) = rect {
+                            info.render_area = vk::Rect2D {
+                                offset: vk::Offset2D {
+                                    x: rect.x as i32,
+                                    y: rect.y as i32,
+                                },
+                                extent: vk::Extent2D {
+                                    width: rect.width,
+                                    height: rect.height,
+                                },
+                            };
+                        }
+                        device.raw().cmd_begin_rendering(command, &info);
                         device.raw().cmd_end_rendering(command);
                     }
                     PreparedOperation::Dispatch { workgroups } => {

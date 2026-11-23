@@ -29,7 +29,7 @@ def capture(args):
         if name == "irradiance":
             flags = ["--gi-debug", name]
         if name == "unshadowed":
-            flags = ["--lighting-pass", "direct", "--shadows-off"]
+            flags = ["--lighting-pass", "direct", "--sun-shadows-off"]
         subprocess.run(common + flags + ["--output", args.captures / name], check=True, stdout=sys.stderr)
 
 

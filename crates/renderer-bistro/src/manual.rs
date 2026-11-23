@@ -298,7 +298,7 @@ impl Options {
                         _ => return Err("--instances needs off, individual or instanced".into()),
                     };
                 }
-                "--shadows-off" => result.shadows = false,
+                "--sun-shadows-off" => result.shadows = false,
                 "--redraw-shadows" => result.reuse_shadows = false,
                 "--capture-shadow-maps" => result.capture_shadows = true,
                 #[cfg(feature = "tracy")]
@@ -442,7 +442,7 @@ Rendering
   --bloom off|tent|box
   --instances off|individual|instanced
   --submission direct|packed|indirect
-  --aa-off --shadows-off --redraw-shadows
+  --aa-off --sun-shadows-off --redraw-shadows
 
 Measurement and captures
   --frames N --warmup N --inflight 1..4

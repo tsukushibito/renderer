@@ -13,9 +13,9 @@ use crate::passes::{
 };
 
 use super::{
-    AlphaMode, Bounds, CASCADE_COUNT, CameraStorage, Config, Draw, Environment, FrameShadows,
-    PbrDrawInput, PreparedInstances, PreparedView, SceneImages, SceneLimits, ShadowSettings,
-    ShadowSource, Sun, ViewInput,
+    AlphaMode, Bounds, CASCADE_COUNT, CameraStorage, Config, Draw, Environment, PbrDrawInput,
+    PreparedInstances, PreparedView, SceneImages, SceneLimits, ShadowSettings, ShadowSource, Sun,
+    SunShadows, ViewInput,
     draw::{Batch, Bindings, image_binding, sampler_binding},
     instances::{InstanceBuffer, InstanceTier},
     raster::{SHADOW_IMAGES, add_shadow_pass},
@@ -154,7 +154,7 @@ impl LocalLights {
 /// Graph owns all recorded work, so prepare another frame after construction.
 pub(crate) struct PreparedScene {
     config: Config,
-    limits: SceneLimits,
+    pub(crate) limits: SceneLimits,
     preparation: Preparation,
     output: Option<PreparedOutput>,
     programs: ScenePrograms,
@@ -241,7 +241,7 @@ impl PreparedScene {
         let raster = programs.raster_requests(config.samples, render_shadows || rect_count > 0);
         let cascades: usize = if render_shadows { CASCADE_COUNT } else { 0 };
         let casters = if render_shadows || rect_count > 0 {
-            limits.max_casters_per_cascade
+            limits.max_shadow_casters
         } else {
             0
         };
@@ -348,12 +348,12 @@ impl PreparedScene {
             preparation.add_requirements(
                 GraphRequirements {
                     resources: rect_faces + 1,
-                    passes: rect_faces * 2,
+                    passes: rect_faces * 3,
                     initial_ranges: 1,
-                    accesses: rect_faces * 2,
-                    attachments: rect_faces,
+                    accesses: rect_faces * 3,
+                    attachments: rect_faces * 2,
                     bindings: checked(draws.checked_mul(shadow_accesses))?,
-                    name_bytes: checked(rect_faces.checked_mul(80))?,
+                    name_bytes: checked(rect_faces.checked_mul(108))?,
                     upload_bytes: checked(rect_faces.checked_mul(CAMERA_BYTES))?,
                     ..Default::default()
                 },
@@ -438,6 +438,10 @@ impl PreparedScene {
             RasterScene<'_>,
         ) -> Result<(ImageHandle, Option<ImageHandle>), GraphError>,
     ) -> Result<SceneImages, GraphError> {
+        self.limits.check_lights(frame.lights)?;
+        if let Some(target) = frame.rect_target {
+            target.check(frame.lights)?;
+        }
         if !frame.lights.is_empty() {
             let state = self
                 .local_lights
@@ -445,7 +449,9 @@ impl PreparedScene {
                 .ok_or_else(|| GraphError::invalid_input("local lights were not reserved"))?;
             state
                 .layout
-                .encode(self.config.extent, frame.lights, &mut state.bytes)?;
+                .encode_slots(self.config.extent, frame.lights, &mut state.bytes, |i| {
+                    frame.rect_target.map_or(i, |t| t.slot(i))
+                })?;
         }
         let transform_end = self.check_frame(graph, &frame)?;
         let camera = match frame.camera_target {
@@ -461,13 +467,13 @@ impl PreparedScene {
             }
             _ => None,
         };
-        let (shadow_views, shadow_images) = match (self.config.shadows, frame.shadows) {
-            (Some(settings), FrameShadows::Cascades(sources)) => {
+        let (shadow_views, shadow_images) = match (self.config.shadows, frame.sun_shadows) {
+            (Some(settings), SunShadows::Cascades(sources)) => {
                 let views =
                     self.add_shadows(graph, camera, &frame, settings, sources, transforms)?;
                 (views, Some(views.map(ImageView::image)))
             }
-            (None, FrameShadows::Disabled(placeholder)) => {
+            (None, SunShadows::Disabled(placeholder)) => {
                 ([placeholder.view(); CASCADE_COUNT], None)
             }
             _ => unreachable!("shadow inputs were checked before graph mutation"),
@@ -616,8 +622,8 @@ impl PreparedScene {
             opaque_commands.checked_add(transparent_commands),
         )?;
         let mut transform_end = opaque_end.max(transparent_end);
-        match (self.config.shadows, frame.shadows) {
-            (Some(settings), FrameShadows::Cascades(sources)) => {
+        match (self.config.shadows, frame.sun_shadows) {
+            (Some(settings), SunShadows::Cascades(sources)) => {
                 validate_shadow_sources(graph, sources, shadow_desc(settings))?;
                 for (cascade, source) in sources.into_iter().enumerate() {
                     if let ShadowSource::Render { casters, .. } = source {
@@ -630,14 +636,14 @@ impl PreparedScene {
                         )?;
                         check_limit(
                             GraphCapacityKind::Draws,
-                            self.limits.max_casters_per_cascade,
+                            self.limits.max_shadow_casters,
                             Some(commands),
                         )?;
                         transform_end = transform_end.max(end);
                     }
                 }
             }
-            (None, FrameShadows::Disabled(placeholder)) => {
+            (None, SunShadows::Disabled(placeholder)) => {
                 graph.image_desc(placeholder.view().image())?;
             }
             _ => {
@@ -646,19 +652,11 @@ impl PreparedScene {
                 ));
             }
         }
-        let count = frame
-            .lights
-            .iter()
-            .filter_map(super::LocalLight::shadow_emitter)
-            .count();
-        if count > self.limits.max_shadowed_rect_lights {
-            return Err(GraphError::invalid_input(
-                "rectangle shadow capacity exceeded",
-            ));
-        }
-        if count > 0 && !frame.rect_target.is_some_and(|(_, reuse)| reuse) {
+        if frame.lights.iter().any(|l| l.shadow_emitter().is_some())
+            && !frame.rect_target.is_some_and(|t| t.reused())
+        {
             let (end, commands) = validate_draws(
-                frame.rect_casters,
+                frame.casters,
                 DrawMode::Direct,
                 has_model,
                 frame,
@@ -666,7 +664,7 @@ impl PreparedScene {
             )?;
             check_limit(
                 GraphCapacityKind::Draws,
-                self.limits.max_casters_per_cascade,
+                self.limits.max_shadow_casters,
                 Some(commands),
             )?;
             transform_end = transform_end.max(end);
@@ -693,8 +691,8 @@ impl PreparedScene {
         let desc = atlas_desc(self.limits.max_shadowed_rect_lights)?;
         let (image, reuse) = match frame.rect_target {
             Some(target) => {
-                graph.require_image_desc(target.0, desc)?;
-                target
+                graph.require_image_desc(target.image, desc)?;
+                (target.image, target.reused())
             }
             None => (graph.image("rectangle shadows", desc)?, false),
         };
@@ -704,9 +702,18 @@ impl PreparedScene {
         }
         let program = &self.programs.world.shadow;
         let model = self.programs.model.as_ref().map(|p| &p.shadow);
-        for (slot, light) in lights.enumerate() {
+        let initialize = frame.rect_target.is_none_or(|t| t.initialize);
+        let mut clear_atlas = initialize;
+        for (ordinal, light) in lights.enumerate() {
+            let slot = frame.rect_target.map_or(ordinal, |t| t.slot(ordinal));
             for face in 0..FACES {
+                if frame.rect_target.is_some_and(|t| !t.dirty(ordinal, face)) {
+                    continue;
+                }
                 let index = slot * FACES + face;
+                if !initialize {
+                    graph.clear_depth_rect("reset rectangle face", atlas, tile(desc, index))?;
+                }
                 let projection = matrix(light, face);
                 let mut bytes = [0; CAMERA_BYTES];
                 for (to, v) in bytes[128..192]
@@ -725,7 +732,7 @@ impl PreparedScene {
                     program,
                     Bindings::Shadow { camera, cascade: 0 },
                     frame.materials,
-                    frame.rect_casters,
+                    frame.casters,
                     model.zip(transforms),
                 )?;
                 graph.raster(
@@ -735,7 +742,7 @@ impl PreparedScene {
                         color_resolves: &[],
                         depth: Some(Attachment {
                             view: atlas,
-                            load: if index == 0 {
+                            load: if std::mem::take(&mut clear_atlas) {
                                 LoadOp::Clear(1.)
                             } else {
                                 LoadOp::Load
@@ -749,7 +756,7 @@ impl PreparedScene {
                         pass.set_scissor(viewport)?;
                         self.shadow.draw(pass, program, model)?;
                         if let Some(draws) = frame.forward_draws {
-                            draws.draw_rect_shadow(pass, index)?;
+                            draws.draw_rect_shadow(pass, ordinal * FACES + face)?;
                         }
                         Ok(())
                     },

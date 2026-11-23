@@ -976,12 +976,9 @@ pub(super) struct Workspace {
 fn caster_revision(options: &Options) -> u64 {
     // Geometry, material coverage and the shadow program stay fixed while
     // history is enabled. These controls can change the draw list.
-    u64::from(options.alpha_only)
-        | (u64::from(options.shadows) << 1)
-        | (u64::from(options.instances.enabled()) << 2)
+    u64::from(options.alpha_only) | (u64::from(options.instances.enabled()) << 2)
 }
 
-#[derive(Default)]
 struct ShadowReuse {
     history: ShadowHistory,
     rect_history: pbr::RectShadowHistory,
@@ -1033,7 +1030,13 @@ impl Workspace {
     /// The scene and resident caster inputs must stay fixed until the caller
     /// clears reuse. The resource mutation probes use a separate Workspace.
     pub fn enable_shadow_reuse(&mut self) {
-        self.shadow_reuse.get_or_insert_with(ShadowReuse::default);
+        self.shadow_reuse.get_or_insert_with(|| ShadowReuse {
+            rect_history: self.prepared.main.rect_shadow_history(),
+            history: ShadowHistory::default(),
+            rect_faces_rendered: 0,
+            hits: [0; shadow::CASCADE_COUNT],
+            misses: [0; shadow::CASCADE_COUNT],
+        });
     }
 
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
@@ -1048,11 +1051,9 @@ impl Workspace {
                 .shadow_reuse
                 .as_mut()
                 .ok_or("missing rectangle shadow history")?;
-            let redrawn = !updates.reused()[0];
+            let faces = updates.rendered_faces();
             reuse.rect_history.accept(pending, &mut updates)?;
-            if redrawn {
-                reuse.rect_faces_rendered += 10;
-            }
+            reuse.rect_faces_rendered += faces as u64;
         }
         let (Some(reuse), Some(mut updates)) = (&mut self.shadow_reuse, updates) else {
             return Ok(());
@@ -1141,10 +1142,7 @@ fn shadow_casters<'a>(
 ) -> impl Iterator<Item = usize> + 'a {
     (0..scene.primitives.len()).filter(move |&index| {
         let material = &scene.materials[scene.primitives[index].material];
-        options.shadows
-            && !material.blend
-            && (!options.alpha_only || material.alpha_zero)
-            && overlaps(index)
+        !material.blend && (!options.alpha_only || material.alpha_zero) && overlaps(index)
     })
 }
 
@@ -1279,7 +1277,7 @@ fn append_shadows(
         let parameters = RasterConstants::new(&[cascade as u32])?;
         casters.clear();
         for index in shadow_casters(scene, options, |index| {
-            clip.overlaps(resident.primitive_bounds[index])
+            options.shadows && clip.overlaps(resident.primitive_bounds[index])
         }) {
             let material = scene.primitives[index].material;
             let slot = &mut shadow_bindings[material];

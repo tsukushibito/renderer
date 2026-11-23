@@ -73,18 +73,18 @@ impl Prepared {
                 max_shadowed_rect_lights: if options.look == crate::shared::camera::Look::O3deAtrium
                     && options.rect_lights == super::RectLights::Shadowed
                 {
-                    2
+                    super::lighting::sponza_rectangles().len()
                 } else {
                     0
                 },
                 max_local_lights: if options.look == crate::shared::camera::Look::O3deAtrium {
-                    2
+                    super::lighting::sponza_rectangles().len()
                 } else if options.pipeline.uses_local_lights() {
                     super::lighting::PRESET_LEN
                 } else {
                     0
                 },
-                max_casters_per_cascade: max_draws,
+                max_shadow_casters: max_draws,
                 max_transforms: if options.instances.enabled() {
                     crate::shared::instancing::COUNT
                 } else {
@@ -183,6 +183,13 @@ impl Prepared {
 
     pub fn defaults(&self) -> Option<pbr::PreparedDefaults> {
         self.defaults
+    }
+
+    pub fn rect_shadow_history(&self) -> pbr::RectShadowHistory {
+        match &self.recipe {
+            Recipe::Standard(recipe) => recipe.rect_shadow_history(),
+            Recipe::Reference(_) => pbr::RectShadowHistory::new(0),
+        }
     }
 
     pub fn standard(&mut self) -> (&mut pipeline::GeometryPipeline, &PreparedBloom) {

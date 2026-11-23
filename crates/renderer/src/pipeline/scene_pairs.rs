@@ -131,7 +131,7 @@ mod tests {
                 max_materials: 2,
                 max_shadowed_rect_lights: 0,
                 max_local_lights: 0,
-                max_casters_per_cascade: 0,
+                max_shadow_casters: 0,
                 max_transforms: 0,
             },
         )?;

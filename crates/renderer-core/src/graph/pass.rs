@@ -87,6 +87,7 @@ pub(crate) struct AttachmentOperand {
     pub view: ImageView,
     pub resolve: Option<ImageView>,
     pub ops: AttachmentOps,
+    pub depth_clear_rect: Option<RasterRect>,
     /// Color RGBA or depth in the first component; meaningful only for Clear.
     #[cfg_attr(
         not(any(test, feature = "vulkan", all(feature = "d3d12", windows))),

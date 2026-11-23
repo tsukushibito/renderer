@@ -98,11 +98,16 @@ pub struct GeometryDrawInput<'a> {
     pub draws: &'a [Draw],
     pub lights: &'a [LocalLight],
     pub camera: Option<BufferHandle>,
-    pub(crate) rect_target: Option<(renderer_core::graph::ImageHandle, bool)>,
+    pub(crate) rect_target: Option<crate::pbr::rect_shadows::Targets<'a>>,
     /// Cascade decisions from the history transaction for this view.
     pub shadow_history: Option<&'a crate::pbr::ShadowFrame>,
 }
 impl<'a> GeometryDrawInput<'a> {
+    /// Use a rectangle atlas selected for this view and Graph.
+    pub fn use_rect_shadow_history(&mut self, history: &crate::pbr::RectShadowFrame<'a>) {
+        self.rect_target = Some(history.targets);
+    }
+
     pub fn new(view: &'a PreparedView, defaults: DefaultViews, draws: &'a [Draw]) -> Self {
         Self {
             view,

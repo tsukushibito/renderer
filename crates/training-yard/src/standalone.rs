@@ -40,7 +40,7 @@ pub fn headless(config: RuntimeConfig, output: Option<&Path>) -> PipelineResult<
     for step in 0..REPLAY_FRAMES {
         if let Some(action) = replay_action(step) {
             yard.apply(action, |mut assets| {
-                if let Err(error) = renderer.prepare_assets(assets.reborrow()) {
+                if let Err(error) = renderer.prepare_scene(assets.reborrow()) {
                     let recovery = error.capacity().map(|c| c.recovery());
                     if recovery != Some(renderer::CapacityRecovery::ReleaseOwners) {
                         return Err(error.into());
@@ -49,7 +49,7 @@ pub fn headless(config: RuntimeConfig, output: Option<&Path>) -> PipelineResult<
                         return Err(error.into());
                     };
                     consume(&mut renderer, capture, &mut pixels, previous, output)?;
-                    renderer.prepare_assets(assets)?;
+                    renderer.prepare_scene(assets)?;
                 }
                 Ok(())
             })?;
@@ -72,7 +72,7 @@ pub fn headless(config: RuntimeConfig, output: Option<&Path>) -> PipelineResult<
     let mut lane = FiringLane::new()?;
     for step in 0..effects::FRAMES {
         match step {
-            0 => renderer.prepare_assets(lane.assets())?,
+            0 => renderer.prepare_scene(lane.assets())?,
             2 => renderer.set_scene_extent(Some([24, 12]), lane.assets())?,
             4 => renderer.set_scene_extent(None, lane.assets())?,
             _ => {}

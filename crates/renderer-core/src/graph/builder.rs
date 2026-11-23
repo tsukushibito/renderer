@@ -454,6 +454,10 @@ impl Graph {
                 {
                     continue;
                 }
+                if access.write {
+                    // A rejected pass can conservatively suppress content reuse for this Graph.
+                    data.resources[access.resource].written_in_graph = true;
+                }
                 data.accesses[end] = access;
                 end += 1;
             }

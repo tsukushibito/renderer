@@ -241,15 +241,15 @@ impl Renderer {
         self.drawing.load_probe_lighting(assets)
     }
 
-    /// Prepare geometry and materials at a load boundary. Supply the active
+    /// Prepare geometry, materials, and local light capacity at a scene change. Supply the active
     /// model selection. Subsequent pose changes use only the scene input.
-    pub fn prepare_assets(
+    pub fn prepare_scene(
         &mut self,
         assets: SceneAssets<'_>,
     ) -> Result<(), crate::AssetPrepareError> {
-        self.prepare_assets_inner(assets).map_err(Into::into)
+        self.prepare_scene_inner(assets).map_err(Into::into)
     }
-    pub(crate) fn prepare_assets_inner(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
+    fn prepare_scene_inner(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
         use crate::material::MaterialInstance;
         use std::collections::HashSet;
         let mut meshes = HashSet::new();
@@ -291,7 +291,7 @@ impl Renderer {
             || assets.draws > limits.max_draws
             || materials.len() > limits.max_materials
             || transforms.min(assets.draws) > limits.max_transforms
-            || casters.min(assets.draws) > limits.max_casters_per_cascade
+            || casters.min(assets.draws) > limits.max_shadow_casters
             || assets.lights.len() > limits.max_local_lights
             || assets
                 .lights

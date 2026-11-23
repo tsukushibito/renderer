@@ -53,28 +53,6 @@ struct Entry {
 /// history. Call `clear` to release their registrations on reset,
 /// resolution change or removal while the runtime continues to be used.
 pub type ShadowHistory = MapHistory<CASCADE_COUNT>;
-/// Retained atlas for the low-level PBR recipes. StandardPipeline tracks its own history.
-pub type RectShadowHistory = MapHistory<1>;
-pub type RectShadowFrame = MapFrame<1>;
-pub type RectShadowUpdates = MapUpdates<1>;
-
-impl RectShadowHistory {
-    /// The caller advances the revision on changes to light order/projection or any caster input.
-    /// Capacity must match the prepared scene. Export the returned frame and accept it on submit.
-    pub fn begin_rectangles(
-        &self,
-        graph: &mut Graph,
-        capacity: usize,
-        revision: u64,
-    ) -> Result<RectShadowFrame, GraphError> {
-        self.begin_maps(
-            graph,
-            super::rect_shadows::atlas_desc(capacity)?,
-            ["rectangle shadows"],
-            [ShadowKey::new([[0.; 4]; 4], revision)],
-        )
-    }
-}
 pub struct MapHistory<const N: usize> {
     entries: [Option<Entry>; N],
     in_progress: Arc<AtomicBool>,
@@ -260,6 +238,17 @@ impl ShadowHistory {
     }
 }
 impl<const N: usize> MapHistory<N> {
+    pub(crate) fn require_idle(&self) -> Result<(), GraphError> {
+        if self.in_progress.load(Ordering::Acquire) {
+            return Err(GraphError::invalid_input(
+                "shadow history already has an active frame",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries[0].is_none()
+    }
     pub(crate) fn begin_maps(
         &self,
         graph: &mut Graph,

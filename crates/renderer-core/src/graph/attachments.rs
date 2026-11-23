@@ -39,6 +39,49 @@ impl Graph {
         })
     }
 
+    /// Reset a rectangular part of an initialized D32 attachment to far depth.
+    /// The surrounding texels are preserved and participate in Graph dependencies.
+    pub fn clear_depth_rect(
+        &mut self,
+        name: &str,
+        view: super::ImageView,
+        rect: super::RasterRect,
+    ) -> Result<PassHandle, GraphError> {
+        let extent = self
+            .image_desc(view.image())?
+            .mip_extent(view.mip_level())
+            .expect("validated image view");
+        let fits = |offset: u32, size: u32, limit: u32| {
+            size != 0
+                && offset
+                    .checked_add(size)
+                    .is_some_and(|end| end <= limit.min(i32::MAX as u32))
+        };
+        if !fits(rect.x, rect.width, extent[0]) || !fits(rect.y, rect.height, extent[1]) {
+            return Err(GraphError::invalid_input(
+                "depth clear rectangle exceeds its attachment",
+            ));
+        }
+        let handle = self.attachment_pass(
+            name,
+            RasterAttachments {
+                colors: &[],
+                color_resolves: &[],
+                depth: Some(super::Attachment {
+                    view,
+                    load: LoadOp::Load,
+                    store: StoreOp::Store,
+                }),
+            },
+        )?;
+        self.data_mut()
+            .attachments
+            .last_mut()
+            .expect("depth attachment")
+            .depth_clear_rect = Some(rect);
+        Ok(handle)
+    }
+
     pub(super) fn append_attachments(
         &mut self,
         attachments: RasterAttachments<'_>,
@@ -95,6 +138,7 @@ impl Graph {
                     view: attachment.view,
                     resolve: attachments.color_resolves.get(index).copied().flatten(),
                     ops: attachment.ops(),
+                    depth_clear_rect: None,
                     clear,
                 },
                 super::ImageAspect::Color,
@@ -126,6 +170,7 @@ impl Graph {
                     view: attachment.view,
                     resolve: None,
                     ops: attachment.ops(),
+                    depth_clear_rect: None,
                     clear: [value, 0.0, 0.0, 0.0],
                 },
                 super::ImageAspect::Depth,
@@ -262,6 +307,34 @@ impl Graph {
 mod tests {
     use super::*;
     use crate::graph::{Attachment, GraphCapacity, GraphPool, ImageDesc};
+
+    #[test]
+    fn tile_clear_requires_in_bounds_and_previously_defined_depth() {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let depth = graph.image("atlas", ImageDesc::depth32(8, 4)).unwrap();
+        let view = graph.image_view(depth, 0, 0).unwrap();
+        for rect in [
+            super::super::RasterRect::new(5, 0, 4, 4),
+            super::super::RasterRect::new(0, 0, 0, 4),
+        ] {
+            assert_eq!(
+                graph
+                    .clear_depth_rect("invalid", view, rect)
+                    .unwrap_err()
+                    .kind(),
+                GraphErrorKind::InvalidInput
+            );
+        }
+        graph
+            .clear_depth_rect("tile", view, super::super::RasterRect::new(4, 0, 4, 4))
+            .unwrap();
+        graph.export_image(depth).unwrap();
+        assert_eq!(
+            graph.compile().unwrap_err().kind(),
+            GraphErrorKind::UninitializedRead
+        );
+    }
 
     #[test]
     fn plan_owns_canonical_color_and_depth_operands_after_inputs_end() {

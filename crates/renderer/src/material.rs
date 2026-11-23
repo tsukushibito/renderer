@@ -72,8 +72,11 @@ impl PbrMaterial {
     pub(crate) fn is_resident(&self) -> bool {
         matches!(self.source, PbrSource::Imported(_))
     }
-    pub(crate) fn external_shadow_input(&self) -> bool {
-        self.alpha == AlphaMode::Mask && self.textures.base_color.is_some()
+    pub(crate) fn coverage_image(&self) -> Option<&ImportImage> {
+        self.textures
+            .base_color
+            .as_ref()
+            .filter(|_| self.alpha == AlphaMode::Mask)
     }
 
     fn new(params: PbrParams) -> Result<Self, GraphError> {

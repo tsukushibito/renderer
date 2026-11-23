@@ -531,7 +531,19 @@ pub(super) fn record(
         let handle = image.dsv.unwrap();
         depth_handle = Some(handle);
         extent = [image.desc.width, image.desc.height];
-        if attachment.ops.load == LoadAction::Clear
+        if let Some(rect) = attachment.depth_clear_rect {
+            let area = D3D12_RECT {
+                left: rect.x as i32,
+                top: rect.y as i32,
+                right: (rect.x + rect.width) as i32,
+                bottom: (rect.y + rect.height) as i32,
+            };
+            // SAFETY: Graph checked the rectangle and the depth attachment is retained in DEPTH_WRITE.
+            unsafe {
+                slot.list
+                    .ClearDepthStencilView(handle, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, &[area])
+            };
+        } else if attachment.ops.load == LoadAction::Clear
             && attachment.clear[0].to_bits() == 1.0f32.to_bits()
         {
             // SAFETY: Prepared full D32 DSV is DEPTH_WRITE; Graph construction

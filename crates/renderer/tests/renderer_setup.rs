@@ -76,7 +76,7 @@ fn plan_counts_shared_assets_and_per_view_work_separately() -> PipelineResult<()
             limits.max_draws,
             limits.max_materials,
             limits.max_transforms,
-            limits.max_casters_per_cascade,
+            limits.max_shadow_casters,
             limits.max_local_lights
         ),
         (5, 4, 5, 4, 260)
