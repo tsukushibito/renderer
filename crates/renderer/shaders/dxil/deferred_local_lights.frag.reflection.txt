@@ -12,7 +12,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: 35f376ea0e74b9877f44f6c75f4c3150
+; shader hash: 5c55386a32c1288612f0e75e76145bbb
 ;
 ; Pipeline Runtime Information:
 ;
@@ -107,10 +107,11 @@
 ; shadow_image3                     texture     f32          2d      T6      t3,space3     1
 ; reflection_probes                 texture     f32          2d      T7      t4,space2     1
 ; local_lights                      texture     f32          2d      T8             t2     1
-; base_metallic_image               texture     f32          2d      T9      t0,space1     1
-; normal_roughness_image            texture     f32          2d     T10      t1,space1     1
-; emissive_occlusion_image          texture     f32          2d     T11      t2,space1     1
-; depth_image                       texture     f32          2d     T12      t3,space1     1
+; rect_shadow_atlas                 texture     f32          2d      T9      t5,space3     1
+; base_metallic_image               texture     f32          2d     T10      t0,space1     1
+; normal_roughness_image            texture     f32          2d     T11      t1,space1     1
+; emissive_occlusion_image          texture     f32          2d     T12      t2,space1     1
+; depth_image                       texture     f32          2d     T13      t3,space1     1
 ;
 ;
 ; ViewId state:

@@ -86,7 +86,7 @@ macro_rules! tier_programs {
             };
             pub(super) static ALL_LIGHTS: RasterProgramDescriptor = descriptor!(
                 REFERENCE_OPAQUE,
-                19,
+                20,
                 $tier,
                 $vertex,
                 "pbr_all_lights_transformed",
@@ -99,7 +99,7 @@ macro_rules! tier_programs {
             };
             pub(super) static FORWARD_PLUS: RasterProgramDescriptor = descriptor!(
                 TILED_OPAQUE,
-                20,
+                21,
                 $tier,
                 $vertex,
                 "pbr_forward_plus_transformed",

@@ -1,7 +1,7 @@
 //! Bistro's adapter from its validated, world-space cook to offline GI inputs.
 use crate::{
     Error,
-    shared::{asset::Scene, camera::BAKE_SCENARIOS},
+    shared::{asset::Scene, camera::Look},
 };
 use renderer_bake::{BakeScene, Lighting, Material, ProbeSettings, Texture, Triangle};
 use sha2::{Digest, Sha256};
@@ -183,6 +183,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut layout = None;
     let mut reference = None;
     let mut ibl_manifest = None;
+    let mut look = Look::LumberyardDay;
     let mut day_only = false;
     let mut endpoints_only = false;
     let mut manifest = None;
@@ -197,6 +198,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
                     args.next().ok_or("missing surface sample file")?,
                 ));
             }
+            "--look" => look = args.next().ok_or("missing lighting preset")?.parse()?,
             "--day-only" => day_only = true,
             "--endpoints-only" => endpoints_only = true,
             "--ibl-manifest" => {
@@ -229,7 +231,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--lightmap-texels N] [--reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--lightmap-texels N] [--reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json]"
                 );
                 return Ok(());
             }
@@ -268,11 +270,18 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             .to_string()
     };
     let mut bake = import(&scene)?;
-    let mut identity = crate::shared::camera::bake_identity(&identity);
+    let mut identity = crate::shared::camera::bake_identity(&identity, look);
+    let scenarios = look.scenarios();
+    let sky_strength = if look == Look::O3deAtrium {
+        bake.set_rect_lights(crate::shared::lighting::sponza_rectangles().to_vec());
+        1.
+    } else {
+        crate::shared::camera::DAY_IBL_STRENGTH
+    };
     let mut panorama = None;
     if let Some(path) = ibl_manifest {
         let mut env = crate::shared::ibl::Environment::load(&path)?;
-        env.strength = crate::shared::camera::DAY_IBL_STRENGTH;
+        env.strength = sky_strength;
         identity = crate::shared::camera::environment_bake_identity(&identity, &env)
             .ok_or("missing IBL identity")?;
         // Level zero is the sharp linear HDR map used by runtime reflections.
@@ -295,16 +304,14 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let lighting = |s: crate::shared::camera::BakeScenario| Lighting {
         environment: panorama,
         sky: if panorama.is_some() {
-            std::array::from_fn(|i| {
-                crate::shared::camera::DAY_IBL_STRENGTH * s.sky[i] / BAKE_SCENARIOS[0].sky[i]
-            })
+            std::array::from_fn(|i| sky_strength * s.sky[i] / scenarios[0].sky[i])
         } else {
             s.sky
         },
         sun: s.sun,
         direction_to_sun: s.direction,
     };
-    let lights = BAKE_SCENARIOS.map(lighting);
+    let lights = scenarios.map(lighting);
     if let Some(path) = reference {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -396,10 +403,10 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     } else {
         let keys = [
             lights[0],
-            lighting(crate::shared::camera::BakeScenario::at(0.5)),
+            lighting(crate::shared::camera::BakeScenario::for_look(0.5, look)),
             lights[1],
         ];
-        identity = crate::shared::camera::daylight_sequence_identity(&identity);
+        identity = crate::shared::camera::daylight_sequence_identity(&identity, look);
         bake.bake_probes(keys, settings)?
             .with_lightmaps(&bake.bake_lightmaps(&triangles, keys, surface_settings)?)?
     };

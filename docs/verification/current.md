@@ -7,6 +7,37 @@
 
 ## Sponza の矩形エリアライト
 
+### 側廊の光漏れと中央通路の対照
+
+RTX 3060、Vulkan、Forward で同じ2灯を「消灯」「点灯・影なし」「点灯・影あり」と切り替えた。各ビューで3枚のカメラ深度はバイト一致し、Vulkan Core/SyncVal の警告・エラーは0。各点灯画像のトーンマッピング前の RGBA16F から消灯 HDR を引き、線形輝度を領域平均した。GI・反射プローブ・太陽・露出は固定している。
+
+![左から完成画像の影なし・あり、矩形の直接光の影なし・あり。黄枠は測定領域](sponza-rectangle-shadows.jpg)
+
+| ビューと測定範囲（左上原点、終端を含まない） | 影なしの矩形直接光 Y | 影ありの矩形直接光 Y | 残存率 |
+|---|---:|---:|---:|
+| 側廊の床 960×540、(160,425)–(230,478) | 0.073011 | 0 | 0% |
+| 中央通路の床 1152×888、(585,770)–(680,842) | 0.077197 | 0.077197 | 100% |
+
+同じGPU、側廊960×540、1フレーム・イン・フライト、厳格検証ありの**フレーム全体**のGPUタイムスタンプを測った。初回以外はウォームアップ8フレーム後、24フレームの中央値。移動条件には同じ2個の検査球を追加し、開始位置 `(-6,1.5,1)` から終了位置 `(-4,1.5,1)` へ動かした。
+
+| 条件 | 矩形影なし | 矩形影あり | 影ありで描いた面数 |
+|---|---:|---:|---:|
+| 静止・初回（1フレーム） | — | 4.46 ms | 10 |
+| 静止・再利用 | 2.80 ms | 3.32 ms | 0 / 24フレーム |
+| 移動する球あり | 27.12 ms | 46.00 ms | 240 / 24フレーム |
+
+2灯の D32 アトラスは2048×1536、12 MiB。VMA のデバイスローカル割り当て量は、準備した投影バッファを含めて12,588,032バイト増えた。静止・移動の両計測区間でRustの確保・再確保・解放とRendererが発行したネイティブ資源生成・破棄はすべて0。GPU時間はこの撮影条件の観測値で、影パス単独の時間や他機種の予測値ではない。
+
+再現には標準の `bistro` バイナリ、同じSponza cook、アトリウムのIBL、およびそのcookと `o3de-atrium` の組み合わせで作成したGI・反射資産を使用する。[比較スクリプト](../../tools/sponza/compare_rect_shadows.py) は2ビューの完成画像・直接光画像を原寸PNGで保存し、側廊1%以下、中央通路の変化5%以内を検査する。ベイカーでも `--look o3de-atrium` を選べる。
+
+```text
+python tools/sponza/compare_rect_shadows.py --binary target/release/bistro.exe --manifest COOK/manifest.json --ibl-manifest IBL/manifest.json --baked-lighting light.gi --reflection-probes light.reflections --output captures
+```
+
+実GPUの `moving_rectangle_blocker` テストではVulkan・D3D12のForward・Forward+・Deferredで、中心投影の面境界をまたぐ受光面、変換付きキャスターが移動した後の復光、アルファマスクの開口を検証した。`mixed_materials` は両APIでカスタムキャスターの材質更新時の失効と静止時の再利用を検査する。
+
+### 従来の補助点光源との比較
+
 実機の Vulkan と D3D12 で、Forward・Forward+・Deferred の各方式で矩形の表が受光面を照らし、裏返すと光源なしの出力に戻ることを検証した。ベイクは両 GPU バックエンドで同じシーンの CPU 結果と照合した。
 
 1152×888 の Vulkan キャプチャで、同じ中庭を従来の補助点光源3灯と矩形2灯で比較した。太陽、空、カメラ、露出、材質、プローブ配置を固定し、矩形を含む間接光を再ベイクした。位置は O3DE の Z-up から `(x,z,-y)` に変換した。各灯は下向きの 5×1 m、300 lm。比較対象のレベルには別にディスク光源もある。[O3DE のレベルデータ](https://github.com/aws-lumberyard-dev/o3de-atomtest/blob/aae8e6098ecb4f5ef3e358f2fbd3d4036f0025e9/Levels/SponzaDiffuseGI/Layers/Lights.layer)

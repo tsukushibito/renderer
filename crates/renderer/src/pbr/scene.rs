@@ -227,9 +227,20 @@ impl PreparedScene {
         }
 
         let render_shadows = config.shadows.is_some();
-        let raster = programs.raster_requests(config.samples, render_shadows);
-        let cascades = if render_shadows { CASCADE_COUNT } else { 0 };
-        let casters = if render_shadows {
+        let rect_count = limits.max_shadowed_rect_lights;
+        if rect_count > limits.max_local_lights {
+            return Err(GraphError::invalid_input(
+                "shadowed rectangles exceed local light capacity",
+            ));
+        }
+        let rect_faces = checked(rect_count.checked_mul(super::rect_shadows::FACES))?;
+        if rect_count > 0 {
+            preparation.reserve_image(super::rect_shadows::atlas_desc(rect_count)?, 1)?;
+            preparation.reserve_buffer(camera_desc(), rect_faces)?;
+        }
+        let raster = programs.raster_requests(config.samples, render_shadows || rect_count > 0);
+        let cascades: usize = if render_shadows { CASCADE_COUNT } else { 0 };
+        let casters = if render_shadows || rect_count > 0 {
             limits.max_casters_per_cascade
         } else {
             0
@@ -240,7 +251,8 @@ impl PreparedScene {
             .map(|tier| PreparedInstances::reserve(&mut preparation, tier, limits.max_transforms))
             .transpose()?;
 
-        let shadow_draws = checked(casters.checked_mul(CASCADE_COUNT))?;
+        let shadow_draws =
+            checked(casters.checked_mul(checked(cascades.checked_add(rect_faces))?))?;
         let largest_programs = local_lights
             .as_ref()
             .map_or(&programs, |lights| &lights.programs);
@@ -331,6 +343,23 @@ impl PreparedScene {
                 ..Default::default()
             },
         )?;
+        if rect_count > 0 {
+            let draws = checked(rect_faces.checked_mul(casters))?;
+            preparation.add_requirements(
+                GraphRequirements {
+                    resources: rect_faces + 1,
+                    passes: rect_faces * 2,
+                    initial_ranges: 1,
+                    accesses: rect_faces * 2,
+                    attachments: rect_faces,
+                    bindings: checked(draws.checked_mul(shadow_accesses))?,
+                    name_bytes: checked(rect_faces.checked_mul(80))?,
+                    upload_bytes: checked(rect_faces.checked_mul(CAMERA_BYTES))?,
+                    ..Default::default()
+                },
+                WorkingSet::default(),
+            )?;
+        }
         let output = config
             .output
             .map(|output| PreparedOutput::prepare(&mut preparation, config.extent, output))
@@ -358,7 +387,7 @@ impl PreparedScene {
                 limits.max_draws,
             )?,
             shadow: Batch::prepare(
-                if render_shadows {
+                if render_shadows || rect_count > 0 {
                     limits.max_materials
                 } else {
                     0
@@ -443,6 +472,7 @@ impl PreparedScene {
             }
             _ => unreachable!("shadow inputs were checked before graph mutation"),
         };
+        let atlas = self.add_rect_shadows(graph, &frame, transforms)?;
         let lighting = lighting_bindings(frame.view.environment(), shadow_views);
         let mut extended = [lighting[0]; renderer_core::program::MAX_RASTER_BINDINGS - 7];
         extended[..lighting.len()].copy_from_slice(&lighting);
@@ -460,12 +490,12 @@ impl PreparedScene {
             } else {
                 None
             };
-            for binding in crate::pbr_forward_plus::raster_bindings(view, mask) {
+            for binding in crate::pbr_forward_plus::raster_bindings(view, mask, atlas) {
                 extended[count] = binding;
                 count += 1;
             }
             programs = &state.programs;
-            point_lights = Some(view);
+            point_lights = Some((view, atlas.unwrap_or(view)));
         }
         let opaque_bindings = Bindings::Scene {
             camera,
@@ -616,7 +646,117 @@ impl PreparedScene {
                 ));
             }
         }
+        let count = frame
+            .lights
+            .iter()
+            .filter_map(super::LocalLight::shadow_emitter)
+            .count();
+        if count > self.limits.max_shadowed_rect_lights {
+            return Err(GraphError::invalid_input(
+                "rectangle shadow capacity exceeded",
+            ));
+        }
+        if count > 0 && !frame.rect_target.is_some_and(|(_, reuse)| reuse) {
+            let (end, commands) = validate_draws(
+                frame.rect_casters,
+                DrawMode::Direct,
+                has_model,
+                frame,
+                DrawPass::RectShadow,
+            )?;
+            check_limit(
+                GraphCapacityKind::Draws,
+                self.limits.max_casters_per_cascade,
+                Some(commands),
+            )?;
+            transform_end = transform_end.max(end);
+        }
         Ok(transform_end)
+    }
+
+    fn add_rect_shadows(
+        &mut self,
+        graph: &mut Graph,
+        frame: &PbrDrawInput<'_>,
+        transforms: Option<InstanceBuffer>,
+    ) -> Result<Option<ImageView>, GraphError> {
+        use super::rect_shadows::{FACES, atlas_desc, matrix, tile};
+        use renderer_core::graph::{Attachment, LoadOp, RasterAttachments, StoreOp};
+        let mut lights = frame
+            .lights
+            .iter()
+            .filter_map(super::LocalLight::shadow_emitter)
+            .peekable();
+        if lights.peek().is_none() {
+            return Ok(None);
+        }
+        let desc = atlas_desc(self.limits.max_shadowed_rect_lights)?;
+        let (image, reuse) = match frame.rect_target {
+            Some(target) => {
+                graph.require_image_desc(target.0, desc)?;
+                target
+            }
+            None => (graph.image("rectangle shadows", desc)?, false),
+        };
+        let atlas = graph.image_view(image, 0, 0)?;
+        if reuse {
+            return Ok(Some(atlas));
+        }
+        let program = &self.programs.world.shadow;
+        let model = self.programs.model.as_ref().map(|p| &p.shadow);
+        for (slot, light) in lights.enumerate() {
+            for face in 0..FACES {
+                let index = slot * FACES + face;
+                let projection = matrix(light, face);
+                let mut bytes = [0; CAMERA_BYTES];
+                for (to, v) in bytes[128..192]
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(projection.as_flattened())
+                {
+                    to.copy_from_slice(&v.to_le_bytes());
+                }
+                let camera = graph.buffer("rectangle projection", camera_desc())?;
+                graph.upload_buffer("rectangle projection upload", camera, 0, &bytes)?;
+                self.shadow.reset_bindings(frame.materials.len());
+                self.shadow.record(
+                    graph,
+                    program,
+                    Bindings::Shadow { camera, cascade: 0 },
+                    frame.materials,
+                    frame.rect_casters,
+                    model.zip(transforms),
+                )?;
+                graph.raster(
+                    "rectangle shadow face",
+                    RasterAttachments {
+                        colors: &[],
+                        color_resolves: &[],
+                        depth: Some(Attachment {
+                            view: atlas,
+                            load: if index == 0 {
+                                LoadOp::Clear(1.)
+                            } else {
+                                LoadOp::Load
+                            },
+                            store: StoreOp::Store,
+                        }),
+                    },
+                    |pass| {
+                        let viewport = Some(tile(desc, index));
+                        pass.set_viewport(viewport)?;
+                        pass.set_scissor(viewport)?;
+                        self.shadow.draw(pass, program, model)?;
+                        if let Some(draws) = frame.forward_draws {
+                            draws.draw_rect_shadow(pass, index)?;
+                        }
+                        Ok(())
+                    },
+                )?;
+            }
+        }
+        Ok(Some(atlas))
     }
 
     fn add_shadows(
@@ -672,7 +812,7 @@ impl PreparedScene {
 pub(crate) struct RasterScene<'a> {
     pub(crate) camera: BufferHandle,
     pub(crate) lighting: [Binding; 10],
-    pub(crate) local_lights: Option<ImageView>,
+    pub(crate) local_lights: Option<(ImageView, ImageView)>,
     pub(crate) has_transparency: bool,
     forward_draws: Option<&'a crate::pipeline::ForwardDraws>,
     opaque: &'a Batch,
@@ -755,11 +895,13 @@ enum DrawPass {
     Opaque,
     Transparent,
     Shadow(usize),
+    RectShadow,
 }
 
 impl DrawPass {
     fn name(self) -> &'static str {
         match self {
+            Self::RectShadow => "rectangle shadow",
             Self::Opaque => "scene_opaque",
             Self::Transparent => "scene_transparent",
             Self::Shadow(cascade) => ["shadow_0", "shadow_1", "shadow_2", "shadow_3"][cascade],

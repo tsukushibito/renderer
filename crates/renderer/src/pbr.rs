@@ -15,6 +15,7 @@ pub use reflections::{
 pub(crate) mod instances;
 mod material;
 pub(crate) mod raster;
+pub(crate) mod rect_shadows;
 pub(crate) mod scene;
 mod unshadowed;
 mod vertex;
@@ -26,7 +27,8 @@ pub use culling::{CascadeClip, Frustum, ViewCulling};
 pub use defaults::DefaultResourceError;
 pub use defaults::{DefaultResources, DefaultViews, Defaults, PreparedDefaults};
 pub use draw::{Draw, GraphMaterial, IndexedDraw, MaterialTextures};
-pub use history::ShadowHistoryError;
+pub(crate) use history::{MapHistory, MapUpdates};
+pub use history::{RectShadowFrame, RectShadowHistory, RectShadowUpdates, ShadowHistoryError};
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::Transform;
 pub use material::{LightmapBinding, MaterialFactors, MaterialUniform, ResidentMaterialUniform};
@@ -99,6 +101,8 @@ pub struct SceneLimits {
     pub max_materials: usize,
     /// Maximum local lights per view. Zero reserves no light data or programs.
     pub max_local_lights: usize,
+    /// Maximum shadow-casting rectangles in one view.
+    pub max_shadowed_rect_lights: usize,
     pub max_casters_per_cascade: usize,
     /// Maximum model transforms across all draws in one view (u32 addressing).
     /// Zero reserves no table. Larger tables use bounded descriptor pages.
@@ -260,6 +264,9 @@ pub struct PbrDrawInput<'a> {
     pub(crate) forward_draws: Option<&'a crate::pipeline::ForwardDraws>,
     pub view: &'a PreparedView,
     pub lights: &'a [LocalLight],
+    /// Geometry eligible to cast local light shadows, including offscreen objects.
+    pub rect_casters: &'a [Draw],
+    pub(crate) rect_target: Option<(ImageHandle, bool)>,
     pub materials: &'a [GraphMaterial],
     /// Draws with Opaque or Mask materials in submission order.
     pub opaque: &'a [Draw],
@@ -274,6 +281,10 @@ pub struct PbrDrawInput<'a> {
 }
 
 impl<'a> PbrDrawInput<'a> {
+    /// Attach the atlas chosen by the current Graph's history transaction.
+    pub fn use_rect_shadow_history(&mut self, frame: &RectShadowFrame) {
+        self.rect_target = Some((frame.target(0), frame.is_reused(0)));
+    }
     /// Supply the same local lights to any of the standard PBR techniques.
     #[must_use]
     pub fn with_lights(mut self, lights: &'a [LocalLight]) -> Self {
@@ -300,13 +311,10 @@ impl<'a> PbrDrawInput<'a> {
                 casters,
             ))
         } else {
-            Ok(Self::unshadowed(
-                view,
-                materials,
-                opaque,
-                transparent,
-                defaults.unshadowed()?,
-            ))
+            let mut frame =
+                Self::unshadowed(view, materials, opaque, transparent, defaults.unshadowed()?);
+            frame.rect_casters = casters;
+            Ok(frame)
         }
     }
 
@@ -319,7 +327,7 @@ impl<'a> PbrDrawInput<'a> {
         transparent: &'a [Draw],
         casters: &'a [Draw],
     ) -> Self {
-        Self::with_shadows(
+        let mut frame = Self::with_shadows(
             view,
             materials,
             opaque,
@@ -330,7 +338,9 @@ impl<'a> PbrDrawInput<'a> {
                     casters,
                 }; CASCADE_COUNT],
             ),
-        )
+        );
+        frame.rect_casters = casters;
+        frame
     }
 
     /// Compose an advanced frame from per-cascade targets or reused shadow maps.
@@ -349,6 +359,8 @@ impl<'a> PbrDrawInput<'a> {
             shadows,
             camera_target: None,
             lights: &[],
+            rect_casters: &[],
+            rect_target: None,
             transforms: &[],
             forward_draws: None,
         }

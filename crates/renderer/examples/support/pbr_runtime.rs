@@ -73,6 +73,15 @@ pub fn render(
     let triangle = Triangle::for_view(bloom != Bloom::Off, settings.placement, settings.view)?;
     let mut prepared = scene::prepare(NonZeroUsize::new(frames).unwrap(), settings)?;
     let (preparation, post) = scene::reserve(&prepared, &triangle, copy_hdr, bloom)?;
+    #[cfg(test)]
+    let preparation = {
+        let mut prep = preparation;
+        if settings.blockers.iter().any(|b| b.cutout) {
+            prep.reserve_image(renderer_core::graph::ImageDesc::rgba8(3, 1), 1)?;
+            prep.reserve_buffer(renderer::pbr::MaterialUniform::DESC, 1)?;
+        }
+        prep
+    };
     // Graph declarations include initialization uploads and readbacks in
     // this example. The WorkingSet reserves physical resources per slot.
     let limits = preparation.runtime_limits(RuntimeLimits {
@@ -127,6 +136,8 @@ pub fn render(
             &post,
             Settings {
                 frame_lights: settings.frame_lights.get(index..=index).unwrap_or_default(),
+                #[cfg(test)]
+                blockers: settings.blockers.get(index..=index).unwrap_or_default(),
                 ..settings
             },
             shadow_history,

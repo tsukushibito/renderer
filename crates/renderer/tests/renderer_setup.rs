@@ -43,12 +43,20 @@ fn plan_counts_shared_assets_and_per_view_work_separately() -> PipelineResult<()
             ..instance
         },
     ];
-    let lights = [LocalLight::Point {
+    let mut lights = [LocalLight::Point {
         position: [0.; 3],
         radius: 1.,
         color: [1.; 3],
         intensity: 1.,
     }; 257];
+    lights[0] = LocalLight::shadowed_rect(renderer::pbr::RectLight::new(
+        [0.; 3],
+        [1., 0., 0.],
+        [0., 1., 0.],
+        [1.; 3],
+        1.,
+        5.,
+    )?);
     let mut group = CameraGroup::standard(
         camera(1)?,
         Technique::ForwardPlus,
@@ -58,9 +66,11 @@ fn plan_counts_shared_assets_and_per_view_work_separately() -> PipelineResult<()
     let mut setup = RendererSetup::new(group);
     setup.additional_objects = 3;
     setup.additional_lights = 2;
+    setup.additional_shadowed_rect_lights = 1;
     let mut plan = setup
         .prepare(SceneAssets::new(&mut meshes, &mut materials, &objects).with_lights(&lights))?;
     let limits = plan.scene_limits();
+    assert_eq!(limits.max_shadowed_rect_lights, 2);
     assert_eq!(
         (
             limits.max_draws,
@@ -69,7 +79,7 @@ fn plan_counts_shared_assets_and_per_view_work_separately() -> PipelineResult<()
             limits.max_casters_per_cascade,
             limits.max_local_lights
         ),
-        (5, 4, 5, 4, 259)
+        (5, 4, 5, 4, 260)
     );
     let before = plan.preparation().graph_requirements();
     let texture = ImageDesc::rgba8(1, 4096);

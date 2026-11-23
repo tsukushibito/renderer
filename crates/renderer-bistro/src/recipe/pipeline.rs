@@ -45,6 +45,7 @@ pub(super) struct PreparedSet {
     bloom_bypass: Option<recipes::Prepared>,
     reservation: Preparation,
     instance_draws: usize,
+    rect_shadows: bool,
 }
 
 impl PreparedSet {
@@ -94,6 +95,8 @@ impl PreparedSet {
             bloom_bypass,
             reservation,
             instance_draws: options.instances.draws(),
+            rect_shadows: options.look == crate::shared::camera::Look::O3deAtrium
+                && options.rect_lights == super::RectLights::Shadowed,
         })
     }
 
@@ -130,6 +133,7 @@ pub(super) struct Budget {
     pub readback_bytes: u64,
     pub ranges: usize,
     use_light_grid: bool,
+    rectangles: Option<super::RectLights>,
     defaults: Option<pbr::PreparedDefaults>,
     fixture: bool,
     packed: Option<Arc<indirect::Layout>>,
@@ -504,6 +508,8 @@ impl Budget {
             readback_bytes,
             ranges: resources * (options.inflight + 3) + 32,
             use_light_grid: options.uses_light_grid(),
+            rectangles: (options.look == crate::shared::camera::Look::O3deAtrium)
+                .then_some(options.rect_lights),
             defaults,
             fixture: options.fixture,
             packed,
@@ -549,7 +555,7 @@ pub(super) struct Resident {
     standard_primitive_bounds: Vec<pbr::Bounds>,
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
-    local_lights: Option<lighting::Preset>,
+    local_lights: Option<Box<[pbr::LocalLight]>>,
     defaults: Option<pbr::DefaultResources>,
     packed: Option<indirect::Resident>,
     // Only small general Uniform uploads retain byte provenance. Geometry uses
@@ -821,9 +827,18 @@ impl Resident {
         let mut initial_uniform = [0; program::CAMERA_BYTES];
         initial_uniform[..128].copy_from_slice(&camera.uniform_bytes());
         let camera = upload_buffer(backend, &mut upload_owners, &initial_uniform)?;
-        let local_lights = budget
-            .use_light_grid
-            .then(|| lighting::preset(budget.fixture));
+        let local_lights: Option<Box<[pbr::LocalLight]>> = match budget.rectangles {
+            Some(super::RectLights::Shadowed) => Some(Box::new(
+                lighting::sponza_rectangles().map(pbr::LocalLight::shadowed_rect),
+            )),
+            Some(super::RectLights::Unshadowed) => Some(Box::new(
+                lighting::sponza_rectangles().map(pbr::LocalLight::Rect),
+            )),
+            Some(super::RectLights::Off) => None,
+            None => budget
+                .use_light_grid
+                .then(|| Box::from(lighting::preset(budget.fixture).as_slice())),
+        };
         let defaults = if let Some(defaults) = budget.defaults {
             let (resources, startup) = defaults.initialize(backend)?;
             drop(super::backend::wait_for(backend, startup)?);
@@ -969,6 +984,8 @@ fn caster_revision(options: &Options) -> u64 {
 #[derive(Default)]
 struct ShadowReuse {
     history: ShadowHistory,
+    rect_history: pbr::RectShadowHistory,
+    rect_faces_rendered: u64,
     hits: [u64; shadow::CASCADE_COUNT],
     misses: [u64; shadow::CASCADE_COUNT],
 }
@@ -992,10 +1009,9 @@ fn begin_shadow_frame(
 impl Workspace {
     pub fn new(scene: &Scene, prepared: PreparedSet) -> Self {
         let primitives = scene.primitives.len();
-        let standard_inputs = prepared
-            .main
-            .uses_standard()
-            .then(|| standard_forward::Inputs::new(scene, prepared.instance_draws));
+        let standard_inputs = prepared.main.uses_standard().then(|| {
+            standard_forward::Inputs::new(scene, prepared.instance_draws, prepared.rect_shadows)
+        });
         Self {
             vertices: Vec::with_capacity(primitives),
             indices: Vec::with_capacity(primitives),
@@ -1025,7 +1041,19 @@ impl Workspace {
         &mut self,
         pending: &FrameSubmission,
         updates: Option<ShadowUpdates>,
+        rect_updates: Option<pbr::RectShadowUpdates>,
     ) -> Result<(), Error> {
+        if let Some(mut updates) = rect_updates {
+            let reuse = self
+                .shadow_reuse
+                .as_mut()
+                .ok_or("missing rectangle shadow history")?;
+            let redrawn = !updates.reused()[0];
+            reuse.rect_history.accept(pending, &mut updates)?;
+            if redrawn {
+                reuse.rect_faces_rendered += 10;
+            }
+        }
         let (Some(reuse), Some(mut updates)) = (&mut self.shadow_reuse, updates) else {
             return Ok(());
         };
@@ -1040,11 +1068,17 @@ impl Workspace {
 
     pub fn reset_shadow_reuse_counts(&mut self) {
         if let Some(reuse) = &mut self.shadow_reuse {
+            reuse.rect_faces_rendered = 0;
             reuse.hits.fill(0);
             reuse.misses.fill(0);
         }
     }
 
+    pub fn rect_faces_rendered(&self) -> u64 {
+        self.shadow_reuse
+            .as_ref()
+            .map_or(0, |h| h.rect_faces_rendered)
+    }
     pub fn shadow_reuse_counts(
         &self,
     ) -> Option<([u64; shadow::CASCADE_COUNT], [u64; shadow::CASCADE_COUNT])> {
@@ -1056,6 +1090,7 @@ impl Workspace {
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn clear_shadow_reuse(&mut self, backend: &mut Runtime) -> Result<(), Error> {
         if let Some(reuse) = &mut self.shadow_reuse {
+            reuse.rect_history.clear(backend)?;
             reuse.history.clear(backend)?;
         }
         self.shadow_reuse = None;
@@ -1072,6 +1107,7 @@ pub(super) struct Built {
     pub present_capture: Option<PassHandle>,
     pub shadow_captures: Option<[PassHandle; 4]>,
     pub shadow_updates: Option<ShadowUpdates>,
+    pub rect_updates: Option<pbr::RectShadowUpdates>,
     pub draws: Option<usize>,
 }
 
@@ -1365,11 +1401,15 @@ fn scene_bindings(
     let _span = tracy_client::Client::running()
         .map(|client| client.span(tracy_client::span_location!("bistro.build.bindings"), 0));
     let mut instance_bindings = None;
-    let mut local_bindings = [None; 2];
+    let mut local_bindings = [None; 3];
     if let Some(local) = local {
         for (slot, binding) in local_bindings
             .iter_mut()
-            .zip(pbr_forward_plus::raster_bindings(local.lights, local.tiles))
+            .zip(pbr_forward_plus::raster_bindings(
+                local.lights,
+                local.tiles,
+                None,
+            ))
         {
             *slot = Some(binding);
         }
@@ -1846,6 +1886,7 @@ fn finish_frame(
         present_capture,
         shadow_captures,
         shadow_updates,
+        rect_updates: None,
         draws,
     })
 }

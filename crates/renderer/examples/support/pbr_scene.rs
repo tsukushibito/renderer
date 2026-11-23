@@ -200,9 +200,18 @@ impl Placement {
     }
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub struct ShadowBlocker {
+    pub x: f32,
+    pub cutout: bool,
+}
+
 #[derive(Clone, Copy)]
 pub struct Settings<'a> {
     pub frame_lights: &'a [&'a [LocalLight]],
+    #[cfg(test)]
+    pub blockers: &'a [ShadowBlocker],
     pub technique: Technique,
     pub samples: SampleCount,
     pub placement: Placement,
@@ -224,6 +233,8 @@ impl<'a> Settings<'a> {
     pub fn new(samples: SampleCount) -> Self {
         Self {
             frame_lights: &[],
+            #[cfg(test)]
+            blockers: &[],
             technique: Technique::Forward,
             samples,
             placement: Placement::Single,
@@ -344,7 +355,29 @@ pub fn prepare(frames_in_flight: NonZeroUsize, settings: Settings) -> Result<Pre
     let limits = SceneLimits {
         frames_in_flight,
         max_draws: count,
-        max_materials: 1,
+        max_materials: {
+            #[cfg(test)]
+            if !settings.blockers.is_empty() {
+                2
+            } else {
+                1
+            }
+            #[cfg(not(test))]
+            {
+                1
+            }
+        },
+        max_shadowed_rect_lights: settings
+            .frame_lights
+            .iter()
+            .map(|lights| {
+                lights
+                    .iter()
+                    .filter(|l| matches!(l, LocalLight::ShadowedRect(_)))
+                    .count()
+            })
+            .max()
+            .unwrap_or(0),
         max_local_lights: settings
             .frame_lights
             .iter()
@@ -353,6 +386,8 @@ pub fn prepare(frames_in_flight: NonZeroUsize, settings: Settings) -> Result<Pre
             .unwrap_or_else(|| settings.local_lights().len()),
         max_casters_per_cascade: count,
         max_transforms: match settings.placement {
+            #[cfg(test)]
+            _ if !settings.blockers.is_empty() => 1,
             #[cfg(test)]
             Placement::PagedInstanced => 1_026,
             placement if placement.uses_transforms() => count,
@@ -468,6 +503,45 @@ pub fn build_graph(
         frame.shadows = FrameShadows::Cascades(std::array::from_fn(|cascade| {
             shadows.source(cascade, opaque)
         }));
+    }
+    #[cfg(test)]
+    let (blocker, blocker_transform, cutout_materials);
+    #[cfg(test)]
+    if let Some(&ShadowBlocker { x, cutout }) = settings.blockers.first() {
+        let mut geometry = indexed;
+        if cutout {
+            let texture = graph.image("caster coverage", ImageDesc::rgba8(3, 1))?;
+            graph.upload_image(
+                "coverage stripes",
+                texture,
+                &[255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255],
+            )?;
+            let factors = renderer::pbr::MaterialUniform::upload(
+                &mut graph,
+                "masked caster",
+                MaterialFactors {
+                    alpha_mode: AlphaMode::Mask,
+                    ..Default::default()
+                },
+            )?;
+            let mut maps = materials[0].textures();
+            maps.base_color = graph.image_view(texture, 0, 0)?;
+            cutout_materials = [
+                materials[0],
+                GraphMaterial::new(factors, maps)
+                    .with_sampler(renderer_core::program::SamplerDescriptor::NearestClamp),
+            ];
+            frame.materials = &cutout_materials;
+            geometry.material = 1;
+        }
+        blocker = [Draw::model(geometry, 0)];
+        blocker_transform = [Transform::new([
+            [1., 0., 0., x],
+            [0., 1., 0., 0.],
+            [0., 0., 1., 0.75],
+        ])?];
+        frame.rect_casters = &blocker;
+        frame.transforms = &blocker_transform;
     }
     let lights = settings.local_lights();
     let (sdr, scene_depth, shadow_images) = if post.copy_hdr || post.bloom.is_some() {

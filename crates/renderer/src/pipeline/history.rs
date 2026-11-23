@@ -1,5 +1,5 @@
 use super::*;
-use crate::{mesh::MeshHandle, pbr::ShadowHistory};
+use crate::mesh::MeshHandle;
 use renderer_core::graph::GraphCapacityKind;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -13,33 +13,33 @@ struct Caster {
     transform: Transform,
     tint: [f32; 4],
 }
-pub(super) struct History {
-    pub(super) maps: ShadowHistory,
-    casters: [Vec<Caster>; pbr::CASCADE_COUNT],
-    pub(super) revisions: [u64; pbr::CASCADE_COUNT],
+pub(super) struct History<const N: usize = { pbr::CASCADE_COUNT }> {
+    pub(super) maps: pbr::MapHistory<N>,
+    casters: [Vec<Caster>; N],
+    pub(super) revisions: [u64; N],
     capacity: usize,
 }
 
-impl History {
+impl<const N: usize> History<N> {
     pub(super) fn new(max_casters_per_cascade: usize) -> Self {
         Self {
-            maps: ShadowHistory::default(),
+            maps: pbr::MapHistory::default(),
             casters: std::array::from_fn(|_| Vec::with_capacity(max_casters_per_cascade)),
-            revisions: [0; pbr::CASCADE_COUNT],
+            revisions: [0; N],
             capacity: max_casters_per_cascade,
         }
     }
 
     pub(super) fn observe(
         &mut self,
-        view: &PreparedView,
+        overlaps: impl Fn(usize, Bounds) -> bool,
         input: SceneInput<'_>,
         draws: &[Draw],
     ) -> Result<(), GraphError> {
         // Compare complete ordered caster lists. Hash collisions cannot authorize reuse.
         // Advance the revision before changing any cached records, including on failure.
-        let mut counts = [0; pbr::CASCADE_COUNT];
-        let mut changed = [false; pbr::CASCADE_COUNT];
+        let mut counts = [0; N];
+        let mut changed = [false; N];
         for (object, draw) in input.objects.iter().zip(draws) {
             if !draw.casts_shadow {
                 continue;
@@ -76,8 +76,8 @@ impl History {
                 transform: object.transform,
                 tint: object.tint,
             };
-            for i in 0..pbr::CASCADE_COUNT {
-                if bounds.is_some_and(|b| view.cascade_overlaps(i, b) == Some(false)) {
+            for i in 0..N {
+                if bounds.is_some_and(|b| !overlaps(i, b)) {
                     continue;
                 }
                 let index = counts[i];

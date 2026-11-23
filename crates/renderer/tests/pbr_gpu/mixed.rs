@@ -105,7 +105,8 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             frames_in_flight: NonZeroUsize::MIN,
             max_draws: 8,
             max_materials: 6,
-            max_local_lights: 0,
+            max_shadowed_rect_lights: 1,
+            max_local_lights: 1,
             max_casters_per_cascade: 1,
             max_transforms: 1,
         },
@@ -204,6 +205,14 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         camera: input,
     };
     scene.register_view(group, &view)?;
+    let shadow_light = [pbr::LocalLight::shadowed_rect(pbr::RectLight::new(
+        [0., 2., 0.],
+        [1., 0., 0.],
+        [0., 0., 1.],
+        [1.; 3],
+        0.,
+        5.,
+    )?)];
     for index in 0..4 {
         #[cfg(feature = "memory-profiling")]
         let before = renderer_core::measurement::Snapshot::now();
@@ -231,6 +240,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             draws.swap(0, 3);
         }
         let input = SceneInput::new(&meshes, &materials, &draws)
+            .with_lights(&shadow_light)
             .with_bounds(pbr::Bounds::new([-1., -1., 0.], [1., 1., 1.])?)
             .with_sun(pbr::Sun::new([0., 0., -1.], [0.; 3])?);
         if index <= 1 {
@@ -248,6 +258,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             recording.draw_view(input, &view)?
         };
         let output = recording.standard_output(view.id).unwrap();
+        assert_eq!(output.reused_rectangle_shadows(), Some(index >= 2));
         if technique == pbr::Technique::Deferred && index >= 2 {
             assert_eq!(output.reused_shadows(), Some([true; 4]));
         }
@@ -385,6 +396,7 @@ fn draw_after_resize(
         frames_in_flight: n,
         max_draws: 1,
         max_materials: 1,
+        max_shadowed_rect_lights: 0,
         max_local_lights: 0,
         max_casters_per_cascade: 0,
         max_transforms: 1,

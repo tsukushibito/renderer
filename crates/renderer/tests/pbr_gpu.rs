@@ -241,6 +241,85 @@ mod gpu {
         late_point_light_matches_single_light(Api::D3D12);
     }
 
+    fn moving_rectangle_blocker(api: Api) {
+        let rect = renderer::pbr::RectLight::new(
+            [1.5, 0., 1.5],
+            [0.3, 0., 0.],
+            [0., -0.2, 0.],
+            [1.; 3],
+            80.,
+            5.,
+        )
+        .unwrap();
+        let lights = [LocalLight::shadowed_rect(rect)];
+        for technique in [
+            Technique::Forward,
+            Technique::ForwardPlus,
+            Technique::Deferred,
+        ] {
+            let frames = render(
+                api,
+                Settings {
+                    technique,
+                    frame_lights: &[&[], &lights, &lights, &lights],
+                    blockers: &[
+                        super::scene::ShadowBlocker {
+                            x: 0.75,
+                            cutout: false,
+                        },
+                        super::scene::ShadowBlocker {
+                            x: 0.75,
+                            cutout: false,
+                        },
+                        super::scene::ShadowBlocker {
+                            x: 4.,
+                            cutout: false,
+                        },
+                        super::scene::ShadowBlocker {
+                            x: 0.75,
+                            cutout: true,
+                        },
+                    ],
+                    ..Settings::new(SampleCount::X1)
+                },
+                false,
+                Bloom::Off,
+                &[],
+            )
+            .unwrap();
+            let center = |i: usize| probe(&frames[i].output).unwrap().0;
+            assert_eq!(center(0), center(1), "{technique:?} covered receiver");
+            assert!(
+                center(2)[0] > center(1)[0],
+                "{technique:?} moved blocker must reveal receiver"
+            );
+            assert_eq!(center(2), center(3), "{technique:?} alpha-mask hole");
+            let center_index = (super::scene::EXTENT[1] / 2 * super::scene::EXTENT[0]
+                + super::scene::EXTENT[0] / 2) as usize;
+            // The receiver straddles the +Z/+X cube-face boundary.
+            for i in center_index - 2..=center_index + 2 {
+                assert_eq!(
+                    frames[0].output.sdr[i * 4..i * 4 + 3],
+                    frames[1].output.sdr[i * 4..i * 4 + 3]
+                );
+            }
+            assert_eq!(frames[0].output.depth, frames[2].output.depth);
+        }
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    #[ignore = "requires real Vulkan GPU"]
+    fn vulkan_moving_rectangle_blocker() {
+        moving_rectangle_blocker(Api::Vulkan)
+    }
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires real D3D12 GPU"]
+    fn d3d12_moving_rectangle_blocker() {
+        moving_rectangle_blocker(Api::D3D12)
+    }
+
     fn one_sided_rectangle(api: Api) {
         let light = |y| {
             LocalLight::Rect(

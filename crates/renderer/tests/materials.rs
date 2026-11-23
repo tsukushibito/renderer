@@ -122,6 +122,7 @@ fn rejects_incompatible_abis_and_scene_modes_at_preparation() {
         max_draws: 1,
         max_materials: 1,
         max_transforms: 0,
+        max_shadowed_rect_lights: 0,
         max_local_lights: 0,
         max_casters_per_cascade: 0,
     };

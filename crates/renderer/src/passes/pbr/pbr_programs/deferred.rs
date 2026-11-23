@@ -116,16 +116,17 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
 
 static LOCAL_LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
     bindings: &{
-        let mut slots = [image(0, 2); 18];
+        let mut slots = [image(0, 2); 19];
         let mut i = 0;
         while i < LIGHTING.bindings.len() {
             slots[i] = LIGHTING.bindings[i];
             i += 1;
         }
+        slots[18] = image(3, 5);
         slots
     },
     binding_bytes: &{
-        let mut bytes = [0; 18];
+        let mut bytes = [0; 19];
         bytes[0] = CAMERA_BYTES as u64;
         bytes[1] = DEFERRED_RECONSTRUCTION_BYTES as u64;
         bytes
@@ -141,8 +142,8 @@ static LOCAL_LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
 };
 
 pub const fn deferred_local_lighting_program() -> ManagedRasterProgram {
-    // SAFETY: Same fullscreen and G-buffer contract as LIGHTING, with one
-    // additional read-only image. GetDimensions bounds all local-light reads.
+    // SAFETY: Same fullscreen and G-buffer contract as LIGHTING, with the light table
+    // and shadow atlas. GetDimensions bounds the indexed image reads.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&LOCAL_LIGHTING) }
 }
 

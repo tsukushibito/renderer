@@ -355,7 +355,7 @@ impl Budget {
             accesses,
             draws: scene.primitives.len() * 5 + 2 + deferred + options.instances.draws(),
             raster_constant_words: Some(raster_constant_words),
-            bindings: scene.materials.len() * (20 + local_lights + tiled_lights)
+            bindings: scene.materials.len() * (20 + 2 * local_lights + tiled_lights)
                 + 4
                 + bloom_bindings
                 + deferred * 16
@@ -1048,12 +1048,12 @@ pub(super) fn build(
         graph.export_buffer(uniform)?;
         uniform
     };
-    let mut local_light_bindings = [None; 2];
+    let mut local_light_bindings = [None; 3];
     if let Some(table) = &resident.local_lights {
         let (lights, tiles) = table.append(&mut graph, uniform)?;
         for (slot, binding) in local_light_bindings
             .iter_mut()
-            .zip(forward_plus::raster_bindings(lights, tiles))
+            .zip(forward_plus::raster_bindings(lights, tiles, None))
         {
             *slot = Some(binding);
         }

@@ -396,7 +396,7 @@ let panel = |x| RectLight::new(
     [0.7557183, 0.8001526, 0.9096513], 300.0, 48.947266,
 );
 let panels = [panel(-4.739024)?, panel(2.899622)?];
-let lights = panels.map(LocalLight::Rect);
+let lights = panels.map(LocalLight::shadowed_rect);
 let input = input.with_lights(&lights);
 
 // 静的な光源を間接光に含める場合、オフラインの準備時に同じ形状と光束を渡す。
@@ -405,7 +405,13 @@ bake_scene.set_rect_lights(panels.to_vec());
 
 各灯の光束を面積と π で割った値に線形 RGB を掛けて面輝度を求める。到達距離は矩形上の最近点から測る。
 直接光では面が占める立体角から拡散を積分し、GGX の鏡面反射には LTC 近似を使う。
-実行時の局所光源には物体による遮蔽・ソフトシャドウは未実装。ベイクは静的な遮蔽物を考慮する。
+`LocalLight::shadowed_rect` は中心から見た遮蔽を固定幅 3×3 PCF で求め、矩形の直接拡散・直接鏡面に適用する。
+`LocalLight::Rect` で影を省略できる。太陽のカスケード設定とは独立して使える。
+`RendererSetup::additional_shadowed_rect_lights` は初期登録後に増やしたい影付きの灯数。灯数とアトラスの両方を予約する。
+標準パイプラインは `RenderObject::casts_shadow`、変換、スキン姿勢、材質の更新を追跡する。
+低水準の PBR レシピでカメラ可視判定済みリストを使う場合は、`PbrDrawInput::rect_casters` に画面外を含む影用リストを渡す。
+レシピのフレーム間再利用には `RectShadowHistory::begin_rectangles` と `use_rect_shadow_history` を使う。
+ベイクでは静的な遮蔽物から矩形の発光面への可視性を評価する。
 ベイクした拡散プローブ・ライトマップ・反射プローブには、矩形光が他の面で反射した寄与が入る。
 矩形を変えた場合はそのデータを再ベイクする。ベイク中のシナリオ間で矩形光源のリストは共通となる。
 

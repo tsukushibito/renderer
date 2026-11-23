@@ -168,7 +168,7 @@ fn frames(
             let _export = tracy_client::Client::running().map(|client| {
                 client.span(tracy_client::span_location!("bistro.export_and_delete"), 0)
             });
-            workspace.accept_shadow_updates(&work, built.shadow_updates)?;
+            workspace.accept_shadow_updates(&work, built.shadow_updates, built.rect_updates)?;
             resident.accept_camera(&work, built.camera_update)?;
             let output = work.export_image(built.output.raw_image())?;
             // Keep the Graph live without a mandatory readback. Deleting a registry
@@ -229,7 +229,7 @@ fn identity(
         "environment":environment,"shadows":options.shadows,"aa":options.aa,"bloom":options.bloom.name(),
         "samples":options.sample_count.as_u32(),"pipeline":options.pipeline.name(),
         "shader_manifest":options.shader_assets.as_ref().map(|selection| &selection.manifest),
-        "local_lights":options.uses_light_grid()
+        "local_lights":options.uses_local_lights()
             .then(|| super::lighting::identity(options.fixture)),
         "instances":options.instances.name(),"instance_draws":options.instances.draws(),
         "submission":options.submission.name(),
@@ -294,7 +294,7 @@ fn capture_planes(
         .map(|updates| updates.reused());
     let plan = built.graph.compile()?;
     let pending = backend.submit(&plan)?;
-    workspace.accept_shadow_updates(&pending, built.shadow_updates)?;
+    workspace.accept_shadow_updates(&pending, built.shadow_updates, built.rect_updates)?;
     resident.accept_camera(&pending, built.camera_update)?;
     let output = pending.export_image(built.output.raw_image())?;
     backend.delete(output.key())?;
@@ -500,10 +500,11 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     let setup_memory = renderer_core::measurement::Snapshot::now();
     let setup = Instant::now();
     let stage = Instant::now();
-    let condition_bytes = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tools/bistro/conditions.json"
-    ));
+    let condition_bytes: &[u8] = if options.look == crate::shared::camera::Look::O3deAtrium {
+        include_bytes!("../../../../tools/sponza/conditions.json")
+    } else {
+        include_bytes!("../../../../tools/bistro/conditions.json")
+    };
     let conditions_hash = super::digest(condition_bytes);
     let mut conditions = Conditions::parse(&serde_json::from_slice(condition_bytes)?)?;
     eprintln!("Bistro asset load boundary");
@@ -601,7 +602,11 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     let mut pool = GraphPool::new(budget.graph, options.inflight + 1)?;
     let mut workspace = Workspace::new(&scene, budget.prepared.take().expect("prepared pipeline"));
     workspace.placements = placements;
-    if options.reuse_shadows && options.shadows {
+    if options.reuse_shadows
+        && (options.shadows
+            || (options.look == crate::shared::camera::Look::O3deAtrium
+                && options.rect_lights == super::RectLights::Shadowed))
+    {
         workspace.enable_shadow_reuse();
     }
     let mut queue = VecDeque::with_capacity(options.inflight);
@@ -732,6 +737,9 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     #[cfg(feature = "tracy")]
     let tracy_connected_end = tracy_client::Client::is_connected();
     let mut measured = measurement(&samples, options, wall, cpu)?;
+    if options.look == crate::shared::camera::Look::O3deAtrium && options.reuse_shadows {
+        measured["rectangle_shadow_faces_rendered"] = json!(workspace.rect_faces_rendered());
+    }
     if let Some((hits, misses)) = workspace.shadow_reuse_counts() {
         measured["shadow_reuse"] = json!({"hits":hits,"misses":misses});
     }

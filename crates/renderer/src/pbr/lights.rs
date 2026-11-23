@@ -97,6 +97,21 @@ pub enum LocalLight {
         intensity: f32,
     },
     Rect(RectLight),
+    /// Evaluate direct visibility from the emission centre with a shadow map.
+    ShadowedRect(RectLight),
+}
+
+impl LocalLight {
+    pub fn shadowed_rect(light: RectLight) -> Self {
+        Self::ShadowedRect(light)
+    }
+
+    pub(crate) fn shadow_emitter(&self) -> Option<RectLight> {
+        match *self {
+            Self::ShadowedRect(rect) => Some(rect),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

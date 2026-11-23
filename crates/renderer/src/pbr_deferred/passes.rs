@@ -38,8 +38,9 @@ pub struct Inputs {
     pub camera: BufferHandle,
     pub view_projection: [[f32; 4]; 4],
     pub lighting: [Binding; 10],
-    /// Optional graph-local table encoded by [LocalLightLayout](crate::pbr_forward_plus::LocalLightLayout).
-    pub local_lights: Option<ImageView>,
+    /// Optional [light table](crate::pbr_forward_plus::LocalLightLayout) and rectangle shadow atlas.
+    /// When no light casts rectangle shadows, the light table can fill both slots.
+    pub local_lights: Option<(ImageView, ImageView)>,
 }
 
 /// The typed RGBA16F material planes and their single-sample D32 depth.
@@ -191,10 +192,11 @@ pub fn append(
             resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
         },
     ];
-    let mut bindings = [inverse; 18];
+    let mut bindings = [inverse; 19];
     bindings[..gbuffer.len()].copy_from_slice(&gbuffer);
     bindings[gbuffer.len()..17].copy_from_slice(&scene.lighting);
-    let program = if let Some(lights) = scene.local_lights {
+    let program = if let Some((lights, atlas)) = scene.local_lights {
+        bindings[18] = crate::passes::pbr::forward_plus::atlas_binding(atlas);
         bindings[17] = crate::passes::pbr::forward_plus::light_binding(lights);
         crate::passes::pbr::deferred::deferred_local_lighting_program()
     } else {

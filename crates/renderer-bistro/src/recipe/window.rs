@@ -225,7 +225,11 @@ impl State {
         let mut workspace =
             Workspace::new(scene, budget.prepared.take().expect("prepared pipeline"));
         workspace.placements = placements;
-        if options.reuse_shadows && options.shadows {
+        if options.reuse_shadows
+            && (options.shadows
+                || (options.look == crate::shared::camera::Look::O3deAtrium
+                    && options.rect_lights == super::RectLights::Shadowed))
+        {
             workspace.enable_shadow_reuse();
         }
         let mut input = CameraInput::default();
@@ -454,7 +458,11 @@ impl State {
             let prepared = budget.prepare_frame(options, scene, conditions.background)?;
             backend::resize(&mut self.backend, options, budget, &prepared)?;
             self.workspace.prepared = prepared;
-            if options.reuse_shadows && options.shadows {
+            if options.reuse_shadows
+                && (options.shadows
+                    || (options.look == crate::shared::camera::Look::O3deAtrium
+                        && options.rect_lights == super::RectLights::Shadowed))
+            {
                 self.workspace.enable_shadow_reuse();
             }
             self.smoke.resized = self.smoke.resize_requested;
@@ -504,8 +512,11 @@ impl State {
                 Err(error) => return Err(error.into()),
             };
             self.surface.queue_frame(&mut pending)?;
-            self.workspace
-                .accept_shadow_updates(&pending, built.shadow_updates)?;
+            self.workspace.accept_shadow_updates(
+                &pending,
+                built.shadow_updates,
+                built.rect_updates,
+            )?;
             resident.accept_camera(&pending, built.camera_update)?;
             let id = pending.id();
             drop(pending);
@@ -608,7 +619,7 @@ impl State {
             "bloom": options.bloom.name(), "vsync": options.vsync, "aa": options.aa,
             "samples":options.sample_count.as_u32(), "pipeline":options.pipeline.name(),
             "shader_manifest":options.shader_assets.as_ref().map(|selection| &selection.manifest),
-            "local_lights":options.uses_light_grid()
+            "local_lights":options.uses_local_lights()
                 .then(|| super::lighting::identity(options.fixture)),
             "instances": options.instances.name(), "instance_draws": options.instances.draws(),
             "submission": options.submission.name(),

@@ -8,6 +8,7 @@ struct LocalLight {
     float4 color_intensity;
     float4 half_width_range;
     float3 half_height;
+    float shadow_slot;
 };
 
 // Four adjacent RGBA32F texels per record. Slot zero is the view header.
@@ -47,7 +48,9 @@ LocalLight load_local_light(uint index) {
     light.position_radius = local_lights.Load(int3(texel, 0));
     light.color_intensity = local_lights.Load(int3(texel + uint2(1, 0), 0));
     light.half_width_range = local_lights.Load(int3(texel + uint2(2, 0), 0));
-    light.half_height = local_lights.Load(int3(texel + uint2(3, 0), 0)).xyz;
+    float4 edge = local_lights.Load(int3(texel + uint2(3, 0), 0));
+    light.half_height = edge.xyz;
+    light.shadow_slot = edge.w;
     return light;
 }
 

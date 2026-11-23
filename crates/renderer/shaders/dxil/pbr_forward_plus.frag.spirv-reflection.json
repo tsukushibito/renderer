@@ -221,6 +221,12 @@
         },
         {
             "type" : "texture2D",
+            "name" : "rect_shadow_atlas",
+            "set" : 3,
+            "binding" : 5
+        },
+        {
+            "type" : "texture2D",
             "name" : "tile_masks",
             "set" : 0,
             "binding" : 3

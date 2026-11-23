@@ -75,7 +75,7 @@
                 }
             ]
         },
-        "_21" : {
+        "_22" : {
             "name" : "type.Reconstruction",
             "members" : [
                 {
@@ -151,6 +151,12 @@
         },
         {
             "type" : "texture2D",
+            "name" : "rect_shadow_atlas",
+            "set" : 3,
+            "binding" : 5
+        },
+        {
+            "type" : "texture2D",
             "name" : "base_metallic_image",
             "set" : 1,
             "binding" : 0
@@ -203,7 +209,7 @@
             "binding" : 0
         },
         {
-            "type" : "_21",
+            "type" : "_22",
             "name" : "type.Reconstruction",
             "block_size" : 64,
             "set" : 0,

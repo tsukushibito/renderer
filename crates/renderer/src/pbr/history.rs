@@ -52,10 +52,41 @@ struct Entry {
 /// Allow one retained set of images in the runtime resource limits for each
 /// history. Call `clear` to release their registrations on reset,
 /// resolution change or removal while the runtime continues to be used.
-#[derive(Default)]
-pub struct ShadowHistory {
-    entries: [Option<Entry>; CASCADE_COUNT],
+pub type ShadowHistory = MapHistory<CASCADE_COUNT>;
+/// Retained atlas for the low-level PBR recipes. StandardPipeline tracks its own history.
+pub type RectShadowHistory = MapHistory<1>;
+pub type RectShadowFrame = MapFrame<1>;
+pub type RectShadowUpdates = MapUpdates<1>;
+
+impl RectShadowHistory {
+    /// The caller advances the revision on changes to light order/projection or any caster input.
+    /// Capacity must match the prepared scene. Export the returned frame and accept it on submit.
+    pub fn begin_rectangles(
+        &self,
+        graph: &mut Graph,
+        capacity: usize,
+        revision: u64,
+    ) -> Result<RectShadowFrame, GraphError> {
+        self.begin_maps(
+            graph,
+            super::rect_shadows::atlas_desc(capacity)?,
+            ["rectangle shadows"],
+            [ShadowKey::new([[0.; 4]; 4], revision)],
+        )
+    }
+}
+pub struct MapHistory<const N: usize> {
+    entries: [Option<Entry>; N],
     in_progress: Arc<AtomicBool>,
+}
+
+impl<const N: usize> Default for MapHistory<N> {
+    fn default() -> Self {
+        Self {
+            entries: [const { None }; N],
+            in_progress: Arc::default(),
+        }
+    }
 }
 
 struct FrameLease(Arc<AtomicBool>);
@@ -74,13 +105,14 @@ struct Cascade {
 }
 
 /// Cascade choices and render targets for the current Graph.
+pub type ShadowFrame = MapFrame<CASCADE_COUNT>;
 #[must_use = "use the cascade targets and export the rendered maps"]
-pub struct ShadowFrame {
+pub struct MapFrame<const N: usize> {
     lease: FrameLease,
-    cascades: [Cascade; CASCADE_COUNT],
+    cascades: [Cascade; N],
 }
 
-impl ShadowFrame {
+impl<const N: usize> MapFrame<N> {
     /// Return the selected cascade image. Use a reused target only for reads.
     ///
     /// Panics if `cascade` is outside `0..CASCADE_COUNT`.
@@ -95,6 +127,24 @@ impl ShadowFrame {
         self.cascades[cascade].reused
     }
 
+    /// Export the rendered maps from this Graph. Rendering must establish each
+    /// missed target's complete contents for the selected key. Graph compile
+    /// checks that the exports have initialized contents. If declaration
+    /// fails, discard the partially built Graph.
+    pub fn export(self, graph: &mut Graph) -> Result<MapUpdates<N>, GraphError> {
+        graph.image_desc(self.cascades[0].target)?;
+        for cascade in self.cascades.iter().filter(|cascade| !cascade.reused) {
+            graph.export_image(cascade.target)?;
+        }
+        Ok(MapUpdates {
+            graph_id: graph.graph_id(),
+            lease: Some(self.lease),
+            cascades: self.cascades,
+        })
+    }
+}
+
+impl ShadowFrame {
     /// Select this cascade for the standard PBR Forward recipe.
     ///
     /// Panics if `cascade` is outside `0..CASCADE_COUNT`.
@@ -109,22 +159,6 @@ impl ShadowFrame {
             }
         }
     }
-
-    /// Export the rendered maps from this Graph. Rendering must establish each
-    /// missed target's complete contents for the selected key. Graph compile
-    /// checks that the exports have initialized contents. If declaration
-    /// fails, discard the partially built Graph.
-    pub fn export(self, graph: &mut Graph) -> Result<ShadowUpdates, GraphError> {
-        graph.image_desc(self.cascades[0].target)?;
-        for cascade in self.cascades.iter().filter(|cascade| !cascade.reused) {
-            graph.export_image(cascade.target)?;
-        }
-        Ok(ShadowUpdates {
-            graph_id: graph.graph_id(),
-            lease: Some(self.lease),
-            cascades: self.cascades,
-        })
-    }
 }
 
 /// History transaction for one Graph. Use `ShadowHistory::submit` to publish
@@ -133,16 +167,17 @@ impl ShadowFrame {
 /// presentation or other fallible operations. Dropping an unsubmitted
 /// transaction releases its CPU lease. To release registered images after
 /// submission, first publish the accepted updates, then clear the history.
+pub type ShadowUpdates = MapUpdates<CASCADE_COUNT>;
 #[must_use = "publish the history updates after successful submission"]
-pub struct ShadowUpdates {
+pub struct MapUpdates<const N: usize> {
     graph_id: u64,
     lease: Option<FrameLease>,
-    cascades: [Cascade; CASCADE_COUNT],
+    cascades: [Cascade; N],
 }
 
-impl ShadowUpdates {
+impl<const N: usize> MapUpdates<N> {
     /// Reuse status by cascade, for diagnostics or application bookkeeping.
-    pub fn reused(&self) -> [bool; CASCADE_COUNT] {
+    pub fn reused(&self) -> [bool; N] {
         self.cascades.map(|cascade| cascade.reused)
     }
 }
@@ -181,7 +216,7 @@ impl Error for ShadowHistoryError {
     }
 }
 
-impl ShadowHistory {
+impl<const N: usize> MapHistory<N> {
     /// Force the next accepted frame to redraw into the existing targets.
     pub fn invalidate(&mut self) -> Result<(), ShadowHistoryError> {
         if self.in_progress.load(Ordering::Acquire) {
@@ -192,6 +227,9 @@ impl ShadowHistory {
         }
         Ok(())
     }
+}
+
+impl ShadowHistory {
     /// Select cached images for a prepared standard PBR view.
     pub fn begin_view(
         &self,
@@ -218,6 +256,17 @@ impl ShadowHistory {
         keys: [ShadowKey; CASCADE_COUNT],
     ) -> Result<ShadowFrame, GraphError> {
         let desc = ImageDesc::depth32(shadow_resolution, shadow_resolution);
+        self.begin_maps(graph, desc, SHADOW_IMAGES, keys)
+    }
+}
+impl<const N: usize> MapHistory<N> {
+    pub(crate) fn begin_maps(
+        &self,
+        graph: &mut Graph,
+        desc: ImageDesc,
+        names: [&str; N],
+        keys: [ShadowKey; N],
+    ) -> Result<MapFrame<N>, GraphError> {
         if self
             .entries
             .iter()
@@ -235,8 +284,8 @@ impl ShadowHistory {
             ));
         }
         let lease = FrameLease(Arc::clone(&self.in_progress));
-        let mut cascades = [None; CASCADE_COUNT];
-        for (index, (name, key)) in SHADOW_IMAGES.into_iter().zip(keys).enumerate() {
+        let mut cascades = [None; N];
+        for (index, (name, key)) in names.into_iter().zip(keys).enumerate() {
             let (target, reused) = match &self.entries[index] {
                 Some(entry) => (
                     graph.import_image(name, &entry.image)?,
@@ -250,7 +299,7 @@ impl ShadowHistory {
                 reused,
             });
         }
-        Ok(ShadowFrame {
+        Ok(MapFrame {
             lease,
             cascades: cascades.map(Option::unwrap),
         })
@@ -263,7 +312,7 @@ impl ShadowHistory {
         &mut self,
         runtime: &mut Runtime,
         graph: &CompiledGraph,
-        updates: &mut ShadowUpdates,
+        updates: &mut MapUpdates<N>,
     ) -> Result<FrameSubmission, ShadowHistoryError> {
         self.check_updates(graph.graph_id(), updates)?;
         let submission = runtime
@@ -282,7 +331,7 @@ impl ShadowHistory {
     pub fn accept(
         &mut self,
         submission: &FrameSubmission,
-        updates: &mut ShadowUpdates,
+        updates: &mut MapUpdates<N>,
     ) -> Result<(), ShadowHistoryError> {
         self.check_updates(submission.graph_id(), updates)?;
         self.publish(submission, updates)
@@ -291,7 +340,7 @@ impl ShadowHistory {
     pub(crate) fn check_updates(
         &self,
         graph_id: u64,
-        updates: &ShadowUpdates,
+        updates: &MapUpdates<N>,
     ) -> Result<(), ShadowHistoryError> {
         let lease = updates
             .lease
@@ -309,9 +358,9 @@ impl ShadowHistory {
     fn publish(
         &mut self,
         submission: &FrameSubmission,
-        updates: &mut ShadowUpdates,
+        updates: &mut MapUpdates<N>,
     ) -> Result<(), ShadowHistoryError> {
-        let mut incoming = [const { None }; CASCADE_COUNT];
+        let mut incoming = [const { None }; N];
         for (entry, cascade) in incoming.iter_mut().zip(updates.cascades) {
             if !cascade.reused {
                 *entry = Some(Entry {

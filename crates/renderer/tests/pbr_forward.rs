@@ -42,6 +42,7 @@ fn limits() -> SceneLimits {
         frames_in_flight: NonZeroUsize::MIN,
         max_draws: 2,
         max_materials: 2,
+        max_shadowed_rect_lights: 0,
         max_local_lights: 0,
         max_casters_per_cascade: 1,
         max_transforms: 0,
@@ -276,6 +277,7 @@ fn standard_techniques_accept_point_lights_and_share_output() {
             technique,
             config(),
             SceneLimits {
+                max_shadowed_rect_lights: 0,
                 max_local_lights: lights.len(),
                 ..limits()
             },

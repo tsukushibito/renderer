@@ -80,16 +80,22 @@ pub(super) struct Inputs {
     materials: Vec<GraphMaterial>,
     opaque: Vec<Draw>,
     transparent: Vec<Draw>,
+    rect_casters: Vec<Draw>,
     casters: [Vec<Draw>; shadow::CASCADE_COUNT],
 }
 
 impl Inputs {
-    pub(super) fn new(scene: &Scene, instance_draws: usize) -> Self {
+    pub(super) fn new(scene: &Scene, instance_draws: usize, rect_shadows: bool) -> Self {
         let primitives = scene.primitives.len();
         Self {
             materials: Vec::with_capacity(scene.materials.len()),
             opaque: Vec::with_capacity(primitives + instance_draws),
             transparent: Vec::with_capacity(primitives),
+            rect_casters: Vec::with_capacity(if rect_shadows {
+                primitives + instance_draws
+            } else {
+                0
+            }),
             casters: std::array::from_fn(|_| Vec::with_capacity(primitives + instance_draws)),
         }
     }
@@ -343,6 +349,41 @@ pub(super) fn build(
         .local_lights
         .as_ref()
         .map_or(&[][..], |preset| &preset[..]);
+    let rect_frame = if lights
+        .iter()
+        .any(|l| matches!(l, pbr::LocalLight::ShadowedRect(_)))
+    {
+        let revision =
+            caster_revision(options) | motion.map_or(0, |_| u64::from(progress.to_bits()) << 32);
+        workspace
+            .shadow_reuse
+            .as_ref()
+            .map(|h| h.rect_history.begin_rectangles(&mut graph, 2, revision))
+            .transpose()?
+    } else {
+        None
+    };
+    if let Some(history) = &rect_frame {
+        frame.use_rect_shadow_history(history);
+    }
+    if lights
+        .iter()
+        .any(|l| matches!(l, pbr::LocalLight::ShadowedRect(_)))
+        && !rect_frame.as_ref().is_some_and(|h| h.is_reused(0))
+    {
+        inputs.rect_casters.clear();
+        inputs
+            .rect_casters
+            .extend(shadow_casters(scene, options, |_| true).map(draw));
+        if let Some(placements) = &workspace.placements {
+            placements.append_draws(
+                options.instances,
+                geometry(placements.fixture.primitive),
+                &mut inputs.rect_casters,
+            );
+        }
+        frame.rect_casters = &inputs.rect_casters;
+    }
     let images = recipe.draw_hdr(&mut graph, frame.with_lights(lights))?;
     let processed = bloom.add_passes(&mut graph, images.hdr)?;
     let output = recipe.write_output(&mut graph, processed, 2.0)?;
@@ -353,7 +394,8 @@ pub(super) fn build(
 
     let draws = (capture && !options.windowed && !indirect)
         .then_some(inputs.opaque.len() + inputs.transparent.len());
-    finish_frame(
+    let rect_updates = rect_frame.map(|f| f.export(&mut graph)).transpose()?;
+    let mut built = finish_frame(
         graph,
         SceneImages {
             hdr: images.hdr,
@@ -367,5 +409,7 @@ pub(super) fn build(
         draws,
         options,
         capture,
-    )
+    )?;
+    built.rect_updates = rect_updates;
+    Ok(built)
 }

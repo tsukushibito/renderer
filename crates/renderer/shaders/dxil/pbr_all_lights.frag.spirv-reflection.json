@@ -218,6 +218,12 @@
             "name" : "local_lights",
             "set" : 0,
             "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "rect_shadow_atlas",
+            "set" : 3,
+            "binding" : 5
         }
     ],
     "separate_samplers" : [

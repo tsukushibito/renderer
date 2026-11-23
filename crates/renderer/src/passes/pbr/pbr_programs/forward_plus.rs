@@ -34,16 +34,23 @@ pub use culling::{LocalLight, LocalLightLayout, TILE_SIZE, active_tile_count, ap
 pub fn raster_bindings(
     lights: ImageView,
     tiles: Option<ImageView>,
+    shadow_atlas: Option<ImageView>,
 ) -> impl Iterator<Item = Binding> {
-    let bindings = match tiles {
-        Some(tiles) => tiled_raster_bindings(lights, tiles).map(Some),
-        None => [Some(light_binding(lights)), None],
-    };
-    bindings.into_iter().flatten()
+    [
+        Some(light_binding(lights)),
+        tiles.map(tile_binding),
+        Some(atlas_binding(shadow_atlas.unwrap_or(lights))),
+    ]
+    .into_iter()
+    .flatten()
 }
 
-pub fn tiled_raster_bindings(lights: ImageView, tiles: ImageView) -> [Binding; 2] {
-    [light_binding(lights), tile_binding(tiles)]
+pub(crate) fn atlas_binding(view: ImageView) -> Binding {
+    Binding {
+        group: 3,
+        binding: 5,
+        resource: renderer_core::graph::BindingResource::ImageView(view),
+    }
 }
 
 const fn pbr_bindings<const N: usize>() -> [BindingLayout; N] {
@@ -54,9 +61,10 @@ const fn pbr_bindings<const N: usize>() -> [BindingLayout; N] {
         bindings[index] = OPAQUE.bindings[index];
         index += 1;
     }
-    if N == 19 {
+    if N == 20 {
         bindings[18] = buffer_slot(TILES, BindingType::SampledImage, ShaderStages::FRAGMENT, 0);
     }
+    bindings[N - 1] = super::image(3, 5);
     bindings
 }
 
@@ -72,8 +80,8 @@ const fn pbr_bytes<const N: usize>() -> [u64; N] {
 
 pub(in crate::passes::pbr) static REFERENCE_OPAQUE: RasterProgramDescriptor =
     RasterProgramDescriptor {
-        bindings: &pbr_bindings::<18>(),
-        binding_bytes: &pbr_bytes::<18>(),
+        bindings: &pbr_bindings::<19>(),
+        binding_bytes: &pbr_bytes::<19>(),
         shaders: packaged_shaders!(
             vulkan: (
                 include_bytes!("../../../../shaders/pbr.vert.spv"),
@@ -93,8 +101,8 @@ static REFERENCE_BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
     ..REFERENCE_OPAQUE
 };
 pub(in crate::passes::pbr) static TILED_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
-    bindings: &pbr_bindings::<19>(),
-    binding_bytes: &pbr_bytes::<19>(),
+    bindings: &pbr_bindings::<20>(),
+    binding_bytes: &pbr_bytes::<20>(),
     shaders: packaged_shaders!(
         vulkan: (
             include_bytes!("../../../../shaders/pbr.vert.spv"),

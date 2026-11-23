@@ -103,6 +103,7 @@ impl LocalLightLayout {
         for (word, value) in bytes[..16].as_chunks_mut::<4>().0.iter_mut().zip(header) {
             *word = (value as f32).to_le_bytes();
         }
+        let mut shadow_slot = 0u32;
         for (record, light) in bytes[64..].as_chunks_mut::<64>().0.iter_mut().zip(lights) {
             let mut words = [0.; 16];
             match *light {
@@ -127,7 +128,11 @@ impl LocalLightLayout {
                     words[4..7].copy_from_slice(&color);
                     words[7] = intensity;
                 }
-                LocalLight::Rect(rect) => {
+                LocalLight::Rect(rect) | LocalLight::ShadowedRect(rect) => {
+                    if matches!(light, LocalLight::ShadowedRect(_)) {
+                        shadow_slot += 1;
+                        words[15] = shadow_slot as f32;
+                    }
                     let [u, v] = rect.half_edges();
                     words[..3].copy_from_slice(&rect.center());
                     words[3] = rect.bound_radius;

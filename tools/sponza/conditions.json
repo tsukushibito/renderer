@@ -1,0 +1,75 @@
+{
+  "views": [
+    {
+      "name": "gallery",
+      "position": [
+        -8.5,
+        2.1,
+        -4.0
+      ],
+      "target": [
+        1.6,
+        3.15,
+        1.4
+      ],
+      "vertical_fov_degrees": 60.06086362260611
+    },
+    {
+      "name": "renderer",
+      "position": [
+        -4.787248011613803,
+        4.3666062559530525,
+        0.40631976937897596
+      ],
+      "target": [
+        5.138152735353227,
+        3.5706507830653456,
+        -0.5171924921998485
+      ],
+      "vertical_fov_degrees": 60.06086362260611
+    }
+  ],
+  "route": {
+    "fps": 60,
+    "keyframes": [
+      {
+        "seconds": 0,
+        "view": "gallery"
+      },
+      {
+        "seconds": 1,
+        "view": "renderer"
+      }
+    ]
+  },
+  "camera": {
+    "near_m": 0.02,
+    "far_m": 500
+  },
+  "lighting": {
+    "sun": {
+      "direction_to_light": [
+        -0.27263095,
+        0.93599215,
+        0.22269052
+      ],
+      "irradiance_rgb": [
+        6.8566,
+        6.9944,
+        7.9472
+      ]
+    },
+    "ambient_occlusion": {
+      "enabled": false,
+      "policy": "Bistro comparison profile follows Falcor 4.0.1's default-disabled occlusion map. Preserve all source ORM texels and material references; disable only their lighting contribution at the consumer creation boundary.",
+      "reference_commit": "c53908dd7930c031eb28b7ee49025eb27a833d64"
+    }
+  },
+  "output": {
+    "background_linear_rgb": [
+      0.55,
+      0.68,
+      0.92
+    ]
+  }
+}

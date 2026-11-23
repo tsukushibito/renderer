@@ -193,7 +193,7 @@ fn deferred_pass_fits_its_advertised_reservations() {
     let planes = deferred::append(
         &mut graph,
         deferred::Inputs {
-            local_lights: Some(environment),
+            local_lights: Some((environment, environment)),
             hdr: hdr_view,
             depth: depth_view,
             clear: [0.0; 4],

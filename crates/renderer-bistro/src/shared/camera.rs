@@ -117,6 +117,7 @@ impl RouteCapture {
 pub(crate) enum Look {
     Reference,
     LumberyardDay,
+    O3deAtrium,
 }
 
 impl std::str::FromStr for Look {
@@ -124,6 +125,7 @@ impl std::str::FromStr for Look {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "o3de-atrium" => Ok(Self::O3deAtrium),
             "reference" => Ok(Self::Reference),
             "lumberyard-day" => Ok(Self::LumberyardDay),
             _ => Err(format!("unknown Bistro look: {value}").into()),
@@ -141,6 +143,10 @@ impl Look {
     ) -> Value {
         let name = match self {
             Self::Reference => "reference",
+            Self::O3deAtrium => {
+                environment.strength = 1.;
+                "o3de-atrium"
+            }
             Self::LumberyardDay => {
                 conditions.light_direction = BAKE_SCENARIOS[0].direction;
                 conditions.light_color = [8.4, 8.0, 7.1];
@@ -158,6 +164,7 @@ impl Look {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct BakeScenario {
     pub sky: [f32; 3],
     pub direction: [f32; 3],
@@ -177,10 +184,20 @@ pub(crate) const BAKE_SCENARIOS: [BakeScenario; 2] = [
     },
 ];
 
+impl Look {
+    pub(crate) fn scenarios(self) -> [BakeScenario; 2] {
+        let mut scenarios = BAKE_SCENARIOS;
+        if self == Self::O3deAtrium {
+            scenarios[0].direction = [-0.27263095, 0.935_992_1, 0.22269052];
+            scenarios[0].sun = [6.8566, 6.9944, 7.9472];
+        }
+        scenarios
+    }
+}
 impl BakeScenario {
     /// Shared by the runtime sun, background and offline diffuse keyframes.
-    pub(crate) fn at(t: f32) -> Self {
-        let [day, dusk] = BAKE_SCENARIOS;
+    pub(crate) fn for_look(t: f32, look: Look) -> Self {
+        let [day, dusk] = look.scenarios();
         let mix = |a: [f32; 3], b: [f32; 3]| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t);
         Self {
             direction: mix(day.direction, dusk.direction),
@@ -191,9 +208,9 @@ impl BakeScenario {
 }
 
 /// Identify the extra, independently integrated midpoint in a daylight sequence.
-pub(crate) fn daylight_sequence_identity(base: &str) -> String {
+pub(crate) fn daylight_sequence_identity(base: &str, look: Look) -> String {
     use sha2::{Digest, Sha256};
-    let mid = BakeScenario::at(0.5);
+    let mid = BakeScenario::for_look(0.5, look);
     let mut hash = Sha256::new();
     hash.update(base.as_bytes());
     hash.update(b"daylight-3");
@@ -204,11 +221,24 @@ pub(crate) fn daylight_sequence_identity(base: &str) -> String {
 }
 
 /// Changing either the geometry cook or a lighting endpoint invalidates the bake.
-pub(crate) fn bake_identity(cook_sha256: &str) -> String {
+pub(crate) fn bake_identity(cook_sha256: &str, look: Look) -> String {
     use sha2::{Digest, Sha256};
     let mut hash = Sha256::new();
     hash.update(cook_sha256.as_bytes());
-    for scenario in BAKE_SCENARIOS {
+    if look == Look::O3deAtrium {
+        for rect in super::lighting::sponza_rectangles() {
+            for value in rect
+                .center()
+                .into_iter()
+                .chain(rect.half_edges().into_iter().flatten())
+                .chain(rect.radiance())
+                .chain([rect.range()])
+            {
+                hash.update(value.to_le_bytes());
+            }
+        }
+    }
+    for scenario in look.scenarios() {
         for word in scenario
             .sky
             .into_iter()

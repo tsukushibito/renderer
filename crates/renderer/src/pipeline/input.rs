@@ -98,6 +98,7 @@ pub struct GeometryDrawInput<'a> {
     pub draws: &'a [Draw],
     pub lights: &'a [LocalLight],
     pub camera: Option<BufferHandle>,
+    pub(crate) rect_target: Option<(renderer_core::graph::ImageHandle, bool)>,
     /// Cascade decisions from the history transaction for this view.
     pub shadow_history: Option<&'a crate::pbr::ShadowFrame>,
 }
@@ -110,6 +111,7 @@ impl<'a> GeometryDrawInput<'a> {
             lights: &[],
             camera: None,
             shadow_history: None,
+            rect_target: None,
         }
     }
 }

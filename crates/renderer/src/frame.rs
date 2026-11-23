@@ -293,6 +293,12 @@ impl Renderer {
             || transforms.min(assets.draws) > limits.max_transforms
             || casters.min(assets.draws) > limits.max_casters_per_cascade
             || assets.lights.len() > limits.max_local_lights
+            || assets
+                .lights
+                .iter()
+                .filter_map(crate::pbr::LocalLight::shadow_emitter)
+                .count()
+                > limits.max_shadowed_rect_lights
         {
             return self.reconfigure(self.camera, assets);
         }

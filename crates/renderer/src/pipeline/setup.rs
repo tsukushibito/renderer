@@ -157,7 +157,10 @@ pub struct RendererSetup {
     pub frames_in_flight: NonZeroUsize,
     /// Capacity for additional independent draws, materials, casters and model transforms.
     pub additional_objects: usize,
+    /// Extra local lights with no dedicated shadow atlas reservation.
     pub additional_lights: usize,
+    /// Extra lights with dedicated shadow atlas space. Also reserves their light records.
+    pub additional_shadowed_rect_lights: usize,
     /// Maximum shared geometry bytes per startup submission, rounded down to four bytes.
     pub mesh_upload_bytes: u64,
 }
@@ -176,6 +179,7 @@ impl RendererSetup {
             frames_in_flight: NonZeroUsize::MIN,
             additional_objects: 0,
             additional_lights: 0,
+            additional_shadowed_rect_lights: 0,
             mesh_upload_bytes: 1024 * 1024,
         }
     }
@@ -256,10 +260,18 @@ impl RendererSetup {
             max_materials: room(materials.len())?,
             max_transforms: room(pbr_objects.min(assets.draws))?,
             max_casters_per_cascade: room(casters.min(assets.draws))?,
+            max_shadowed_rect_lights: assets
+                .lights
+                .iter()
+                .filter_map(LocalLight::shadow_emitter)
+                .count()
+                .checked_add(self.additional_shadowed_rect_lights)
+                .ok_or("shadow light capacity overflow")?,
             max_local_lights: assets
                 .lights
                 .len()
                 .checked_add(self.additional_lights)
+                .and_then(|n| n.checked_add(self.additional_shadowed_rect_lights))
                 .ok_or("light capacity overflow")?,
         };
         let mut preparation = Preparation::new(self.frames_in_flight);

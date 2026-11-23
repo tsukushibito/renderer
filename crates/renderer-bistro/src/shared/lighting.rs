@@ -3,6 +3,21 @@
 use renderer::pbr_forward_plus::{self, LocalLight, LocalLightLayout, TILE_SIZE};
 use renderer_core::graph::{BufferHandle, Graph, GraphError, ImageDesc, ImageView};
 
+/// Two ceiling emitters in O3DE SponzaDiffuseGI, converted to Y-up metres.
+pub(crate) fn sponza_rectangles() -> [renderer::pbr::RectLight; 2] {
+    [-4.739_024, 2.8996224].map(|x| {
+        renderer::pbr::RectLight::new(
+            [x, 10.431_108, -0.5591918],
+            [2.5, 0., 0.],
+            [0., 0., 0.5],
+            [0.7557183, 0.8001526, 0.9096513],
+            300.,
+            48.947266,
+        )
+        .expect("fixed Sponza rectangle")
+    })
+}
+
 pub(crate) const PRESET_LEN: usize = 64;
 pub(crate) type Preset = [LocalLight; PRESET_LEN];
 

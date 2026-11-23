@@ -70,7 +70,16 @@ impl Prepared {
                 frames_in_flight: concurrent,
                 max_draws,
                 max_materials: scene.materials.len(),
-                max_local_lights: if options.pipeline.uses_local_lights() {
+                max_shadowed_rect_lights: if options.look == crate::shared::camera::Look::O3deAtrium
+                    && options.rect_lights == super::RectLights::Shadowed
+                {
+                    2
+                } else {
+                    0
+                },
+                max_local_lights: if options.look == crate::shared::camera::Look::O3deAtrium {
+                    2
+                } else if options.pipeline.uses_local_lights() {
                     super::lighting::PRESET_LEN
                 } else {
                     0

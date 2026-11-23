@@ -153,16 +153,30 @@ struct Options {
     aa: bool,
     shadows: bool,
     reuse_shadows: bool,
+    rect_lights: RectLights,
     capture_shadows: bool,
     #[cfg(feature = "tracy")]
     capture_handshake: bool,
     output: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RectLights {
+    Off,
+    Unshadowed,
+    Shadowed,
+}
 impl Options {
     fn uses_light_grid(&self) -> bool {
         self.pipeline == PipelineMode::ForwardReference
             || (self.pipeline == PipelineMode::ForwardPlus && self.baked_lighting.is_none())
+    }
+    fn uses_local_lights(&self) -> bool {
+        if self.look == camera::Look::O3deAtrium {
+            self.rect_lights != RectLights::Off
+        } else {
+            self.uses_light_grid()
+        }
     }
     fn diffuse_lighting(&self, blend: f32) -> renderer::pbr::DiffuseLighting {
         if self.baked_lighting.is_some() {
@@ -187,7 +201,7 @@ impl Options {
             } else {
                 self.scenario_blend
             };
-            let light = camera::BakeScenario::at(t);
+            let light = camera::BakeScenario::for_look(t, self.look);
             input.direction_to_light = camera::normalize(light.direction)?;
             input.irradiance = light.sun;
             input.scenario_blend = t;
@@ -202,7 +216,7 @@ impl Options {
             return Some([0., 0., 0., 1.]);
         }
         self.sweep.then(|| {
-            let [r, g, b] = camera::BakeScenario::at(t).sky;
+            let [r, g, b] = camera::BakeScenario::for_look(t, self.look).sky;
             [r, g, b, 1.]
         })
     }
@@ -236,7 +250,7 @@ impl Options {
         if self.reflection_probes.is_none() && self.baked_lighting.is_none() {
             return Ok(());
         }
-        let base = camera::bake_identity(&run::loaded_cook_hash(scene, self.fixture)?);
+        let base = camera::bake_identity(&run::loaded_cook_hash(scene, self.fixture)?, self.look);
         let hdr = camera::environment_bake_identity(&base, env);
         let matches_bake =
             |id: &[u8]| base.as_bytes() == id || hdr.as_ref().is_some_and(|s| s.as_bytes() == id);
@@ -279,9 +293,9 @@ impl Options {
             let volume = renderer::pbr::BakedLighting::from_bytes(atlas)?;
             let matches = match volume.scenario_count() {
                 1 | 2 => matches_bake(identity),
-                3 => std::iter::once(&base)
-                    .chain(hdr.iter())
-                    .any(|id| camera::daylight_sequence_identity(id).as_bytes() == identity),
+                3 => std::iter::once(&base).chain(hdr.iter()).any(|id| {
+                    camera::daylight_sequence_identity(id, self.look).as_bytes() == identity
+                }),
                 _ => false,
             };
             if !matches {
@@ -308,7 +322,7 @@ impl Options {
             env.identity["baked_lighting_sha256"] = serde_json::json!(digest(file));
         }
         env.identity["scenario_blend"] = serde_json::json!(self.scenario_blend);
-        let light = camera::BakeScenario::at(self.scenario_blend);
+        let light = camera::BakeScenario::for_look(self.scenario_blend, self.look);
         conditions.light_direction = light.direction;
         conditions.light_color = light.sun;
         conditions.background = light.sky;
@@ -435,6 +449,7 @@ impl Options {
             offset_shadow_receiver: false,
             aa: true,
             shadows: true,
+            rect_lights: RectLights::Shadowed,
             reuse_shadows: true,
             capture_shadows: false,
             #[cfg(feature = "tracy")]
@@ -446,6 +461,14 @@ impl Options {
         let mut shader_manifest = None;
         while let Some(argument) = args.next() {
             match argument.as_str() {
+                "--rect-lights" => {
+                    result.rect_lights = match args.next().as_deref() {
+                        Some("off") => RectLights::Off,
+                        Some("unshadowed") => RectLights::Unshadowed,
+                        Some("shadowed") => RectLights::Shadowed,
+                        _ => return Err("expected off, unshadowed or shadowed".into()),
+                    }
+                }
                 "--fixture" => result.fixture = true,
                 "--gpu-timing" => result.gpu_timing = true,
                 "--steady-state-cpu" => result.steady_state_cpu = true,
@@ -663,6 +686,11 @@ impl Options {
         if result.instances.enabled() && result.omit_material.is_some() {
             return Err("--instances requires all original materials".into());
         }
+        if result.look == camera::Look::O3deAtrium
+            && (result.pipeline == PipelineMode::ForwardReference || result.shader_assets.is_some())
+        {
+            return Err("Sponza rectangles require a standard PBR pipeline".into());
+        }
         if result.fixture && result.look != camera::Look::Reference {
             return Err("--look lumberyard-day requires the exterior scene".into());
         }
@@ -780,8 +808,8 @@ Scenes and output
   --reflection-probes FILE [--reflection-debug weights|radiance] [--reflection-spheres X Y Z] [--reflection-spheres-to X Y Z]
   --lighting-pass beauty|base-color|direct|diffuse|diffuse-no-ao|specular|local-specular|emissive
   --time-sweep | --gi-debug irradiance|sources|weights | --white-sphere X Y Z
-  --look reference|lumberyard-day
-  --view bistro-corner|street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route
+  --look reference|lumberyard-day|o3de-atrium
+  --view bistro-corner|street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route|gallery|renderer
   --width N --height N
   --windowed | --window-smoke    Requires Windows and the presentation feature
   --vsync on|off                 Default: on
@@ -797,6 +825,7 @@ Rendering
 
 Measurement and captures
   --frames N --warmup N --inflight 1..4
+  --rect-lights off|unshadowed|shadowed  Sponza atrium emitters (default shadowed)
   --gpu-timing
   --steady-state-cpu             Requires warmup >= inflight
   --resource-checks              Requires memory-profiling and inflight >= 2
