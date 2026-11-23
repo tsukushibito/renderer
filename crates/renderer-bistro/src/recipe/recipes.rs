@@ -67,6 +67,11 @@ impl Prepared {
                 .checked_add(instance_draws)
                 .ok_or("Bistro scene draw capacity overflow")?;
             let limits = pbr::SceneLimits {
+                max_lightmapped_draws: if options.baked_lighting.is_some() {
+                    max_draws
+                } else {
+                    0
+                },
                 frames_in_flight: concurrent,
                 max_draws,
                 max_materials: scene.materials.len(),
@@ -117,7 +122,9 @@ impl Prepared {
                 PipelineMode::Deferred => {
                     pipeline::GeometryPipeline::new(pbr::Technique::Deferred, config, limits)?
                 }
-                PipelineMode::ForwardReference => unreachable!("the comparison has its own recipe"),
+                PipelineMode::ForwardReference => {
+                    pipeline::GeometryPipeline::new(pbr::Technique::Forward, config, limits)?
+                }
             };
             preparation.add_requirements(
                 standard.preparation().graph_requirements(),
@@ -212,7 +219,7 @@ fn standard_pipeline(options: &Options) -> bool {
     if options.offset_shadow_receiver {
         return false;
     }
-    options.pipeline != PipelineMode::ForwardReference
+    options.pipeline != PipelineMode::ForwardReference || options.baked_lighting.is_some()
 }
 
 /// The all-light control and the development receiver-offset probe capture

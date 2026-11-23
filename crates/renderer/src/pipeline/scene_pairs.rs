@@ -126,6 +126,7 @@ mod tests {
         let pipeline = StandardPipeline::forward(
             [8, 8],
             SceneLimits {
+                max_lightmapped_draws: 0,
                 frames_in_flight: NonZeroUsize::MIN,
                 max_draws: 3,
                 max_materials: 2,

@@ -25,6 +25,7 @@ fn mesh(graph: &mut Graph, name: &str, seed_vertices: bool, seed_indices: bool) 
     }
     RasterDraw {
         bindings: None,
+        secondary_vertices: None,
         vertices,
         indices,
         first_index: 0,
@@ -386,6 +387,7 @@ fn shared_vertex_index_inputs_keep_the_latest_producer_and_cull_older_contents()
     graph.upload_buffer("current", shared, 0, &[0; 84]).unwrap();
     let draw = RasterDraw {
         bindings: None,
+        secondary_vertices: None,
         vertices: shared,
         indices: shared,
         first_index: 0,
@@ -967,6 +969,7 @@ fn empty_draws_enforce_custom_depth_and_output_contracts() {
     static REQUIRED: RasterProgramDescriptor = RasterProgramDescriptor {
         entry: "main",
         vertex_stride: 4,
+        secondary_vertex_stride: 0,
         vertex_attributes: &[],
         parameters: RasterParameterLayout {
             size: 0,

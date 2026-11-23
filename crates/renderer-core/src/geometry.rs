@@ -20,6 +20,7 @@ use crate::graph::{BufferHandle, Graph, GraphError, GraphErrorKind, MeshUpload, 
 pub enum GeometryStream {
     Vertices,
     Indices,
+    SecondaryVertices,
 }
 
 /// Owned encoded vertices and little-endian `u32` triangle indices.
@@ -40,6 +41,7 @@ pub enum GeometryStream {
 pub struct GeometryData {
     pub(crate) vertices: Arc<[u8]>,
     pub(crate) indices: Arc<[u8]>,
+    secondary: Option<Arc<[u8]>>,
     vertex_stride: u32,
     vertex_count: u64,
     index_count: u32,
@@ -120,6 +122,7 @@ impl GeometryData {
         Ok(Self {
             vertices: Arc::from(vertices),
             indices: encoded_indices.into(),
+            secondary: None,
             vertex_stride,
             vertex_count,
             index_count,
@@ -127,6 +130,26 @@ impl GeometryData {
         })
     }
 
+    /// Attach an independent per-vertex stream without changing the primary layout.
+    pub fn with_secondary_vertices(
+        mut self,
+        stride: u32,
+        bytes: Vec<u8>,
+    ) -> Result<Self, GraphError> {
+        if stride == 0
+            || !stride.is_multiple_of(4)
+            || self.vertex_count.checked_mul(u64::from(stride)) != Some(bytes.len() as u64)
+        {
+            return Err(GraphError::invalid_input(
+                "invalid secondary vertex stream length",
+            ));
+        }
+        self.secondary = Some(bytes.into());
+        Ok(self)
+    }
+    pub fn secondary_byte_len(&self) -> u64 {
+        self.secondary.as_ref().map_or(0, |v| v.len() as u64)
+    }
     pub fn vertex_stride(&self) -> u32 {
         self.vertex_stride
     }
@@ -149,7 +172,7 @@ impl GeometryData {
 
     /// Encoded payload bytes, independent of sharing and native allocation size.
     pub fn byte_len(&self) -> u64 {
-        self.vertex_byte_len() + self.index_byte_len()
+        self.vertex_byte_len() + self.index_byte_len() + self.secondary_byte_len()
     }
 
     /// Capture the complete immutable vertex stream into an equally sized buffer.
@@ -193,7 +216,15 @@ impl GeometryData {
         stream: GeometryStream,
         range: Range<usize>,
     ) -> Result<PassHandle, GraphError> {
-        self.upload_graph_slice(graph, name, dst, stream == GeometryStream::Indices, range)
+        if stream == GeometryStream::SecondaryVertices {
+            let bytes = self
+                .secondary
+                .as_ref()
+                .ok_or_else(|| GraphError::invalid_input("mesh has no secondary vertex stream"))?;
+            graph.upload_mesh_slice(name, dst, bytes, range, MeshUpload::Vertices)
+        } else {
+            self.upload_graph_slice(graph, name, dst, stream == GeometryStream::Indices, range)
+        }
     }
 
     /// Upload one aligned slice of an immutable mesh stream. Only this bridge

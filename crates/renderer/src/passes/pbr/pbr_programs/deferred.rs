@@ -108,6 +108,7 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
     ),
     entry: "main",
     vertex_stride: 0,
+    secondary_vertex_stride: 0,
     vertex_attributes: &[],
     parameters: NO_PARAMETERS,
     blend: renderer_core::program::BlendState::Replace,

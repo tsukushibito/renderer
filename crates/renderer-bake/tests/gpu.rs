@@ -2,8 +2,8 @@
 #![cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 
 use renderer_bake::{
-    BakeBackend, BakeScene, Lighting, LightmapSettings, Material, ProbeSettings, ReceiverTriangle,
-    Triangle,
+    BakeBackend, BakeScene, Lighting, LightmapVertex, Material, ProbeSettings, StaticReceiver,
+    SurfaceLayout, Triangle,
 };
 
 fn compare(backend: BakeBackend) {
@@ -48,18 +48,34 @@ fn compare(backend: BakeBackend) {
         direction_to_sun: [0., 1., 0.],
         sun: [1.; 3],
     });
-    let receivers = [ReceiverTriangle {
-        positions: [[-1., 0., -1.], [1., 0., -1.], [0., 0., 1.]],
-        normals: [[0., 1., 0.]; 3],
+    let receivers = [StaticReceiver {
+        placement: 42,
+        extent: [8, 7],
+        double_sided: true,
+        material: 0,
+        indices: vec![0, 1, 2],
+        vertices: [[-1., 0., -1.], [1., 0., -1.], [0., 0., 1.]]
+            .into_iter()
+            .zip([[0., 0.], [1., 0.], [0., 1.]])
+            .map(|(position, lightmap_uv)| LightmapVertex {
+                position,
+                normal: [0., 1., 0.],
+                material_uv: [0.; 2],
+                lightmap_uv,
+            })
+            .collect(),
     }];
     fn bake<const N: usize>(
         scene: &BakeScene,
-        receivers: &[ReceiverTriangle],
+        receivers: &[StaticReceiver],
         backend: BakeBackend,
-        lights: impl renderer_bake::LightingScenarios<N> + Copy,
-    ) -> renderer::pbr::BakedLighting {
-        let probes = scene
-            .bake_probes(
+        lights: impl renderer_bake::LightingScenarios<N>,
+    ) -> renderer::pbr::SurfaceLightmaps {
+        let mut file = Vec::new();
+        SurfaceLayout::new(receivers, 16, None)
+            .unwrap()
+            .bake_to(
+                scene,
                 lights,
                 ProbeSettings {
                     backend,
@@ -67,22 +83,29 @@ fn compare(backend: BakeBackend) {
                     max_depth: 1,
                     ..Default::default()
                 },
+                64,
+                &mut file,
             )
             .unwrap();
-        let charts = scene
-            .bake_lightmaps(
-                receivers,
-                lights,
-                LightmapSettings {
-                    backend,
-                    rays_per_texel: 64,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        probes.with_lightmaps(&charts).unwrap()
+        renderer::pbr::SurfaceLightmaps::from_bytes(&file).unwrap()
     }
-    let verify = |reference: renderer::pbr::BakedLighting, native: renderer::pbr::BakedLighting| {
+    let verify = |reference: renderer::pbr::SurfaceLightmaps,
+                  native: renderer::pbr::SurfaceLightmaps| {
+        assert_eq!(reference.placements(), native.placements());
+        assert_eq!(reference.pages().len(), native.pages().len());
+        for (a, b) in reference.pages().iter().zip(native.pages()) {
+            assert_eq!(a.extent(), b.extent());
+            for (a, b) in a
+                .rgba32f()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(b.rgba32f().as_chunks::<4>().0)
+            {
+                assert!((f32::from_le_bytes(*a) - f32::from_le_bytes(*b)).abs() < 0.0005);
+            }
+        }
+        let (reference, native) = (reference.probes(), native.probes());
         assert_eq!(reference.extent(), native.extent());
         for (i, (a, b)) in reference
             .rgba32f()

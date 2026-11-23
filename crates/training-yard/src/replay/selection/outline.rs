@@ -10,6 +10,7 @@ fn program() -> ManagedRasterProgram {
     static PROGRAM: RasterProgramDescriptor = RasterProgramDescriptor {
         entry: "main",
         vertex_stride: 0,
+        secondary_vertex_stride: 0,
         vertex_attributes: &[],
         parameters: RasterParameterLayout {
             size: 4,

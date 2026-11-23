@@ -20,7 +20,7 @@ pub struct ImageHandle {
 }
 /// A graph-local contiguous mip range in one image layer. Views retain the image's identity rather
 /// than declaring another resource, so overlapping views share content/hazards.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct ImageView {
     pub(crate) image: ImageHandle,
     pub(crate) mip: u32,

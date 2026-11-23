@@ -31,7 +31,9 @@ fn program(stride: u32) -> Result<ManagedRasterProgram, GraphError> {
     static PBR: RasterProgramDescriptor = RasterProgramDescriptor {
         entry: "main",
         vertex_stride: crate::passes::pbr::VERTEX_BYTES as u32,
+        secondary_vertex_stride: 0,
         vertex_attributes: &[VertexAttribute {
+            stream: 0,
             location: 0,
             offset: 0,
             format: VertexFormat::Float32x3,
@@ -158,6 +160,7 @@ impl PickPass {
                     stride,
                     RasterDraw {
                         bindings: None,
+                        secondary_vertices: None,
                         vertices: mesh.vertices,
                         indices: mesh.indices,
                         first_index: mesh.first_index,

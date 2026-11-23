@@ -488,6 +488,7 @@ fn raster_imports<B: Backend>(backend: &mut B, reconfigure: bool) {
         &mut graph,
         "imported draw",
         [RasterDraw {
+            secondary_vertices: None,
             vertices: v,
             indices: i,
             first_index: 0,

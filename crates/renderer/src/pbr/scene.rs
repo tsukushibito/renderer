@@ -46,6 +46,7 @@ impl ScenePrograms {
         &self,
         samples: SampleCount,
         include_shadows: bool,
+        lightmaps: bool,
     ) -> Vec<RasterPipelineRequest> {
         let mut raster = Vec::with_capacity(
             (2 + usize::from(include_shadows)) * (1 + usize::from(self.model.is_some())),
@@ -55,6 +56,17 @@ impl ScenePrograms {
             raster.push(pipeline(programs.blend.clone(), samples));
             if include_shadows {
                 raster.push(pipeline(programs.shadow.clone(), SampleCount::X1));
+            }
+        }
+        if lightmaps {
+            for packed in [false, true] {
+                for p in std::iter::once(&self.world).chain(self.model.iter().filter(|_| !packed)) {
+                    if let Some(program) =
+                        crate::passes::pbr::lightmapped_program(&p.opaque, packed)
+                    {
+                        raster.push(pipeline(program, samples));
+                    }
+                }
             }
         }
         raster
@@ -112,7 +124,8 @@ impl LocalLights {
         } else {
             None
         };
-        let raster = programs.raster_requests(config.samples, false);
+        let raster =
+            programs.raster_requests(config.samples, false, limits.max_lightmapped_draws > 0);
         let compute = tiled.then(compute_program);
         prep.reserve_image(layout.image_desc(), 1)?;
         if let Some(desc) = mask {
@@ -238,7 +251,11 @@ impl PreparedScene {
             preparation.reserve_image(super::rect_shadows::atlas_desc(rect_count)?, 1)?;
             preparation.reserve_buffer(camera_desc(), rect_faces)?;
         }
-        let raster = programs.raster_requests(config.samples, render_shadows || rect_count > 0);
+        let raster = programs.raster_requests(
+            config.samples,
+            render_shadows || rect_count > 0,
+            limits.max_lightmapped_draws > 0,
+        );
         let cascades: usize = if render_shadows { CASCADE_COUNT } else { 0 };
         let casters = if render_shadows || rect_count > 0 {
             limits.max_shadow_casters
@@ -316,22 +333,30 @@ impl PreparedScene {
             GraphRequirements {
                 resources: cascades + 2 + usize::from(transient_camera) + usize::from(msaa),
                 passes: cascades + 2 + usize::from(upload_camera),
-                accesses: checked(accesses.checked_add(cascades + 12))?,
+                accesses: checked(
+                    accesses
+                        .checked_add(cascades + 12)
+                        .and_then(|n| n.checked_add(limits.max_lightmapped_draws)),
+                )?,
                 draws: checked(limits.max_draws.checked_add(shadow_draws))?,
                 raster_constant_words: if transforms {
                     checked(
                         shadow_draws
                             .checked_mul(2)
-                            .and_then(|n| n.checked_add(limits.max_draws)),
+                            .and_then(|n| n.checked_add(limits.max_draws))
+                            .and_then(|n| n.checked_add(limits.max_lightmapped_draws)),
                     )?
                 } else {
-                    shadow_draws
+                    checked(shadow_draws.checked_add(limits.max_lightmapped_draws))?
                 },
                 bindings: checked(
                     limits
                         .max_materials
                         .checked_mul(material_bindings)
-                        .and_then(|n| n.checked_add(extra_bindings)),
+                        .and_then(|n| n.checked_add(extra_bindings))
+                        .and_then(|n| {
+                            n.checked_add(limits.max_lightmapped_draws.checked_mul(scene_accesses)?)
+                        }),
                 )?,
                 attachments: cascades + 4 + usize::from(msaa),
                 name_bytes: 256,
@@ -379,12 +404,14 @@ impl PreparedScene {
                 limits.max_draws,
                 pages,
                 limits.max_draws,
+                limits.max_lightmapped_draws,
             )?,
             transparent: Batch::prepare(
                 limits.max_materials,
                 limits.max_draws,
                 pages,
                 limits.max_draws,
+                0,
             )?,
             shadow: Batch::prepare(
                 if render_shadows || rect_count > 0 {
@@ -395,6 +422,7 @@ impl PreparedScene {
                 casters,
                 pages,
                 shadow_draws,
+                0,
             )?,
         })
     }
@@ -607,9 +635,14 @@ impl PreparedScene {
             Some(frame.transforms.len()),
         )?;
         let has_model = self.instances.is_some();
-        let (opaque_end, opaque_commands) =
+        let (opaque_end, opaque_commands, surface_commands) =
             validate_draws(frame.opaque, self.mode, has_model, frame, DrawPass::Opaque)?;
-        let (transparent_end, transparent_commands) = validate_draws(
+        check_limit(
+            GraphCapacityKind::Draws,
+            self.limits.max_lightmapped_draws,
+            Some(surface_commands),
+        )?;
+        let (transparent_end, transparent_commands, _) = validate_draws(
             frame.transparent,
             DrawMode::Direct,
             has_model,
@@ -627,7 +660,7 @@ impl PreparedScene {
                 validate_shadow_sources(graph, sources, shadow_desc(settings))?;
                 for (cascade, source) in sources.into_iter().enumerate() {
                     if let ShadowSource::Render { casters, .. } = source {
-                        let (end, commands) = validate_draws(
+                        let (end, commands, _) = validate_draws(
                             casters,
                             DrawMode::Direct,
                             has_model,
@@ -655,7 +688,7 @@ impl PreparedScene {
         if frame.lights.iter().any(|l| l.shadow_emitter().is_some())
             && !frame.rect_target.is_some_and(|t| t.reused())
         {
-            let (end, commands) = validate_draws(
+            let (end, commands, _) = validate_draws(
                 frame.casters,
                 DrawMode::Direct,
                 has_model,
@@ -922,14 +955,32 @@ fn validate_draws(
     has_model: bool,
     frame: &PbrDrawInput<'_>,
     pass: DrawPass,
-) -> Result<(usize, usize), GraphError> {
+) -> Result<(usize, usize, usize), GraphError> {
+    let mut surface_commands = 0;
     let mut commands = draws.len();
     let wants_blend = matches!(pass, DrawPass::Transparent);
     let mut transform_end = 0;
     for (index, draw) in draws.iter().enumerate() {
+        if matches!(
+            draw,
+            Draw::Lightmapped { .. } | Draw::LightmappedIndirect { .. }
+        ) {
+            if wants_blend {
+                return Err(GraphError::invalid_input(
+                    "lightmaps require an opaque or masked receiver",
+                ));
+            }
+            surface_commands += 1;
+        }
         let (material, range) = match *draw {
             Draw::WorldSpaceIndexed(draw) => (draw.material, None),
-            Draw::WorldSpaceIndirect { material, .. } if mode == DrawMode::Indirect => {
+            Draw::Lightmapped { geometry, surface } if has_model || surface.transform.is_none() => {
+                (geometry.material, surface.transform.map(|i| (i, 1)))
+            }
+            Draw::WorldSpaceIndirect { material, .. }
+            | Draw::LightmappedIndirect { material, .. }
+                if mode == DrawMode::Indirect =>
+            {
                 (material, None)
             }
             Draw::TransformedIndirect {
@@ -944,9 +995,9 @@ fn validate_draws(
             } if has_model => (geometry.material, Some((first_transform, instance_count))),
             _ => {
                 let kind = match draw {
-                    Draw::WorldSpaceIndirect { .. } | Draw::TransformedIndirect { .. } => {
-                        "indirect"
-                    }
+                    Draw::WorldSpaceIndirect { .. }
+                    | Draw::LightmappedIndirect { .. }
+                    | Draw::TransformedIndirect { .. } => "indirect",
                     _ => "instanced",
                 };
                 return Err(GraphError::invalid_input(format!(
@@ -985,7 +1036,7 @@ fn validate_draws(
             .with_pass_name(pass.name()));
         }
     }
-    Ok((transform_end, commands))
+    Ok((transform_end, commands, surface_commands))
 }
 
 fn validate_shadow_sources(

@@ -37,6 +37,8 @@ impl VertexFormat {
 /// `location` is both the SPIR-V location and DXIL `TEXCOORD` semantic index.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VertexAttribute {
+    /// Vertex buffer binding (0 or 1).
+    pub stream: u32,
     pub location: u32,
     pub offset: u32,
     pub format: VertexFormat,
@@ -160,6 +162,8 @@ pub struct RasterProgramDescriptor<'a, B = &'a [u8]> {
     pub entry: &'a str,
     /// Zero selects a generated fullscreen triangle and requires no attributes.
     pub vertex_stride: u32,
+    /// Stride of optional independent per-vertex input at binding 1. Zero disables it.
+    pub secondary_vertex_stride: u32,
     pub vertex_attributes: &'a [VertexAttribute],
     pub parameters: RasterParameterLayout,
     pub color_outputs: &'a [ImageFormat],
@@ -176,19 +180,29 @@ pub struct RasterProgramDescriptor<'a, B = &'a [u8]> {
 impl<B> RasterProgramDescriptor<'_, B> {
     fn validate_layout(&self) -> Result<(), ShaderImportError> {
         let graphics = ShaderStages::VERTEX.union(ShaderStages::FRAGMENT);
-        if !self.vertex_stride.is_multiple_of(4)
+        if !self.secondary_vertex_stride.is_multiple_of(4)
+            || (self.secondary_vertex_stride != 0)
+                != self.vertex_attributes.iter().any(|a| a.stream == 1)
+            || !self.vertex_stride.is_multiple_of(4)
             || self.vertex_attributes.len() > MAX_RASTER_ATTRIBUTES
             || (self.vertex_stride == 0 && !self.vertex_attributes.is_empty())
         {
             return Err(ShaderImportError::InvalidDescriptor("raster vertex layout"));
         }
         for (index, attribute) in self.vertex_attributes.iter().enumerate() {
-            if attribute.location >= MAX_RASTER_ATTRIBUTES as u32
+            if attribute.stream > 1
+                || attribute.location >= MAX_RASTER_ATTRIBUTES as u32
                 || !attribute.offset.is_multiple_of(4)
                 || attribute
                     .offset
                     .checked_add(attribute.format.size())
-                    .is_none_or(|end| end > self.vertex_stride)
+                    .is_none_or(|end| {
+                        end > if attribute.stream == 0 {
+                            self.vertex_stride
+                        } else {
+                            self.secondary_vertex_stride
+                        }
+                    })
                 || self.vertex_attributes[..index]
                     .iter()
                     .any(|other| other.location == attribute.location)
@@ -285,6 +299,7 @@ type RasterBinaries<B> = ShaderBinaries<RasterShaderStages<B>, D3D12RasterShader
 
 struct OwnedRasterProgram {
     vertex_stride: u32,
+    secondary_vertex_stride: u32,
     vertex_attributes: Box<[VertexAttribute]>,
     parameters: RasterParameterLayout,
     color_outputs: Box<[ImageFormat]>,
@@ -314,11 +329,13 @@ impl From<ManagedRasterProgram> for RasterPipelineRequest {
 
 const MESH_ATTRIBUTES: &[VertexAttribute] = &[
     VertexAttribute {
+        stream: 0,
         location: 0,
         offset: 0,
         format: VertexFormat::Float32x3,
     },
     VertexAttribute {
+        stream: 0,
         location: 1,
         offset: 12,
         format: VertexFormat::Float32x4,
@@ -327,6 +344,7 @@ const MESH_ATTRIBUTES: &[VertexAttribute] = &[
 pub(crate) static MESH: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: 28,
+    secondary_vertex_stride: 0,
     vertex_attributes: MESH_ATTRIBUTES,
     parameters: RasterParameterLayout {
         size: 80,
@@ -591,6 +609,7 @@ impl ManagedRasterProgram {
         Ok(Self {
             manifest: ProgramAsset::loaded(OwnedRasterProgram {
                 vertex_stride: descriptor.vertex_stride,
+                secondary_vertex_stride: descriptor.secondary_vertex_stride,
                 vertex_attributes: descriptor.vertex_attributes.into(),
                 parameters: descriptor.parameters,
                 color_outputs: descriptor.color_outputs.into(),
@@ -650,6 +669,7 @@ impl ManagedRasterProgram {
                 RasterProgramDescriptor {
                     entry: "main",
                     vertex_stride: owned.vertex_stride,
+                    secondary_vertex_stride: owned.secondary_vertex_stride,
                     vertex_attributes: &owned.vertex_attributes,
                     parameters: owned.parameters,
                     color_outputs: &owned.color_outputs,

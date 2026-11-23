@@ -6,7 +6,7 @@
         }
     ],
     "types" : {
-        "_16" : {
+        "_15" : {
             "name" : "type.ConstantBuffer.CameraData",
             "members" : [
                 {
@@ -75,7 +75,7 @@
                 }
             ]
         },
-        "_18" : {
+        "_17" : {
             "name" : "type.ConstantBuffer.Placements",
             "members" : [
                 {
@@ -162,7 +162,7 @@
     ],
     "ubos" : [
         {
-            "type" : "_16",
+            "type" : "_15",
             "name" : "type.ConstantBuffer.CameraData",
             "block_size" : 464,
             "set" : 0,
@@ -171,7 +171,7 @@
     ],
     "push_constants" : [
         {
-            "type" : "_18",
+            "type" : "_17",
             "name" : "placements",
             "push_constant" : true
         }

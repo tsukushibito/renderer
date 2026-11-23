@@ -74,11 +74,57 @@ pub struct IndexedDraw {
     pub material: usize,
 }
 
+/// Independent mesh UVs and per-placement lighting for a standard PBR draw.
+#[derive(Clone, Copy, Debug)]
+pub struct DrawLightmap {
+    pub vertices: BufferHandle,
+    pub image: ImageView,
+    slot: u32,
+    packed: bool,
+    pub(crate) transform: Option<u32>,
+}
+impl DrawLightmap {
+    pub const fn new(
+        vertices: BufferHandle,
+        image: ImageView,
+        address: super::LightmapAddress,
+    ) -> Self {
+        Self {
+            vertices,
+            image,
+            slot: address.slot,
+            packed: false,
+            transform: None,
+        }
+    }
+    pub const fn packed(vertices: BufferHandle, image: ImageView) -> Self {
+        Self {
+            vertices,
+            image,
+            slot: 0,
+            packed: true,
+            transform: None,
+        }
+    }
+}
+
 /// A draw using graph-local handles. Indexed and untransformed indirect
 /// draws use world-space vertices. Draws with transforms use model-space
 /// vertices.
 #[derive(Clone, Copy, Debug)]
 pub enum Draw {
+    /// World-space static placement. The UV buffer is shared by mesh instances.
+    Lightmapped {
+        geometry: IndexedDraw,
+        surface: DrawLightmap,
+    },
+    /// Packed opaque draws share one page image; each packed vertex carries
+    /// its placement's one-based slot alongside the mesh UV.
+    LightmappedIndirect {
+        args: IndexedIndirectArgs,
+        material: usize,
+        surface: DrawLightmap,
+    },
     WorldSpaceIndexed(IndexedDraw),
     /// Opaque or alpha-masked geometry. The argument contains its geometry.
     WorldSpaceIndirect {
@@ -131,6 +177,16 @@ impl Draw {
 
 #[derive(Clone, Copy)]
 enum Command {
+    Surface {
+        draw: RasterDraw,
+        packed: bool,
+    },
+    SurfaceIndirect {
+        args: IndexedIndirectArgs,
+        bindings: RasterBindings,
+        packed: bool,
+        slot: u32,
+    },
     Indexed(RasterDraw),
     Indirect {
         args: IndexedIndirectArgs,
@@ -144,7 +200,7 @@ impl Command {
     fn indexed(&self) -> Option<&RasterDraw> {
         match self {
             Self::Indexed(draw) | Self::Instanced(draw) => Some(draw),
-            Self::Indirect { .. } => None,
+            Self::Indirect { .. } | Self::Surface { .. } | Self::SurfaceIndirect { .. } => None,
         }
     }
 }
@@ -155,6 +211,7 @@ pub(crate) struct Batch {
     // Page zero is indexed directly for small scenes. Only pairs actually used
     // on subsequent pages occupy this prepared cache.
     paged_bindings: HashMap<(usize, u32), RasterBindings>,
+    surface_bindings: HashMap<(usize, ImageView, bool, Option<u32>), RasterBindings>,
     commands: Vec<Command>,
 }
 
@@ -164,6 +221,7 @@ impl Batch {
         draws: usize,
         pages: usize,
         binding_uses: usize,
+        surface_uses: usize,
     ) -> Result<Self, GraphError> {
         let paged_capacity = materials
             .saturating_mul(pages.saturating_sub(1))
@@ -171,6 +229,10 @@ impl Batch {
         let mut paged_bindings = HashMap::new();
         paged_bindings.try_reserve(paged_capacity).map_err(|_| {
             GraphError::capacity_error(GraphCapacityKind::Bindings, paged_capacity, None)
+        })?;
+        let mut surface_bindings = HashMap::new();
+        surface_bindings.try_reserve(surface_uses).map_err(|_| {
+            GraphError::capacity_error(GraphCapacityKind::Bindings, surface_uses, None)
         })?;
         let bindings = |count| {
             let mut slots = Vec::new();
@@ -188,12 +250,14 @@ impl Batch {
             bindings: bindings(materials)?,
             instanced_bindings: bindings(if pages > 0 { materials } else { 0 })?,
             paged_bindings,
+            surface_bindings,
             commands,
         })
     }
 
     pub(crate) fn reset_bindings(&mut self, material_count: usize) {
         self.paged_bindings.clear();
+        self.surface_bindings.clear();
         self.bindings[..material_count].fill(None);
         if !self.instanced_bindings.is_empty() {
             self.instanced_bindings[..material_count].fill(None);
@@ -214,6 +278,123 @@ impl Batch {
         for draw in draws {
             // Frame preflight checked material indices and instance ranges.
             let command = match *draw {
+                Draw::Lightmapped { geometry, surface } => {
+                    let model = surface.transform.map(|index| {
+                        let (program, table) =
+                            instances.expect("preflight validated the model table");
+                        (program, (table, index / PAGE_RECORDS), index % PAGE_RECORDS)
+                    });
+                    if matches!(stage, Bindings::Shadow { .. }) {
+                        if let Some((program, table, first)) = model {
+                            let bindings = self.model_binding(
+                                graph,
+                                program,
+                                stage,
+                                materials,
+                                geometry.material,
+                                table,
+                            )?;
+                            Command::Instanced(indexed(
+                                geometry,
+                                bindings,
+                                1,
+                                stage.parameters(Some(first))?,
+                            ))
+                        } else {
+                            let bindings = Self::material_binding(
+                                &mut self.bindings,
+                                graph,
+                                program,
+                                stage,
+                                materials,
+                                geometry.material,
+                            )?;
+                            Command::Indexed(indexed(geometry, bindings, 1, parameters))
+                        }
+                    } else {
+                        let selected = model.map_or(program, |m| m.0);
+                        let variant =
+                            crate::passes::pbr::lightmapped_program(selected, surface.packed)
+                                .ok_or_else(|| {
+                                    GraphError::invalid_input("unsupported lightmap program")
+                                })?;
+                        let key = (
+                            geometry.material,
+                            surface.image,
+                            surface.packed,
+                            model.map(|m| m.1.1),
+                        );
+                        let bindings = match self.surface_bindings.entry(key) {
+                            std::collections::hash_map::Entry::Occupied(e) => *e.get(),
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                *e.insert(stage.bind_surface(
+                                    graph,
+                                    &variant,
+                                    materials[geometry.material],
+                                    Some(surface.image),
+                                    model.map(|m| m.1),
+                                )?)
+                            }
+                        };
+                        let params = if let Some((_, _, first)) = model {
+                            RasterConstants::new(&[first, surface.slot])?
+                        } else {
+                            RasterConstants::new(&[surface.slot])?
+                        };
+                        let mut draw = indexed(geometry, bindings, 1, params);
+                        draw.secondary_vertices = Some(surface.vertices);
+                        Command::Surface {
+                            draw,
+                            packed: surface.packed,
+                        }
+                    }
+                }
+                Draw::LightmappedIndirect {
+                    args,
+                    material,
+                    surface,
+                } => {
+                    if matches!(stage, Bindings::Shadow { .. }) {
+                        let bindings = Self::material_binding(
+                            &mut self.bindings,
+                            graph,
+                            program,
+                            stage,
+                            materials,
+                            material,
+                        )?;
+                        Command::Indirect {
+                            args,
+                            bindings,
+                            first_transform: None,
+                        }
+                    } else {
+                        let variant =
+                            crate::passes::pbr::lightmapped_program(program, surface.packed)
+                                .ok_or_else(|| {
+                                    GraphError::invalid_input("unsupported lightmap program")
+                                })?;
+                        let key = (material, surface.image, surface.packed, None);
+                        let bindings = match self.surface_bindings.entry(key) {
+                            std::collections::hash_map::Entry::Occupied(e) => *e.get(),
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                *e.insert(stage.bind_surface(
+                                    graph,
+                                    &variant,
+                                    materials[material],
+                                    Some(surface.image),
+                                    None,
+                                )?)
+                            }
+                        };
+                        Command::SurfaceIndirect {
+                            args: args.with_secondary_vertices(surface.vertices),
+                            bindings,
+                            packed: surface.packed,
+                            slot: surface.slot,
+                        }
+                    }
+                }
                 Draw::WorldSpaceIndexed(draw) => {
                     let bindings = Self::material_binding(
                         &mut self.bindings,
@@ -373,6 +554,35 @@ impl Batch {
             .chunk_by(|a, b| std::mem::discriminant(a) == std::mem::discriminant(b))
         {
             match batch[0] {
+                Command::Surface { .. } | Command::SurfaceIndirect { .. } => {
+                    for &cmd in batch {
+                        match cmd {
+                            Command::Surface { draw, packed } => {
+                                let base = if draw.parameters.words().len() == 2 {
+                                    instances.expect("prepared model program")
+                                } else {
+                                    program
+                                };
+                                pass.draw(
+                                    &crate::passes::pbr::lightmapped_program(base, packed).unwrap(),
+                                    [draw],
+                                )?;
+                            }
+                            Command::SurfaceIndirect {
+                                args,
+                                bindings,
+                                packed,
+                                slot,
+                            } => pass.draw_indirect(
+                                &crate::passes::pbr::lightmapped_program(program, packed).unwrap(),
+                                args,
+                                Some(bindings),
+                                RasterConstants::new(&[slot])?,
+                            )?,
+                            _ => unreachable!(),
+                        }
+                    }
+                }
                 Command::Indexed(_) => {
                     pass.draw(program, batch.iter().filter_map(Command::indexed))?;
                 }
@@ -415,6 +625,7 @@ fn indexed(
 ) -> RasterDraw {
     RasterDraw {
         bindings: Some(bindings),
+        secondary_vertices: None,
         vertices: draw.vertices,
         indices: draw.indices,
         first_index: draw.first_index,
@@ -455,6 +666,16 @@ impl Bindings<'_> {
         material: GraphMaterial,
         transforms: Option<(InstanceBuffer, u32)>,
     ) -> Result<RasterBindings, GraphError> {
+        self.bind_surface(graph, program, material, None, transforms)
+    }
+    fn bind_surface(
+        self,
+        graph: &mut Graph,
+        program: &ManagedRasterProgram,
+        material: GraphMaterial,
+        surface: Option<ImageView>,
+        transforms: Option<(InstanceBuffer, u32)>,
+    ) -> Result<RasterBindings, GraphError> {
         let camera = match self {
             Self::Scene { camera, .. } | Self::Shadow { camera, .. } => camera,
         };
@@ -478,6 +699,9 @@ impl Bindings<'_> {
                 ]);
                 let count = 7 + lighting.len();
                 bindings[7..count].copy_from_slice(lighting);
+                if let Some(image) = surface {
+                    bindings[7] = image_binding(2, 0, image);
+                }
                 count
             }
             Self::Shadow { .. } => {

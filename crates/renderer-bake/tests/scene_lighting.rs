@@ -61,23 +61,27 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
     })?;
     let vertices = [[-0.8, -0.8, 0.5], [0.8, -0.8, 0.5], [0., 0.8, 0.5]]
         .map(|p| PbrVertex::new(p, [0., 0., -1.], [1., 0., 0., 1.], [0.; 2]).unwrap());
-    let mesh = meshes.create(MeshData::pbr(&vertices, &[0, 2, 1])?)?;
+    let mesh = meshes.create(MeshData::pbr(&vertices, &[0, 2, 1])?.with_lightmap_uvs(&[
+        [0., 0.],
+        [1., 0.],
+        [0., 1.],
+    ])?)?;
     let mut materials = Materials::default();
     let mut metal = PbrParams::color([1.; 4]);
     metal.factors.double_sided = true;
     metal.factors.metallic = 1.;
     let mut matte = PbrParams::color([1.; 4]);
     matte.factors.double_sided = true;
-    let mut charted = PbrParams::color([1.; 4]);
-    charted.factors.lightmap = Some(renderer::pbr::LightmapBinding {
-        first_chart: 0,
-        first_vertex: 0,
-    });
-    charted.factors.double_sided = true;
+    let matte = materials.create_pbr(matte)?;
+    let translated =
+        renderer::pbr::Transform::new([[1., 0., 0., 0.03], [0., 1., 0., 0.], [0., 0., 1., 0.]])?;
     let objects = [
         RenderObject::new(mesh, materials.create_pbr(metal)?),
-        RenderObject::new(mesh, materials.create_pbr(matte)?),
-        RenderObject::new(mesh, materials.create_pbr(charted)?),
+        RenderObject::new(mesh, matte),
+        RenderObject::new(mesh, matte).with_lightmap(40),
+        RenderObject::new(mesh, matte)
+            .with_transform(translated)
+            .with_lightmap(41),
     ];
     let mut renderer = Renderer::headless(
         backend,
@@ -100,7 +104,7 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
                     &objects[1..2]
                 },
             )
-            .with_probe_lighting(&lighting, 1.),
+            .with_baked_lighting(&lighting, 1.),
             1.,
         )?;
         let capture = frame.capture()?;
@@ -117,16 +121,29 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
     let red = [1., 0., 0.];
     let green = [0., 1., 0.];
     let blue = [0., 0., 1.];
-    let chart = renderer::pbr::LightmapChart {
-        extent: [2, 2],
-        irradiance: vec![[red, green, blue]; 4],
-    };
-    let sequence = renderer::pbr::BakedLighting::from_lightmaps(&[chart], [blue, red, green])?;
-    let resident = renderer.load_probe_lighting(ProbeLighting {
-        diffuse: Some(&sequence),
-        reflections: None,
-    })?;
-    for (object, channels) in [(1, [2, 0, 1]), (2, [0, 1, 2])] {
+    // Adjacent rectangles for two placements of the same mesh and material.
+    let mut file = renderer::pbr::SurfaceLightmaps::MAGIC.to_vec();
+    for v in [3u32, 1, 2, 8, 4, 40, 0, 0, 1, 1, 2, 2, 41, 0, 0, 5, 1, 2, 2] {
+        file.extend(v.to_le_bytes());
+    }
+    for _y in 0..4 {
+        for x in 0..8 {
+            let keys = if x < 4 {
+                [red, green, blue]
+            } else {
+                [green, blue, red]
+            };
+            for rgb in keys {
+                for v in rgb {
+                    file.extend(f32::to_le_bytes(v));
+                }
+            }
+        }
+    }
+    renderer::pbr::BakedLighting::uniform([blue, red, green])?.write(&mut file)?;
+    let sequence = renderer::pbr::SurfaceLightmaps::from_bytes(&file)?;
+    let resident = renderer.load_surface_lighting(&sequence, None)?;
+    for (object, channels) in [(1, [2, 0, 1]), (2, [0, 1, 2]), (3, [1, 2, 0])] {
         for (phase, expected) in [
             (0., [true, false, false]),
             (0.25, [true, true, false]),
@@ -137,7 +154,7 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
             let mut frame = renderer.begin_frame()?;
             frame.draw_scene(
                 SceneInput::new(&meshes, &materials, &objects[object..=object])
-                    .with_probe_lighting(&resident, phase),
+                    .with_baked_lighting(&resident, phase),
                 1.,
             )?;
             let capture = frame.capture()?;

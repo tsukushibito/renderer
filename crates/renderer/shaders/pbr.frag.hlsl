@@ -20,7 +20,7 @@ struct PixelInput {
     BISTRO_LOCATION(4) nointerpolation uint mirrored : TEXCOORD4;
 #endif
     BISTRO_LOCATION(5) float2 lightmap_uv : TEXCOORD5;
-    BISTRO_LOCATION(6) nointerpolation uint lightmap_triangle : TEXCOORD6;
+    BISTRO_LOCATION(6) nointerpolation uint lightmap_slot : TEXCOORD6;
 #if BISTRO_LOCAL_LIGHTS == 2
     float4 pixel : SV_Position;
 #endif
@@ -34,7 +34,7 @@ float4 main(PixelInput input) : SV_Target0 {
     MaterialSample sampled = sample_material(
         input.world_normal, input.world_tangent, input.texcoord, input.front_facing);
     Surface surface = sampled.surface;
-    apply_lightmap(surface,input.front_facing ? material.flags.z : 0u,material.flags.w,input.lightmap_triangle,input.lightmap_uv);
+    apply_lightmap(surface,input.lightmap_slot,input.front_facing,input.lightmap_uv);
     BrdfInputs brdf = make_brdf_inputs(input.world_position, surface);
     float3 color = evaluate_lighting(input.world_position, surface, brdf);
 #if defined(BISTRO_LOCAL_LIGHTS)

@@ -207,9 +207,33 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     pub fn load_probe_lighting(
         &mut self,
         assets: ProbeLighting<'_>,
-    ) -> PipelineResult<ResidentProbeLighting> {
+    ) -> PipelineResult<ResidentBakedLighting> {
+        self.upload_baked_lighting(assets, None)
+    }
+
+    pub fn load_surface_lighting(
+        &mut self,
+        surfaces: &crate::pbr::SurfaceLightmaps,
+        reflections: Option<&crate::pbr::ReflectionProbes>,
+    ) -> PipelineResult<ResidentBakedLighting> {
+        self.upload_baked_lighting(
+            ProbeLighting {
+                diffuse: Some(&surfaces.probes),
+                reflections,
+            },
+            Some(surfaces),
+        )
+    }
+
+    fn upload_baked_lighting(
+        &mut self,
+        assets: ProbeLighting<'_>,
+        surfaces: Option<&crate::pbr::SurfaceLightmaps>,
+    ) -> PipelineResult<ResidentBakedLighting> {
         if assets.diffuse.is_none() && assets.reflections.is_none() {
-            return Ok(ResidentProbeLighting {
+            return Ok(ResidentBakedLighting {
+                pages: Vec::new(),
+                placements: Default::default(),
                 diffuse: None,
                 reflections: None,
             });
@@ -220,7 +244,11 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         startup.add_working_set(self.configured.working_set())?;
         let mut bytes = 0;
         let mut footprint = 0;
-        for (desc, data) in [diffuse, reflections].into_iter().flatten() {
+        for (desc, data) in [diffuse, reflections].into_iter().flatten().chain(
+            surfaces
+                .into_iter()
+                .flat_map(|s| s.pages.iter().map(|p| (p.image_desc(), p.rgba32f()))),
+        ) {
             startup.add_working_set(WorkingSet {
                 resources: &[ResourceClass::Image { desc, count: 1 }],
                 ..Default::default()
@@ -248,7 +276,13 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
                 {}
                 Ok(image)
             };
-        Ok(ResidentProbeLighting {
+        Ok(ResidentBakedLighting {
+            pages: surfaces
+                .into_iter()
+                .flat_map(|s| &s.pages)
+                .map(|p| upload("static irradiance", (p.image_desc(), p.rgba32f())))
+                .collect::<Result<_, _>>()?,
+            placements: surfaces.map_or_else(Default::default, |s| s.placements.clone()),
             diffuse: diffuse
                 .map(|image| upload("baked diffuse lighting", image))
                 .transpose()?,

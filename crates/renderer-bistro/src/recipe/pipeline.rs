@@ -267,11 +267,24 @@ impl Budget {
         let prepared = PreparedSet::new(options, scene, packed.as_deref(), background)?;
         let defaults = prepared.main.defaults();
         let packed_buffers = packed.as_ref().map_or(0, |_| 2 + usize::from(indirect));
+        let surface_count = scene
+            .primitives
+            .iter()
+            .filter(|p| p.surface.is_some())
+            .count();
         let buffer_count = scene
             .primitives
             .len()
             .checked_mul(2)
-            .and_then(|v| v.checked_add(scene.materials.len() + 1 + packed_buffers))
+            .and_then(|v| {
+                v.checked_add(
+                    scene.materials.len()
+                        + 1
+                        + packed_buffers
+                        + surface_count
+                        + usize::from(surface_count > 0 && packed.is_some()),
+                )
+            })
             .ok_or("buffer count overflow")?;
         let mut buffers = Vec::<(u64, usize)>::new();
         let mut add = |size: u64| {
@@ -283,6 +296,9 @@ impl Budget {
         };
         for primitive in &scene.primitives {
             add(primitive.vertices.len() as u64);
+            if primitive.surface.is_some() {
+                add((primitive.vertices.len() / 48 * 8) as u64);
+            }
             add(primitive.indices.len() as u64);
         }
         for _ in &scene.materials {
@@ -291,6 +307,9 @@ impl Budget {
         add(program::CAMERA_BYTES as u64);
         if let Some(layout) = &packed {
             add(layout.vertex_bytes as u64);
+            if surface_count > 0 {
+                add((layout.vertex_bytes / 48 * 12) as u64);
+            }
             add(layout.index_bytes() as u64);
             if indirect {
                 add(layout.aabb_bytes() as u64);
@@ -348,6 +367,7 @@ impl Budget {
             .images()
             .into_iter()
             .chain(&environment.reflection_probes)
+            .chain(&environment.lightmaps)
         {
             add_image(environment_desc(image), 1);
         }
@@ -376,13 +396,14 @@ impl Budget {
         let requirements = prepared.reservation.graph_requirements();
         let resources = buffer_count
             + scene.images.len()
-            + 3 + usize::from(environment.reflection_probes.is_some()) // IBL
+            + 3 + usize::from(environment.reflection_probes.is_some()) + environment.lightmaps.len() // IBL
             + shadow::CASCADE_COUNT // cached imports
             + requirements.resources;
         let physical_resources = buffer_count
             + scene.images.len()
             + 3
             + usize::from(environment.reflection_probes.is_some())
+            + environment.lightmaps.len()
             + frame_instances
             + frame_buffers
             + check_images
@@ -448,6 +469,7 @@ impl Budget {
                     .images()
                     .into_iter()
                     .chain(&environment.reflection_probes)
+                    .chain(&environment.lightmaps)
                     .map(|image| {
                         let mut end = 0usize;
                         for mip in 0..image.mips.len() {
@@ -545,6 +567,8 @@ pub(super) struct Resident {
     pub materials: Vec<ResidentMaterialUniform>,
     surfaces: standard_forward::SurfaceTable,
     pub images: Vec<ManagedImage>,
+    pub lightmap_pages: Vec<ManagedImage>,
+    lightmap_uv: Vec<Option<ImportBuffer>>,
     pub reflection_probes: Option<ManagedImage>,
     pub environment: [ManagedImage; 3],
     pub environment_mips: [u32; 3],
@@ -760,6 +784,8 @@ impl Resident {
         let mut upload_owners = Vec::with_capacity(scene.materials.len() + 1);
         let mut vertices = Vec::with_capacity(scene.primitives.len());
         let mut indices = Vec::with_capacity(scene.primitives.len());
+        let mut lightmap_uv = Vec::with_capacity(scene.primitives.len());
+        let mut shared_uv = std::collections::HashMap::new();
         let mut primitive_bounds = Vec::with_capacity(scene.primitives.len());
         for (index, primitive) in scene.primitives.iter().enumerate() {
             let primitive_vertices = &scene.vertices[primitive.vertices.clone()];
@@ -791,6 +817,20 @@ impl Resident {
                 primitive_vertices,
                 &decoded,
             )?;
+            lightmap_uv.push(if primitive.surface.is_some() {
+                let range = primitive.lightmap.as_ref().unwrap().0.clone();
+                let owner = match shared_uv.entry(range.clone()) {
+                    std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(e) => e.insert(upload_buffer(
+                        backend,
+                        &mut upload_owners,
+                        &scene.lightmap_uv[range],
+                    )?),
+                };
+                Some(owner.clone())
+            } else {
+                None
+            });
             vertices.push(vertex);
             indices.push(index_buffer);
             if (index + 1).is_multiple_of(256) {
@@ -898,6 +938,12 @@ impl Resident {
             materials,
             surfaces,
             images,
+            lightmap_uv,
+            lightmap_pages: environment
+                .lightmaps
+                .iter()
+                .map(&mut upload_environment)
+                .collect::<Result<_, _>>()?,
             reflection_probes: environment
                 .reflection_probes
                 .as_ref()
@@ -957,6 +1003,8 @@ impl InstancePlacements {
 }
 
 pub(super) struct Workspace {
+    lightmap_uv: Vec<Option<BufferHandle>>,
+    lightmap_pages: Vec<ImageView>,
     vertices: Vec<BufferHandle>,
     indices: Vec<BufferHandle>,
     materials: Vec<MaterialUniform>,
@@ -1014,6 +1062,8 @@ impl Workspace {
             standard_forward::Inputs::new(scene, prepared.instance_draws, prepared.rect_shadows)
         });
         Self {
+            lightmap_uv: Vec::with_capacity(primitives),
+            lightmap_pages: Vec::with_capacity(primitives),
             vertices: Vec::with_capacity(primitives),
             indices: Vec::with_capacity(primitives),
             materials: Vec::with_capacity(scene.materials.len()),
@@ -1166,6 +1216,7 @@ impl Geometry<'_> {
     ) -> RasterDraw {
         RasterDraw {
             bindings: Some(bindings),
+            secondary_vertices: None,
             vertices: self.vertices[index],
             indices: self.indices[index],
             first_index: 0,
@@ -1701,6 +1752,21 @@ fn import_frame(
         .map(|client| client.span(tracy_client::span_location!("bistro.build.imports"), 0));
     workspace.vertices.clear();
     workspace.indices.clear();
+    workspace.lightmap_uv.clear();
+    for uv in &resident.lightmap_uv {
+        workspace.lightmap_uv.push(
+            uv.as_ref()
+                .map(|v| graph.import_buffer("mesh lightmap UV", v))
+                .transpose()?,
+        );
+    }
+    workspace.lightmap_pages.clear();
+    for page in &resident.lightmap_pages {
+        let image = graph.import_image("static irradiance", page.snapshot())?;
+        workspace
+            .lightmap_pages
+            .push(graph.image_view(image, 0, 0)?);
+    }
 
     for value in &resident.vertices {
         workspace

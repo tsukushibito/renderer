@@ -65,11 +65,21 @@ impl WindowRenderer {
         })
     }
 
+    /// Upload the static surface pages and the corresponding dynamic probe volume.
+    pub fn load_surface_lighting(
+        &mut self,
+        surfaces: &crate::pbr::SurfaceLightmaps,
+        reflections: Option<&crate::pbr::ReflectionProbes>,
+    ) -> PipelineResult<crate::pipeline::ResidentBakedLighting> {
+        self.ready_for_change()?;
+        self.renderer.load_surface_lighting(surfaces, reflections)
+    }
+
     /// Prepare baked diffuse and specular lighting on this renderer's device.
     pub fn load_probe_lighting(
         &mut self,
         assets: crate::pipeline::ProbeLighting<'_>,
-    ) -> PipelineResult<crate::pipeline::ResidentProbeLighting> {
+    ) -> PipelineResult<crate::pipeline::ResidentBakedLighting> {
         self.ready_for_change()?;
         self.renderer.load_probe_lighting(assets)
     }

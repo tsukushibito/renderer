@@ -239,6 +239,7 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
             texture_colors[(draw + frame / 12) % 2]
         };
         RasterDraw {
+            secondary_vertices: None,
             vertices: vertex_buffer,
             indices: index_buffer,
             first_index: 0,

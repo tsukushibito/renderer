@@ -114,6 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = sampled_chain(
         &mut graph,
         RasterDraw {
+            secondary_vertices: None,
             vertices,
             indices,
             first_index: 0,
@@ -158,6 +159,7 @@ mod tests {
         let output = sampled_chain(
             &mut graph,
             RasterDraw {
+                secondary_vertices: None,
                 vertices,
                 indices,
                 first_index: 0,

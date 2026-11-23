@@ -26,13 +26,16 @@ pub const DEPTH_IMAGES: usize = 3;
 static ALPHA: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: 24,
+    secondary_vertex_stride: 0,
     vertex_attributes: &[
         VertexAttribute {
+            stream: 0,
             location: 0,
             offset: 0,
             format: VertexFormat::Float32x2,
         },
         VertexAttribute {
+            stream: 0,
             location: 1,
             offset: 8,
             format: VertexFormat::Float32x4,
@@ -341,6 +344,7 @@ pub fn inputs(graph: &mut Graph, frame: usize) -> Inputs {
         },
     ];
     let opaque = RasterDraw {
+        secondary_vertices: None,
         vertices: standard_vertices,
         indices,
         first_index: 0,
@@ -413,6 +417,7 @@ pub fn overlay_draws(inputs: &Inputs, frame: usize) -> [RasterDraw; 3] {
         let (depth, tint) = overlay_values(frame, draw);
         RasterDraw {
             bindings: Some(inputs.raster_bindings),
+            secondary_vertices: None,
             vertices: inputs.vertices,
             indices: inputs.indices,
             first_index: 0,

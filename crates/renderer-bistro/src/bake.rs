@@ -103,71 +103,87 @@ fn import(scene: &Scene) -> Result<BakeScene, Error> {
     Ok(BakeScene::new(triangles, materials, textures)?)
 }
 
-// Static architectural receivers around the street camera. Select whole mesh
-// placements within the sample's texel budget; other objects use the volume.
-fn receivers(
-    scene: &Scene,
-    settings: renderer_bake::LightmapSettings,
-    budget: usize,
-) -> Result<(Vec<u32>, Vec<renderer_bake::ReceiverTriangle>), Error> {
-    let mut candidates = Vec::new();
+fn receivers(scene: &Scene) -> Result<Vec<renderer_bake::StaticReceiver>, Error> {
+    let mut result = Vec::new();
     for (id, p) in scene.primitives.iter().enumerate() {
         let m = &scene.materials[p.material];
-        if m.blend || m.alpha_zero || m.uniform[48] != 0 || p.index_count > 1200 {
+        if m.blend || m.alpha_zero {
             continue;
         }
-        let vertices = &scene.vertices[p.vertices.clone()];
-        let distance = p
-            .center
-            .into_iter()
-            .zip([-13., 3., 0.])
-            .map(|(a, b)| (a - b) * (a - b))
-            .sum::<f32>();
-        let mut tris = Vec::new();
-        let mut cost = 0;
-        for face in scene.indices[p.indices.clone()].as_chunks::<12>().0 {
-            let v = std::array::from_fn::<_, 3, _>(|j| {
-                let index = u32::from_le_bytes(face[j * 4..j * 4 + 4].try_into().unwrap()) as usize;
-                let f = |k: usize| {
-                    f32::from_le_bytes(
-                        vertices[index * 48 + k * 4..index * 48 + k * 4 + 4]
-                            .try_into()
-                            .unwrap(),
-                    )
-                };
-                ([f(0), f(1), f(2)], [f(3), f(4), f(5)])
-            });
-            let tri = renderer_bake::ReceiverTriangle {
-                positions: v.map(|v| v.0),
-                normals: v.map(|v| v.1),
-            };
-            let [w, h] = tri.chart_extent(settings)?;
-            cost += usize::from(w) * usize::from(h);
-            tris.push(tri);
-        }
-        // Prefer broad surfaces per chart; tessellated details receive probes.
-        if !tris.is_empty() && cost <= budget {
-            let priority = cost as f32 / (tris.len() as f32 * (1. + distance * 0.01));
-            candidates.push((priority, id, cost, tris));
-        }
+        let (range, extent) = p.lightmap.as_ref().ok_or_else(|| {
+            format!("placement {id} needs cooked lightmap UVs; recook the source scene")
+        })?;
+        let vertices = scene.vertices[p.vertices.clone()]
+            .as_chunks::<48>()
+            .0
+            .iter()
+            .zip(scene.lightmap_uv[range.clone()].as_chunks::<8>().0)
+            .map(|(v, uv)| {
+                let f = |i: usize| f32::from_le_bytes(v[i * 4..i * 4 + 4].try_into().unwrap());
+                renderer_bake::LightmapVertex {
+                    position: [f(0), f(1), f(2)],
+                    normal: [f(3), f(4), f(5)],
+                    material_uv: [f(10), f(11)],
+                    lightmap_uv: [
+                        f32::from_le_bytes(uv[..4].try_into().unwrap()),
+                        f32::from_le_bytes(uv[4..].try_into().unwrap()),
+                    ],
+                }
+            })
+            .collect();
+        result.push(renderer_bake::StaticReceiver {
+            placement: u32::try_from(id)?,
+            extent: *extent,
+            material: p.material,
+            double_sided: renderer::pbr::MaterialFactors::decode(&m.uniform)?.double_sided,
+            vertices,
+            indices: scene.indices[p.indices.clone()]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .copied()
+                .map(u32::from_le_bytes)
+                .collect(),
+        });
     }
-    candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let mut selected = Vec::new();
-    let mut remaining = budget;
-    for (_, id, cost, tris) in candidates {
-        if cost <= remaining {
-            remaining -= cost;
-            selected.push((id, tris));
-        }
+    Ok(result)
+}
+
+fn publish<const N: usize>(
+    output: &std::path::Path,
+    identity: &str,
+    layout: &renderer_bake::SurfaceLayout<'_>,
+    scene: &BakeScene,
+    lights: [Lighting; N],
+    settings: ProbeSettings,
+) -> Result<(), Error> {
+    let mut staging = output.as_os_str().to_owned();
+    staging.push(format!(".{}.partial", std::process::id()));
+    let staging = PathBuf::from(staging);
+    let file = std::fs::File::create_new(&staging)?;
+    let result = (|| -> Result<(), Error> {
+        let mut writer = std::io::BufWriter::new(file);
+        writer.write_all(identity.as_bytes())?;
+        let counts = layout.bake_to(
+            scene,
+            lights,
+            settings,
+            settings.rays_per_probe,
+            &mut writer,
+        )?;
+        eprintln!(
+            "{} traced surface samples per scenario",
+            counts.iter().sum::<usize>()
+        );
+        writer.flush()?;
+        drop(writer);
+        std::fs::rename(&staging, output)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(staging);
     }
-    selected.sort_by_key(|(id, _)| *id);
-    let mut entries = vec![];
-    let mut triangles = vec![];
-    for (id, tris) in selected {
-        entries.push(u32::try_from(id)?);
-        triangles.extend(tris);
-    }
-    Ok((entries, triangles))
+    result
 }
 
 pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
@@ -182,6 +198,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     }
     let mut layout = None;
     let mut reference = None;
+    let mut diffuse_reference = None;
     let mut ibl_manifest = None;
     let mut look = Look::LumberyardDay;
     let mut day_only = false;
@@ -190,9 +207,15 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut fixture = false;
     let mut output = None;
     let mut settings = ProbeSettings::default();
-    let mut texel_budget = 65536;
+    let mut texel_budget = None;
+    let mut estimate = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--diffuse-reference" => {
+                diffuse_reference = Some(PathBuf::from(
+                    args.next().ok_or("missing diffuse receiver file")?,
+                ))
+            }
             "--reflection-reference" => {
                 reference = Some(PathBuf::from(
                     args.next().ok_or("missing surface sample file")?,
@@ -223,15 +246,16 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
                     _ => return Err("unknown bake backend".into()),
                 }
             }
+            "--estimate" => estimate = true,
             "--lightmap-texels" => {
-                texel_budget = args.next().ok_or("missing texel budget")?.parse()?
+                texel_budget = Some(args.next().ok_or("missing texel budget")?.parse()?)
             }
             "--samples" => {
                 settings.rays_per_probe = args.next().ok_or("missing samples")?.parse()?
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--lightmap-texels N] [--reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
                 );
                 return Ok(());
             }
@@ -241,8 +265,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     if day_only && endpoints_only {
         return Err("choose either day-only or endpoints-only".into());
     }
-    if reference.is_some()
+    if (reference.is_some() || diffuse_reference.is_some())
         && (layout.is_some()
+            || (reference.is_some() && diffuse_reference.is_some())
             || endpoints_only
             || ibl_manifest.is_none()
             || !matches!(
@@ -250,17 +275,49 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
                 renderer_bake::BakeBackend::Auto | renderer_bake::BakeBackend::Cpu
             ))
     {
-        return Err("reflection references require the CPU daylight path, an IBL manifest and no probe layout".into());
+        return Err("lighting references require the CPU daylight path, an IBL manifest and no probe layout".into());
     }
-    let output = output.ok_or("missing --output")?;
-    if output.exists() {
-        return Err("output already exists".into());
-    }
+
     let scene = match (manifest, fixture) {
         (None, true) => Scene::fixture(false),
         (Some(path), false) => Scene::load(&path, false)?,
         _ => return Err("select --manifest or --fixture".into()),
     };
+    let receivers = if reference.is_none() && diffuse_reference.is_none() && layout.is_none() {
+        receivers(&scene)?
+    } else {
+        Vec::new()
+    };
+    let surfaces = renderer_bake::SurfaceLayout::new(&receivers, 2048, texel_budget)?;
+    if reference.is_none() && diffuse_reference.is_none() && layout.is_none() {
+        eprintln!(
+            "{} static placements, {} receiver triangles, {} sides in {} pages, {} allocated texels/scenario",
+            receivers.len(),
+            receivers.iter().map(|r| r.indices.len() / 3).sum::<usize>(),
+            surfaces.regions().count(),
+            surfaces.pages().len(),
+            surfaces.texels()
+        );
+        let keys = if day_only {
+            1
+        } else if endpoints_only {
+            2
+        } else {
+            3
+        };
+        eprintln!(
+            "{} RGB32 bytes for {keys} lighting scenario(s), at most {} hemisphere rays per scenario",
+            surfaces.texels() * 12 * keys,
+            surfaces.texels() * u64::from(settings.rays_per_probe)
+        );
+    }
+    if estimate {
+        return Ok(());
+    }
+    let output = output.ok_or("missing --output")?;
+    if output.exists() {
+        return Err("output already exists".into());
+    }
     let identity = if fixture {
         format!("{:x}", Sha256::digest(b"builtin-pbr-material-fixture-v1"))
     } else {
@@ -312,6 +369,31 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         direction_to_sun: s.direction,
     };
     let lights = scenarios.map(lighting);
+    if let Some(path) = diffuse_reference {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Receiver {
+            position: [f32; 3],
+            normal: [f32; 3],
+        }
+        let points: Vec<Receiver> = serde_json::from_slice(&std::fs::read(path)?)?;
+        let samples: Vec<_> = points
+            .into_iter()
+            .map(|r| renderer_bake::SurfaceSample {
+                position: r.position,
+                normal: r.normal,
+            })
+            .collect();
+        let irradiance = bake.bake_irradiance(&samples, lights[0], settings.rays_per_probe)?;
+        let mut file = std::io::BufWriter::new(std::fs::File::create_new(output)?);
+        serde_json::to_writer(
+            &mut file,
+            &serde_json::json!({"identity":identity,
+            "samples":settings.rays_per_probe,"irradiance":irradiance}),
+        )?;
+        file.flush()?;
+        return Ok(());
+    }
     if let Some(path) = reference {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -386,20 +468,12 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         eprintln!("Baked {} local reflection probes", probes.len());
         return Ok(());
     }
-    let surface_settings = renderer_bake::LightmapSettings {
-        backend: settings.backend,
-        rays_per_texel: settings.rays_per_probe,
-        ..Default::default()
-    };
-    let (placements, triangles) = receivers(&scene, surface_settings, texel_budget)?;
     drop(scene);
     let started = std::time::Instant::now();
-    let volume = if day_only {
-        bake.bake_probes(lights[0], settings)?
-            .with_lightmaps(&bake.bake_lightmaps(&triangles, lights[0], surface_settings)?)?
+    if day_only {
+        publish(&output, &identity, &surfaces, &bake, [lights[0]], settings)?;
     } else if endpoints_only {
-        bake.bake_probes(lights, settings)?
-            .with_lightmaps(&bake.bake_lightmaps(&triangles, lights, surface_settings)?)?
+        publish(&output, &identity, &surfaces, &bake, lights, settings)?;
     } else {
         let keys = [
             lights[0],
@@ -407,25 +481,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             lights[1],
         ];
         identity = crate::shared::camera::daylight_sequence_identity(&identity, look);
-        bake.bake_probes(keys, settings)?
-            .with_lightmaps(&bake.bake_lightmaps(&triangles, keys, surface_settings)?)?
-    };
-    eprintln!(
-        "Baked {} surface charts on {} placements",
-        volume.chart_count(),
-        placements.len()
-    );
-    let mut file = std::fs::File::create_new(output)?;
-    file.write_all(identity.as_bytes())?;
-    file.write_all(&u32::try_from(placements.len())?.to_le_bytes())?;
-    for id in placements {
-        file.write_all(&id.to_le_bytes())?;
+        publish(&output, &identity, &surfaces, &bake, keys, settings)?;
     }
-    volume.write(file)?;
-    eprintln!(
-        "Baked {:?} probe atlas in {:.2}s",
-        volume.extent(),
-        started.elapsed().as_secs_f64()
-    );
+    eprintln!("Baked lighting in {:.2}s", started.elapsed().as_secs_f64());
     Ok(())
 }

@@ -371,7 +371,11 @@ impl RasterPipeline {
                 "Raster Program requires a depth attachment",
             ));
         }
-        if managed.vertex_stride() > 2048 {
+        if managed
+            .vertex_stride()
+            .max(managed.descriptor().secondary_vertex_stride)
+            > 2048
+        {
             return Err(D3D12RuntimeError::unsupported(
                 "Raster vertex stride exceeds the D3D12 input-assembler limit",
             ));
@@ -383,7 +387,7 @@ impl RasterPipeline {
                 SemanticName: windows_core::s!("TEXCOORD"),
                 SemanticIndex: attribute.location,
                 Format: vertex_format(attribute.format),
-                InputSlot: 0,
+                InputSlot: attribute.stream,
                 AlignedByteOffset: attribute.offset,
                 InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
                 InstanceDataStepRate: 0,

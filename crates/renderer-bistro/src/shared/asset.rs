@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 pub(crate) struct Scene {
+    pub lightmap_uv: Vec<u8>,
     pub vertices: Vec<u8>,
     pub indices: Vec<u8>,
     pub primitives: Vec<Primitive>,
@@ -26,6 +27,8 @@ pub(crate) struct Scene {
 }
 
 pub(crate) struct Primitive {
+    pub surface: Option<renderer::pbr::LightmapAddress>,
+    pub lightmap: Option<(Range<usize>, [u32; 2])>,
     pub material: usize,
     pub vertices: Range<usize>,
     pub indices: Range<usize>,
@@ -314,6 +317,8 @@ fn validate_geometry(
             }
         }
         result.push(Primitive {
+            surface: None,
+            lightmap: None,
             material,
             vertices: vertex_range.clone(),
             indices: index_range.clone(),
@@ -636,6 +641,8 @@ impl Scene {
             }
         }
         self.primitives.push(Primitive {
+            surface: None,
+            lightmap: None,
             material,
             vertices: start..self.vertices.len(),
             indices: index_start..self.indices.len(),
@@ -643,75 +650,6 @@ impl Scene {
             center,
         });
         self.mesh_count += 1;
-    }
-
-    /// Expand each static placement's chart seams once at publication. Its
-    /// original material remains available to dynamic placements and other LODs.
-    pub fn bind_lightmaps(&mut self, entries: &[u8], chart_count: u32, packed: bool) -> Result<()> {
-        let mut previous = None;
-        let mut first = 0u32;
-        for id in entries.as_chunks::<4>().0 {
-            let id = u32::from_le_bytes(*id) as usize;
-            let p = self
-                .primitives
-                .get_mut(id)
-                .ok_or("unknown lightmap placement")?;
-            if previous.is_some_and(|prev| prev >= id) || self.materials[p.material].blend {
-                return Err(invalid("invalid static placement list"));
-            }
-            previous = Some(id);
-            let count = p.index_count / 3;
-            let end = first
-                .checked_add(count)
-                .filter(|n| *n <= chart_count)
-                .ok_or("invalid placement chart range")?;
-            let mut material = self.materials[p.material].clone();
-            let mut factors = renderer::pbr::MaterialFactors::decode(&material.uniform)?;
-            factors.lightmap = Some(renderer::pbr::LightmapBinding {
-                first_chart: first,
-                first_vertex: 0,
-            });
-            material.uniform = factors.encode()?;
-            p.material = self.materials.len();
-            self.materials.push(material);
-            first = end;
-            let start = self.vertices.len();
-            for (index, word) in self.indices[p.indices.clone()]
-                .as_chunks_mut::<4>()
-                .0
-                .iter_mut()
-                .enumerate()
-            {
-                let src = p.vertices.start + u32::from_le_bytes(*word) as usize * 48;
-                self.vertices.extend_from_within(src..src + 48);
-                *word = (index as u32).to_le_bytes();
-            }
-            p.vertices = start..self.vertices.len();
-        }
-        if first != chart_count {
-            return Err(invalid("unbound lightmap charts"));
-        }
-        if packed {
-            // The packed draw layout concatenates opaque members in material order.
-            let mut indices = (0..self.primitives.len())
-                .filter(|&i| !self.materials[self.primitives[i].material].blend)
-                .collect::<Vec<_>>();
-            indices.sort_by_key(|&i| self.primitives[i].material);
-            let mut vertex = 0u32;
-            for i in indices {
-                let p = &self.primitives[i];
-                let m = &mut self.materials[p.material];
-                let mut factors = renderer::pbr::MaterialFactors::decode(&m.uniform)?;
-                if let Some(binding) = &mut factors.lightmap {
-                    binding.first_vertex = vertex;
-                    m.uniform = factors.encode()?;
-                }
-                vertex = vertex
-                    .checked_add(u32::try_from(p.vertices.len() / 48)?)
-                    .ok_or("packed bake vertex overflow")?;
-            }
-        }
-        Ok(())
     }
 
     /// Apply the Bistro AO policy at publication, preserving source ORM pixels.
@@ -767,7 +705,38 @@ impl Scene {
         if materials.is_empty() {
             return Err(invalid("scene has no materials"));
         }
-        let primitives = validate_geometry(&doc, &vertices, &indices, materials.len())?;
+        let mut primitives = validate_geometry(&doc, &vertices, &indices, materials.len())?;
+        let lightmap_uv = if doc["lightmap_uv"].is_null() {
+            Vec::new()
+        } else {
+            let blob = read_blob(root, &doc["lightmap_uv"])?;
+            if !blob.len().is_multiple_of(8)
+                || !blob
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|b| (0.0..=1.0).contains(&f32::from_le_bytes(*b)))
+            {
+                return Err(invalid("invalid cooked lightmap UV stream"));
+            }
+            for (p, record) in primitives.iter_mut().zip(array(&doc["primitives"])?) {
+                let layout = &record["lightmap"];
+                if layout.is_null() {
+                    continue;
+                }
+                let range = byte_range(&layout["uv_offset"], p.vertices.len() / 48, 8, blob.len())?;
+                let e = array(&layout["extent"])?;
+                if e.len() != 2 {
+                    return Err(invalid("invalid lightmap extent"));
+                }
+                let extent = [u32_value(&e[0])?, u32_value(&e[1])?];
+                if extent.contains(&0) || !range.start.is_multiple_of(8) {
+                    return Err(invalid("invalid cooked lightmap layout"));
+                }
+                p.lightmap = Some((range, extent));
+            }
+            blob
+        };
         let mesh_count = array(&doc["meshes"])?.len();
         let triangle_count = primitives
             .iter()
@@ -797,6 +766,7 @@ impl Scene {
         source["primitive_count"] = Value::from(primitives.len());
         source["triangle_count"] = Value::from(triangle_count);
         Ok(Self {
+            lightmap_uv,
             vertices,
             indices,
             primitives,
@@ -890,6 +860,8 @@ impl Scene {
             .expect("audited fixture material");
             materials.push(mat);
             primitives.push(Primitive {
+                surface: None,
+                lightmap: Some((0..32, [4, 4])),
                 material: id,
                 vertices: vstart..vertices.len(),
                 indices: istart..indices.len(),
@@ -898,6 +870,10 @@ impl Scene {
             });
         }
         Self {
+            lightmap_uv: [0f32, 1., 1., 1., 1., 0., 0., 0.]
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect(),
             vertices,
             indices,
             primitives,

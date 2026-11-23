@@ -105,6 +105,7 @@ fn frame(
                     .unwrap();
                 RasterDraw {
                     bindings: None,
+                    secondary_vertices: None,
                     vertices,
                     indices,
                     first_index: 0,

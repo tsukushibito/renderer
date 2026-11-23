@@ -58,10 +58,31 @@ class CookTests(unittest.TestCase):
         cls.temporary.cleanup()
 
     def result(self, geometry, transform=None):
-        vertices, indices, record = cook_primitive(geometry, PRIMITIVE,
+        vertices, indices, record, _ = cook_primitive(geometry, PRIMITIVE,
                                                   np.eye(4) if transform is None else transform,
                                                   self.generator)
         return np.frombuffer(vertices, "<f4").reshape(-1, 12), np.frombuffer(indices, "<u4"), record
+
+    def test_authored_lightmap_is_independent_of_material_uv(self):
+        from lightmap_uv import parameterize
+        geo = triangle()
+        geo.values.append(geo.values[2].copy())
+        geo.values[2][:] = 3.5
+        prim = dict(PRIMITIVE, attributes=dict(PRIMITIVE["attributes"], TEXCOORD_1=4))
+        uv, extent, source = parameterize(geo, prim, np.eye(4))
+        self.assertEqual((source, extent), ("authored", [4, 4]))
+        vertices, indices, _, secondary = cook_primitive(geo, prim, np.eye(4), self.generator, uv)
+        np.testing.assert_array_equal(np.frombuffer(vertices, "<f4").reshape(-1, 12)[:, 10:], 3.5)
+        np.testing.assert_array_equal(np.frombuffer(secondary, "<f4").reshape(-1, 2)[np.frombuffer(indices, "<u4")], uv[0])
+
+    def test_overlapping_secondary_uv_is_unwrapped(self):
+        from lightmap_uv import parameterize
+        geo = Geometry([[0,0,0], [1,0,0], [0,1,0], [2,0,0], [3,0,0], [2,1,0]],
+                       [[0,0,1]] * 6, [[0,0], [1,0], [0,1]] * 2, list(range(6)))
+        prim = dict(PRIMITIVE, attributes=dict(PRIMITIVE["attributes"], TEXCOORD_1=2))
+        uv, _, source = parameterize(geo, prim, np.eye(4))
+        self.assertEqual(source, "xatlas")
+        self.assertFalse(np.array_equal(uv[0], uv[1]))
 
     def test_mirrored_uv_splits_source_shared_corner(self):
         geometry = Geometry([[0, 0, 0], [1, 0, 0], [0, 1, 0], [-1, 0, 0]],
@@ -167,8 +188,9 @@ class CookTests(unittest.TestCase):
                 offset += len(chunk)
             material = {"name": "fixture", "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}
             Image.new("RGBA", (1, 1), (255, 128, 64, 0)).save(root / "color.png")
-            data = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}],
-                    "nodes": [{"name": "triangle", "mesh": 0}],
+            data = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0, 1]}],
+                    "nodes": [{"name": "triangle", "mesh": 0},
+                              {"name": "copy", "mesh": 0, "translation": [1,2,3], "scale": [2,2,2]}],
                     "meshes": [{"primitives": [{**PRIMITIVE, "material": 0}]}], "materials": [material],
                     "textures": [{"source": 0}], "images": [{"uri": "color.png"}],
                     "buffers": [{"uri": "input.bin", "byteLength": offset}],
@@ -176,9 +198,12 @@ class CookTests(unittest.TestCase):
             (root / "input.gltf").write_text(json.dumps(data), encoding="utf-8")
             manifests = [cook(root / "input.gltf", root / name, self.library) for name in ("a", "b")]
             self.assertEqual(manifests[0], manifests[1])
-            self.assertEqual(manifests[0]["summary"]["triangles"], 1)
+            self.assertEqual(manifests[0]["summary"]["triangles"], 2)
+            first, second = [p["lightmap"] for p in manifests[0]["primitives"]]
+            self.assertEqual(first["uv_offset"], second["uv_offset"])
+            self.assertEqual(second["extent"], [2*n for n in first["extent"]])
             self.assertEqual(manifests[0]["images"][0]["mips"][0]["alpha_max"], 0)
-            for relative in ("manifest.json", "vertices.bin", "indices.bin", "images/0000.bin"):
+            for relative in ("manifest.json", "vertices.bin", "indices.bin", "lightmap_uv.bin", "images/0000.bin"):
                 self.assertEqual(hashlib.sha256((root / "a" / relative).read_bytes()).digest(),
                                  hashlib.sha256((root / "b" / relative).read_bytes()).digest())
 

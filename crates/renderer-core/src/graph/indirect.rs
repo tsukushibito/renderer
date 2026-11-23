@@ -101,6 +101,7 @@ impl IndexedIndirectTable {
 /// public handle, so later user declarations cannot alter its command words.
 #[derive(Clone, Copy, Debug)]
 pub struct IndexedIndirectArgs {
+    pub(crate) secondary_vertices: Option<BufferHandle>,
     pub(super) buffer: BufferHandle,
     pub(super) vertices: BufferHandle,
     pub(super) indices: BufferHandle,
@@ -108,6 +109,14 @@ pub struct IndexedIndirectArgs {
     pub(super) max_index_end: u32,
 }
 
+impl IndexedIndirectArgs {
+    /// Attach a second per-vertex stream in the same packed vertex order.
+    #[must_use]
+    pub fn with_secondary_vertices(mut self, vertices: BufferHandle) -> Self {
+        self.secondary_vertices = Some(vertices);
+        self
+    }
+}
 impl Graph {
     /// Encode ordered indexed draw arguments from a cold table and an
     /// initialized range of 32-bit visibility entries. Every nonzero entry
@@ -170,6 +179,7 @@ impl Graph {
                 [table.groups, 1],
             )?;
             Ok(IndexedIndirectArgs {
+                secondary_vertices: None,
                 buffer,
                 vertices,
                 indices,

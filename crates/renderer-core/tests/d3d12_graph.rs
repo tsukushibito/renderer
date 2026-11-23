@@ -238,6 +238,7 @@ fn append_owned_textured_raster(graph: &mut Graph) -> renderer_core::graph::Imag
                 raster.draw(
                     &ManagedRasterProgram::textured_mesh(),
                     [RasterDraw {
+                        secondary_vertices: None,
                         vertices,
                         indices,
                         first_index: 0,

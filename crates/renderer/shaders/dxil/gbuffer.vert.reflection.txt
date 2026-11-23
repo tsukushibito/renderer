@@ -7,7 +7,6 @@
 ; TEXCOORD                 1   xyz         1     NONE   float   xyz
 ; TEXCOORD                 2   xyzw        2     NONE   float   xyzw
 ; TEXCOORD                 3   xy          3     NONE   float   xy
-; SV_VertexID              0   x           4   VERTID    uint   x
 ;
 ;
 ; Output signature:
@@ -21,7 +20,7 @@
 ; TEXCOORD                 6   x           3     NONE    uint   x
 ; SV_Position              0   xyzw        4      POS   float   xyzw
 ;
-; shader hash: 4c397739dc9d28b26cd6752e087fdf32
+; shader hash: a6665509bc663be6e0ba7043b66aeeb0
 ;
 ; Pipeline Runtime Information:
 ;
@@ -31,10 +30,10 @@
 ; MinimumExpectedWaveLaneCount: 0
 ; MaximumExpectedWaveLaneCount: 4294967295
 ; UsesViewID: false
-; SigInputElements: 5
+; SigInputElements: 4
 ; SigOutputElements: 6
 ; SigPatchConstOrPrimElements: 0
-; SigInputVectors: 5
+; SigInputVectors: 4
 ; SigOutputVectors[0]: 5
 ; SigOutputVectors[1]: 0
 ; SigOutputVectors[2]: 0
@@ -50,7 +49,6 @@
 ; TEXCOORD                 1
 ; TEXCOORD                 2
 ; TEXCOORD                 3
-; SV_VertexID              0
 ;
 ; Output signature:
 ;
@@ -103,7 +101,7 @@
 ;
 ; ViewId state:
 ;
-; Number of inputs: 17, outputs: 20
+; Number of inputs: 14, outputs: 20
 ; Outputs dependent on ViewId: {  }
 ; Inputs contributing to computation of Outputs:
 ;   output 0 depends on inputs: { 4 }
@@ -115,9 +113,6 @@
 ;   output 7 depends on inputs: { 11 }
 ;   output 8 depends on inputs: { 12 }
 ;   output 9 depends on inputs: { 13 }
-;   output 10 depends on inputs: { 16 }
-;   output 11 depends on inputs: { 16 }
-;   output 12 depends on inputs: { 16 }
 ;   output 16 depends on inputs: { 0, 1, 2 }
 ;   output 17 depends on inputs: { 0, 1, 2 }
 ;   output 18 depends on inputs: { 0, 1, 2 }

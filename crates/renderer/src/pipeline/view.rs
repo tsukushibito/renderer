@@ -226,7 +226,21 @@ impl StandardPipeline {
         self.connected.clear();
         for obj in input.objects {
             let mesh = input.import_mesh(graph, obj)?;
+            let lightmap = match (obj.placement(), input.surfaces) {
+                (Some(id), Some(baked)) if !baked.pages.is_empty() => {
+                    let address = *baked
+                        .placements
+                        .get(&id)
+                        .ok_or_else(|| GraphError::invalid_input("unknown baked placement"))?;
+                    let uv = input.meshes.import_lightmap_uvs(graph, obj.mesh)?;
+                    let image =
+                        crate::material::texture_view(graph, baked.pages[address.page].snapshot())?;
+                    Some(pbr::DrawLightmap::new(uv, image, address))
+                }
+                _ => None,
+            };
             self.connected.push(Draw {
+                lightmap,
                 transform: (obj.transform != Transform::IDENTITY).then_some(obj.transform),
                 sort_center: obj.sort_center.unwrap_or_else(|| mesh.bounds.center()),
                 casts_shadow: obj.casts_shadow,

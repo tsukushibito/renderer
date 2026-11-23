@@ -24,6 +24,7 @@ impl SnapshotInputs<'_> {
                 .expect("connected snapshot mesh");
             let (vertices, indices) = self.meshes[index].buffers.expect("connected mesh buffers");
             crate::graph::RasterDraw {
+                secondary_vertices: None,
                 vertices,
                 indices,
                 first_index: 0,

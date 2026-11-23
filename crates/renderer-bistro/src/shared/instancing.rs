@@ -196,6 +196,7 @@ mod tests {
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut graph = pool.begin().unwrap();
         let draw = RasterDraw {
+            secondary_vertices: None,
             vertices: graph
                 .buffer("resident mesh", BufferDesc { size: 192 })
                 .unwrap(),

@@ -341,6 +341,7 @@ impl Frame<'_> {
                     program,
                     group.visible_draws(frustum, bounds).map(|draw| RasterDraw {
                         bindings,
+                        secondary_vertices: None,
                         vertices: self.vertices,
                         indices: self.indices,
                         first_index: draw.range.first_index,

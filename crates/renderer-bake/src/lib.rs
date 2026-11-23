@@ -40,10 +40,12 @@ impl BakeBackend {
 
 mod bvh;
 mod lightmaps;
+mod surface_pages;
+pub use surface_pages::{LightmapVertex, StaticReceiver, SurfaceLayout, SurfaceRegion};
 mod probes;
 mod reflection_reference;
 mod reflections;
-pub use lightmaps::{LightmapSettings, ReceiverTriangle};
+
 pub use probes::ProbeSettings;
 pub use reflection_reference::{ReflectionReceiver, ReflectionReference};
 pub use renderer::pbr::{RectLight, ReflectionProbeDesc};

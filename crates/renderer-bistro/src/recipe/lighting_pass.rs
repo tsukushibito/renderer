@@ -47,8 +47,12 @@ impl LightingPass {
         }
         if !matches!(self, Self::Diffuse | Self::DiffuseNoAo) {
             if baked {
-                // A valid empty atlas suppresses both chart and probe contributions.
-                let atlas = BakedLighting::from_lightmaps(&[], [[0.; 3]])?;
+                env.lightmaps.clear();
+                for primitive in &mut scene.primitives {
+                    primitive.surface = None;
+                }
+                // Keep a valid, black probe volume for the diffuse binding.
+                let atlas = BakedLighting::uniform([[0.; 3]])?;
                 let [width, height] = atlas.extent();
                 let bytes = atlas.into_rgba32f();
                 env.diffuse = ibl::Image {

@@ -11,6 +11,7 @@ from contextlib import nullcontext
 import hashlib
 from io import BytesIO
 import json
+import tempfile
 from pathlib import Path
 import struct
 from urllib.parse import unquote
@@ -19,6 +20,8 @@ import zipfile
 import numpy as np
 from PIL import Image, __version__ as pillow_version
 
+from lightmap_uv import parameterize, TEXELS_PER_METRE
+from importlib.metadata import version
 from compare_geometry import Gltf
 from mikk import Generator, UPSTREAM_COMMIT, source_hashes
 
@@ -26,7 +29,7 @@ from mikk import Generator, UPSTREAM_COMMIT, source_hashes
 VERTEX_STRIDE = 48
 TOOL_HASHES = {
     name: hashlib.sha256((Path(__file__).parent / name).read_text(encoding="utf-8").encode("utf-8")).hexdigest()
-    for name in ("cook.py", "mikk.py", "compare_geometry.py")
+    for name in ("cook.py", "lightmap_uv.py", "mikk.py", "compare_geometry.py")
 }
 MATERIAL_TEXTURES = (
     ("base_color_texture", "base_color", "pbrMetallicRoughness", "baseColorTexture"),
@@ -82,7 +85,7 @@ def fallback_tangents(normals):
     return normalized(axes, "fallback tangent")
 
 
-def cook_primitive(gltf, primitive, world, generator):
+def cook_primitive(gltf, primitive, world, generator, lightmap=None):
     require(primitive.get("mode", 4) == 4, "Only triangle primitives are supported")
     require(not primitive.get("targets") and not primitive.get("extensions"),
             "Morph/compressed/extended primitives need an explicit cook contract")
@@ -143,7 +146,12 @@ def cook_primitive(gltf, primitive, world, generator):
     require(np.isfinite(vertices).all(), "World-space vertex exceeds finite float32 range")
     # Mikk returns per-corner tangent frames. Reindex ALL output attributes,
     # never average/overwrite a source vertex's distinct mirrored UV frames.
-    _, first, remap = np.unique(vertices.view("V48").ravel(), return_index=True, return_inverse=True)
+    # Index in local space so repeated placements share the same optional UV
+    # stream, including placements with mirrored winding.
+    key = np.column_stack((corners, tangent)).astype("<f4")
+    if lightmap is not None:
+        key = np.column_stack((key, lightmap.reshape(-1, 2))).astype("<f4")
+    _, first, remap = np.unique(key.view(f"V{key.strides[0]}").ravel(), return_index=True, return_inverse=True)
     vertices = vertices[first]
     indices = remap.astype("<u4").reshape(-1, 3)
     if determinant < 0:
@@ -160,7 +168,7 @@ def cook_primitive(gltf, primitive, world, generator):
               "degenerate_uv_faces": int(degenerate_uv.sum()),
               "degenerate_geometry_faces": int(degenerate_geometry.sum()),
               "reflected_transform": bool(determinant < 0)}
-    return vertices.tobytes(), indices.tobytes(), record
+    return vertices.tobytes(), indices.tobytes(), record, (None if lightmap is None else lightmap.reshape(-1, 2)[first].astype("<f4").tobytes())
 
 
 def scalar(value, label, low=None, high=None):
@@ -267,6 +275,29 @@ def dds_levels(raw, role):
     return metadata, levels()
 
 
+def generated_levels(pixels, role):
+    """Filter glTF sources without authored mips in linear color or normal space."""
+    while True:
+        yield pixels
+        h, w = pixels.shape[:2]
+        if (w, h) == (1, 1):
+            return
+        values = pixels.astype(np.float32) / 255
+        rgb = values[:, :, :3]
+        if role in ("base_color", "emissive"):
+            values[:, :, :3] = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
+        size = max(1, w // 2), max(1, h // 2)
+        values = np.stack([np.asarray(Image.fromarray(band).resize(size, Image.Resampling.BOX))
+                           for band in values.transpose(2, 0, 1)], axis=-1)
+        rgb = values[:, :, :3]
+        if role in ("base_color", "emissive"):
+            values[:, :, :3] = np.where(rgb <= .0031308, 12.92 * rgb, 1.055 * rgb ** (1 / 2.4) - .055)
+        elif role == "normal":
+            normal = 2 * rgb - 1
+            values[:, :, :3] = .5 + .5 * normal / np.maximum(np.linalg.norm(normal, axis=2, keepdims=True), 1e-7)
+        pixels = np.rint(np.clip(values, 0, 1) * 255).astype(np.uint8)
+
+
 def cook_images(gltf, roles, output, archive):
     entries = {}
     if archive:
@@ -293,10 +324,7 @@ def cook_images(gltf, roles, output, archive):
             metadata, levels = dds_levels(raw, role)
             record["source_dds"] = {"archive_path": entry.filename, **metadata}
         else:
-            # Small CPU fixtures can use a 1x1 PNG as their already complete
-            # mip chain. Real assets require original DDS, never implicit mips.
-            require(baseline.shape[:2] == (1, 1), "A source DDS archive is required for non-1x1 images")
-            levels = iter([baseline.copy()])
+            levels = generated_levels(baseline, role)
         offset = 0
         with (output / record["path"]).open("wb") as stream:
             for level, pixels in enumerate(levels):
@@ -317,11 +345,15 @@ def cook_images(gltf, roles, output, archive):
     return records
 
 
-def _cook(gltf_path, output, generator, source_zip=None):
+def _cook(gltf_path, output, generator, source_zip, texels_per_metre):
     output = Path(output).resolve()
     require(not output.exists() or not any(output.iterdir()), "Cook output must be a new or empty directory")
     gltf = checked_gltf(gltf_path)
     materials, roles = cook_materials(gltf.data)
+    # A glTF node index is stable within its source asset even without a name.
+    for index, node in enumerate(gltf.data.get("nodes", [])):
+        if "mesh" in node and not node.get("name"):
+            node["name"] = f"node[{index}]"
     instances = gltf.mesh_instances()
     source_meshes = gltf.data.get("meshes", [])
     require({mesh for mesh, _ in instances.values()} == set(range(len(source_meshes))),
@@ -329,7 +361,11 @@ def _cook(gltf_path, output, generator, source_zip=None):
     output.mkdir(parents=True, exist_ok=True)
     mesh_records, primitive_records = [], []
     node_ids = {node["name"]: index for index, node in enumerate(gltf.data.get("nodes", [])) if node.get("name")}
-    with (output / "vertices.bin").open("wb") as vertex_stream, (output / "indices.bin").open("wb") as index_stream:
+    layouts = {}
+    uv_offsets = {}
+    with ((output / "vertices.bin").open("wb") as vertex_stream,
+          (output / "indices.bin").open("wb") as index_stream,
+          (output / "lightmap_uv.bin").open("wb") as uv_stream):
         for name, (source_mesh, world) in sorted(instances.items(), key=lambda item: (item[1][0], node_ids[item[0]])):
             mesh_id = len(mesh_records)
             mesh = {"id": mesh_id, "source_mesh": source_mesh, "node": node_ids[name], "name": name,
@@ -338,7 +374,24 @@ def _cook(gltf_path, output, generator, source_zip=None):
                 material = primitive.get("material")
                 require(isinstance(material, int) and 0 <= material < len(materials), "Missing or invalid primitive material")
                 try:
-                    vertices, indices, record = cook_primitive(gltf, primitive, world, generator)
+                    layout = None
+                    if materials[material]["alpha_mode"] != "BLEND":
+                        key = source_mesh, source_primitive
+                        if key not in layouts:
+                            layouts[key] = (*parameterize(gltf, primitive, world, texels_per_metre), np.linalg.inv(world[:3, :3]))
+                        layout = layouts[key]
+                    vertices, indices, record, lightmap = cook_primitive(
+                        gltf, primitive, world, generator, None if layout is None else layout[0])
+                    if layout is not None:
+                        _, extent, origin, inverse = layout
+                        scale = np.linalg.norm(world[:3, :3] @ inverse, ord=2)
+                        digest_uv = hashlib.sha256(lightmap).digest()
+                        if digest_uv not in uv_offsets:
+                            uv_offsets[digest_uv] = uv_stream.tell()
+                            uv_stream.write(lightmap)
+                        record["lightmap"] = {"uv_offset": uv_offsets[digest_uv],
+                                              "extent": [max(1, int(np.ceil(v * scale - 1e-8))) for v in extent],
+                                              "source": origin}
                 except ValueError as error:
                     raise ValueError(f"Mesh {name}, primitive {source_primitive}: {error}") from error
                 record.update(id=len(primitive_records), mesh=mesh_id, source_primitive=source_primitive,
@@ -348,6 +401,7 @@ def _cook(gltf_path, output, generator, source_zip=None):
                 mesh["primitives"].append(record["id"])
                 primitive_records.append(record)
             mesh_records.append(mesh)
+    del layouts
     archive_context = zipfile.ZipFile(source_zip) if source_zip else nullcontext(None)
     with archive_context as archive:
         images = cook_images(gltf, roles, output, archive)
@@ -371,6 +425,8 @@ def _cook(gltf_path, output, generator, source_zip=None):
     manifest = {"schema_version": 1, "vertex_stride": VERTEX_STRIDE, "source": source,
                 "vertices": {"path": "vertices.bin", "byte_length": (output / "vertices.bin").stat().st_size,
                              "count": summary["vertices"], "sha256": digest(output / "vertices.bin")},
+                "lightmap_uv": {"path": "lightmap_uv.bin", "byte_length": (output / "lightmap_uv.bin").stat().st_size,
+                                "sha256": digest(output / "lightmap_uv.bin"), "texels_per_metre": texels_per_metre},
                 "indices": {"path": "indices.bin", "byte_length": (output / "indices.bin").stat().st_size,
                             "count": summary["triangles"] * 3, "sha256": digest(output / "indices.bin")},
                 "meshes": mesh_records, "primitives": primitive_records, "materials": materials,
@@ -380,21 +436,31 @@ def _cook(gltf_path, output, generator, source_zip=None):
                            "tool_sha256_utf8_lf": TOOL_HASHES,
                            "mikk_compiler": generator.build_record["compiler"],
                            "mikk_flags": generator.build_record["flags"],
-                           "numpy": np.__version__, "pillow": pillow_version,
+                           "xatlas": version("xatlas"), "numpy": np.__version__, "pillow": pillow_version,
                            "vertex_layout": "little-endian float32 position3 normal3 tangent4 uv2; local uint32 indices",
-                           "source_attributes": "POSITION/NORMAL/TEXCOORD_0 consumed; unused LightMap TEXCOORD_1 remains preserved in source glTF",
+                           "source_attributes": "POSITION/NORMAL/TEXCOORD_0 plus separate TEXCOORD_1 or generated lightmap UVs for static opaque/masked placements",
                            "transform": "local Mikk first; world position A*p+t, normal inverse-transpose, tangent A*T projected/normalized, sign*det; reflect winding",
                            "tangent_fallback": "Finite Mikk tangent with collapsed projected length (including degenerate UV/geometry or collapsed projected-angle basis): least-aligned Cartesian axis projected onto normal plane; preserve Mikk handedness. Non-finite output/generation failure is rejected",
-                           "mips": "All provided complete source DDS mip levels, individually decoded without resampling; PNG base must match exactly",
+                           "mips": "complete authored DDS levels" if archive else "linear-color and normalized tangent-space glTF mip chain",
                            "color": "base/emissive RGB sRGB, base alpha linear; normal/ORM linear; use native sRGB sampled formats for color",
                            "normal": "BC5 positive-Z reconstruction and DirectX-to-OpenGL green inversion for every provided mip"}}
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     return manifest
 
 
-def cook(gltf_path, output, library, source_zip=None):
-    with Generator(library) as generator:
-        return _cook(gltf_path, output, generator, source_zip)
+def cook(gltf_path, output, library, source_zip=None, texels_per_metre=TEXELS_PER_METRE):
+    output = Path(output).resolve()
+    require(not output.exists() or not any(output.iterdir()), "Cook output must be a new or empty directory")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Publish complete assets together on the same filesystem. Failed cooks
+    # leave the requested destination untouched and can be retried.
+    with tempfile.TemporaryDirectory(prefix=".lightmap-cook-", dir=output.parent) as work, Generator(library) as generator:
+        staged = Path(work) / "asset"
+        result = _cook(gltf_path, staged, generator, source_zip, texels_per_metre)
+        if output.exists():
+            output.rmdir()  # succeeds only if it is still empty
+        staged.rename(output)
+        return result
 
 
 if __name__ == "__main__":
@@ -403,6 +469,7 @@ if __name__ == "__main__":
     parser.add_argument("output", type=Path)
     parser.add_argument("--mikk-library", type=Path, required=True)
     parser.add_argument("--source-zip", type=Path)
+    parser.add_argument("--texels-per-metre", type=float, default=TEXELS_PER_METRE)
     args = parser.parse_args()
-    result = cook(args.gltf, args.output, args.mikk_library, args.source_zip)
+    result = cook(args.gltf, args.output, args.mikk_library, args.source_zip, args.texels_per_metre)
     print(json.dumps(result["summary"], sort_keys=True))

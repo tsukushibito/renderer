@@ -255,6 +255,12 @@ impl RendererSetup {
                 .ok_or("scene capacity overflow")
         };
         let limits = SceneLimits {
+            max_lightmapped_draws: assets
+                .objects
+                .iter()
+                .filter(|o| o.placement().is_some())
+                .count()
+                .min(assets.draws),
             frames_in_flight: self.frames_in_flight,
             max_draws: room(assets.draws)?,
             max_materials: room(materials.len())?,

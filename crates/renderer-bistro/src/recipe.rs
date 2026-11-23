@@ -289,14 +289,8 @@ impl Options {
             let (identity, file) = bytes
                 .split_at_checked(64)
                 .ok_or("invalid Bistro probe asset")?;
-            let (count, payload) = file.split_at_checked(4).ok_or("missing placement count")?;
-            let table_bytes = (u32::from_le_bytes(count.try_into()?) as usize)
-                .checked_mul(4)
-                .ok_or("placement count overflow")?;
-            let (placements, atlas) = payload
-                .split_at_checked(table_bytes)
-                .ok_or("truncated placement table")?;
-            let volume = renderer::pbr::BakedLighting::from_bytes(atlas)?;
+            let lighting = renderer::pbr::SurfaceLightmaps::from_bytes(file)?;
+            let (pages, placements, volume) = lighting.into_parts();
             let matches = match volume.scenario_count() {
                 1 | 2 => matches_bake(identity),
                 3 => std::iter::once(&base).chain(hdr.iter()).any(|id| {
@@ -310,12 +304,39 @@ impl Options {
                 );
             }
             env.identity["diffuse_scenarios"] = serde_json::json!(volume.scenario_count());
-            scene.bind_lightmaps(
-                placements,
-                volume.chart_count(),
-                self.submission != SubmissionMode::Direct,
-            )?;
-            env.identity["static_triangles"] = serde_json::json!(volume.chart_count());
+            let mut triangles = 0u64;
+            for (id, address) in placements {
+                let p = scene
+                    .primitives
+                    .get_mut(id as usize)
+                    .ok_or("unknown lightmap placement")?;
+                if p.lightmap.is_none() || scene.materials[p.material].blend {
+                    return Err("invalid baked placement".into());
+                }
+                triangles += u64::from(p.index_count / 3);
+                p.surface = Some(address);
+            }
+            if scene.primitives.iter().any(|p| {
+                let m = &scene.materials[p.material];
+                !m.blend && !m.alpha_zero && p.surface.is_none()
+            }) {
+                return Err("incomplete static lightmap coverage".into());
+            }
+            env.lightmaps = pages
+                .into_iter()
+                .map(|page| {
+                    let [width, height] = page.extent();
+                    let bytes = page.into_rgba32f();
+                    ibl::Image {
+                        format: renderer_core::ImageFormat::Rgba32Float,
+                        width,
+                        height,
+                        mips: std::iter::once(0..bytes.len()).collect(),
+                        bytes,
+                    }
+                })
+                .collect();
+            env.identity["static_triangles"] = serde_json::json!(triangles);
             let [width, height] = volume.extent();
             let bytes = volume.into_rgba32f();
             env.diffuse = ibl::Image {
@@ -719,6 +740,13 @@ impl Options {
             || !(1..=4).contains(&result.inflight)
         {
             return Err("invalid extent/frame/in-flight limits".into());
+        }
+        #[cfg(feature = "development-validation")]
+        if result.offset_shadow_receiver && result.baked_lighting.is_some() {
+            return Err(
+                "the offset-shadow-receiver control shader does not sample surface lightmaps"
+                    .into(),
+            );
         }
         if result.steady_state_cpu && result.warmup < result.inflight {
             return Err("stationary CPU measurement requires a fully warmed pipeline".into());

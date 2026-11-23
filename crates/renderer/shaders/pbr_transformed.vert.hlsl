@@ -6,6 +6,9 @@ ConstantBuffer<CameraData> camera : register(b0, space0);
 
 struct Parameters {
     uint first_transform;
+#ifdef RENDERER_MODEL_LIGHTMAP
+    uint slot;
+#endif
 };
 
 #ifdef __spirv__
@@ -22,7 +25,7 @@ struct PbrVertex {
     BISTRO_LOCATION(3) float2 texcoord : TEXCOORD3;
     BISTRO_LOCATION(4) nointerpolation uint mirrored : TEXCOORD4;
     BISTRO_LOCATION(5) float2 lightmap_uv : TEXCOORD5;
-    BISTRO_LOCATION(6) nointerpolation uint lightmap_triangle : TEXCOORD6;
+    BISTRO_LOCATION(6) nointerpolation uint lightmap_slot : TEXCOORD6;
     float4 clip_position : SV_Position;
 };
 
@@ -40,7 +43,7 @@ float3 transform_direction(TransformRows rows, float3 value) {
     return transform_linear(rows, value);
 }
 
-PbrVertex main(MeshVertex vertex, uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID) {
+PbrVertex main(MeshVertex vertex, uint instance_id : SV_InstanceID) {
     uint address = transform_address(parameters.first_transform, instance_id);
     TransformRows model = load_transform_rows(address);
     TransformRows normal = load_transform_rows(address + 48u);
@@ -58,7 +61,12 @@ PbrVertex main(MeshVertex vertex, uint vertex_id : SV_VertexID, uint instance_id
     float handedness = output.mirrored != 0u ? -vertex.tangent.w : vertex.tangent.w;
     output.world_tangent = float4(transform_direction(model, vertex.tangent.xyz), handedness);
     output.texcoord = vertex.uv;
-    output.lightmap_uv = float2(vertex_id%3u==1u, vertex_id%3u==2u);
-    output.lightmap_triangle = vertex_id;
+#ifdef RENDERER_LIGHTMAP
+    output.lightmap_uv = vertex.surface_uv.xy;
+    output.lightmap_slot = parameters.slot + (uint)vertex.surface_uv.z;
+#else
+    output.lightmap_uv = 0.0;
+    output.lightmap_slot = 0u;
+#endif
     return output;
 }

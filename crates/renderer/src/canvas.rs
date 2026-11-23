@@ -34,6 +34,7 @@ fn program(format: ImageFormat, solid: bool) -> Result<ManagedRasterProgram, Gra
     static DESCRIPTOR: RasterProgramDescriptor = RasterProgramDescriptor {
         entry: "main",
         vertex_stride: 0,
+        secondary_vertex_stride: 0,
         vertex_attributes: &[],
         parameters: RasterParameterLayout {
             size: 16,

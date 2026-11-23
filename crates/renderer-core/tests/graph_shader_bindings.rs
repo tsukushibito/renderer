@@ -15,6 +15,7 @@ fn geometry(graph: &mut Graph) -> RasterDraw {
         .upload_buffer("indices", indices, 0, &[0; 12])
         .unwrap();
     RasterDraw {
+        secondary_vertices: None,
         vertices,
         indices,
         first_index: 0,

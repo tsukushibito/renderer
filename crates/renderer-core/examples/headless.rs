@@ -84,6 +84,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &renderer_core::program::ManagedRasterProgram::mesh(),
                 [RasterDraw {
                     bindings: None,
+                    secondary_vertices: None,
                     vertices: vertex_buffer,
                     indices: index_buffer,
                     first_index: 0,

@@ -1694,6 +1694,7 @@ mod tests {
                         raster.draw(
                             &ManagedRasterProgram::mesh(),
                             [RasterDraw {
+                                secondary_vertices: None,
                                 vertices,
                                 indices,
                                 first_index: 0,

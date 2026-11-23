@@ -233,11 +233,20 @@ impl Renderer {
         Ok(base)
     }
 
+    /// Upload the static surface pages and the corresponding dynamic probe volume.
+    pub fn load_surface_lighting(
+        &mut self,
+        surfaces: &crate::pbr::SurfaceLightmaps,
+        reflections: Option<&crate::pbr::ReflectionProbes>,
+    ) -> PipelineResult<crate::pipeline::ResidentBakedLighting> {
+        self.drawing.load_surface_lighting(surfaces, reflections)
+    }
+
     /// Prepare baked diffuse and specular lighting on this renderer's device.
     pub fn load_probe_lighting(
         &mut self,
         assets: crate::pipeline::ProbeLighting<'_>,
-    ) -> PipelineResult<crate::pipeline::ResidentProbeLighting> {
+    ) -> PipelineResult<crate::pipeline::ResidentBakedLighting> {
         self.drawing.load_probe_lighting(assets)
     }
 
@@ -289,6 +298,13 @@ impl Renderer {
         let limits = self.drawing.limits;
         if new_program
             || assets.draws > limits.max_draws
+            || assets
+                .objects
+                .iter()
+                .filter(|o| o.placement().is_some())
+                .count()
+                .min(assets.draws)
+                > limits.max_lightmapped_draws
             || materials.len() > limits.max_materials
             || transforms.min(assets.draws) > limits.max_transforms
             || casters.min(assets.draws) > limits.max_shadow_casters

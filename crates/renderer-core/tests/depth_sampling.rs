@@ -59,7 +59,9 @@ const COLOR_PAIR: SampledImageSamplerPair = SampledImageSamplerPair {
 static MASK: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: 8,
+    secondary_vertex_stride: 0,
     vertex_attributes: &[VertexAttribute {
+        stream: 0,
         location: 0,
         offset: 0,
         format: VertexFormat::Float32x2,
@@ -271,6 +273,7 @@ fn build() -> (GraphPool, CompiledGraph, Vec<Capture>) {
         )
         .unwrap();
     let draw = RasterDraw {
+        secondary_vertices: None,
         vertices,
         indices,
         first_index: 0,

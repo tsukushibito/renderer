@@ -32,17 +32,6 @@ pub struct MaterialFactors {
     pub alpha_cutoff: f32,
     pub alpha_mode: AlphaMode,
     pub double_sided: bool,
-    /// First baked triangle chart for this static placement and LOD. Lightmapped
-    /// mesh vertices are expanded in triangle order; UV0 remains the material UV.
-    pub lightmap: Option<LightmapBinding>,
-}
-
-/// Bind a static placement and LOD to its consecutive triangle charts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LightmapBinding {
-    pub first_chart: u32,
-    /// Start of the expanded receiver vertices within the bound vertex buffer.
-    pub first_vertex: u32,
 }
 
 impl Default for MaterialFactors {
@@ -57,7 +46,6 @@ impl Default for MaterialFactors {
             alpha_cutoff: 0.5,
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
-            lightmap: None,
         }
     }
 }
@@ -83,12 +71,6 @@ impl MaterialFactors {
             alpha_cutoff: floats(11),
             alpha_mode,
             double_sided: u32::from_le_bytes(block[13]) != 0,
-            lightmap: u32::from_le_bytes(block[14])
-                .checked_sub(1)
-                .map(|first_chart| LightmapBinding {
-                    first_chart,
-                    first_vertex: u32::from_le_bytes(block[15]),
-                }),
         };
         if factors.encode()? != *bytes {
             return Err(GraphError::invalid_input(
@@ -115,10 +97,6 @@ impl MaterialFactors {
         {
             return Err(GraphError::invalid_input("invalid PBR material factors"));
         }
-        let chart = self
-            .lightmap
-            .map_or(Some(0), |b| b.first_chart.checked_add(1))
-            .ok_or_else(|| GraphError::invalid_input("lightmap chart index overflow"))?;
         let floats = self.base_color.into_iter().chain(self.emissive).chain([
             self.normal_scale,
             self.metallic,
@@ -132,15 +110,9 @@ impl MaterialFactors {
             AlphaMode::Blend => 2,
         };
         let mut bytes = [0; MATERIAL_BYTES];
-        let words = floats.map(f32::to_le_bytes).chain(
-            [
-                mode,
-                u32::from(self.double_sided),
-                chart,
-                self.lightmap.map_or(0, |b| b.first_vertex),
-            ]
-            .map(u32::to_le_bytes),
-        );
+        let words = floats
+            .map(f32::to_le_bytes)
+            .chain([mode, u32::from(self.double_sided), 0, 0].map(u32::to_le_bytes));
         for (out, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
             *out = value;
         }
@@ -346,10 +318,6 @@ mod tests {
             alpha_cutoff: 2.0,
             alpha_mode: AlphaMode::Mask,
             double_sided: true,
-            lightmap: Some(LightmapBinding {
-                first_chart: 15,
-                first_vertex: 7,
-            }),
         };
         let bytes = values.encode().unwrap();
         let words = bytes.as_chunks::<4>().0;
@@ -360,7 +328,7 @@ mod tests {
             ]
             .map(f32::to_le_bytes)
         );
-        assert_eq!(words[12..], [1u32, 1, 16, 7].map(u32::to_le_bytes));
+        assert_eq!(words[12..], [1u32, 1, 0, 0].map(u32::to_le_bytes));
         assert!(
             MaterialFactors {
                 roughness: f32::NAN,

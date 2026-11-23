@@ -8,39 +8,32 @@
 
 ## ライトマップと照度プローブを使う
 
-ゲーム側が用意する入力は、ワールド座標の静的な三角形、線形色の材質とテクスチャ、時刻ごとの照明条件です。アセットビルドで一度だけ `renderer-bake` を使います。プローブの位置はジオメトリから自動で決まります。
+静的配置には面に沿った拡散間接照度を、移動・スキニングする物体にはワールド空間の照度プローブを使います。メッシュには、材質の UV0 と独立したライトマップ用 UV を一度だけ用意します。同じメッシュと材質を複数の場所に置けます。照度のアドレスは静的配置の ID が決めます。
+
+アセットビルドで、遮蔽・反射に参加する三角形、材質、テクスチャを `BakeScene` に登録します。`StaticReceiver::from_mesh` にインデックス付きメッシュ、元のテクセル寸法、配置の変換を渡すと、ワールド座標と配置の縮尺に対応した寸法を準備します。ワールド座標でクック済みのデータは `StaticReceiver` に直接渡せます。
 
 ```rust
 let scene = BakeScene::new(occluders, materials, textures)?;
-let daylight = [day, afternoon, dusk];
-let probes = scene.bake_probes(daylight, ProbeSettings::default())?;
-let maps = scene.bake_lightmaps(&static_receivers, daylight, LightmapSettings::default())?;
-probes.with_lightmaps(&maps)?.write(output)?;
+let layout = SurfaceLayout::pack(&receivers)?;
+layout.bake_to(&scene, [day, afternoon, dusk], ProbeSettings::default(), 128, writer)?;
 ```
 
-時刻が固定なら三つのベイク関数に `day` を直接渡します。単一シナリオ用の照度・反射だけを計算し、保存します。HDR の空には、描画と同じ線形経緯度画像と回転角を渡せます。
+固定照明には `day` を直接渡します。表裏を描く受光面には `double_sided: true` を指定すると、それぞれの向きで焼きます。透過マスクの判定には材質 UV とアルファカットオフを使います。ページの予算を検査する場合は `SurfaceLayout::new(&receivers, 2048, Some(texel_budget))?` を使います。全配置の収録に足りなければ必要なサイズとページ数を返します。単一の配置の UV 矩形は境界を含めて１ページに収めます。巨大なメッシュはクック時にプリミティブを分割してください。
 
 ```rust
-let mut scene = BakeScene::new(occluders, materials, textures)?;
-let map = scene.add_sky_map(panorama, yaw_radians)?;
-let day = Lighting::environment_map(map, [strength; 3]).with_sun(direction, sun_irradiance);
-let diffuse = scene.bake_probes(day, ProbeSettings::default())?;
-let reflections = scene.bake_reflection_probes(&boxes, day)?;
+// メッシュのロード時。uvs は頂点と同じ順序の正規化 UV。
+let mesh = meshes.create(MeshData::pbr(&vertices, &indices)?.with_lightmap_uvs(&uvs)?)?;
+let baked = SurfaceLightmaps::from_bytes(&level_lighting_bytes)?;
+let lighting = renderer.load_surface_lighting(&baked, Some(&reflections))?;
+
+let mut curtain = RenderObject::new(mesh, cloth);
+curtain.transform = gallery_transform;
+let objects = [curtain.with_lightmap(curtain_placement_id), actor];
+let input = SceneInput::new(&meshes, &materials, &objects)
+    .with_baked_lighting(&lighting, time_of_day);
 ```
 
-プローブだけなら `bake_probes` の結果を直接保存できます。ライトマップだけなら `BakedLighting::from_lightmaps(&maps, fallback)` に、範囲外で使う各シナリオの RGB 照度を渡します。配置と LOD ごとに、描画順の三角形を `ReceiverTriangle` として渡してください。各チャートの UV はベイク側が生成します。描画メッシュの各三角形は 3 個の連続する固有頂点を使い、元の UV0 は材質用に保持します。
-
-ロード時に `renderer::pbr::BakedLighting::from_bytes` でアセットを検証します。`Renderer`、`WindowRenderer`、`SceneRenderer` のいずれも `load_probe_lighting` が転送容量を準備して完了を待ちます。返り値を描画する間保持します。大域 IBL を使う場合は `input.environment` も指定します。静的配置の `MaterialFactors::lightmap` にはゼロ始まりの `first_chart` と描画バッファ内の `first_vertex` を指定します。移動物体や未ベイクの LOD は `None` にすると各ピクセルのワールド位置と法線でプローブを引きます。表面が両面描画の場合、裏側もプローブを使います。
-
-```rust
-// レベルのロード時
-let lighting = renderer.load_probe_lighting(ProbeLighting {
-    diffuse: Some(&diffuse), reflections: Some(&reflections),
-})?;
-
-// 描画時。複数ビューで同じ lighting を共有できる
-frame.draw_scene(input.with_probe_lighting(&lighting, time_of_day), exposure)?;
-```
+`with_lightmap` は呼び出し時のメッシュと変換を記録します。配置を動かしたとき、別メッシュの LOD に切り替えたとき、またはスキンポーズを指定したときは照度プローブを参照します。変形や遮蔽物、照明、材質の変更を静的 GI に取り込むには再ベイクが必要です。プローブのみなら `scene.bake_probes(day, settings)?` と `renderer.load_probe_lighting(...)?` を使えます。鏡面プローブは独立して `scene.bake_reflection_probes(&boxes, day)?` で生成します。
 
 拡散照明には 1～16 条件を渡せます。係数は全区間で 0～1 です。この 3 条件の例では 0.5 が独立してベイクした午後、0.75 が午後と夕方の中間です。キーは等間隔です。鏡面プローブには固定条件または両端の 2 条件を渡します。太陽の方位・色、背景、時計の進行はアプリ側で更新します。ベイクは線形の拡散照度を供給し、直接光の影と鏡面 IBL は通常の描画経路を使います。
 
@@ -53,7 +46,7 @@ cargo run --release -p renderer-bistro --features bake-tool,vulkan --bin bistro-
 cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --baked-lighting .tools/bistro.gi --pipeline forward-plus --white-sphere -14 2.7 0.65 --time-sweep --frames 5 --width 800 --height 450 --output .tools/bistro-gi
 ```
 
-`--fixture` は配布アセットなしでベイクと描画を試せます。`--backend cpu|vulkan|d3d12|auto` はベイクの実行先を選びます。Auto は利用可能な GPU を準備できなければ CPU を使います。`--spacing`、`--max-depth`、`--lightmap-texels` で密度と面の予算を変更でき、予算 0 ならシーン全体をプローブで描きます。Bistro の既定は昼・中間・夕方の 3 条件、静的な面のライトマップ予算は 65,536 テクセルです。`--endpoints-only` で同じ配置に昼と夕方だけを焼いて比較できます。出力には cook と照明プリセットの識別子を保存します。入力を変更したら再ベイクし、新しい出力名を指定してください。
+`--fixture` は配布アセットなしでベイクと描画を試せます。`--backend cpu|vulkan|d3d12|auto` はベイクの実行先を選びます。Auto は利用可能な GPU を準備できなければ CPU を使います。`--spacing` と `--max-depth` は照度プローブを調整します。クックは有効な glTF TEXCOORD_1 を再利用し、欠損・重複する場合は xatlas で生成します。クック時の `--texels-per-metre` の既定値は 4、ベイクは 128 rays/受光テクセル、昼・中間・夕方の３条件です。`--estimate` は配置数、面数、ページ数、テクセル数、照度のデータ量を計算して終了します。`--lightmap-texels N` は条件ごとの全ページに対する上限です。超過時は書き出し前に停止します。旧形式の静的ライトマップを使っていたシーンはジオメトリから再クックしてください。`--endpoints-only` で同じ配置に昼と夕方だけを焼いて比較できます。出力には cook と照明プリセットの識別子を保存します。入力を変更したら再ベイクし、新しい出力名を指定してください。
 
 `--scenario-blend 0.5` は中間時刻を固定します。`--time-sweep` のオフスクリーン実行は先頭、中間、末尾を保存します。`--gi-debug sources` はライトマップを橙、プローブを青系で表示し、`irradiance` は拡散照度、`weights` は有効なプローブ重みの合計を表示します。[実機の比較画像](../verification/current.md#bistro-baked-lighting)
 

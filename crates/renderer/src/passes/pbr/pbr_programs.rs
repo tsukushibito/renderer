@@ -72,21 +72,25 @@ pub(super) const NO_PARAMETERS: RasterParameterLayout = RasterParameterLayout {
 };
 const PBR_ATTRIBUTES: &[VertexAttribute] = &[
     VertexAttribute {
+        stream: 0,
         location: 0,
         offset: 0,
         format: VertexFormat::Float32x3,
     },
     VertexAttribute {
+        stream: 0,
         location: 1,
         offset: 12,
         format: VertexFormat::Float32x3,
     },
     VertexAttribute {
+        stream: 0,
         location: 2,
         offset: 24,
         format: VertexFormat::Float32x4,
     },
     VertexAttribute {
+        stream: 0,
         location: 3,
         offset: 40,
         format: VertexFormat::Float32x2,
@@ -95,6 +99,7 @@ const PBR_ATTRIBUTES: &[VertexAttribute] = &[
 pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: VERTEX_BYTES as u32,
+    secondary_vertex_stride: 0,
     vertex_attributes: PBR_ATTRIBUTES,
     parameters: NO_PARAMETERS,
     color_outputs: &[ImageFormat::Rgba16Float],
@@ -180,13 +185,16 @@ pub(super) static BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
 pub(super) static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: VERTEX_BYTES as u32,
+    secondary_vertex_stride: 0,
     vertex_attributes: &[
         VertexAttribute {
+            stream: 0,
             location: 0,
             offset: 0,
             format: VertexFormat::Float32x3,
         },
         VertexAttribute {
+            stream: 0,
             location: 3,
             offset: 40,
             format: VertexFormat::Float32x2,
@@ -280,6 +288,135 @@ pub const fn instancing_program() -> ManagedRasterProgram {
     // bindings of OPAQUE. It only reads the declared 68 inline bytes, then
     // uses a bounded instance index in arithmetic to transform the positions.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&INSTANCING) }
+}
+
+/// Resolve a baked surface variant of a standard world-space PBR program.
+pub(crate) fn lightmapped_program(
+    base: &ManagedRasterProgram,
+    packed: bool,
+) -> Option<ManagedRasterProgram> {
+    const fn attributes(packed: bool) -> [VertexAttribute; 5] {
+        [
+            PBR_ATTRIBUTES[0],
+            PBR_ATTRIBUTES[1],
+            PBR_ATTRIBUTES[2],
+            PBR_ATTRIBUTES[3],
+            VertexAttribute {
+                location: 4,
+                stream: 1,
+                offset: 0,
+                format: if packed {
+                    VertexFormat::Float32x3
+                } else {
+                    VertexFormat::Float32x2
+                },
+            },
+        ]
+    }
+    macro_rules! variants {
+        ($base:path, $vs:literal, $fs:literal, $size:literal) => {{
+            static UV: RasterProgramDescriptor = RasterProgramDescriptor {
+                secondary_vertex_stride: 8,
+                vertex_attributes: &attributes(false),
+                parameters: RasterParameterLayout { size: $size, stages: ShaderStages::VERTEX },
+                shaders: packaged_shaders!(
+                    vulkan: (include_bytes!(concat!("../../../shaders/", $vs, ".spv")), Some(include_bytes!(concat!("../../../shaders/", $fs, ".spv")))),
+                    d3d12: (include_bytes!(concat!("../../../shaders/dxil/", $vs, ".dxil")), Some(include_bytes!(concat!("../../../shaders/dxil/", $fs, ".dxil")))),
+                    inline_constants: Some(renderer_core::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
+                ),
+                ..$base
+            };
+            static PACKED: RasterProgramDescriptor = RasterProgramDescriptor {
+                secondary_vertex_stride: 12,
+                vertex_attributes: &attributes(true),
+                ..UV
+            };
+            (&$base, &UV, &PACKED)
+        }};
+    }
+    static VARIANTS: &[(
+        &RasterProgramDescriptor,
+        &RasterProgramDescriptor,
+        &RasterProgramDescriptor,
+    )] = &[
+        variants!(OPAQUE, "pbr_lightmap.vert", "pbr.frag", 4),
+        variants!(
+            deferred::GBUFFER,
+            "gbuffer_lightmap.vert",
+            "gbuffer.frag",
+            4
+        ),
+        variants!(
+            forward_plus::REFERENCE_OPAQUE,
+            "pbr_lightmap.vert",
+            "pbr_all_lights.frag",
+            4
+        ),
+        variants!(
+            forward_plus::TILED_OPAQUE,
+            "pbr_lightmap.vert",
+            "pbr_forward_plus.frag",
+            4
+        ),
+        variants!(
+            super::transform_programs::small::FORWARD,
+            "pbr_lightmap_transformed_small.vert",
+            "pbr_transformed.frag",
+            8
+        ),
+        variants!(
+            super::transform_programs::small::ALL_LIGHTS,
+            "pbr_lightmap_transformed_small.vert",
+            "pbr_all_lights_transformed.frag",
+            8
+        ),
+        variants!(
+            super::transform_programs::small::FORWARD_PLUS,
+            "pbr_lightmap_transformed_small.vert",
+            "pbr_forward_plus_transformed.frag",
+            8
+        ),
+        variants!(
+            super::transform_programs::small::DEFERRED,
+            "gbuffer_lightmap_transformed_small.vert",
+            "gbuffer_transformed.frag",
+            8
+        ),
+        variants!(
+            super::transform_programs::full::FORWARD,
+            "pbr_lightmap_transformed.vert",
+            "pbr_transformed.frag",
+            8
+        ),
+        variants!(
+            super::transform_programs::full::ALL_LIGHTS,
+            "pbr_lightmap_transformed.vert",
+            "pbr_all_lights_transformed.frag",
+            8
+        ),
+        variants!(
+            super::transform_programs::full::FORWARD_PLUS,
+            "pbr_lightmap_transformed.vert",
+            "pbr_forward_plus_transformed.frag",
+            8
+        ),
+        variants!(
+            super::transform_programs::full::DEFERRED,
+            "gbuffer_lightmap_transformed.vert",
+            "gbuffer_transformed.frag",
+            8
+        ),
+    ];
+    VARIANTS.iter().find_map(|&(plain, uv, indexed)| {
+        // SAFETY: All three are immutable packaged standard programs. The UV
+        // variants declare the secondary input, inline words and matching shaders.
+        unsafe {
+            base.same(&ManagedRasterProgram::from_trusted_descriptor(plain))
+                .then(|| {
+                    ManagedRasterProgram::from_trusted_descriptor(if packed { indexed } else { uv })
+                })
+        }
+    })
 }
 
 #[cfg(test)]

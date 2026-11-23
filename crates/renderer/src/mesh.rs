@@ -41,6 +41,21 @@ impl MeshData {
             program.descriptor().vertex_attributes,
         ))
     }
+    pub fn with_lightmap_uvs(mut self, uvs: &[[f32; 2]]) -> Result<Self, GraphError> {
+        if uvs.iter().flatten().any(|v| !(0.0..=1.0).contains(v)) {
+            return Err(GraphError::invalid_input(
+                "lightmap UV outside the unit rectangle",
+            ));
+        }
+        let bytes = uvs
+            .iter()
+            .flatten()
+            .copied()
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        self.geometry = self.geometry.with_secondary_vertices(8, bytes)?;
+        Ok(self)
+    }
     pub fn unlit(vertices: &[unlit_forward::Vertex], indices: &[u32]) -> Result<Self, GraphError> {
         let geometry = unlit_forward::mesh_data(vertices, indices)
             .map_err(|e| GraphError::invalid_input(e.to_string()))?;
@@ -106,17 +121,17 @@ impl MeshData {
 struct Resident {
     layout: Arc<Layout>,
     revision: u64,
-    buffers: [ImportBuffer; 2],
+    buffers: [Option<ImportBuffer>; 3],
 }
 #[derive(Default)]
 struct Upload {
-    keys: [Option<ResourceKey>; 2],
+    keys: [Option<ResourceKey>; 3],
     accepted_bytes: u64,
 }
 // Published layout ownership moves here until explicit GPU collection. Import
 // tokens return their range slots at publication; only their registrations remain.
 struct RetiredVersion {
-    keys: [Option<ResourceKey>; 2],
+    keys: [Option<ResourceKey>; 3],
     _layout: Option<Arc<Layout>>,
 }
 
@@ -146,7 +161,7 @@ impl Asset {
     fn retire_active(&mut self, retired: &mut Vec<RetiredVersion>) {
         if let Some(active) = self.active.take() {
             retired.push(RetiredVersion {
-                keys: active.buffers.map(|buffer| Some(buffer.key())),
+                keys: active.buffers.map(|buffer| buffer.map(|b| b.key())),
                 _layout: Some(active.layout),
             });
         }
@@ -253,14 +268,23 @@ impl Meshes {
         let mut upload = GraphRequirements::default();
         for handle in handles {
             let data = self.geometry(handle)?;
+            let extra = usize::from(data.secondary_byte_len() > 0);
             upload = upload.checked_add(GraphRequirements {
-                resources: 2,
-                passes: 2,
-                accesses: 2,
-                name_bytes: "mesh verticesmesh indicesmesh vertex uploadmesh index upload".len(),
+                resources: 2 + extra,
+                passes: 2 + extra,
+                accesses: 2 + extra,
+                name_bytes: "mesh verticesmesh indicesmesh vertex uploadmesh index upload".len()
+                    + extra * "mesh UVmesh UV upload".len(),
                 ..Default::default()
             })?;
-            for size in [data.vertex_byte_len(), data.index_byte_len()] {
+            for size in [
+                data.vertex_byte_len(),
+                data.index_byte_len(),
+                data.secondary_byte_len(),
+            ]
+            .into_iter()
+            .filter(|&s| s > 0)
+            {
                 classes.push(ResourceClass::Buffer {
                     desc: BufferDesc { size },
                     count: 1,
@@ -296,6 +320,14 @@ impl Meshes {
             .registry
             .geometry(mesh)
             .map_err(|e| GraphError::invalid_input(e.to_string()))?;
+        if data.secondary_byte_len() > 0 {
+            preparation.reserve_buffer(
+                BufferDesc {
+                    size: data.secondary_byte_len(),
+                },
+                1,
+            )?;
+        }
         preparation.add_working_set(WorkingSet {
             resources: &[
                 ResourceClass::Buffer {
@@ -349,6 +381,23 @@ impl Meshes {
         Ok(())
     }
 
+    pub(crate) fn import_lightmap_uvs(
+        &self,
+        graph: &mut Graph,
+        mesh: MeshHandle,
+    ) -> Result<renderer_core::graph::BufferHandle, GraphError> {
+        let stream = self
+            .assets
+            .get(&mesh)
+            .and_then(|a| a.active.as_ref())
+            .and_then(|a| a.buffers[2].as_ref())
+            .ok_or_else(|| {
+                GraphError::invalid_input(
+                    "static placement requires a resident mesh with lightmap UVs",
+                )
+            })?;
+        graph.import_readonly_buffer("mesh UV", stream)
+    }
     /// Import the current resident vertex/index range into this Graph.
     pub fn import(&self, graph: &mut Graph, mesh: MeshHandle) -> Result<Mesh, GraphError> {
         self.import_geometry(graph, mesh, None)
@@ -371,7 +420,7 @@ impl Meshes {
         let (vertices, bounds) = match posed {
             Some(stream) => (stream.vertices, stream.bounds),
             None => (
-                graph.import_readonly_buffer(VERTEX_BUFFER, &active.buffers[0])?,
+                graph.import_readonly_buffer(VERTEX_BUFFER, active.buffers[0].as_ref().unwrap())?,
                 active.layout.bounds,
             ),
         };
@@ -379,7 +428,8 @@ impl Meshes {
             bounds,
             vertex_stride: active.layout.vertex_stride,
             vertices,
-            indices: graph.import_readonly_buffer(INDEX_BUFFER, &active.buffers[1])?,
+            indices: graph
+                .import_readonly_buffer(INDEX_BUFFER, active.buffers[1].as_ref().unwrap())?,
             first_index: 0,
             index_count: active.layout.index_count,
         })

@@ -16,6 +16,7 @@ const SOURCE: &str = "5eb82f21bced3f7e901774083cfee1a05fd2bcf22f56ff699f3171c1ee
 const MAPPING: &str = "u=fract(.5+atan2(z,x)/(2*pi));v=acos(y)/pi;top-origin;U-repeat/V-clamp";
 
 pub(crate) struct Environment {
+    pub lightmaps: Vec<Image>,
     pub reflection_probes: Option<Image>,
     pub diffuse: Image,
     pub specular: Image,
@@ -269,6 +270,7 @@ impl Environment {
         let brdf = load_image(root, &value["images"]["brdf"], 256, 256, 1)?;
         value["manifest_sha256"] = json!(format!("{:x}", Sha256::digest(bytes)));
         Ok(Self {
+            lightmaps: Vec::new(),
             reflection_probes: None,
             diffuse,
             specular,
@@ -293,6 +295,7 @@ impl Environment {
             bytes: include_bytes!("ibl-fixture-brdf.rgba16f").to_vec(),
         };
         Self {
+            lightmaps: Vec::new(),
             reflection_probes: None,
             diffuse,
             specular,

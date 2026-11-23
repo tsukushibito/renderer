@@ -47,7 +47,9 @@ const TEXELS: [u8; 16] = [
 static ALPHA_MASK: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: 8,
+    secondary_vertex_stride: 0,
     vertex_attributes: &[VertexAttribute {
+        stream: 0,
         location: 0,
         offset: 0,
         format: VertexFormat::Float32x2,
@@ -150,6 +152,7 @@ fn fragment_sample(
                     program,
                     [RasterDraw {
                         bindings: Some(bindings),
+                        secondary_vertices: None,
                         vertices,
                         indices,
                         first_index: 0,

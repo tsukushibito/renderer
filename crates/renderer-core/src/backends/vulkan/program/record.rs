@@ -31,6 +31,7 @@ pub(in crate::backends::vulkan) enum NativeRasterGeometry {
     Fullscreen,
     Indexed {
         vertices: vk::Buffer,
+        secondary_vertices: Option<vk::Buffer>,
         indices: vk::Buffer,
         command: NativeIndexedDraw,
     },
@@ -151,10 +152,20 @@ impl ShaderPrograms {
                         }
                         NativeRasterGeometry::Indexed {
                             vertices,
+                            secondary_vertices,
                             indices,
                             command: indexed,
                         } => {
-                            device.cmd_bind_vertex_buffers(command, 0, &[vertices], &[0]);
+                            if let Some(second) = secondary_vertices {
+                                device.cmd_bind_vertex_buffers(
+                                    command,
+                                    0,
+                                    &[vertices, second],
+                                    &[0, 0],
+                                );
+                            } else {
+                                device.cmd_bind_vertex_buffers(command, 0, &[vertices], &[0]);
+                            }
                             device.cmd_bind_index_buffer(
                                 command,
                                 indices,

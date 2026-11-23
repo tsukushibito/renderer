@@ -151,6 +151,250 @@ fn pack<const N: usize>(
     bytes.resize(width * height * 16, 0);
     Ok((ImageDesc::rgba32_float(width as u32, height as u32), bytes))
 }
+/// A single transport scene upload serves all surface pages for these scenarios.
+pub(super) struct Transport<const N: usize> {
+    runtime: Runtime,
+    pool: GraphPool,
+    image: renderer::core::runtime::ManagedImage,
+    program: ManagedProgram,
+    input: BufferDesc,
+    output: BufferDesc,
+    batch: usize,
+}
+
+impl<const N: usize> Transport<N> {
+    pub(super) fn prepare(
+        choice: BakeBackend,
+        scene: &BakeScene,
+        lights: [Lighting; N],
+        samples: u32,
+    ) -> Result<Option<Self>> {
+        if choice == BakeBackend::Cpu {
+            return Ok(None);
+        }
+        if samples > 4096 {
+            return if choice == BakeBackend::Auto {
+                Ok(None)
+            } else {
+                Err("GPU supports at most 4096 rays per receiver".into())
+            };
+        }
+        let (desc, pixels) = match pack(scene, lights, samples) {
+            Ok(ok) => ok,
+            Err(_) if choice == BakeBackend::Auto => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        // Limit the longest dispatch. Upload static triangles once for all batches.
+        let batch = (65536 / samples as usize).clamp(1, 512);
+        let input = BufferDesc {
+            size: batch as u64 * RECEIVER_BYTES,
+        };
+        let output = BufferDesc {
+            size: batch as u64 * RESPONSE_BYTES,
+        };
+        let graph_cap = GraphCapacity {
+            upload_bytes: pixels.len().max(input.size as usize),
+            ..Default::default()
+        };
+        let limits = RuntimeLimits {
+            graph: graph_cap,
+            frames: 1,
+            results: 1,
+            ..Default::default()
+        };
+        let programs = [program()];
+        let resources = [
+            ResourceClass::Image { desc, count: 1 },
+            ResourceClass::Buffer {
+                desc: input,
+                count: 1,
+            },
+            ResourceClass::Buffer {
+                desc: output,
+                count: 1,
+            },
+        ];
+        let set = WorkingSet {
+            resources: &resources,
+            compute: &programs,
+            raster: &[],
+        };
+        let upload =
+            (u64::from(desc.width) * 16).next_multiple_of(256) * u64::from(desc.height) + 512;
+        let mut selected = None;
+        for candidate in [BakeBackend::Vulkan, BakeBackend::D3D12] {
+            if choice != BakeBackend::Auto && choice != candidate {
+                continue;
+            }
+            let config = match candidate {
+                #[cfg(feature = "vulkan")]
+                BakeBackend::Vulkan => {
+                    RuntimeConfig::Vulkan(renderer::core::runtime::VulkanConfig {
+                        // The dispatch graph owns the receiver upload and its readback concurrently.
+                        staging_bytes: upload
+                            .max(input.size.next_multiple_of(256) + output.size)
+                            .next_multiple_of(65536),
+                        ..Default::default()
+                    })
+                }
+                #[cfg(all(windows, feature = "d3d12"))]
+                BakeBackend::D3D12 => RuntimeConfig::D3D12(renderer::core::runtime::D3D12Config {
+                    upload_bytes: upload.max(input.size),
+                    max_buffer_bytes: output.size,
+                    readback_bytes: output.size,
+                    ..Default::default()
+                }),
+                _ => continue,
+            };
+            match Runtime::new(config, limits, set) {
+                Ok(runtime) => {
+                    eprintln!("Baking on {candidate:?}");
+                    selected = Some(runtime);
+                    break;
+                }
+                Err(e) if choice == BakeBackend::Auto => {
+                    eprintln!("{candidate:?} bake initialization: {e}")
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        let Some(mut rt) = selected else {
+            return if choice == BakeBackend::Auto {
+                Ok(None)
+            } else {
+                Err("requested GPU backend unavailable".into())
+            };
+        };
+        let mut pool = GraphPool::new(graph_cap, 1)?;
+        let (uploaded, image) = rt.upload_texture(&mut pool, "bake world", desc, &pixels)?;
+        drop(pixels);
+        rt.wait_for_frame(uploaded, WAIT)?
+            .ok_or("bake upload timed out")?;
+        Ok(Some(Self {
+            runtime: rt,
+            pool,
+            image,
+            program: programs.into_iter().next().unwrap(),
+            input,
+            output,
+            batch,
+        }))
+    }
+    pub(super) fn trace(&mut self, jobs: &[SurfaceSample], limit: f32) -> Result<Vec<[f32; 4]>> {
+        let Self {
+            runtime: rt,
+            pool,
+            image,
+            program,
+            input,
+            output,
+            batch,
+        } = self;
+        let (input, output, batch) = (*input, *output, *batch);
+        let stride = 2 + N * 4;
+        let mut result = vec![[0.; 4]; jobs.len() * stride];
+        for (chunk, dst) in jobs.chunks(batch).zip(result.chunks_mut(batch * stride)) {
+            for first in (0..N).step_by(2) {
+                let mut g = pool.begin()?;
+                let scene = g.import_image("transport scene", image.snapshot())?;
+                let scene = g.image_view(scene, 0, 0)?;
+                let receivers = g.buffer("receivers", input)?;
+                let responses = g.buffer("irradiance", output)?;
+                let bytes = chunk
+                    .iter()
+                    .flat_map(|s| {
+                        texel(s.position, limit)
+                            .into_iter()
+                            .chain(texel(s.normal, first as f32))
+                    })
+                    .flat_map(f32::to_le_bytes)
+                    .collect::<Vec<_>>();
+                g.upload_buffer("upload bake receivers", receivers, 0, &bytes)?;
+                let result_size = chunk.len() as u64 * RESPONSE_BYTES;
+                let buffer = |binding, buffer, size| Binding {
+                    group: 0,
+                    binding,
+                    resource: BindingResource::Buffer {
+                        buffer,
+                        offset: 0,
+                        size,
+                    },
+                };
+                g.dispatch_buffer_grid(
+                    "integrate diffuse transport",
+                    program,
+                    &[
+                        Binding {
+                            group: 0,
+                            binding: 0,
+                            resource: BindingResource::ImageView(scene),
+                        },
+                        buffer(1, receivers, bytes.len() as u64),
+                        buffer(2, responses, result_size),
+                    ],
+                    [chunk.len() as u32, 1],
+                )?;
+                let readback = g.readback_buffer("baked samples", responses, 0, result_size)?;
+                let receipt = rt.submit(&g.compile()?)?;
+                let mut completed = rt
+                    .wait_for_frame(receipt.id(), WAIT)?
+                    .ok_or("bake dispatch timed out")?;
+                let mut bytes = vec![0; result_size as usize];
+                completed.readback_into(readback, &mut bytes)?;
+                for (raw, record) in bytes
+                    .as_chunks::<{ RESPONSE_BYTES as usize }>()
+                    .0
+                    .iter()
+                    .zip(dst.chunks_exact_mut(stride))
+                {
+                    let source = raw.as_chunks::<16>().0;
+                    let decode = |w: &[u8; 16]| {
+                        std::array::from_fn(|i| {
+                            f32::from_le_bytes(w[i * 4..i * 4 + 4].try_into().unwrap())
+                        })
+                    };
+                    if first == 0 {
+                        record[0] = decode(&source[0]);
+                        record[1] = decode(&source[1]);
+                    }
+                    let count = 4 * (N - first).min(2);
+                    for (target, word) in record[2 + first * 4..]
+                        .iter_mut()
+                        .zip(&source[2..2 + count])
+                    {
+                        *target = decode(word);
+                    }
+                }
+            }
+        }
+        Ok(result)
+    }
+    pub(super) fn finish(self) -> Result<()> {
+        let Self {
+            image, runtime: rt, ..
+        } = self;
+        drop(image);
+        #[cfg(feature = "vulkan")]
+        let vk = rt.as_vulkan().map(|r| r.validation_monitor());
+        #[cfg(all(windows, feature = "d3d12"))]
+        let dx = rt.as_d3d12().map(|r| r.validation_monitor());
+        drop(rt);
+        #[cfg(feature = "vulkan")]
+        if let Some(m) = vk
+            && !m.report().is_clean()
+        {
+            return Err(format!("Vulkan bake validation: {:?}", m.report()).into());
+        }
+        #[cfg(all(windows, feature = "d3d12"))]
+        if let Some(m) = dx
+            && !m.snapshot().is_clean()
+        {
+            return Err(format!("D3D12 bake validation: {:?}", m.snapshot()).into());
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn integrate<const N: usize>(
     choice: BakeBackend,
     scene: &BakeScene,
@@ -162,194 +406,10 @@ pub(super) fn integrate<const N: usize>(
     if jobs.is_empty() {
         return Ok(Some(Vec::new()));
     }
-    if samples > 4096 {
-        return if choice == BakeBackend::Auto {
-            Ok(None)
-        } else {
-            Err("GPU supports at most 4096 rays per receiver".into())
-        };
-    }
-    let (desc, pixels) = match pack(scene, lights, samples) {
-        Ok(ok) => ok,
-        Err(_) if choice == BakeBackend::Auto => return Ok(None),
-        Err(e) => return Err(e),
+    let Some(mut gpu) = Transport::prepare(choice, scene, lights, samples)? else {
+        return Ok(None);
     };
-    // Limit the longest dispatch. Upload static triangles once for all batches.
-    let batch = jobs.len().min((65536 / samples as usize).clamp(1, 512));
-    let input = BufferDesc {
-        size: batch as u64 * RECEIVER_BYTES,
-    };
-    let output = BufferDesc {
-        size: batch as u64 * RESPONSE_BYTES,
-    };
-    let graph_cap = GraphCapacity {
-        upload_bytes: pixels.len().max(input.size as usize),
-        ..Default::default()
-    };
-    let limits = RuntimeLimits {
-        graph: graph_cap,
-        frames: 1,
-        results: 1,
-        ..Default::default()
-    };
-    let programs = [program()];
-    let resources = [
-        ResourceClass::Image { desc, count: 1 },
-        ResourceClass::Buffer {
-            desc: input,
-            count: 1,
-        },
-        ResourceClass::Buffer {
-            desc: output,
-            count: 1,
-        },
-    ];
-    let set = WorkingSet {
-        resources: &resources,
-        compute: &programs,
-        raster: &[],
-    };
-    let upload = (u64::from(desc.width) * 16).next_multiple_of(256) * u64::from(desc.height) + 512;
-    let mut selected = None;
-    for candidate in [BakeBackend::Vulkan, BakeBackend::D3D12] {
-        if choice != BakeBackend::Auto && choice != candidate {
-            continue;
-        }
-        let config = match candidate {
-            #[cfg(feature = "vulkan")]
-            BakeBackend::Vulkan => RuntimeConfig::Vulkan(renderer::core::runtime::VulkanConfig {
-                // The dispatch graph owns the receiver upload and its readback concurrently.
-                staging_bytes: upload
-                    .max(input.size.next_multiple_of(256) + output.size)
-                    .next_multiple_of(65536),
-                ..Default::default()
-            }),
-            #[cfg(all(windows, feature = "d3d12"))]
-            BakeBackend::D3D12 => RuntimeConfig::D3D12(renderer::core::runtime::D3D12Config {
-                upload_bytes: upload.max(input.size),
-                max_buffer_bytes: output.size,
-                readback_bytes: output.size,
-                ..Default::default()
-            }),
-            _ => continue,
-        };
-        match Runtime::new(config, limits, set) {
-            Ok(runtime) => {
-                eprintln!("Baking on {candidate:?}");
-                selected = Some(runtime);
-                break;
-            }
-            Err(e) if choice == BakeBackend::Auto => {
-                eprintln!("{candidate:?} bake initialization: {e}")
-            }
-            Err(e) => return Err(e.into()),
-        }
-    }
-    let Some(mut rt) = selected else {
-        return if choice == BakeBackend::Auto {
-            Ok(None)
-        } else {
-            Err("requested GPU backend unavailable".into())
-        };
-    };
-    let mut pool = GraphPool::new(graph_cap, 1)?;
-    let (uploaded, image) = rt.upload_texture(&mut pool, "bake world", desc, &pixels)?;
-    drop(pixels);
-    rt.wait_for_frame(uploaded, WAIT)?
-        .ok_or("bake upload timed out")?;
-    let stride = 2 + N * 4;
-    let mut result = vec![[0.; 4]; jobs.len() * stride];
-    for (chunk, dst) in jobs.chunks(batch).zip(result.chunks_mut(batch * stride)) {
-        for first in (0..N).step_by(2) {
-            let mut g = pool.begin()?;
-            let scene = g.import_image("transport scene", image.snapshot())?;
-            let scene = g.image_view(scene, 0, 0)?;
-            let receivers = g.buffer("receivers", input)?;
-            let responses = g.buffer("irradiance", output)?;
-            let bytes = chunk
-                .iter()
-                .flat_map(|s| {
-                    texel(s.position, limit)
-                        .into_iter()
-                        .chain(texel(s.normal, first as f32))
-                })
-                .flat_map(f32::to_le_bytes)
-                .collect::<Vec<_>>();
-            g.upload_buffer("upload bake receivers", receivers, 0, &bytes)?;
-            let result_size = chunk.len() as u64 * RESPONSE_BYTES;
-            let buffer = |binding, buffer, size| Binding {
-                group: 0,
-                binding,
-                resource: BindingResource::Buffer {
-                    buffer,
-                    offset: 0,
-                    size,
-                },
-            };
-            g.dispatch_buffer_grid(
-                "integrate diffuse transport",
-                &programs[0],
-                &[
-                    Binding {
-                        group: 0,
-                        binding: 0,
-                        resource: BindingResource::ImageView(scene),
-                    },
-                    buffer(1, receivers, bytes.len() as u64),
-                    buffer(2, responses, result_size),
-                ],
-                [chunk.len() as u32, 1],
-            )?;
-            let readback = g.readback_buffer("baked samples", responses, 0, result_size)?;
-            let receipt = rt.submit(&g.compile()?)?;
-            let mut completed = rt
-                .wait_for_frame(receipt.id(), WAIT)?
-                .ok_or("bake dispatch timed out")?;
-            let mut bytes = vec![0; result_size as usize];
-            completed.readback_into(readback, &mut bytes)?;
-            for (raw, record) in bytes
-                .as_chunks::<{ RESPONSE_BYTES as usize }>()
-                .0
-                .iter()
-                .zip(dst.chunks_exact_mut(stride))
-            {
-                let source = raw.as_chunks::<16>().0;
-                let decode = |w: &[u8; 16]| {
-                    std::array::from_fn(|i| {
-                        f32::from_le_bytes(w[i * 4..i * 4 + 4].try_into().unwrap())
-                    })
-                };
-                if first == 0 {
-                    record[0] = decode(&source[0]);
-                    record[1] = decode(&source[1]);
-                }
-                let count = 4 * (N - first).min(2);
-                for (target, word) in record[2 + first * 4..]
-                    .iter_mut()
-                    .zip(&source[2..2 + count])
-                {
-                    *target = decode(word);
-                }
-            }
-        }
-    }
-    drop(image);
-    #[cfg(feature = "vulkan")]
-    let vk = rt.as_vulkan().map(|r| r.validation_monitor());
-    #[cfg(all(windows, feature = "d3d12"))]
-    let dx = rt.as_d3d12().map(|r| r.validation_monitor());
-    drop(rt);
-    #[cfg(feature = "vulkan")]
-    if let Some(m) = vk
-        && !m.report().is_clean()
-    {
-        return Err(format!("Vulkan bake validation: {:?}", m.report()).into());
-    }
-    #[cfg(all(windows, feature = "d3d12"))]
-    if let Some(m) = dx
-        && !m.snapshot().is_clean()
-    {
-        return Err(format!("D3D12 bake validation: {:?}", m.snapshot()).into());
-    }
+    let result = gpu.trace(jobs, limit)?;
+    gpu.finish()?;
     Ok(Some(result))
 }

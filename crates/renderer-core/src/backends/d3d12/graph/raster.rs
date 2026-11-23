@@ -740,7 +740,24 @@ fn record_draws(
                         SizeInBytes: graph.resources[indexed.indices].desc.units() as u32,
                         Format: DXGI_FORMAT_R32_UINT,
                     };
-                    slot.list.IASetVertexBuffers(0, Some(&[vertices]));
+                    if let Some(id) = indexed.secondary_vertices {
+                        let second = D3D12_VERTEX_BUFFER_VIEW {
+                            BufferLocation: slot.buffers[slot.resource_map[id]]
+                                .raw()
+                                .GetGPUVirtualAddress(),
+                            SizeInBytes: u32::try_from(graph.resources[id].desc.units()).map_err(
+                                |_| {
+                                    D3D12RuntimeError::invalid(
+                                        "secondary vertex buffer exceeds D3D12 view size",
+                                    )
+                                },
+                            )?,
+                            StrideInBytes: program.descriptor().secondary_vertex_stride,
+                        };
+                        slot.list.IASetVertexBuffers(0, Some(&[vertices, second]));
+                    } else {
+                        slot.list.IASetVertexBuffers(0, Some(&[vertices]));
+                    }
                     slot.list.IASetIndexBuffer(Some(&indices));
                 }
             }
@@ -1029,6 +1046,7 @@ mod tests {
                                 &ManagedRasterProgram::textured_mesh(),
                                 [RasterDraw {
                                     bindings: Some(bindings),
+                                    secondary_vertices: None,
                                     vertices,
                                     indices: shared,
                                     first_index: 0,
@@ -1263,6 +1281,7 @@ mod tests {
                             &program,
                             [RasterDraw {
                                 bindings: Some(bindings),
+                                secondary_vertices: None,
                                 vertices,
                                 indices,
                                 first_index: 0,

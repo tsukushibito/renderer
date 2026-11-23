@@ -190,6 +190,8 @@ impl RasterPass<'_, '_> {
         graph.capture_raster_draw(
             program,
             &RasterDraw {
+                secondary_vertices: arguments.secondary_vertices,
+
                 vertices: arguments.vertices,
                 indices: arguments.indices,
                 first_index: 0,
@@ -322,7 +324,31 @@ impl Graph {
         let (vertices, indices, index_range) =
             self.raster_buffers(draw, u64::from(program.vertex_stride()))?;
         let vertex_bytes = self.resources[vertices].desc.units();
+        let stride = program.descriptor().secondary_vertex_stride;
+        let secondary = draw
+            .secondary_vertices
+            .map(|v| self.buffer_id(v))
+            .transpose()?;
+        let required = vertex_bytes / u64::from(program.vertex_stride());
+        match secondary {
+            Some(id)
+                if stride != 0
+                    && self.resources[id]
+                        .desc
+                        .units()
+                        .is_multiple_of(u64::from(stride))
+                    && self.resources[id].desc.units() / u64::from(stride) == required => {}
+            None if stride == 0 => (),
+            _ => {
+                return Err(GraphError::invalid_input(
+                    "secondary vertex buffer does not match the program and primary vertex count",
+                ));
+            }
+        }
         let data = self.data_mut();
+        if let Some(id) = secondary {
+            data.track_raster_prefix(id, 0, required * u64::from(stride));
+        }
         data.track_raster_prefix(vertices, 0, vertex_bytes);
         if draw.first_index == 0 {
             data.track_raster_prefix(indices, 1, index_range.end);
@@ -333,6 +359,7 @@ impl Graph {
         data.draws.push(RasterDrawOperands {
             bindings,
             indexed: Some(IndexedDrawOperands {
+                secondary_vertices: secondary,
                 vertices,
                 indices,
                 first_index: draw.first_index,

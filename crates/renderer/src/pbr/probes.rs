@@ -35,13 +35,6 @@ impl DiffuseLighting {
     }
 }
 
-/// A private UV chart with an independent bilinear footprint. Corner UVs are
-/// (0,0), (1,0), (0,1) in triangle order; material UVs are independent.
-pub struct LightmapChart<const N: usize = 2> {
-    pub extent: [u16; 2],
-    pub irradiance: Vec<[[f32; 3]; N]>,
-}
-
 /// Resident-ready linear RGBA32F texture. All structural checks run at import.
 pub struct BakedLighting {
     bytes: Vec<u8>,
@@ -117,7 +110,7 @@ impl BakedLighting {
         let surface_start = header + Self::NODE_TEXELS * nodes + probe_texels * probes;
         let charts = integer(6)?;
         let count = bytes.len() / 16;
-        if nodes == 0 || probes == 0 || surface_start + charts > count {
+        if nodes == 0 || probes == 0 || charts != 0 || surface_start != count {
             return Err(invalid());
         }
         if (2..header).any(|t| (0..3).any(|c| word(t * 4 + c) < 0.)) {
@@ -158,24 +151,6 @@ impl BakedLighting {
                 return Err(invalid());
             }
         }
-        let mut end = surface_start + charts;
-        for i in 0..charts {
-            let at = (surface_start + i) * 4;
-            let w = integer(at + 1)?;
-            let h = integer(at + 2)?;
-            if integer(at)? != end || !(2..=256).contains(&w) || !(2..=256).contains(&h) {
-                return Err(invalid());
-            }
-            end += scenarios * w * h;
-            if end > count {
-                return Err(invalid());
-            }
-        }
-        if end != count
-            || (surface_start + charts..end).any(|t| (0..3).any(|c| word(4 * t + c) < 0.))
-        {
-            return Err(invalid());
-        }
         let width = count.min(256);
         let height = count.div_ceil(width);
         let payload_len = bytes.len();
@@ -186,62 +161,8 @@ impl BakedLighting {
             payload_len,
         })
     }
-    /// Attach RGB irradiance for static charts, in baked triangle order. Each
-    /// row-major texel has one RGB value per lighting scenario.
-    pub fn with_lightmaps<const N: usize>(
-        mut self,
-        charts: &[LightmapChart<N>],
-    ) -> Result<Self, GraphError> {
-        let invalid = || GraphError::invalid_input("invalid static lightmap atlas");
-        if self.bytes[24..28] != 0f32.to_le_bytes() || self.scenario_count() != N {
-            return Err(invalid());
-        }
-        self.bytes.truncate(self.payload_len);
-        let mut end = self.payload_len / 16 + charts.len();
-        if end > 256 * 16384 {
-            return Err(invalid());
-        }
-        self.bytes[24..28].copy_from_slice(&(charts.len() as f32).to_le_bytes());
-        for c in charts {
-            let [w, h] = c.extent;
-            if !(2..=256).contains(&w)
-                || !(2..=256).contains(&h)
-                || c.irradiance.len() != usize::from(w) * usize::from(h)
-            {
-                return Err(invalid());
-            }
-            self.bytes.extend(
-                [end as f32, w as f32, h as f32, 0.]
-                    .into_iter()
-                    .flat_map(f32::to_le_bytes),
-            );
-            end += N * c.irradiance.len();
-            if end > 256 * 16384 {
-                return Err(invalid());
-            }
-        }
-        for c in charts {
-            for scenarios in &c.irradiance {
-                for rgb in scenarios {
-                    if rgb.iter().any(|x| !x.is_finite() || *x < 0.) {
-                        return Err(invalid());
-                    }
-                    self.bytes.extend(
-                        [rgb[0], rgb[1], rgb[2], 0.]
-                            .into_iter()
-                            .flat_map(f32::to_le_bytes),
-                    );
-                }
-            }
-        }
-        Self::from_texels(self.bytes)
-    }
-    /// Build a surface-only atlas. Unmapped surfaces use the specified uniform
-    /// fallback irradiance for each scenario.
-    pub fn from_lightmaps<const N: usize>(
-        charts: &[LightmapChart<N>],
-        fallback: [[f32; 3]; N],
-    ) -> Result<Self, GraphError> {
+    /// Uniform probe irradiance for each lighting scenario.
+    pub fn uniform<const N: usize>(fallback: [[f32; 3]; N]) -> Result<Self, GraphError> {
         if !(1..=Self::MAX_SCENARIOS).contains(&N)
             || fallback.iter().flatten().any(|v| !v.is_finite() || *v < 0.)
         {
@@ -267,8 +188,7 @@ impl BakedLighting {
                 .flatten()
                 .flat_map(f32::to_le_bytes)
                 .collect(),
-        )?
-        .with_lightmaps(charts)
+        )
     }
     pub fn image_desc(&self) -> renderer_core::graph::ImageDesc {
         renderer_core::graph::ImageDesc::rgba32_float(self.extent[0], self.extent[1])
@@ -297,9 +217,6 @@ impl BakedLighting {
             count => count,
         }
     }
-    pub fn chart_count(&self) -> u32 {
-        f32::from_le_bytes(self.bytes[24..28].try_into().unwrap()) as u32
-    }
     pub fn extent(&self) -> [u32; 2] {
         self.extent
     }
@@ -325,8 +242,7 @@ mod tests {
 
     #[test]
     fn sequence_roundtrips_and_rejects_mismatched_or_truncated_keys() {
-        let atlas =
-            BakedLighting::from_lightmaps(&[], [[0.; 3]; BakedLighting::MAX_SCENARIOS]).unwrap();
+        let atlas = BakedLighting::uniform([[0.; 3]; BakedLighting::MAX_SCENARIOS]).unwrap();
         let mut file = Vec::new();
         atlas.write(&mut file).unwrap();
         assert_eq!(
@@ -342,20 +258,5 @@ mod tests {
             assert!(BakedLighting::from_bytes(&bad).is_err());
         }
         assert!(BakedLighting::from_bytes(&file[..file.len() - 16]).is_err());
-    }
-
-    #[test]
-    fn surface_only_archive_round_trips_and_rejects_negative_irradiance() {
-        let chart = LightmapChart {
-            extent: [2, 2],
-            irradiance: vec![[[2., 1., 0.], [0., 0., 0.5]]; 4],
-        };
-        let atlas = BakedLighting::from_lightmaps(&[chart], [[0.5; 3], [0.1; 3]]).unwrap();
-        let mut file = Vec::new();
-        atlas.write(&mut file).unwrap();
-        assert_eq!(BakedLighting::from_bytes(&file).unwrap().chart_count(), 1);
-        let last_blue = file.len() - 8;
-        file[last_blue..last_blue + 4].copy_from_slice(&(-1f32).to_le_bytes());
-        assert!(BakedLighting::from_bytes(&file).is_err());
     }
 }

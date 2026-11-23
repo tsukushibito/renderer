@@ -88,7 +88,7 @@ fn present_before_and_after_suspension_and_resize() -> PipelineResult<()> {
             camera,
             SceneAssets::new(&mut meshes, &mut materials, &[]),
         )?;
-        let diffuse = renderer::pbr::BakedLighting::from_lightmaps(&[], [[0.4; 3]])?;
+        let diffuse = renderer::pbr::BakedLighting::uniform([[0.4; 3]])?;
         let lighting = view.load_probe_lighting(renderer::pipeline::ProbeLighting {
             diffuse: Some(&diffuse),
             ..Default::default()
@@ -124,7 +124,7 @@ fn present_before_and_after_suspension_and_resize() -> PipelineResult<()> {
             events.pump_app_events(Some(Duration::from_millis(1)), &mut host);
             match view.draw(|frame| {
                 frame.draw_scene(
-                    SceneInput::new(&meshes, &materials, &[]).with_probe_lighting(&lighting, 0.),
+                    SceneInput::new(&meshes, &materials, &[]).with_baked_lighting(&lighting, 0.),
                     1.,
                 )?;
                 Ok(())

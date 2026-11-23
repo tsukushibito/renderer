@@ -156,6 +156,7 @@ fn build(
         .zip(visibility.visible_stripes())
         .filter(|(_, visible)| *visible)
         .map(|(template, _)| RasterDraw {
+            secondary_vertices: None,
             vertices: vertices_buffer,
             indices,
             first_index: template.first_index,

@@ -48,7 +48,9 @@ const CAPACITY: GraphCapacity = GraphCapacity {
 static INLINE_COLOR: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: 12,
+    secondary_vertex_stride: 0,
     vertex_attributes: &[VertexAttribute {
+        stream: 0,
         location: 0,
         offset: 0,
         format: VertexFormat::Float32x3,
@@ -202,6 +204,7 @@ fn build(
     };
     let draw = RasterDraw {
         bindings: None,
+        secondary_vertices: None,
         vertices: front,
         indices,
         first_index: 0,

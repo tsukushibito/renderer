@@ -51,6 +51,7 @@ fn offscreen_pipeline(graph: &mut Graph) {
                     &renderer_core::program::ManagedRasterProgram::mesh(),
                     [RasterDraw {
                         bindings: None,
+                        secondary_vertices: None,
                         vertices,
                         indices,
                         first_index: 0,

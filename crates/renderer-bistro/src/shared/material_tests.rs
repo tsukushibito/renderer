@@ -357,6 +357,8 @@ fn scene(cases: &[Case], force_opaque: bool) -> Scene {
             super::asset::validate_vertex(vertex).unwrap();
         }
         primitives.push(Primitive {
+            surface: None,
+            lightmap: None,
             material: id,
             vertices: start..vertices.len(),
             indices: index_start..indices.len(),
@@ -365,6 +367,7 @@ fn scene(cases: &[Case], force_opaque: bool) -> Scene {
         });
     }
     Scene {
+        lightmap_uv: Vec::new(),
         vertices,
         indices,
         primitives,
@@ -790,6 +793,7 @@ pub(super) fn alpha_background(api: &str, report: &serde_json::Value) {
         std::fs::read(report["captures"][name]["path"].as_str().unwrap()).unwrap()
     });
     let empty = Scene {
+        lightmap_uv: Vec::new(),
         vertices: Vec::new(),
         indices: Vec::new(),
         primitives: Vec::new(),

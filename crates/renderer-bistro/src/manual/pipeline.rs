@@ -1181,6 +1181,7 @@ pub(super) fn build(
                 let primitive = &scene.primitives[index];
                 RasterDraw {
                     bindings: Some(workspace.shadow_bindings[primitive.material]),
+                    secondary_vertices: None,
                     vertices: workspace.vertices[index],
                     indices: workspace.indices[index],
                     first_index: 0,
@@ -1443,6 +1444,7 @@ pub(super) fn build(
         let primitive = &scene.primitives[index];
         RasterDraw {
             bindings: Some(workspace.bindings[primitive.material]),
+            secondary_vertices: None,
             vertices: workspace.vertices[index],
             indices: workspace.indices[index],
             first_index: 0,

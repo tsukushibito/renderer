@@ -211,6 +211,8 @@ impl From<RasterParameters> for RasterConstants {
 /// Raster Program; `None` is accepted only for Programs with no binding slots.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RasterDraw {
+    /// Optional independent vertex stream with one record per primary vertex.
+    pub secondary_vertices: Option<BufferHandle>,
     pub bindings: Option<super::RasterBindings>,
     pub vertices: BufferHandle,
     pub indices: BufferHandle,
@@ -263,7 +265,7 @@ impl AccessPurpose {
         }
     }
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ImageAspect {
     Color,
     Depth,
@@ -352,6 +354,7 @@ pub(crate) struct RasterDrawOperands {
     )
 )]
 pub(crate) struct IndexedDrawOperands {
+    pub secondary_vertices: Option<usize>,
     pub vertices: usize,
     pub indices: usize,
     pub first_index: u32,

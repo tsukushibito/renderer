@@ -22,6 +22,7 @@ fn batch_draws(draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>) 
         .into_iter()
         .map(|(vertices, indices, index_count, parameters)| RasterDraw {
             bindings: None,
+            secondary_vertices: None,
             vertices,
             indices,
             first_index: 0,
@@ -572,6 +573,7 @@ fn raster_checks_clear_payloads_and_requires_none_for_load_or_discard() {
                     &crate::program::ManagedRasterProgram::mesh(),
                     [RasterDraw {
                         bindings: None,
+                        secondary_vertices: None,
                         vertices,
                         indices,
                         first_index: 0,
@@ -615,6 +617,7 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
                     &crate::program::ManagedRasterProgram::mesh(),
                     [RasterDraw {
                         bindings: None,
+                        secondary_vertices: None,
                         vertices: v,
                         indices: i,
                         first_index: 0,
@@ -657,6 +660,7 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
                     &crate::program::ManagedRasterProgram::mesh(),
                     [RasterDraw {
                         bindings: None,
+                        secondary_vertices: None,
                         vertices: v,
                         indices: i,
                         first_index: 0,
@@ -703,6 +707,7 @@ fn partial_raster_after_discard_does_not_claim_full_initialization() {
                     &crate::program::ManagedRasterProgram::mesh(),
                     [RasterDraw {
                         bindings: None,
+                        secondary_vertices: None,
                         vertices: v,
                         indices: i,
                         first_index: 0,

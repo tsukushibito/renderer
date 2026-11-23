@@ -105,6 +105,7 @@ impl Bundle<'_> {
             ManagedRasterProgram::from_trusted_owned_descriptor(RasterProgramDescriptor {
                 entry: descriptor.entry,
                 vertex_stride: descriptor.vertex_stride,
+                secondary_vertex_stride: 0,
                 vertex_attributes: descriptor.vertex_attributes,
                 parameters: descriptor.parameters,
                 color_outputs: descriptor.color_outputs,

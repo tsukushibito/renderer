@@ -1546,6 +1546,7 @@ mod tests {
                         &crate::program::ManagedRasterProgram::mesh(),
                         [RasterDraw {
                             bindings: None,
+                            secondary_vertices: None,
                             vertices,
                             indices,
                             first_index: 0,
@@ -2223,6 +2224,7 @@ mod tests {
                         &crate::program::ManagedRasterProgram::mesh(),
                         [RasterDraw {
                             bindings: None,
+                            secondary_vertices: None,
                             vertices,
                             indices,
                             first_index: 0,

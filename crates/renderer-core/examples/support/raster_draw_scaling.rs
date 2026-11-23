@@ -46,7 +46,9 @@ const TRIANGLE: [[f32; 2]; 3] = [[-0.75, -0.65], [0.75, -0.65], [0.0, 0.95]];
 static UNIFORM_PROGRAM: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: 12,
+    secondary_vertex_stride: 0,
     vertex_attributes: &[VertexAttribute {
+        stream: 0,
         location: 0,
         offset: 0,
         format: VertexFormat::Float32x3,
@@ -563,6 +565,7 @@ impl Scene {
                     pass.draw(
                         &self.program,
                         (0..self.draws as u32).map(|draw| RasterDraw {
+                            secondary_vertices: None,
                             vertices,
                             indices,
                             first_index: draw * 3,
@@ -588,6 +591,7 @@ impl Scene {
                     pass.draw(
                         &self.program,
                         parameters.iter().map(|&parameters| RasterDraw {
+                            secondary_vertices: None,
                             vertices,
                             indices,
                             first_index: 0,

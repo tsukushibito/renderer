@@ -308,6 +308,7 @@ mod tests {
             graph.import_buffer("mesh", &source).unwrap()
         };
         let draws = [0, 2].map(|id| RasterDraw {
+            secondary_vertices: None,
             vertices: import(id, 84),
             indices: import(id + 1, 12),
             first_index: 0,

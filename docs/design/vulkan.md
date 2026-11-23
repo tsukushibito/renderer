@@ -937,3 +937,8 @@ usageはdriverの推定、budgetは変動する目安であり、物理pageの�
 - [VMAのメモリmapping](https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/memory_mapping.html)
 - [VMA Virtual allocator](https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/virtual_allocator.html)
 - [Command資源の再利用](https://docs.vulkan.org/samples/latest/samples/performance/command_buffer_usage/README.html)
+
+
+### ライトマップ用の副頂点ストリーム
+
+標準 PBR のライトマップ付きプログラムは binding 1 に専用 UV を読む。通常の直接描画は float2、複数配置をまとめた描画は配置スロットを含む float3 を使う。Graph の構築時に宣言ストライドと主・副ストリームの頂点数を照合し、両方を頂点読み取りアクセスとして記録する。記録時は同じインデックスを用いる２つの vertex buffer をバインドする。ライトマップを使わない通常の PBR は主ストリームのみを使う。

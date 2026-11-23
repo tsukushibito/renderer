@@ -6,7 +6,7 @@
         }
     ],
     "types" : {
-        "_14" : {
+        "_13" : {
             "name" : "type.ConstantBuffer.CameraData",
             "members" : [
                 {
@@ -132,7 +132,7 @@
     ],
     "ubos" : [
         {
-            "type" : "_14",
+            "type" : "_13",
             "name" : "type.ConstantBuffer.CameraData",
             "block_size" : 464,
             "set" : 0,

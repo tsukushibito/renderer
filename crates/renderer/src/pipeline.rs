@@ -29,7 +29,7 @@ pub use view::{StandardViewOutput, StandardViewState};
 mod scene;
 pub use scene::{
     BakedLightingInput, EnvironmentMaps, MeshIndexRange, ProbeLighting, ReflectionProbeInput,
-    RenderObject, ResidentProbeLighting, SceneInput,
+    RenderObject, ResidentBakedLighting, SceneInput,
 };
 mod scene_pairs;
 pub use scene_pairs::{FrameScene, PipelineId};
@@ -528,7 +528,14 @@ impl StandardPipeline {
                     self.transforms.push(transform);
                     index
                 };
-                pbr::Draw::model(geometry, index)
+                if let Some(mut surface) = draw.lightmap {
+                    surface.transform = Some(index);
+                    pbr::Draw::Lightmapped { geometry, surface }
+                } else {
+                    pbr::Draw::model(geometry, index)
+                }
+            } else if let Some(surface) = draw.lightmap {
+                pbr::Draw::Lightmapped { geometry, surface }
             } else {
                 pbr::Draw::WorldSpaceIndexed(geometry)
             };
@@ -563,6 +570,7 @@ impl StandardPipeline {
         let command = |program: &ManagedRasterProgram, bindings, parameters| ForwardCommand {
             program: program.clone(),
             draw: RasterDraw {
+                secondary_vertices: None,
                 vertices: mesh.vertices,
                 indices: mesh.indices,
                 first_index: mesh.first_index,

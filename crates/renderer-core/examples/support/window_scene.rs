@@ -112,6 +112,7 @@ pub fn build(
             [position[0], position[1], position[2], 1.0],
         ];
         RasterDraw {
+            secondary_vertices: None,
             vertices,
             indices,
             first_index: 0,

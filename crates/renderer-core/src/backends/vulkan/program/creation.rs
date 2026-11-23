@@ -177,8 +177,13 @@ impl Program {
             .unwrap_or(0);
         if limits.max_push_constants_size < managed.parameter_size()
             || limits.max_vertex_input_attributes < managed.vertex_attributes().len() as u32
-            || (!managed.is_fullscreen() && limits.max_vertex_input_bindings < 1)
-            || limits.max_vertex_input_binding_stride < managed.vertex_stride()
+            || (!managed.is_fullscreen()
+                && limits.max_vertex_input_bindings
+                    < 1 + u32::from(managed.descriptor().secondary_vertex_stride != 0))
+            || limits.max_vertex_input_binding_stride
+                < managed
+                    .vertex_stride()
+                    .max(managed.descriptor().secondary_vertex_stride)
             || managed.vertex_attributes().iter().any(|attribute| {
                 attribute.offset > limits.max_vertex_input_attribute_offset
                     || attribute.location >= limits.max_vertex_input_attributes
@@ -457,17 +462,21 @@ impl Program {
         } else {
             &stages[..]
         };
-        let bindings = [vk::VertexInputBindingDescription {
-            binding: 0,
-            stride: program.vertex_stride(),
+        let strides = [
+            program.vertex_stride(),
+            program.descriptor().secondary_vertex_stride,
+        ];
+        let bindings = [0, 1].map(|binding| vk::VertexInputBindingDescription {
+            binding,
+            stride: strides[binding as usize],
             input_rate: vk::VertexInputRate::VERTEX,
-        }];
+        });
         let attributes: Vec<_> = program
             .vertex_attributes()
             .iter()
             .map(|attribute| vk::VertexInputAttributeDescription {
                 location: attribute.location,
-                binding: 0,
+                binding: attribute.stream,
                 format: vertex_format(attribute.format),
                 offset: attribute.offset,
             })
@@ -475,6 +484,8 @@ impl Program {
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(if program.is_fullscreen() {
                 &[]
+            } else if strides[1] == 0 {
+                &bindings[..1]
             } else {
                 &bindings
             })

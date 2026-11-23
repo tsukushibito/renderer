@@ -14,6 +14,7 @@ pub struct Mesh {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Draw {
+    pub lightmap: Option<crate::pbr::DrawLightmap>,
     pub mesh: Mesh,
     pub material: MaterialHandle,
     /// None selects world-space vertex records.
@@ -83,6 +84,7 @@ impl Draw {
     pub fn new(mesh: Mesh, material: MaterialHandle) -> Self {
         Self {
             mesh,
+            lightmap: None,
             material,
             transform: None,
             sort_center: mesh.bounds.center(),

@@ -120,6 +120,7 @@ fn draws(graph: &mut Graph, frame: usize) -> [RasterDraw; 4] {
             0.125
         };
         RasterDraw {
+            secondary_vertices: None,
             vertices,
             indices,
             first_index: 0,

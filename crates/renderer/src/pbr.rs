@@ -7,8 +7,10 @@ mod defaults;
 pub(crate) mod draw;
 mod history;
 mod probes;
+mod surface_lightmaps;
+pub use surface_lightmaps::{LightmapAddress, LightmapPage, SurfaceLightmaps};
 mod reflections;
-pub use probes::{BakedLighting, BakedLightingView, DiffuseLighting, LightmapChart};
+pub use probes::{BakedLighting, BakedLightingView, DiffuseLighting};
 pub use reflections::{
     LocalReflections, ReflectionProbeDesc, ReflectionProbeView, ReflectionProbes,
 };
@@ -26,12 +28,12 @@ pub use crate::pipeline::Technique;
 pub use culling::{CascadeClip, Frustum, ViewCulling};
 pub use defaults::DefaultResourceError;
 pub use defaults::{DefaultResources, DefaultViews, Defaults, PreparedDefaults};
-pub use draw::{Draw, GraphMaterial, IndexedDraw, MaterialTextures};
+pub use draw::{Draw, DrawLightmap, GraphMaterial, IndexedDraw, MaterialTextures};
 pub(crate) use history::MapHistory;
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::Transform;
-pub use material::{LightmapBinding, MaterialFactors, MaterialUniform, ResidentMaterialUniform};
+pub use material::{MaterialFactors, MaterialUniform, ResidentMaterialUniform};
 pub use rect_shadows::{RectShadowFace, RectShadowFrame, RectShadowHistory, RectShadowUpdates};
 pub use unshadowed::UnshadowedView;
 pub use vertex::PbrVertex;
@@ -100,6 +102,8 @@ pub struct SceneLimits {
     pub frames_in_flight: NonZeroUsize,
     pub max_draws: usize,
     pub max_materials: usize,
+    /// Maximum static lightmapped commands in this view.
+    pub max_lightmapped_draws: usize,
     /// Maximum local lights per view. Zero reserves no light data or programs.
     pub max_local_lights: usize,
     /// Maximum shadow-casting rectangles in one view.

@@ -24,6 +24,7 @@ struct Draw {
 }
 
 struct Group {
+    page: Option<usize>,
     material: usize,
     draws: Vec<Draw>,
 }
@@ -48,17 +49,20 @@ pub(in super::super) struct Layout {
 
 impl Layout {
     pub fn new(scene: &Scene) -> Result<Option<Self>, Error> {
-        let mut by_material = vec![Vec::new(); scene.materials.len()];
+        let mut by_material = std::collections::BTreeMap::new();
         for (index, primitive) in scene.primitives.iter().enumerate() {
             if !scene.materials[primitive.material].blend {
-                by_material[primitive.material].push(index);
+                by_material
+                    .entry((primitive.material, primitive.surface.map(|s| s.page)))
+                    .or_insert_with(Vec::new)
+                    .push(index);
             }
         }
         let mut groups = Vec::new();
         let mut tables = Vec::new();
         let mut vertex_bytes = 0usize;
         let mut index_count = 0u32;
-        for (material, members) in by_material.into_iter().enumerate() {
+        for ((material, page), members) in by_material {
             if members.is_empty() {
                 continue;
             }
@@ -79,7 +83,11 @@ impl Layout {
             }
             let templates = draws.iter().map(|draw| draw.range).collect::<Vec<_>>();
             tables.push(IndexedIndirectTable::new(&templates)?);
-            groups.push(Group { material, draws });
+            groups.push(Group {
+                material,
+                page,
+                draws,
+            });
         }
         let _ = usize::try_from(u64::from(index_count) * size_of::<u32>() as u64)?;
         if groups.is_empty() {
@@ -155,6 +163,7 @@ pub(super) struct Resident {
     vertices: ImportBuffer,
     indices: ImportBuffer,
     aabbs: Option<ImportBuffer>,
+    lightmap_uv: Option<ImportBuffer>,
 }
 
 impl Resident {
@@ -176,6 +185,24 @@ impl Resident {
             &vertices,
             &indices,
         )?;
+        let lightmap_uv = if layout.groups.iter().any(|g| g.page.is_some()) {
+            let mut bytes = Vec::with_capacity(layout.vertex_bytes / 48 * 12);
+            for draw in layout.groups.iter().flat_map(|g| &g.draws) {
+                let p = &scene.primitives[draw.primitive];
+                if let Some(surface) = p.surface {
+                    let range = p.lightmap.as_ref().unwrap().0.clone();
+                    for uv in scene.lightmap_uv[range].as_chunks::<8>().0 {
+                        bytes.extend_from_slice(uv);
+                        bytes.extend_from_slice(&(surface.slot as f32).to_le_bytes());
+                    }
+                } else {
+                    bytes.resize(bytes.len() + p.vertices.len() / 48 * 12, 0);
+                }
+            }
+            Some(upload_buffer(backend, upload_owners, &bytes)?)
+        } else {
+            None
+        };
         let aabbs = if indirect {
             Some(upload_buffer(
                 backend,
@@ -189,6 +216,7 @@ impl Resident {
             vertices,
             indices,
             aabbs,
+            lightmap_uv,
             layout: Arc::clone(layout),
         })
     }
@@ -220,6 +248,11 @@ impl Resident {
             vertices,
             indices,
             commands,
+            lightmap_uv: self
+                .lightmap_uv
+                .as_ref()
+                .map(|v| graph.import_buffer("packed lightmap UV", v))
+                .transpose()?,
         })
     }
 }
@@ -229,6 +262,7 @@ pub(super) struct Frame<'a> {
     vertices: BufferHandle,
     indices: BufferHandle,
     commands: Option<&'a [Option<IndexedIndirectArgs>]>,
+    lightmap_uv: Option<BufferHandle>,
 }
 
 impl Frame<'_> {
@@ -261,41 +295,46 @@ impl Frame<'_> {
         out: &mut Vec<pbr::Draw>,
         visible: impl Fn(usize) -> bool,
         include_material: impl Fn(usize) -> bool,
+        pages: &[renderer_core::graph::ImageView],
     ) {
-        if let Some(commands) = self.commands {
-            out.extend(
-                self.layout
-                    .groups
-                    .iter()
-                    .zip(commands)
-                    .filter_map(|(group, args)| {
-                        args.map(|args| pbr::Draw::WorldSpaceIndirect {
+        for (index, g) in self.layout.groups.iter().enumerate() {
+            if !include_material(g.material) {
+                continue;
+            }
+            let surface = g
+                .page
+                .map(|page| pbr::DrawLightmap::packed(self.lightmap_uv.unwrap(), pages[page]));
+            if let Some(commands) = self.commands {
+                if let Some(args) = commands[index] {
+                    out.push(match surface {
+                        Some(surface) => pbr::Draw::LightmappedIndirect {
                             args,
-                            material: group.material,
-                        })
-                    }),
-            );
-        } else {
-            out.extend(
-                self.layout
-                    .groups
-                    .iter()
-                    .filter(|group| include_material(group.material))
-                    .flat_map(|group| {
-                        group.visible_draws(&visible).map(move |draw| {
-                            pbr::Draw::WorldSpaceIndexed(pbr::IndexedDraw {
-                                vertices: self.vertices,
-                                indices: self.indices,
-                                first_index: draw.range.first_index,
-                                index_count: draw.range.index_count,
-                                material: group.material,
-                            })
-                        })
-                    }),
-            );
+                            material: g.material,
+                            surface,
+                        },
+                        None => pbr::Draw::WorldSpaceIndirect {
+                            args,
+                            material: g.material,
+                        },
+                    });
+                }
+            } else {
+                for draw in g.visible_draws(&visible) {
+                    let geometry = pbr::IndexedDraw {
+                        vertices: self.vertices,
+                        indices: self.indices,
+                        first_index: draw.range.first_index,
+                        index_count: draw.range.index_count,
+                        material: g.material,
+                    };
+                    out.push(match surface {
+                        Some(surface) => pbr::Draw::Lightmapped { geometry, surface },
+                        None => pbr::Draw::WorldSpaceIndexed(geometry),
+                    });
+                }
+            }
         }
     }
-
     pub fn draw(
         &self,
         raster: &mut RasterPass<'_, '_>,
@@ -327,6 +366,7 @@ impl Frame<'_> {
                         .visible_draws(|index| frustum.overlaps(bounds[index]))
                         .map(move |draw| RasterDraw {
                             bindings: Some(bindings[group.material]),
+                            secondary_vertices: None,
                             vertices: self.vertices,
                             indices: self.indices,
                             first_index: draw.range.first_index,

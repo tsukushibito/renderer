@@ -33,10 +33,18 @@ impl MeshIndexRange {
     }
 }
 
+/// Surface lighting is valid for the mesh and world pose used by the baker.
+#[derive(Clone, Copy, Debug)]
+pub struct StaticPlacement {
+    id: u32,
+    mesh: MeshHandle,
+    transform: Transform,
+}
 /// Geometry and material selection, independent of any frame Graph or camera.
 #[derive(Clone, Copy, Debug)]
 pub struct RenderObject {
     pub mesh: MeshHandle,
+    pub lightmap: Option<StaticPlacement>,
     pub material: MaterialHandle,
     /// Optional independent joint pose of this mesh.
     pub pose: Option<crate::mesh::SkinPoseId>,
@@ -51,6 +59,7 @@ impl RenderObject {
     pub fn new(mesh: MeshHandle, material: MaterialHandle) -> Self {
         Self {
             mesh,
+            lightmap: None,
             material,
             pose: None,
             index_range: None,
@@ -59,6 +68,21 @@ impl RenderObject {
             casts_shadow: true,
             tint: [1.; 4],
         }
+    }
+    /// Associate this mesh at its current transform with a stable baked placement.
+    #[must_use]
+    pub fn with_lightmap(mut self, placement: u32) -> Self {
+        self.lightmap = Some(StaticPlacement {
+            id: placement,
+            mesh: self.mesh,
+            transform: self.transform,
+        });
+        self
+    }
+    pub(crate) fn placement(&self) -> Option<u32> {
+        self.lightmap
+            .filter(|p| p.mesh == self.mesh && p.transform == self.transform && self.pose.is_none())
+            .map(|p| p.id)
     }
     /// Share a vertex/index allocation across several objects or material slots.
     /// Whole-mesh bounds conservatively bound the selected submesh.
@@ -142,7 +166,9 @@ pub struct ProbeLighting<'a> {
 }
 
 /// Owns the GPU registrations until dropped. Share across cameras on the same renderer.
-pub struct ResidentProbeLighting {
+pub struct ResidentBakedLighting {
+    pub(super) pages: Vec<renderer_core::runtime::ManagedImage>,
+    pub(super) placements: std::collections::BTreeMap<u32, crate::pbr::LightmapAddress>,
     pub(super) diffuse: Option<renderer_core::runtime::ManagedImage>,
     pub(super) reflections: Option<renderer_core::runtime::ManagedImage>,
 }
@@ -184,6 +210,7 @@ impl<'a> ReflectionProbeInput<'a> {
 /// Borrow the same object list for any number of cameras.
 #[derive(Clone, Copy)]
 pub struct SceneInput<'a> {
+    pub(super) surfaces: Option<&'a ResidentBakedLighting>,
     pub(super) poses: Option<&'a crate::mesh::FramePoses>,
     pub meshes: &'a Meshes,
     pub materials: &'a Materials,
@@ -203,6 +230,7 @@ pub struct SceneInput<'a> {
 impl<'a> SceneInput<'a> {
     pub fn new(meshes: &'a Meshes, materials: &'a Materials, objects: &'a [RenderObject]) -> Self {
         Self {
+            surfaces: None,
             poses: None,
             meshes,
             materials,
@@ -216,7 +244,8 @@ impl<'a> SceneInput<'a> {
         }
     }
     /// Apply the same scenario interpolation to diffuse and specular lighting.
-    pub fn with_probe_lighting(mut self, lighting: &'a ResidentProbeLighting, blend: f32) -> Self {
+    pub fn with_baked_lighting(mut self, lighting: &'a ResidentBakedLighting, blend: f32) -> Self {
+        self.surfaces = Some(lighting);
         self.baked_lighting = lighting
             .diffuse
             .as_ref()

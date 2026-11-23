@@ -249,6 +249,15 @@ pub(super) fn build(
                 first_transform: 0,
                 instance_count: 1,
             }
+        } else if let Some(address) = scene.primitives[index].surface {
+            Draw::Lightmapped {
+                geometry: geometry(index),
+                surface: pbr::DrawLightmap::new(
+                    workspace.lightmap_uv[index].unwrap(),
+                    workspace.lightmap_pages[address.page],
+                    address,
+                ),
+            }
         } else {
             Draw::WorldSpaceIndexed(geometry(index))
         }
@@ -256,7 +265,12 @@ pub(super) fn build(
 
     inputs.opaque.clear();
     let indirect = if let Some(packed) = &packed {
-        packed.append_pbr_draws(&mut inputs.opaque, visible, include_material);
+        packed.append_pbr_draws(
+            &mut inputs.opaque,
+            visible,
+            include_material,
+            &workspace.lightmap_pages,
+        );
         packed.is_indirect()
     } else {
         inputs

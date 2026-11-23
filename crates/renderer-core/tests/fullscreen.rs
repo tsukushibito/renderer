@@ -24,6 +24,7 @@ const BACKGROUND: [f32; 4] = [0.25, 0.0, 0.0, 0.0];
 static FULLSCREEN: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: 0,
+    secondary_vertex_stride: 0,
     vertex_attributes: &[],
     parameters: RasterParameterLayout {
         size: 0,
@@ -206,6 +207,7 @@ mod native {
             ManagedRasterProgram::from_trusted_owned_descriptor(RasterProgramDescriptor {
                 entry: &entry,
                 vertex_stride: FULLSCREEN.vertex_stride,
+                secondary_vertex_stride: 0,
                 vertex_attributes: FULLSCREEN.vertex_attributes,
                 parameters: FULLSCREEN.parameters,
                 color_outputs: FULLSCREEN.color_outputs,
@@ -275,6 +277,7 @@ mod native {
                         &ManagedRasterProgram::mesh(),
                         [RasterDraw {
                             bindings: None,
+                            secondary_vertices: None,
                             vertices,
                             indices,
                             first_index: 0,

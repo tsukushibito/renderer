@@ -581,6 +581,7 @@ mod tests {
         graph.upload_buffer(name, indices, 0, &[0; 12]).unwrap();
         RasterDraw {
             bindings: None,
+            secondary_vertices: None,
             vertices,
             indices,
             first_index: 0,
@@ -1193,6 +1194,10 @@ mod tests {
             .zip([first, second])
         {
             let indexed = actual.indexed.unwrap();
+            assert_eq!(
+                indexed.secondary_vertices,
+                expected.secondary_vertices.map(|v| v.index)
+            );
             assert_eq!(indexed.vertices, expected.vertices.index);
             assert_eq!(indexed.indices, expected.indices.index);
             assert_eq!(indexed.index_count, expected.index_count);

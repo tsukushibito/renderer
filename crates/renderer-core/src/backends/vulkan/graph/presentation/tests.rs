@@ -238,6 +238,7 @@ fn image_frame(
                     &crate::program::ManagedRasterProgram::mesh(),
                     [RasterDraw {
                         bindings: None,
+                        secondary_vertices: None,
                         vertices,
                         indices,
                         first_index: 0,

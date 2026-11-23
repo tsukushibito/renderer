@@ -106,6 +106,7 @@ fn quad(graph: &mut Graph, invalid_last_index: bool) -> RasterDraw {
         .unwrap();
     RasterDraw {
         bindings: None,
+        secondary_vertices: None,
         vertices,
         indices,
         first_index: 0,

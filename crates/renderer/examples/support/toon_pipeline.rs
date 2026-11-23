@@ -98,6 +98,7 @@ impl ViewPipeline for ToonPipeline {
             let tint = std::array::from_fn(|i| obj.tint[i] * mat.color[i]);
             self.draws.push(RasterDraw {
                 bindings: None,
+                secondary_vertices: None,
                 vertices: mesh.vertices,
                 indices: mesh.indices,
                 first_index: mesh.first_index,

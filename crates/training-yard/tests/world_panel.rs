@@ -75,6 +75,7 @@ fn world(graph: &mut Graph, panel: ImageHandle) -> Result<ImageHandle, GraphErro
     let color = graph.image("world color", SCENE)?;
     let depth = graph.image("world depth", DEPTH)?;
     let draw = RasterDraw {
+        secondary_vertices: None,
         vertices,
         indices,
         first_index: 0,

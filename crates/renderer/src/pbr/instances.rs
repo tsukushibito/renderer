@@ -93,6 +93,18 @@ impl Transform {
         })
     }
 
+    /// Transform a local point into render-world coordinates.
+    pub fn transform_point(self, p: [f32; 3]) -> [f32; 3] {
+        self.model
+            .map(|[x, y, z, t]| x * p[0] + y * p[1] + z * p[2] + t)
+    }
+
+    /// Apply the inverse transpose. Normalize the result before using it as a direction.
+    pub fn transform_normal(self, n: [f32; 3]) -> [f32; 3] {
+        self.normal
+            .map(|[x, y, z, _]| x * n[0] + y * n[1] + z * n[2])
+    }
+
     pub fn columns(self) -> [[f32; 4]; 4] {
         std::array::from_fn(|col| {
             [

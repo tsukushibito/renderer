@@ -98,7 +98,8 @@ try {
         if ($file.Extension -ceq '.hlsli') { $includes[$file.Name] = Hash $canonical }
     }
     $shaders = @(
-        'pick.vert', 'pick.frag', 'selection_outline.frag',
+        'pbr_lightmap_transformed.vert', 'pbr_lightmap_transformed_small.vert', 'gbuffer_lightmap_transformed.vert', 'gbuffer_lightmap_transformed_small.vert',
+        'pbr_lightmap.vert', 'gbuffer_lightmap.vert', 'pick.vert', 'pick.frag', 'selection_outline.frag',
         'pbr.vert', 'pbr.frag', 'toon.frag', 'canvas.frag', 'canvas_fill.frag', 'shadow.vert', 'shadow.frag', 'bloom_extract_downsample.comp',
         'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp',
         'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag',
@@ -119,6 +120,12 @@ try {
             'bloom_extract_downsample.comp' { $shaderSource = 'bloom_downsample.comp'; $defines = @('BLOOM_EXTRACT=1') }
             'pbr_all_lights.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=1') }
             'pbr_forward_plus.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=2') }
+            'pbr_lightmap_transformed.vert' { $shaderSource = 'pbr_transformed.vert'; $defines = @('RENDERER_LIGHTMAP=1', 'RENDERER_MODEL_LIGHTMAP=1') }
+            'pbr_lightmap_transformed_small.vert' { $shaderSource = 'pbr_transformed.vert'; $defines = @('RENDERER_LIGHTMAP=1', 'RENDERER_MODEL_LIGHTMAP=1', 'RENDERER_TRANSFORM_RECORDS=64') }
+            'gbuffer_lightmap_transformed.vert' { $shaderSource = 'pbr_transformed.vert'; $defines = @('RENDERER_LIGHTMAP=1', 'RENDERER_MODEL_LIGHTMAP=1', 'RENDERER_GBUFFER_VERTEX=1') }
+            'gbuffer_lightmap_transformed_small.vert' { $shaderSource = 'pbr_transformed.vert'; $defines = @('RENDERER_LIGHTMAP=1', 'RENDERER_MODEL_LIGHTMAP=1', 'RENDERER_TRANSFORM_RECORDS=64', 'RENDERER_GBUFFER_VERTEX=1') }
+            'pbr_lightmap.vert' { $shaderSource = 'pbr.vert'; $defines = @('RENDERER_LIGHTMAP=1') }
+            'gbuffer_lightmap.vert' { $shaderSource = 'gbuffer.vert'; $defines = @('RENDERER_LIGHTMAP=1') }
             'pbr_instancing.vert' { $shaderSource = 'pbr.vert'; $defines = @('BISTRO_INSTANCING=1') }
             'pbr_transformed_small.vert' { $shaderSource = 'pbr_transformed.vert'; $defines = @('RENDERER_TRANSFORM_RECORDS=64') }
             'gbuffer_transformed.vert' { $shaderSource = 'pbr_transformed.vert'; $defines = @('RENDERER_GBUFFER_VERTEX=1') }
@@ -165,7 +172,7 @@ try {
         $reflection = [regex]::Replace($dump.Substring(0, $end), '(?m)[ \t]+$', '')
         $reflectionPath = Join-Path $temporaryRoot ($name + '.reflection.txt')
         Write-Text $reflectionPath $reflection
-        $hasInline = $name -cin @('shadow.vert', 'pbr_instancing.vert', 'pick.vert') -or
+        $hasInline = $name -cin @('pbr_lightmap.vert','gbuffer_lightmap.vert','shadow.vert', 'pbr_instancing.vert', 'pick.vert') -or
             ($stage -ceq 'vert' -and $name.Contains('_transformed'))
         if (($reflection -match '\bcb7\b') -ne $hasInline) {
             throw "Unexpected inline cbuffer contract in $name reflection"

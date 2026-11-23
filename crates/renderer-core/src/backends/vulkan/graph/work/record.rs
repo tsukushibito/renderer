@@ -265,6 +265,9 @@ impl TransferPayload for GraphWork {
                                                 });
                                             NativeRasterGeometry::Indexed {
                                                 vertices: vertices.handle,
+                                                secondary_vertices: indexed
+                                                    .secondary_vertices
+                                                    .map(|id| self.resource(id).buffer().handle),
                                                 indices: indices.handle,
                                                 command,
                                             }

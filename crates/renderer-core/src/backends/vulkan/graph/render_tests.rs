@@ -180,6 +180,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
                         &crate::program::ManagedRasterProgram::mesh(),
                         [RasterDraw {
                             bindings: None,
+                            secondary_vertices: None,
                             vertices,
                             indices,
                             first_index: 0,
@@ -247,6 +248,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
                         [
                             RasterDraw {
                                 bindings: None,
+                                secondary_vertices: None,
                                 vertices,
                                 indices,
                                 first_index: 0,
@@ -256,6 +258,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
                             },
                             RasterDraw {
                                 bindings: None,
+                                secondary_vertices: None,
                                 vertices,
                                 indices,
                                 first_index: 0,
@@ -408,6 +411,7 @@ fn vulkan_owned_raster_descriptor_capacity_recovery() {
         };
         let mut draws = [RasterDraw {
             bindings: Some(first),
+            secondary_vertices: None,
             vertices,
             indices,
             first_index: 0,
@@ -519,6 +523,7 @@ fn batch_draws(draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>) 
         .into_iter()
         .map(|(vertices, indices, index_count, parameters)| RasterDraw {
             bindings: None,
+            secondary_vertices: None,
             vertices,
             indices,
             first_index: 0,
@@ -692,6 +697,7 @@ fn opaque_batch_comparison(
                             &crate::program::ManagedRasterProgram::mesh(),
                             [RasterDraw {
                                 bindings: None,
+                                secondary_vertices: None,
                                 vertices,
                                 indices,
                                 first_index: 0,
@@ -1155,6 +1161,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                             &crate::program::ManagedRasterProgram::mesh(),
                             [RasterDraw {
                                 bindings: None,
+                                secondary_vertices: None,
                                 vertices,
                                 indices,
                                 first_index: 0,
@@ -1377,6 +1384,7 @@ fn vulkan_graph_prepared_programs_survive_pending_work() {
                     &crate::program::ManagedRasterProgram::mesh(),
                     [RasterDraw {
                         bindings: None,
+                        secondary_vertices: None,
                         vertices,
                         indices,
                         first_index: 0,
@@ -1561,6 +1569,7 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                             &crate::program::ManagedRasterProgram::mesh(),
                             [RasterDraw {
                                 bindings: None,
+                                secondary_vertices: None,
                                 vertices,
                                 indices,
                                 first_index: 0,
@@ -1622,6 +1631,7 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                             &crate::program::ManagedRasterProgram::mesh(),
                             [RasterDraw {
                                 bindings: None,
+                                secondary_vertices: None,
                                 vertices: blue_vertices,
                                 indices: blue_indices,
                                 first_index: 0,
@@ -1736,6 +1746,7 @@ fn vulkan_graph_compute_copy_and_pending_handoff() {
                             &crate::program::ManagedRasterProgram::mesh(),
                             [RasterDraw {
                                 bindings: None,
+                                secondary_vertices: None,
                                 vertices,
                                 indices,
                                 first_index: 0,

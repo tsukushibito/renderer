@@ -10,7 +10,18 @@ struct MeshVertex {
     BISTRO_LOCATION(1) float3 normal : TEXCOORD1;
     BISTRO_LOCATION(2) float4 tangent : TEXCOORD2;
     BISTRO_LOCATION(3) float2 uv : TEXCOORD3;
+#ifdef RENDERER_LIGHTMAP
+    BISTRO_LOCATION(4) float3 surface_uv : TEXCOORD4;
+#endif
 };
+
+#if defined(RENDERER_LIGHTMAP) && !defined(RENDERER_MODEL_LIGHTMAP)
+struct SurfacePlacement { uint slot; };
+#ifdef __spirv__
+[[vk::push_constant]]
+#endif
+ConstantBuffer<SurfacePlacement> surface_placement : register(b7, space0);
+#endif
 
 float4 project_vertex(float4x4 matrix_columns, float3 world) {
     // Nearby world-space geometry can cancel large MVP terms. Use the

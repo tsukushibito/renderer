@@ -432,6 +432,7 @@ fn raster_graph(pool: &mut GraphPool, frame: usize) -> Graph {
     let count = [0, 1, 4, 2][frame % 4];
     let mut draws = std::array::from_fn::<_, 4, _>(|draw| RasterDraw {
         bindings: None,
+        secondary_vertices: None,
         vertices: vertices[draw % 2],
         indices: indices[draw % 2],
         first_index: 0,
@@ -601,6 +602,7 @@ fn shader_bindings_graph(pool: &mut GraphPool, frame: usize) -> Graph {
                 .unwrap()
         });
         let mut draws = std::array::from_fn::<_, 2, _>(|draw| RasterDraw {
+            secondary_vertices: None,
             vertices,
             indices,
             first_index: 0,

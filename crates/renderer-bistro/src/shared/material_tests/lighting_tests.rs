@@ -17,6 +17,7 @@ fn panel(name: &'static str) -> Case {
 
 fn empty_scene() -> Scene {
     Scene {
+        lightmap_uv: Vec::new(),
         vertices: Vec::new(),
         indices: Vec::new(),
         primitives: Vec::new(),
@@ -99,6 +100,7 @@ fn constant_levels(width: u32, height: u32, colors: &[V3]) -> ibl::Image {
 fn environment(diffuse: ibl::Image, specular: ibl::Image) -> ibl::Environment {
     let max_prefilter_lod = (specular.mips.len() - 1) as u32;
     ibl::Environment {
+        lightmaps: Vec::new(),
         reflection_probes: None,
         diffuse,
         specular,

@@ -21,7 +21,7 @@ pub struct MeshUploadProgress {
 struct Transfer {
     mesh: MeshHandle,
     end: u64,
-    exports: Option<[BufferHandle; 2]>,
+    exports: Option<[Option<BufferHandle>; 3]>,
 }
 
 /// Exclusive setup borrows the registry until it publishes or restores these versions.
@@ -67,7 +67,7 @@ impl MeshCheckpoint {
                 // The previous drawable may still be referenced by a CPU graph.
                 if let Some(active) = old_active.take() {
                     meshes.retired.push(super::RetiredVersion {
-                        keys: active.buffers.map(|b| Some(b.key())),
+                        keys: active.buffers.map(|b| b.map(|b| b.key())),
                         _layout: Some(active.layout),
                     });
                 }
@@ -80,7 +80,7 @@ impl MeshCheckpoint {
             } else {
                 // Convert a published staging version back to keys for retryable deletion.
                 if let Some(active) = asset.active.take() {
-                    asset.upload.keys = active.buffers.map(|b| Some(b.key()));
+                    asset.upload.keys = active.buffers.map(|b| b.map(|b| b.key()));
                 }
                 for key in &mut asset.upload.keys {
                     if let Some(k) = *key {
@@ -182,7 +182,7 @@ impl Meshes {
         for mesh in selected {
             let asset = &self.assets[mesh];
             if let Some(active) = &asset.active {
-                for buffer in &active.buffers {
+                for buffer in active.buffers.iter().flatten() {
                     runtime.refresh_buffer(buffer.key())?;
                 }
             }
@@ -261,7 +261,8 @@ impl Meshes {
                 .get_mut(&transfer.mesh)
                 .expect("registered mesh");
             if let Some(handles) = transfer.exports {
-                let buffers = handles.map(|h| sent.export_buffer(h).expect("accepted mesh export"));
+                let buffers = handles
+                    .map(|h| h.map(|h| sent.export_buffer(h).expect("accepted mesh export")));
                 asset.retire_active(&mut self.retired);
                 asset.active = Some(Resident {
                     layout: asset.layout.clone(),
@@ -320,9 +321,13 @@ impl super::Upload {
         runtime: &mut Runtime,
         geometry: &GeometryData,
         end: u64,
-    ) -> Result<Option<[BufferHandle; 2]>, DefaultResourceError> {
-        let sizes = [geometry.vertex_byte_len(), geometry.index_byte_len()];
-        let mut exports = [None; 2];
+    ) -> Result<Option<[Option<BufferHandle>; 3]>, DefaultResourceError> {
+        let sizes = [
+            geometry.vertex_byte_len(),
+            geometry.index_byte_len(),
+            geometry.secondary_byte_len(),
+        ];
+        let mut exports = [None; 3];
         let complete = end == geometry.byte_len();
         let mut base = 0;
         for (n, ((name, pass, stream), size)) in [
@@ -332,11 +337,19 @@ impl super::Upload {
                 GeometryStream::Vertices,
             ),
             ("mesh indices", "mesh index upload", GeometryStream::Indices),
+            (
+                "mesh UV",
+                "mesh UV upload",
+                GeometryStream::SecondaryVertices,
+            ),
         ]
         .into_iter()
         .zip(sizes)
         .enumerate()
         {
+            if size == 0 {
+                continue;
+            }
             let from = self.accepted_bytes.saturating_sub(base).min(size);
             let to = end.saturating_sub(base).min(size);
             base += size;
@@ -361,6 +374,6 @@ impl super::Upload {
                 exports[n] = Some(target);
             }
         }
-        Ok(complete.then(|| exports.map(|h| h.expect("complete upload exports both streams"))))
+        Ok(complete.then_some(exports))
     }
 }
