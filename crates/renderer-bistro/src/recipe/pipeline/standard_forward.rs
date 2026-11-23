@@ -7,7 +7,7 @@ use renderer::pbr::{Draw, GraphMaterial};
 use super::{
     Built, Error, GraphPool, Options, Resident, SceneImages, SubmissionMode, Workspace,
     caster_revision, finish_frame, import_environment, import_frame, material_visible,
-    select_draws, shadow_casters,
+    select_draws, shadow_casters, sun_caster_revision,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::pbr::{self, IndexedDraw, PbrDrawInput, ShadowSource, SunShadows};
@@ -282,7 +282,7 @@ pub(super) fn build(
             .as_ref()
             .map(|reuse| {
                 let pose_revision = motion.map_or(0, |_| u64::from(progress.to_bits()) << 32);
-                let revision = caster_revision(options) | pose_revision;
+                let revision = sun_caster_revision(options) | pose_revision;
                 reuse
                     .history
                     .begin_view(&mut graph, &view, [revision; pbr::CASCADE_COUNT])

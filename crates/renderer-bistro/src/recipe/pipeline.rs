@@ -979,6 +979,10 @@ fn caster_revision(options: &Options) -> u64 {
     u64::from(options.alpha_only) | (u64::from(options.instances.enabled()) << 2)
 }
 
+fn sun_caster_revision(options: &Options) -> u64 {
+    caster_revision(options) | (u64::from(options.shadows) << 1)
+}
+
 struct ShadowReuse {
     history: ShadowHistory,
     rect_history: pbr::RectShadowHistory,
@@ -994,7 +998,7 @@ fn begin_shadow_frame(
     matrices: &[[[f32; 4]; 4]; shadow::CASCADE_COUNT],
     options: &Options,
 ) -> Result<Option<ShadowFrame>, GraphError> {
-    let revision = caster_revision(options);
+    let revision = sun_caster_revision(options);
     reuse
         .map(|reuse| {
             let keys = matrices.map(|matrix| ShadowKey::new(matrix, revision));
@@ -1902,8 +1906,10 @@ mod tests {
         options.alpha_only = !options.alpha_only;
         assert_ne!(original, caster_revision(&options));
         options.alpha_only = !options.alpha_only;
+        let old_sun = sun_caster_revision(&options);
         options.shadows = !options.shadows;
-        assert_ne!(original, caster_revision(&options));
+        assert_eq!(original, caster_revision(&options));
+        assert_ne!(old_sun, sun_caster_revision(&options));
     }
 
     #[test]
