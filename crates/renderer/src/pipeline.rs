@@ -231,10 +231,16 @@ impl StandardPipeline {
             .max()
             .unwrap_or(0);
         let resources = count(mats, 1 + (2 * bindings).max(4))?;
+        // Distinct static meshes and pages can require two more imports per
+        // placement. Shared imports are deduplicated by the graph.
+        let surface_imports = count(limits.max_lightmapped_draws, 2)?;
         preparation.reserve_buffer(pbr::MaterialUniform::DESC, mats)?;
         preparation.add_requirements(
             GraphRequirements {
-                resources: resources.checked_add(count(max, 2)?).ok_or_else(overflow)?,
+                resources: resources
+                    .checked_add(count(max, 2)?)
+                    .and_then(|n| n.checked_add(surface_imports))
+                    .ok_or_else(overflow)?,
                 passes: mats,
                 accesses: count(draws, bindings)?
                     .checked_add(mats)
@@ -244,6 +250,13 @@ impl StandardPipeline {
                 upload_bytes: count(mats, crate::passes::pbr::MATERIAL_BYTES)?,
                 name_bytes: count(resources, 40)?
                     .checked_add(count(max, 25)?)
+                    .and_then(|n| {
+                        n.checked_add(
+                            limits
+                                .max_lightmapped_draws
+                                .checked_mul("mesh UVmaterial texture".len())?,
+                        )
+                    })
                     .ok_or_else(overflow)?,
                 ..Default::default()
             },

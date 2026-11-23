@@ -197,6 +197,8 @@ impl RendererSetup {
         let mut seen_definitions = HashSet::new();
         let mut definitions = Vec::new();
         let mut pbr_objects = 0;
+        let mut mapped = 0usize;
+        let mut has_surface_mesh = false;
         let mut casters = 0;
         let mut uniforms = 0usize;
         let mut mesh_bytes = 0u64;
@@ -211,6 +213,12 @@ impl RendererSetup {
             let instance = assets.materials.get(object.material)?;
             if matches!(instance, MaterialInstance::Pbr(_)) {
                 pbr_objects += 1;
+                if object.placement().is_some() {
+                    if geometry.secondary_byte_len() == 0 {
+                        return Err("static placement requires a mesh with lightmap UVs".into());
+                    }
+                    mapped += 1;
+                }
             }
             if object.casts_shadow {
                 casters += 1;
@@ -224,6 +232,7 @@ impl RendererSetup {
         {
             let geometry = assets.meshes.geometry(mesh)?;
             if seen.insert(mesh) {
+                has_surface_mesh |= geometry.secondary_byte_len() > 0;
                 meshes.push(mesh);
                 mesh_bytes = mesh_bytes
                     .checked_add(geometry.byte_len())
@@ -255,12 +264,11 @@ impl RendererSetup {
                 .ok_or("scene capacity overflow")
         };
         let limits = SceneLimits {
-            max_lightmapped_draws: assets
-                .objects
-                .iter()
-                .filter(|o| o.placement().is_some())
-                .count()
-                .min(assets.draws),
+            max_lightmapped_draws: if has_surface_mesh {
+                room(mapped.min(assets.draws))?
+            } else {
+                0
+            },
             frames_in_flight: self.frames_in_flight,
             max_draws: room(assets.draws)?,
             max_materials: room(materials.len())?,

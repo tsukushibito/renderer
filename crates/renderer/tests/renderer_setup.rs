@@ -32,12 +32,18 @@ fn plan_counts_shared_assets_and_per_view_work_separately() -> PipelineResult<()
     })?;
     let mut materials = Materials::default();
     let vertex = PbrVertex::new([0.; 3], [0., 0., 1.], [1., 0., 0., 1.], [0.; 2])?;
-    let mesh = meshes.create(MeshData::pbr(&[vertex; 3], &[0, 1, 2])?)?;
+    let mesh = meshes.create(
+        MeshData::pbr(&[vertex; 3], &[0, 1, 2])?.with_lightmap_uvs(&[
+            [0., 0.],
+            [1., 0.],
+            [0., 1.],
+        ])?,
+    )?;
     let mat = materials.create_pbr(PbrParams::color([1.; 4]))?;
     let model = Transform::new([[1., 0., 0., 1.], [0., 1., 0., 0.], [0., 0., 1., 0.]])?;
     let instance = RenderObject::new(mesh, mat).with_transform(model);
     let objects = [
-        instance,
+        instance.with_lightmap(12),
         RenderObject {
             casts_shadow: false,
             ..instance
@@ -70,6 +76,7 @@ fn plan_counts_shared_assets_and_per_view_work_separately() -> PipelineResult<()
     let mut plan = setup
         .prepare(SceneAssets::new(&mut meshes, &mut materials, &objects).with_lights(&lights))?;
     let limits = plan.scene_limits();
+    assert_eq!(limits.max_lightmapped_draws, 4);
     assert_eq!(limits.max_shadowed_rect_lights, 2);
     assert_eq!(
         (

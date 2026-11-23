@@ -36,7 +36,7 @@ pub(super) const MIP_PROBE_SDR: SdrOutput = SdrOutput {
 /// used opaque material. The GPU pixel-change gate rejects an invisible choice.
 pub(super) fn selection(scene: &Scene) -> Result<(usize, usize), Error> {
     // The material-detail camera sees the Vespa in cooked primitive 16.
-    // Lightmap binding can clone a material and inspection spheres append draws.
+    // Read its material through the primitive; inspection spheres append draws.
     if scene.mesh_count >= 1296 && scene.source["primitive_count"].as_u64() == Some(1591) {
         let index = scene.primitives[16].material;
         let material = &scene.materials[index];
@@ -317,21 +317,21 @@ pub(super) fn execute(
     stages: Value,
 ) -> Result<Value, Error> {
     let directory = options.output.join("resource-checks");
-    let cameras = if options.fixture {
+    let (names, cameras) = if options.fixture {
         let first = Camera::fixture();
         let mut second = first;
         second.fov *= 0.8;
-        [first, second]
+        (["fixture", "fixture-narrow"], [first, second])
     } else {
-        [
-            conditions.camera("street", 0)?,
-            conditions.camera("material-detail", 0)?,
-        ]
-    };
-    let names = if options.fixture {
-        ["fixture", "fixture-narrow"]
-    } else {
-        ["street", "material-detail"]
+        let [a, b, ..] = conditions.views.as_slice() else {
+            return Err("resource checks require two distinct published camera views".into());
+        };
+        // Keep the Bistro material-replacement control in its audited view.
+        let named = |name: &str| conditions.views.iter().find(|v| v.0 == name);
+        let (a, b) = named("street")
+            .zip(named("material-detail"))
+            .unwrap_or((a, b));
+        ([a.0.as_str(), b.0.as_str()], [a.1, b.1])
     };
     let mut pool = GraphPool::new(budget.graph, options.inflight + 3)?;
     let mut references = Vec::new();
