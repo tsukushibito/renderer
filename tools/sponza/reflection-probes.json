@@ -1,0 +1,13 @@
+[
+  {"name": "Courtyard -8m", "position": [-8, 2.0, 0], "min": [-15.5, -3.5, -5.2], "max": [-0.5, 12, 5.2], "blend_distance": 2.2},
+  {"name": "Courtyard +0m", "position": [0, 2.0, 0], "min": [-7.5, -3.5, -5.2], "max": [7.5, 12, 5.2], "blend_distance": 2.2},
+  {"name": "Courtyard +8m", "position": [8, 2.0, 0], "min": [0.5, -3.5, -5.2], "max": [15.5, 12, 5.2], "blend_distance": 2.2},
+  {"name": "Arcade -7 -5.3", "position": [-7, 1.55, -5.3], "min": [-16, -2.5, -8.2], "max": [2, 4.6, -2.4], "blend_distance": 1.35},
+  {"name": "Arcade +6.5 -5.3", "position": [6.5, 1.55, -5.3], "min": [-2.5, -2.5, -8.2], "max": [15.5, 4.6, -2.4], "blend_distance": 1.35},
+  {"name": "Arcade -7 +5.3", "position": [-7, 1.55, 5.3], "min": [-16, -2.5, 2.4], "max": [2, 4.6, 8.2], "blend_distance": 1.35},
+  {"name": "Arcade +6.5 +5.3", "position": [6.5, 1.55, 5.3], "min": [-2.5, -2.5, 2.4], "max": [15.5, 4.6, 8.2], "blend_distance": 1.35},
+  {"name": "Upper gallery (-7, -3.95)", "position": [-7, 5.75, -3.95], "min": [-16, 3.6, -8.2], "max": [2, 8.7, -2.4], "blend_distance": 0.85},
+  {"name": "Upper gallery (+6.5, -3.95)", "position": [6.5, 5.75, -3.95], "min": [-2.5, 3.6, -8.2], "max": [15.5, 8.7, -2.4], "blend_distance": 0.85},
+  {"name": "Upper gallery (-7, +3.65)", "position": [-7, 5.75, 3.65], "min": [-16, 3.6, 2.4], "max": [2, 8.7, 8.2], "blend_distance": 0.85},
+  {"name": "Upper gallery (+6.5, +3.65)", "position": [6.5, 5.75, 3.65], "min": [-2.5, 3.6, 2.4], "max": [15.5, 8.7, 8.2], "blend_distance": 0.85}
+]
