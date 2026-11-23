@@ -122,7 +122,7 @@ pub fn run(mut config: RuntimeConfig) -> PipelineResult<()> {
     let mut materials = Materials::default();
     let mut red = PbrParams::color([0., 0., 0., 1.]);
     red.factors.double_sided = true;
-    red.factors.emissive = [1., 0., 0.];
+    red.factors.emissive_nits = [1., 0., 0.];
     let props = [
         RenderObject::new(pbr, materials.create_pbr(red)?),
         RenderObject::new(

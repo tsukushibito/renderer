@@ -144,21 +144,24 @@ impl Look {
         let name = match self {
             Self::Reference => "reference",
             Self::O3deAtrium => {
-                environment.strength = 1.;
+                environment.nits_per_unit = 1.;
                 "o3de-atrium"
             }
             Self::LumberyardDay => {
                 conditions.light_direction = BAKE_SCENARIOS[0].direction;
                 conditions.light_color = [8.4, 8.0, 7.1];
                 conditions.background = [0.55, 0.68, 0.92];
-                environment.strength = DAY_IBL_STRENGTH;
+                environment.nits_per_unit = DAY_IBL_STRENGTH;
                 "lumberyard-day"
             }
         };
         serde_json::json!({
+            "units": {"irradiance_rgb": "linear Rec.709, Y in lux",
+                      "ibl_strength": "cd/m² per unit white texel",
+                      "exposure_ev": "exposure compensation in stops"},
             "name": name, "direction_to_light": conditions.light_direction,
             "irradiance_rgb": conditions.light_color, "background_linear_rgb": conditions.background,
-            "ibl_strength": environment.strength, "ibl_yaw_degrees": environment.yaw_degrees,
+            "ibl_strength": environment.nits_per_unit, "ibl_yaw_degrees": environment.yaw_degrees,
             "exposure_ev": 1
         })
     }
@@ -231,7 +234,7 @@ pub(crate) fn bake_identity(cook_sha256: &str, look: Look) -> String {
                 .center()
                 .into_iter()
                 .chain(rect.half_edges().into_iter().flatten())
-                .chain(rect.radiance())
+                .chain(rect.rgb_nits())
                 .chain([rect.range()])
             {
                 hash.update(value.to_le_bytes());
@@ -261,7 +264,7 @@ pub(crate) fn environment_bake_identity(
     let mut hash = Sha256::new();
     hash.update(base.as_bytes());
     hash.update(manifest.as_bytes());
-    hash.update(env.strength.to_le_bytes());
+    hash.update(env.nits_per_unit.to_le_bytes());
     hash.update(env.yaw_degrees.to_le_bytes());
     Some(format!("{:x}", hash.finalize()))
 }

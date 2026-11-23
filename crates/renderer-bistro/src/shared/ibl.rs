@@ -21,7 +21,7 @@ pub(crate) struct Environment {
     pub diffuse: Image,
     pub specular: Image,
     pub brdf: Image,
-    pub strength: f32,
+    pub nits_per_unit: f32,
     pub yaw_degrees: f32,
     pub max_prefilter_lod: u32,
     pub identity: Value,
@@ -275,7 +275,7 @@ impl Environment {
             diffuse,
             specular,
             brdf,
-            strength: 3.,
+            nits_per_unit: 3.,
             yaw_degrees: 0.,
             max_prefilter_lod: 4,
             identity: value,
@@ -300,7 +300,7 @@ impl Environment {
             diffuse,
             specular,
             brdf,
-            strength: 1.,
+            nits_per_unit: 1.,
             yaw_degrees: 0.,
             max_prefilter_lod: 3,
             identity: json!({"kind":"fixture-constant-diffuse", "strength":1, "yaw_degrees":0,"max_prefilter_lod":3,
@@ -371,7 +371,7 @@ mod tests {
                 .all(|image| image.bytes.is_empty())
         );
         assert_eq!(environment.images().map(Image::byte_length), lengths);
-        assert_eq!(environment.strength, 1.);
+        assert_eq!(environment.nits_per_unit, 1.);
         assert_eq!(environment.yaw_degrees, 0.);
         assert_eq!(environment.diffuse.width, 8);
         assert_eq!(environment.diffuse.height, 4);
@@ -451,7 +451,7 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         let loaded = Environment::load(&path).unwrap();
         assert_eq!(loaded.specular.mips.len(), 11);
-        assert_eq!(loaded.strength, 3.);
+        assert_eq!(loaded.nits_per_unit, 3.);
         assert_eq!(loaded.yaw_degrees, 0.);
         assert_eq!(loaded.brdf.bytes.len(), 524_288);
         for (pointer, wrong) in [

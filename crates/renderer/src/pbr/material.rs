@@ -24,7 +24,8 @@ use crate::material::AlphaMode;
 #[derive(Clone, Copy, Debug)]
 pub struct MaterialFactors {
     pub base_color: [f32; 4],
-    pub emissive: [f32; 3],
+    /// Linear Rec.709 emission for a white emissive texel, with luminance Y in cd/m².
+    pub emissive_nits: [f32; 3],
     pub normal_scale: f32,
     pub metallic: f32,
     pub roughness: f32,
@@ -38,7 +39,7 @@ impl Default for MaterialFactors {
     fn default() -> Self {
         Self {
             base_color: [1.0; 4],
-            emissive: [0.0; 3],
+            emissive_nits: [0.0; 3],
             normal_scale: 1.0,
             metallic: 0.0,
             roughness: 1.0,
@@ -51,6 +52,12 @@ impl Default for MaterialFactors {
 }
 
 impl MaterialFactors {
+    /// Set the emitted luminance of a white emissive texel (linear Rec.709 tint).
+    pub fn with_emission_nits(mut self, tint: [f32; 3], nits: f32) -> Result<Self, GraphError> {
+        self.emissive_nits = super::photometric_rgb(tint, nits)?;
+        Ok(self)
+    }
+
     /// Decode a cooked standard material at an asset import or change boundary.
     pub fn decode(bytes: &[u8; MATERIAL_BYTES]) -> Result<Self, GraphError> {
         let block = bytes.as_chunks::<4>().0;
@@ -63,7 +70,7 @@ impl MaterialFactors {
         let floats = |index: usize| f32::from_le_bytes(block[index]);
         let factors = MaterialFactors {
             base_color: std::array::from_fn(floats),
-            emissive: std::array::from_fn(|index| floats(4 + index)),
+            emissive_nits: std::array::from_fn(|index| floats(4 + index)),
             normal_scale: floats(7),
             metallic: floats(8),
             roughness: floats(9),
@@ -88,7 +95,7 @@ impl MaterialFactors {
             .chain([self.metallic, self.roughness, self.occlusion_strength])
             .any(|value| !(0.0..=1.0).contains(&value))
             || self
-                .emissive
+                .emissive_nits
                 .into_iter()
                 .any(|value| !value.is_finite() || value < 0.0)
             || !self.normal_scale.is_finite()
@@ -97,13 +104,17 @@ impl MaterialFactors {
         {
             return Err(GraphError::invalid_input("invalid PBR material factors"));
         }
-        let floats = self.base_color.into_iter().chain(self.emissive).chain([
-            self.normal_scale,
-            self.metallic,
-            self.roughness,
-            self.occlusion_strength,
-            self.alpha_cutoff,
-        ]);
+        let floats = self
+            .base_color
+            .into_iter()
+            .chain(self.emissive_nits)
+            .chain([
+                self.normal_scale,
+                self.metallic,
+                self.roughness,
+                self.occlusion_strength,
+                self.alpha_cutoff,
+            ]);
         let mode: u32 = match self.alpha_mode {
             AlphaMode::Opaque => 0,
             AlphaMode::Mask => 1,
@@ -310,7 +321,7 @@ mod tests {
     fn material_packing_matches_float_and_flag_slots() {
         let values = MaterialFactors {
             base_color: [0.1, 0.2, 0.3, 0.4],
-            emissive: [1.0, 2.0, 3.0],
+            emissive_nits: [1.0, 2.0, 3.0],
             normal_scale: -1.0,
             metallic: 0.5,
             roughness: 0.6,

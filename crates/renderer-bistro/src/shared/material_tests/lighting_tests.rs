@@ -105,7 +105,7 @@ fn environment(diffuse: ibl::Image, specular: ibl::Image) -> ibl::Environment {
         diffuse,
         specular,
         brdf: constant_levels(2, 2, &[[0.5, 0.125, 0.]]),
-        strength: 1.,
+        nits_per_unit: 1.,
         yaw_degrees: 0.,
         max_prefilter_lod,
         identity: serde_json::json!({"fixture":"analytic IBL; constant BRDF A=.5/B=.125"}),

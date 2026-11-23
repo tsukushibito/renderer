@@ -9,46 +9,56 @@ use renderer_core::graph::GraphError;
 pub use input::{Projection, ViewInput};
 pub use shadow::{Bounds, ShadowSettings};
 
-/// Directional light pointing from the scene toward the sun, with linear RGB.
+/// Directional light pointing from the scene toward the sun, with normal-incidence RGB illuminance in lux.
 #[derive(Clone, Copy, Debug)]
 pub struct Sun {
     direction: [f32; 3],
-    color: [f32; 3],
+    rgb_lux: [f32; 3],
 }
 
 impl Sun {
     pub const OFF: Self = Self {
         direction: [0., 1., 0.],
-        color: [0.; 3],
+        rgb_lux: [0.; 3],
     };
     pub fn direction(self) -> [f32; 3] {
         self.direction
     }
-    pub fn color(self) -> [f32; 3] {
-        self.color
+    pub fn rgb_lux(self) -> [f32; 3] {
+        self.rgb_lux
     }
 
-    pub fn new(direction: [f32; 3], color: [f32; 3]) -> Result<Self, GraphError> {
-        Self::from_normalized(normalize(direction, "degenerate PBR sun direction")?, color)
+    pub fn from_lux(direction: [f32; 3], tint: [f32; 3], lux: f32) -> Result<Self, GraphError> {
+        Self::from_rgb_lux(direction, super::photometric_rgb(tint, lux)?)
+    }
+    /// Import already calibrated linear Rec.709 illuminance (Y in lux).
+    pub fn from_rgb_lux(direction: [f32; 3], rgb_lux: [f32; 3]) -> Result<Self, GraphError> {
+        Self::from_normalized_rgb_lux(
+            normalize(direction, "degenerate PBR sun direction")?,
+            rgb_lux,
+        )
     }
 
     /// Retain the exact components of an already normalized direction.
-    pub fn from_normalized(direction: [f32; 3], color: [f32; 3]) -> Result<Self, GraphError> {
+    pub fn from_normalized_rgb_lux(
+        direction: [f32; 3],
+        rgb_lux: [f32; 3],
+    ) -> Result<Self, GraphError> {
         let length_squared = dot(direction, direction);
         if !length_squared.is_finite() || (length_squared - 1.0).abs() > 8.0 * f32::EPSILON {
             return Err(GraphError::invalid_input(
                 "PBR sun direction must be normalized",
             ));
         }
-        if color
+        if rgb_lux
             .into_iter()
             .any(|value| !value.is_finite() || value < 0.0)
         {
             return Err(GraphError::invalid_input(
-                "PBR sun color must be finite and nonnegative",
+                "PBR sun rgb_lux must be finite and nonnegative",
             ));
         }
-        Ok(Self { direction, color })
+        Ok(Self { direction, rgb_lux })
     }
 }
 
@@ -137,7 +147,7 @@ pub(super) fn prepare(
     camera_words[3] = view.near_far[0];
     camera_words[4..7].copy_from_slice(&sun.direction);
     camera_words[7] = view.near_far[1];
-    camera_words[8..11].copy_from_slice(&sun.color);
+    camera_words[8..11].copy_from_slice(&sun.rgb_lux);
     let orthographic = matches!(view.shape, input::Shape::Orthographic(_));
     camera_words[11] = if orthographic { 1.0 } else { 0.0 };
     camera_words[12..15].copy_from_slice(&environment);
@@ -185,8 +195,8 @@ mod tests {
     #[test]
     fn view_packs_projection_sun_ibl_and_each_cascade_in_shader_order() {
         let input = test_perspective([0.02, 500.0]);
-        let sun = Sun::new([1.0, 2.0, 3.0], [0.5, 1.0, 4.0]).unwrap();
-        let reused = Sun::from_normalized(sun.direction, sun.color).unwrap();
+        let sun = Sun::from_rgb_lux([1.0, 2.0, 3.0], [0.5, 1.0, 4.0]).unwrap();
+        let reused = Sun::from_normalized_rgb_lux(sun.direction, sun.rgb_lux).unwrap();
         assert_eq!(
             reused.direction.map(f32::to_bits),
             sun.direction.map(f32::to_bits)
@@ -247,7 +257,7 @@ mod tests {
     #[test]
     fn disabled_shadows_do_not_require_cascade_splits() {
         let input = test_perspective([200.0, 500.0]);
-        let sun = Sun::new([0.0, 1.0, 0.0], [1.0; 3]).unwrap();
+        let sun = Sun::from_lux([0.0, 1.0, 0.0], [1.; 3], 1.0).unwrap();
         let bounds = Bounds::new([0.0; 3], [0.0; 3]).unwrap();
         let view = prepare(input, sun, bounds, None, [0.0; 3]).unwrap();
         assert!(view.shadow_matrices().is_none());
@@ -257,7 +267,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_input_before_upload() {
-        assert!(Sun::from_normalized([0.0, 2.0, 0.0], [1.0; 3]).is_err());
+        assert!(Sun::from_normalized_rgb_lux([0.0, 2.0, 0.0], [1.0; 3]).is_err());
         assert!(Bounds::new([1.0; 3], [0.0; 3]).is_err());
         assert!(
             ShadowSettings {
@@ -284,7 +294,7 @@ mod tests {
             Projection::Orthographic,
         )
         .unwrap();
-        let sun = Sun::new([0.0, 1.0, 0.0], [1.0; 3]).unwrap();
+        let sun = Sun::from_lux([0.0, 1.0, 0.0], [1.; 3], 1.0).unwrap();
         let bounds = Bounds::new([-2.0, -1.0, -2.0], [2.0, 3.0, 2.0]).unwrap();
         let data = prepare(
             input,

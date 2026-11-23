@@ -9,12 +9,9 @@ fn layout() -> LocalLightLayout {
 }
 
 fn light(position: [f32; 3], radius: f32) -> LocalLight {
-    LocalLight::Point {
-        position,
-        radius,
-        color: [1.0, 0.5, 0.25],
-        intensity: 2.0,
-    }
+    LocalLight::Point(
+        renderer::pbr::PointLight::from_candela(position, radius, [1.0, 0.5, 0.25], 2.0).unwrap(),
+    )
 }
 
 fn fixture(
@@ -130,13 +127,11 @@ mod native {
             // Under identity projection the six planes are three intervals.
             let mut masks = [0u32; WORDS];
             for (id, light) in lights.iter().enumerate() {
-                let LocalLight::Point {
-                    position, radius, ..
-                } = *light
-                else {
+                let LocalLight::Point(point) = *light else {
                     unreachable!()
                 };
-                let radius = f64::from(radius);
+                let position = point.position();
+                let radius = f64::from(point.range());
                 if position
                     .into_iter()
                     .zip(bounds)

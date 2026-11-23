@@ -240,7 +240,7 @@ pub fn run_on<P: ViewPipeline + 'static>(
             renderer.prepare_assets(SceneAssets::new(&mut meshes, &mut materials, &objects))?;
         }
         let scene = SceneInput::new(&meshes, &materials, &objects)
-            .with_sun(Sun::new([0., 0., -1.], [2.; 3])?)
+            .with_sun(Sun::from_lux([0., 0., -1.], [1.; 3], 2.)?)
             .with_bounds(Bounds::new([-1., -1., 0.], [1., 1., 1.])?);
         #[cfg(all(test, feature = "memory-profiling"))]
         let before = renderer_core::measurement::Snapshot::now();

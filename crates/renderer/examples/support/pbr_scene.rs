@@ -79,7 +79,7 @@ impl Triangle {
         let indices = if baked_mirror { [0, 2, 1] } else { [0, 1, 2] };
         let material = MaterialFactors {
             base_color: [0.75, 0.015, 0.009, 1.0],
-            emissive: [if glowing { 2.0 } else { 0.0 }, 0.0, 0.0],
+            emissive_nits: [if glowing { 2.0 } else { 0.0 }, 0.0, 0.0],
             #[cfg(test)]
             alpha_mode: if matches!(view, ViewFixture::LeftHandedPerspective { .. }) {
                 AlphaMode::Mask
@@ -209,6 +209,7 @@ pub struct ShadowBlocker {
 
 #[derive(Clone, Copy)]
 pub struct Settings<'a> {
+    pub sun_lux: f32,
     pub frame_lights: &'a [&'a [LocalLight]],
     #[cfg(test)]
     pub blockers: &'a [ShadowBlocker],
@@ -224,7 +225,7 @@ impl<'a> Settings<'a> {
             .first()
             .copied()
             .unwrap_or(if self.technique == Technique::ForwardPlus {
-                &POINT_LIGHTS
+                &*POINT_LIGHTS
             } else {
                 &[]
             })
@@ -232,6 +233,7 @@ impl<'a> Settings<'a> {
 
     pub fn new(samples: SampleCount) -> Self {
         Self {
+            sun_lux: 1.5,
             frame_lights: &[],
             #[cfg(test)]
             blockers: &[],
@@ -243,12 +245,11 @@ impl<'a> Settings<'a> {
     }
 }
 
-pub const POINT_LIGHTS: [LocalLight; 1] = [LocalLight::Point {
-    position: [0.1, 0.3, 1.5],
-    radius: 3.0,
-    color: [0.9, 0.6, 0.2],
-    intensity: 2.0,
-}];
+pub static POINT_LIGHTS: std::sync::LazyLock<[LocalLight; 1]> = std::sync::LazyLock::new(|| {
+    [LocalLight::Point(
+        renderer::pbr::PointLight::from_candela([0.1, 0.3, 1.5], 3., [0.9, 0.6, 0.2], 2.).unwrap(),
+    )]
+});
 
 #[derive(Clone, Copy)]
 pub enum ViewFixture {
@@ -469,7 +470,7 @@ pub fn build_graph(
         Placement::Tilted(None) | Placement::Mirrored { baked: true, .. } => &single[..],
     };
     let fixture = triangle.view;
-    let sun = Sun::new(fixture.orient([0.0, 0.0, 1.0]), [1.5; 3])?;
+    let sun = Sun::from_lux(fixture.orient([0.0, 0.0, 1.0]), [1.; 3], settings.sun_lux)?;
     let half_extents = fixture.orient([1.0, 0.7, 0.01]).map(f32::abs);
     let bounds = Bounds::new(half_extents.map(|value| -value), half_extents)?;
     let view = prepared.prepare_view(fixture.input()?, sun, bounds, defaults.environment()?)?;

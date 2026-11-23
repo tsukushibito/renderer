@@ -76,7 +76,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
     let brick = |alpha_mode, alpha| PbrParams {
         factors: MaterialFactors {
             base_color: [0., 0., 0., alpha],
-            emissive: [1., 0., 0.],
+            emissive_nits: [1., 0., 0.],
             double_sided: true,
             alpha_mode,
             ..Default::default()
@@ -209,7 +209,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         camera: input,
     };
     scene.register_view(group, &view)?;
-    let shadow_light = [pbr::LocalLight::shadowed_rect(pbr::RectLight::new(
+    let shadow_light = [pbr::LocalLight::shadowed_rect(pbr::RectLight::from_lumens(
         [0., 2., 0.],
         [1., 0., 0.],
         [0., 0., 1.],
@@ -246,7 +246,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         let input = SceneInput::new(&meshes, &materials, &draws)
             .with_lights(&shadow_light)
             .with_bounds(pbr::Bounds::new([-1., -1., 0.], [1., 1., 1.])?)
-            .with_sun(pbr::Sun::new([0., 0., -1.], [0.; 3])?);
+            .with_sun(pbr::Sun::from_lux([0., 0., -1.], [1.; 3], 0.)?);
         if index <= 1 {
             scene.prepare_scene(group, input)?;
         }
@@ -356,7 +356,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
     }
     // A single textured caster under the first panel, well outside the second panel's range.
     let panel = |x, flux| -> Result<_> {
-        Ok(pbr::LocalLight::shadowed_rect(pbr::RectLight::new(
+        Ok(pbr::LocalLight::shadowed_rect(pbr::RectLight::from_lumens(
             [x, 3., 0.],
             [0.5, 0., 0.],
             [0., 0., 0.5],

@@ -384,6 +384,35 @@ GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resid
 標準3方式で局所光源を使うには `SceneLimits::max_local_lights` にビュー当たりの上限を指定する。
 フレームの光源は `pbr::PbrDrawInput::with_lights(&lights)` で渡す。上限0では局所光源の資源を予約せず、空の入力では転送やタイル判定を省く。
 
+<a id="photometric-units"></a>
+
+### ライトの測光単位
+
+ワールド座標の 1 単位を 1 m とする。色は線形 Rec.709 RGB。色と強度を別々に渡すコンストラクターは、着色後の Y（0.2126 R + 0.7152 G + 0.0722 B）が指定した測光量になるよう正規化する。単色の青を選んでも指定光束は保たれる。
+
+| 入力 | 指定する量 |
+| --- | --- |
+| `Sun::from_lux` | 光線に垂直な面の照度（lx）。方向は受光点から太陽へ向かう。校正済み RGB には `Sun::from_rgb_lux` を使う |
+| `PointLight::from_candela` / `from_lumens` | 等方点光源の光度（cd）または全光束（lm）。1 cd は全方向で 4π lm |
+| `RectLight::from_lumens` | 片面から出る全光束（lm）。面積 A の一様なランバート面の輝度は lm/(π A) |
+| `EnvironmentMaps::nits_per_unit` | 元の環境画像の白 (1, 1, 1) に対応する輝度（cd/m²）。絶対輝度の HDRI は 1、相対 HDRI は撮影時の校正値を使う |
+| `MaterialFactors::with_emission_nits` | 発光テクスチャが白の部分の輝度（cd/m²）。`emissive_nits` には校正済み RGB を直接指定できる |
+
+```rust
+use renderer::pbr::{LocalLight, PointLight, Sun};
+
+let sun = Sun::from_lux([0., 1., 0.], [1.; 3], 20_000.)?;
+let bulb = PointLight::from_lumens([0., 2., 0.], 12., [1., 0.8, 0.6], 800.)?;
+let lights = [LocalLight::Point(bulb)];
+let input = input.with_sun(sun).with_lights(&lights);
+
+// オフラインで静的な電球からの反射光を焼く場合
+bake_scene.set_point_lights(vec![bulb]);
+let lighting = renderer_bake::Lighting::environment_map(sky_map, nits_per_unit).with_sun(sun);
+```
+
+点光源は正対面に I/r² lx を与える。ゲーム描画では 0.1 m 未満の発散を抑え、指定した到達距離まで滑らかに減衰させる。ベイカーにも同じ距離則が適用され、静的な遮蔽物は反射光に影を落とす。絶対値の入ったライトマップや局所プローブには HDRI の校正倍率を重ねない。露出とトーンマッピングはこれらの光を加算した後に適用する。Sponza と Bistro の比較用プリセットは絵合わせの値を使っており、現場で測定した照度とは独立している。
+
 ゲーム側の標準経路では、点光源と矩形光源を同じスライスに入れ、`SceneInput::with_lights` でビューに渡す。
 初期化時に `SceneAssets::with_lights` へ同じスライスを渡すと、その件数が自動で予約される。
 次は Sponza の中庭で使った下向きの面光源。長さの単位はメートルで、半辺の外積が発光面の表を向く。
@@ -391,7 +420,7 @@ GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resid
 ```rust
 use renderer::pbr::{LocalLight, RectLight};
 
-let panel = |x| RectLight::new(
+let panel = |x| RectLight::from_lumens(
     [x, 10.431109, -0.559192], [2.5, 0.0, 0.0], [0.0, 0.0, 0.5],
     [0.7557183, 0.8001526, 0.9096513], 300.0, 48.947266,
 );
@@ -403,7 +432,7 @@ let input = input.with_lights(&lights);
 bake_scene.set_rect_lights(panels.to_vec());
 ```
 
-各灯の光束を面積と π で割った値に線形 RGB を掛けて面輝度を求める。到達距離は矩形上の最近点から測る。
+各灯の面輝度は着色後の光束を面積と π で割って求める。到達距離は矩形上の最近点から測る。
 直接光では面が占める立体角から拡散を積分し、GGX の鏡面反射には LTC 近似を使う。
 `LocalLight::shadowed_rect` は中心から見た遮蔽を固定幅 3×3 PCF で求め、矩形の直接拡散・直接鏡面に適用する。
 `LocalLight::Rect` で影を省略できる。太陽のカスケード設定とは独立して使える。

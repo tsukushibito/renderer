@@ -54,8 +54,8 @@ pub(super) fn check(mut runtime: Runtime) -> PipelineResult<Runtime> {
     plan.reserve_readback("equipment", ImageDesc::rgba8(16, 16))?;
     plan.prepare_runtime(&mut runtime)?;
     let mut drawing = plan.begin_with_runtime(runtime)?.wait()?;
-    let red = Sun::new([0., 0., -1.], [2., 0., 0.])?;
-    let green = Sun::new([0., 0., -1.], [0., 2., 0.])?;
+    let red = Sun::from_rgb_lux([0., 0., -1.], [2., 0., 0.])?;
+    let green = Sun::from_rgb_lux([0., 0., -1.], [0., 2., 0.])?;
     let mut main_pixels = [0; 32 * 32 * 4];
     let mut depths = [0; 32 * 32 * 4];
     let mut equipment = [0; 16 * 16 * 4];

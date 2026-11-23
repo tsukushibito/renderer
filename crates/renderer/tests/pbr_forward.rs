@@ -148,7 +148,7 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, GraphMaterial,
     let view = recipe
         .prepare_view(
             input,
-            Sun::new([0.4, 1.0, 0.3], [1.0; 3]).unwrap(),
+            Sun::from_lux([0.4, 1.0, 0.3], [1.; 3], 1.0).unwrap(),
             Bounds::new([-1.0; 3], [1.0; 3]).unwrap(),
             Environment {
                 irradiance: environment,
@@ -156,7 +156,7 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, GraphMaterial,
                 diffuse_lighting: Default::default(),
                 reflection: environment,
                 brdf_lut: environment,
-                strength: 1.0,
+                nits_per_unit: 1.0,
                 yaw_radians: 0.0,
                 max_prefilter_lod: 0,
             },
@@ -263,12 +263,9 @@ fn disabled_shadows_omit_maps_and_reject_cascade_inputs() {
 #[test]
 fn standard_techniques_accept_point_lights_and_share_output() {
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
-    let lights = [pbr::LocalLight::Point {
-        position: [0.0, 0.0, 1.0],
-        radius: 2.0,
-        color: [1.0; 3],
-        intensity: 1.0,
-    }; 65];
+    let lights = [pbr::LocalLight::Point(
+        renderer::pbr::PointLight::from_candela([0.0, 0.0, 1.0], 2.0, [1.0; 3], 1.0).unwrap(),
+    ); 65];
     for technique in [
         pbr::Technique::Forward,
         pbr::Technique::ForwardPlus,

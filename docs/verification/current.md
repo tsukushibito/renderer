@@ -1,9 +1,17 @@
 # 現行実装の検証状況
 
-最終確認日は2026-11-23。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
+最終確認日は2026-11-24。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
 現在の契約は[RenderGraph](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
+
+## 光源の測光単位
+
+Windows、GeForce RTX 3060。CPU ベイカーで、100 cd の白色点光源の正対照度が 1 m で 100 lx、2 m で 25 lx となることを確認した。相対値 0.5 の一様な HDRI を 40 cd/m²/unit で校正すると、受光面の照度は 20π lx となる。着色した 300 lm の矩形では 3 種の面積で Y × 面積 × π が 300 lm に一致した。[公開 API と単位](../guides/tooling.md#photometric-units)
+
+Vulkan と D3D12 の標準 Forward で、4 cd の点光源から 1 m・2 m にある同一材質の受光画素を 4 lx・1 lx の太陽で照らした結果と比較し、SDR の各チャンネルが 2 階調以内で一致した。CPU・Vulkan・D3D12 の間接光ベイクでは着色点光源・矩形・HDRI・発光材質を含む同一入力で 1、2、3 条件のライトマップ・拡散プローブの差が各成分 0.0005 未満だった。
+
+Sponza の昼を 128 rays/sample で再ベイクし、103 配置・117 面のライトマップと 11 個の局所反射プローブを使って gallery を 960×540 で撮影した。Vulkan と D3D12 の検証警告・エラーはいずれも 0。Bistro Exterior は既存の昼の GI を使い、Vulkan で bistro-corner を描画した。各デモの露出と太陽の既存プリセットを使用した。実在する中庭の照度は測定していない。
 
 ## メッシュ共有 UV と静的配置のライトマップ
 

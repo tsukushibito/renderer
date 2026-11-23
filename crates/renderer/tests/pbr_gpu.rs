@@ -182,16 +182,14 @@ mod gpu {
     use super::scene::POINT_LIGHTS;
     use renderer::pbr::LocalLight;
 
-    static LATE_POINT_LIGHTS: [LocalLight; 257] = {
-        let mut lights = [LocalLight::Point {
-            intensity: 0.0,
-            position: [0., 0., 1.],
-            radius: 3.,
-            color: [1.; 3],
-        }; 257];
-        lights[256] = POINT_LIGHTS[0];
-        lights
-    };
+    static LATE_POINT_LIGHTS: std::sync::LazyLock<[LocalLight; 257]> =
+        std::sync::LazyLock::new(|| {
+            let mut lights = [LocalLight::Point(
+                renderer::pbr::PointLight::from_candela([0., 0., 1.], 3., [1.; 3], 0.).unwrap(),
+            ); 257];
+            lights[256] = POINT_LIGHTS[0];
+            lights
+        });
 
     fn late_point_light_matches_single_light(api: Api) {
         for technique in [
@@ -209,7 +207,7 @@ mod gpu {
                 let settings = Settings {
                     technique,
                     placement,
-                    frame_lights: &[&[], &POINT_LIGHTS, &LATE_POINT_LIGHTS],
+                    frame_lights: &[&[], &*POINT_LIGHTS, &*LATE_POINT_LIGHTS],
                     ..Settings::new(SampleCount::X1)
                 };
                 // All three submissions are live before any result is consumed.
@@ -241,8 +239,72 @@ mod gpu {
         late_point_light_matches_single_light(Api::D3D12);
     }
 
+    fn compare_point_and_sun(api: Api) {
+        // Compare the same receiver and BRDF under 4 cd at 1 and 2 metres
+        // and under directional lights of 4 and 1 lux, respectively.
+        let [width, height] = super::scene::EXTENT;
+        let half_pixel = 3. * (55_f32.to_radians() * 0.5).tan() / height as f32;
+        let pixel = ((height / 2 * width + width / 2) * 4) as usize;
+        let point = |z| {
+            [LocalLight::Point(
+                renderer::pbr::PointLight::from_candela(
+                    [half_pixel, -half_pixel, z],
+                    1000.,
+                    [1.; 3],
+                    4.,
+                )
+                .unwrap(),
+            )]
+        };
+        let (near, far) = (point(1.), point(2.));
+        let image = |lux, lights: &[&[LocalLight]]| {
+            render(
+                api,
+                Settings {
+                    technique: Technique::Forward,
+                    sun_lux: lux,
+                    frame_lights: lights,
+                    ..Settings::new(SampleCount::X1)
+                },
+                false,
+                Bloom::Off,
+                &[],
+            )
+            .unwrap()
+        };
+        let points = image(0., &[&near, &far]);
+        let mut red = [0; 2];
+        for (index, lux) in [4., 1.].into_iter().enumerate() {
+            let sun = image(lux, &[&[]]);
+            for c in 0..3 {
+                let actual = points[index].output.sdr[pixel + c];
+                let expected = sun[0].output.sdr[pixel + c];
+                assert!(
+                    actual.abs_diff(expected) <= 2,
+                    "{lux} lx channel {c}: {actual} vs {expected}"
+                );
+            }
+            red[index] = sun[0].output.sdr[pixel];
+        }
+        assert!(red[0] > red[1] && red[1] > 0);
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    #[ignore = "requires real Vulkan GPU"]
+    fn vulkan_point_sun_photometry() {
+        compare_point_and_sun(Api::Vulkan);
+    }
+
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires real D3D12 GPU"]
+    fn d3d12_point_sun_photometry() {
+        compare_point_and_sun(Api::D3D12);
+    }
+
     fn moving_rectangle_blocker(api: Api) {
-        let rect = renderer::pbr::RectLight::new(
+        let rect = renderer::pbr::RectLight::from_lumens(
             [1.5, 0., 1.5],
             [0.3, 0., 0.],
             [0., -0.2, 0.],
@@ -323,7 +385,7 @@ mod gpu {
     fn one_sided_rectangle(api: Api) {
         let light = |y| {
             LocalLight::Rect(
-                renderer::pbr::RectLight::new(
+                renderer::pbr::RectLight::from_lumens(
                     [0.1, 0.3, 1.5],
                     [0.5, 0., 0.],
                     [0., y, 0.],
@@ -530,7 +592,7 @@ mod gpu {
             let settings = Settings {
                 technique,
                 placement,
-                frame_lights: &[&LATE_POINT_LIGHTS],
+                frame_lights: &[&*LATE_POINT_LIGHTS],
                 ..Settings::new(SampleCount::X1)
             };
             render(api, settings, false, Bloom::Off, &[]).unwrap()

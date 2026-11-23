@@ -15,7 +15,7 @@ fn compare(backend: BakeBackend) {
         }],
         vec![Material {
             diffuse: [0.4, 0.1, 0.1],
-            emission: [0.6, 0.2, 0.],
+            emissive_nits: [0.6, 0.2, 0.],
             ..Default::default()
         }],
         vec![
@@ -28,8 +28,11 @@ fn compare(backend: BakeBackend) {
         ],
     )
     .unwrap();
+    scene.set_point_lights(vec![
+        renderer_bake::PointLight::from_candela([0., 0.2, 0.], 8., [1., 0.6, 0.2], 2.).unwrap(),
+    ]);
     scene.set_rect_lights(vec![
-        renderer_bake::RectLight::new(
+        renderer_bake::RectLight::from_lumens(
             [0., 0.25, 0.],
             [0.4, 0., 0.],
             [0., 0., -0.25],
@@ -44,9 +47,9 @@ fn compare(backend: BakeBackend) {
             texture: 0,
             yaw_radians: 0.4,
         }),
-        sky,
-        direction_to_sun: [0., 1., 0.],
-        sun: [1.; 3],
+        sky_rgb_nits: sky,
+
+        sun: renderer::pbr::Sun::from_lux([0., 1., 0.], [1.; 3], 1.).unwrap(),
     });
     let receivers = [StaticReceiver {
         placement: 42,

@@ -2,7 +2,7 @@
 
 mod culling;
 mod lights;
-pub use lights::{LocalLight, RectLight};
+pub use lights::{LocalLight, PointLight, RectLight, photometric_rgb};
 mod defaults;
 pub(crate) mod draw;
 mod history;
@@ -150,7 +150,8 @@ pub struct Environment {
     pub reflection: ImageView,
     pub local_reflections: Option<LocalReflections>,
     pub brdf_lut: ImageView,
-    pub strength: f32,
+    /// Luminance in cd/m² of a unit white environment texel, before convolution.
+    pub nits_per_unit: f32,
     pub yaw_radians: f32,
     pub max_prefilter_lod: u32,
 }
@@ -187,7 +188,7 @@ impl PreparedView {
             bounds,
             shadows,
             [
-                environment.strength,
+                environment.nits_per_unit,
                 environment.yaw_radians,
                 environment.max_prefilter_lod as f32,
             ],

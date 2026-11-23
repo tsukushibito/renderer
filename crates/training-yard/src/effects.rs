@@ -135,7 +135,7 @@ impl FiringLane {
         let mut quad = |rgb, alpha, sx, sy, x, y, z| -> PipelineResult<RenderObject> {
             let mut material = PbrParams::color([0., 0., 0., alpha]);
             material.factors.double_sided = true;
-            material.factors.emissive = rgb;
+            material.factors.emissive_nits = rgb;
             if alpha < 1. {
                 material.factors.alpha_mode = AlphaMode::Blend;
             }

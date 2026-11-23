@@ -117,26 +117,11 @@ impl LocalLightLayout {
         for (record, light) in bytes[64..].as_chunks_mut::<64>().0.iter_mut().zip(lights) {
             let mut words = [0.; 16];
             match *light {
-                LocalLight::Point {
-                    position,
-                    radius,
-                    color,
-                    intensity,
-                } => {
-                    if !position.into_iter().all(f32::is_finite)
-                        || !radius.is_finite()
-                        || radius <= 0.
-                        || color
-                            .into_iter()
-                            .chain([intensity])
-                            .any(|v| !v.is_finite() || v < 0.)
-                    {
-                        return Err(GraphError::invalid_input("invalid PBR point light"));
-                    }
-                    words[..3].copy_from_slice(&position);
-                    words[3] = radius;
-                    words[4..7].copy_from_slice(&color);
-                    words[7] = intensity;
+                LocalLight::Point(point) => {
+                    words[..3].copy_from_slice(&point.position());
+                    words[3] = point.range();
+                    words[4..7].copy_from_slice(&point.rgb_candela());
+                    words[7] = 1.;
                 }
                 LocalLight::Rect(rect) | LocalLight::ShadowedRect(rect) => {
                     if matches!(light, LocalLight::ShadowedRect(_)) {
@@ -146,7 +131,7 @@ impl LocalLightLayout {
                     let [u, v] = rect.half_edges();
                     words[..3].copy_from_slice(&rect.center());
                     words[3] = rect.bound_radius;
-                    words[4..7].copy_from_slice(&rect.radiance());
+                    words[4..7].copy_from_slice(&rect.rgb_nits());
                     words[8..11].copy_from_slice(&u);
                     words[11] = rect.range();
                     words[12..15].copy_from_slice(&v);

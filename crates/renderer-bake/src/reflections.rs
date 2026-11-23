@@ -176,9 +176,8 @@ mod tests {
         };
         let sky = |v| Lighting {
             environment: None,
-            sky: [v; 3],
-            sun: [0.; 3],
-            direction_to_sun: [0., 1., 0.],
+            sky_rgb_nits: [v; 3],
+            sun: crate::Sun::OFF,
         };
         let asset = scene
             .bake_reflection_probes(&[p], [sky(0.25), sky(2.)])

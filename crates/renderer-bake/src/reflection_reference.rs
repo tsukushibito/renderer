@@ -35,7 +35,7 @@ impl BakeScene {
         light: Lighting,
         samples: u32,
     ) -> Result<ReflectionReference, BakeError> {
-        let light = light.normalized(self)?;
+        light.validate(self)?;
         let n = unit(s.shading_normal)?;
         let v = unit(s.view)?;
         let nv = dot(n, v);

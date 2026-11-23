@@ -64,12 +64,12 @@ fn import(scene: &Scene) -> Result<BakeScene, Error> {
                 factors.base_color[1],
                 factors.base_color[2],
             ],
-            emission: factors.emissive,
+            emissive_nits: factors.emissive_nits,
             base_texture: Some(texture(m.textures[0])?),
             orm_texture: (factors.metallic > 0.)
                 .then(|| texture(m.textures[2]))
                 .transpose()?,
-            emission_texture: (factors.emissive != [0.; 3])
+            emission_texture: (factors.emissive_nits != [0.; 3])
                 .then(|| texture(m.textures[3]))
                 .transpose()?,
             opacity: factors.base_color[3],
@@ -338,7 +338,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut panorama = None;
     if let Some(path) = ibl_manifest {
         let mut env = crate::shared::ibl::Environment::load(&path)?;
-        env.strength = sky_strength;
+        env.nits_per_unit = sky_strength;
         identity = crate::shared::camera::environment_bake_identity(&identity, &env)
             .ok_or("missing IBL identity")?;
         // Level zero is the sharp linear HDR map used by runtime reflections.
@@ -358,17 +358,19 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             env.yaw_degrees.to_radians(),
         )?);
     }
-    let lighting = |s: crate::shared::camera::BakeScenario| Lighting {
-        environment: panorama,
-        sky: if panorama.is_some() {
-            std::array::from_fn(|i| sky_strength * s.sky[i] / scenarios[0].sky[i])
-        } else {
-            s.sky
-        },
-        sun: s.sun,
-        direction_to_sun: s.direction,
-    };
-    let lights = scenarios.map(lighting);
+    let lighting =
+        |s: crate::shared::camera::BakeScenario| -> Result<_, renderer::core::graph::GraphError> {
+            Ok(Lighting {
+                environment: panorama,
+                sky_rgb_nits: if panorama.is_some() {
+                    std::array::from_fn(|i| sky_strength * s.sky[i] / scenarios[0].sky[i])
+                } else {
+                    s.sky
+                },
+                sun: renderer::pbr::Sun::from_rgb_lux(s.direction, s.sun)?,
+            })
+        };
+    let lights = [lighting(scenarios[0])?, lighting(scenarios[1])?];
     if let Some(path) = diffuse_reference {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -477,7 +479,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     } else {
         let keys = [
             lights[0],
-            lighting(crate::shared::camera::BakeScenario::for_look(0.5, look)),
+            lighting(crate::shared::camera::BakeScenario::for_look(0.5, look))?,
             lights[1],
         ];
         identity = crate::shared::camera::daylight_sequence_identity(&identity, look);

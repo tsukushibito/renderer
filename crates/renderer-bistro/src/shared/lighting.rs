@@ -6,7 +6,7 @@ use renderer_core::graph::{BufferHandle, Graph, GraphError, ImageDesc, ImageView
 /// Two ceiling emitters in O3DE SponzaDiffuseGI, converted to Y-up metres.
 pub(crate) fn sponza_rectangles() -> [renderer::pbr::RectLight; 2] {
     [-4.739_024, 2.8996224].map(|x| {
-        renderer::pbr::RectLight::new(
+        renderer::pbr::RectLight::from_lumens(
             [x, 10.431_108, -0.5591918],
             [2.5, 0., 0.],
             [0., 0., 0.5],
@@ -58,12 +58,11 @@ pub(crate) fn preset(fixture: bool) -> Preset {
                 15.0,
             )
         };
-        LocalLight::Point {
-            position,
-            radius,
-            intensity,
-            color: [[1.0, 0.75, 0.55], [0.60, 0.80, 1.0], [0.74, 1.0, 0.70]][index % 3],
-        }
+        let tint = [[1.0, 0.75, 0.55], [0.60, 0.80, 1.0], [0.74, 1.0, 0.70]][index % 3];
+        LocalLight::Point(
+            renderer::pbr::PointLight::from_candela(position, radius, tint, intensity)
+                .expect("finite preset point light"),
+        )
     })
 }
 
@@ -124,7 +123,7 @@ mod tests {
         assert!(
             preset(true)
                 .iter()
-                .all(|light| matches!(light, LocalLight::Point {intensity,..} if *intensity > 0.))
+                .all(|light| matches!(light, LocalLight::Point(p) if p.rgb_candela()[0] > 0.))
         );
     }
 }

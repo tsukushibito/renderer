@@ -48,7 +48,7 @@ mod reflections;
 
 pub use probes::ProbeSettings;
 pub use reflection_reference::{ReflectionReceiver, ReflectionReference};
-pub use renderer::pbr::{RectLight, ReflectionProbeDesc};
+pub use renderer::pbr::{PointLight, RectLight, ReflectionProbeDesc, Sun};
 mod transport;
 
 use bvh::Bvh;
@@ -133,7 +133,8 @@ impl Texture {
 #[derive(Clone, Copy, Debug)]
 pub struct Material {
     pub diffuse: Vec3,
-    pub emission: Vec3,
+    /// Linear Rec.709 emission for a white emissive texel, with luminance Y in cd/m².
+    pub emissive_nits: Vec3,
     pub base_texture: Option<usize>,
     pub alpha_cutoff: Option<f32>,
     pub opacity: f32,
@@ -146,7 +147,7 @@ impl Default for Material {
     fn default() -> Self {
         Self {
             diffuse: [1.; 3],
-            emission: [0.; 3],
+            emissive_nits: [0.; 3],
             base_texture: None,
             alpha_cutoff: None,
             opacity: 1.,
@@ -170,9 +171,15 @@ pub struct BakeScene {
     textures: Vec<Texture>,
     bvh: Bvh,
     rect_lights: Vec<RectLight>,
+    point_lights: Vec<PointLight>,
 }
 
 impl BakeScene {
+    /// Replace static point emitters contributing bounced light in all scenarios.
+    pub fn set_point_lights(&mut self, lights: Vec<PointLight>) {
+        self.point_lights = lights;
+    }
+
     /// Replace static rectangular emitters for all baked scenarios. Direct light
     /// at the final receiver is evaluated by the runtime from the same descriptors.
     pub fn set_rect_lights(&mut self, lights: Vec<RectLight>) {
@@ -200,7 +207,7 @@ impl BakeScene {
         for m in &materials {
             if !nonnegative(m.diffuse)
                 || m.diffuse.into_iter().any(|x| x > 1.)
-                || !nonnegative(m.emission)
+                || !nonnegative(m.emissive_nits)
                 || [m.base_texture, m.orm_texture, m.emission_texture]
                     .into_iter()
                     .flatten()
@@ -228,6 +235,7 @@ impl BakeScene {
             textures,
             bvh,
             rect_lights: Vec::new(),
+            point_lights: Vec::new(),
         })
     }
 }

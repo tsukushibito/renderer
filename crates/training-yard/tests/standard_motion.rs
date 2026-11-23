@@ -51,7 +51,7 @@ fn exercise(backend: RuntimeConfig, load_after_start: bool) -> PipelineResult<()
     )?)?;
     let mut materials = Materials::default();
     let mut params = PbrParams::color([1.; 4]);
-    params.factors.emissive = [1., 0., 0.];
+    params.factors.emissive_nits = [1., 0., 0.];
     params.factors.double_sided = true;
     let red = materials.create_pbr(params)?;
     let green = materials.create_custom(
@@ -163,7 +163,7 @@ fn exercise(backend: RuntimeConfig, load_after_start: bool) -> PipelineResult<()
         );
     }
     // Enable a light after startup, then promote it to a shadow caster.
-    let panel = renderer::pbr::RectLight::new(
+    let panel = renderer::pbr::RectLight::from_lumens(
         [0., 2., 0.],
         [0.5, 0., 0.],
         [0., 0., 0.5],

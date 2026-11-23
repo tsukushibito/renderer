@@ -129,7 +129,7 @@ impl BakeScene {
                     backface: det < 0.,
                     normal: n.map(|x| x * scale),
                     diffuse: std::array::from_fn(|i| m.diffuse[i] * tex[i].min(1.) * dielectric),
-                    emission: std::array::from_fn(|i| m.emission[i] * emitted[i]),
+                    emission: std::array::from_fn(|i| m.emissive_nits[i] * emitted[i]),
                 });
                 limit = dist;
             }

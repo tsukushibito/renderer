@@ -64,7 +64,8 @@ fn pack<const N: usize>(
         scene.materials.len(),
         scene.textures.len(),
     ];
-    if scene.rect_lights.len() > 0xffffff
+    if scene.point_lights.len() > 0xffffff
+        || scene.rect_lights.len() > 0xffffff
         || counts.iter().any(|&n| n > 0xffffff)
         || scene
             .textures
@@ -75,6 +76,7 @@ fn pack<const N: usize>(
     }
     let count = 2
         + 4 * scene.rect_lights.len()
+        + 2 * scene.point_lights.len()
         + 3 * N
         + counts[0] * 3
         + counts[1] * 4
@@ -93,24 +95,33 @@ fn pack<const N: usize>(
         }
     };
     push(counts.map(|n| n as f32));
-    push([samples as f32, N as f32, scene.rect_lights.len() as f32, 0.]);
+    push([
+        samples as f32,
+        N as f32,
+        scene.rect_lights.len() as f32,
+        scene.point_lights.len() as f32,
+    ]);
     for light in lights {
         push(texel(
-            light.sky,
+            light.sky_rgb_nits,
             light.environment.map_or(-1., |m| m.texture as f32),
         ));
         push(texel(
-            light.sun,
+            light.sun.rgb_lux(),
             light.environment.map_or(0., |m| m.yaw_radians),
         ));
-        push(texel(light.direction_to_sun, 0.));
+        push(texel(light.sun.direction(), 0.));
     }
     for rect in &scene.rect_lights {
         let [u, v] = rect.half_edges();
         push(texel(rect.center(), rect.range()));
         push(texel(u, rect.area()));
         push(texel(v, 0.));
-        push(texel(rect.radiance(), 0.));
+        push(texel(rect.rgb_nits(), 0.));
+    }
+    for point in &scene.point_lights {
+        push(texel(point.position(), point.range()));
+        push(texel(point.rgb_candela(), 0.));
     }
     for n in &scene.bvh.0 {
         push(texel(n.lo, n.start as f32));
@@ -125,7 +136,7 @@ fn pack<const N: usize>(
     }
     for m in &scene.materials {
         push(texel(m.diffuse, m.base_texture.map_or(-1., |i| i as f32)));
-        push(texel(m.emission, m.alpha_cutoff.unwrap_or(-1.)));
+        push(texel(m.emissive_nits, m.alpha_cutoff.unwrap_or(-1.)));
         push([
             m.opacity,
             m.metallic,

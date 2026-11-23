@@ -956,7 +956,7 @@ impl Resident {
                 environment.brdf.mips.len() as u32,
             ],
             environment_parameters: [
-                environment.strength,
+                environment.nits_per_unit,
                 environment.yaw_degrees.to_radians(),
                 environment.max_prefilter_lod as f32,
             ],

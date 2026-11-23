@@ -550,7 +550,7 @@ struct Lighting {
 impl Lighting {
     fn direct() -> Self {
         let mut environment = super::ibl::Environment::fixture();
-        environment.strength = 0.;
+        environment.nits_per_unit = 0.;
         Self {
             environment,
             light_color: LIGHT_COLOR,

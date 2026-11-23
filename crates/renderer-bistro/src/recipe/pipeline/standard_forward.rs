@@ -120,7 +120,7 @@ pub(super) fn build(
     let mut graph = pool.begin()?;
     let camera_target = import_frame(&mut graph, workspace, resident)?;
     let [irradiance, reflection, brdf_lut] = import_environment(&mut graph, resident)?;
-    let [strength, yaw_radians, max_prefilter_lod] = resident.environment_parameters;
+    let [nits_per_unit, yaw_radians, max_prefilter_lod] = resident.environment_parameters;
     let (recipe, bloom) = workspace.prepared.select(options).standard();
     let mut scene_bounds = workspace
         .placements
@@ -171,7 +171,10 @@ pub(super) fn build(
                 aspect: options.width as f32 / options.height as f32,
             },
         )?,
-        pbr::Sun::from_normalized(camera_input.direction_to_light, camera_input.irradiance)?,
+        pbr::Sun::from_normalized_rgb_lux(
+            camera_input.direction_to_light,
+            camera_input.irradiance,
+        )?,
         scene_bounds,
         pbr::Environment {
             local_reflections: super::import_reflections(&mut graph, resident)?.map(|atlas| {
@@ -185,7 +188,7 @@ pub(super) fn build(
             irradiance,
             reflection,
             brdf_lut,
-            strength,
+            nits_per_unit,
             yaw_radians,
             max_prefilter_lod: max_prefilter_lod as u32,
         },

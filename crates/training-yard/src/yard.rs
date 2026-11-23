@@ -70,7 +70,7 @@ pub fn replay_action(step: usize) -> Option<Action> {
 fn emission(rgb: [f32; 3]) -> PbrParams {
     let mut params = PbrParams::color([0., 0., 0., 1.]);
     params.factors.double_sided = true;
-    params.factors.emissive = rgb;
+    params.factors.emissive_nits = rgb;
     params
 }
 
@@ -158,7 +158,7 @@ impl Yard {
             actor.set_pose(mesh, Some(pose))?;
         }
         let world_bounds = Bounds::new([-1., -1., 0.], [1., 1., 1.])?;
-        let sun = Sun::new([0., 0., -1.], [0.01; 3])?;
+        let sun = Sun::from_lux([0., 0., -1.], [1.; 3], 0.01)?;
 
         Ok(Self {
             meshes,

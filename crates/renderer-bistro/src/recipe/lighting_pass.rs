@@ -70,7 +70,7 @@ impl LightingPass {
             env.brdf.bytes.fill(0);
         }
         if self == Self::LocalSpecular {
-            env.strength = 0.;
+            env.nits_per_unit = 0.;
         }
         if self == Self::DiffuseNoAo {
             scene.disable_environment_occlusion();
@@ -80,13 +80,13 @@ impl LightingPass {
             if self == Self::BaseColor {
                 // Use the emissive input as an unlit read of the original sRGB base texture.
                 m.textures[3] = m.textures[0];
-                factors.emissive = [
+                factors.emissive_nits = [
                     factors.base_color[0],
                     factors.base_color[1],
                     factors.base_color[2],
                 ];
             } else if self != Self::Emissive {
-                factors.emissive = [0.; 3];
+                factors.emissive_nits = [0.; 3];
             }
             m.uniform = factors.encode()?;
         }

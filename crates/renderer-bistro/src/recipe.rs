@@ -238,7 +238,7 @@ impl Options {
             .apply(scene, env, self.baked_lighting.is_some())?;
         look["lighting_pass"] = serde_json::json!(format!("{:?}", self.lighting_pass));
         if self.lighting_pass != LightingPass::Beauty {
-            look["ibl_strength"] = serde_json::json!(env.strength);
+            look["ibl_strength"] = serde_json::json!(env.nits_per_unit);
             look["background_linear_rgb"] = serde_json::json!([0.0, 0.0, 0.0]);
             if !self.lighting_pass.has_sun() {
                 look["irradiance_rgb"] = serde_json::json!([0.0, 0.0, 0.0]);

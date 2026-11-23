@@ -4,11 +4,10 @@ use std::f32::consts::{PI, TAU};
 /// Sky radiance for escaping rays and normal-incidence solar irradiance.
 #[derive(Clone, Copy)]
 pub struct Lighting {
-    /// Uniform sky radiance, or RGB multiplier of the environment texture.
-    pub sky: Vec3,
+    /// Linear Rec.709 sky color in cd/m² (Y), for a unit white texel when textured.
+    pub sky_rgb_nits: Vec3,
     pub environment: Option<SkyMap>,
-    pub direction_to_sun: Vec3,
-    pub sun: Vec3,
+    pub sun: crate::Sun,
 }
 /// Top-origin linear HDR latitude-longitude texture in the bake scene.
 #[derive(Clone, Copy)]
@@ -60,29 +59,27 @@ fn random(state: &mut u32) -> f32 {
 }
 impl Lighting {
     /// Illuminate the scene with a uniform linear HDR sky.
-    pub fn uniform_sky(radiance: Vec3) -> Self {
+    pub fn uniform_sky(rgb_nits: Vec3) -> Self {
         Self {
-            sky: radiance,
+            sky_rgb_nits: rgb_nits,
             environment: None,
-            direction_to_sun: [0., 1., 0.],
-            sun: [0.; 3],
+            sun: crate::Sun::OFF,
         }
     }
-    /// Use a lat-long environment shared with the runtime. Tint scales its radiance.
-    pub fn environment_map(map: SkyMap, tint: Vec3) -> Self {
+    /// Use a lat-long environment shared with the runtime. A unit white texel emits the specified luminance in cd/m².
+    pub fn environment_map(map: SkyMap, nits_per_unit: f32) -> Self {
         Self {
             environment: Some(map),
-            ..Self::uniform_sky(tint)
+            ..Self::uniform_sky([nits_per_unit; 3])
         }
     }
     #[must_use]
-    pub fn with_sun(mut self, direction_to_sun: Vec3, irradiance: Vec3) -> Self {
-        self.direction_to_sun = direction_to_sun;
-        self.sun = irradiance;
+    pub fn with_sun(mut self, sun: crate::Sun) -> Self {
+        self.sun = sun;
         self
     }
-    pub(crate) fn normalized(self, scene: &BakeScene) -> Result<Self, BakeError> {
-        if !nonnegative(self.sky) || !nonnegative(self.sun) {
+    pub(crate) fn validate(&self, scene: &BakeScene) -> Result<(), BakeError> {
+        if !nonnegative(self.sky_rgb_nits) {
             return Err(BakeError("invalid lighting energy"));
         }
         if let Some(map) = self.environment
@@ -90,10 +87,7 @@ impl Lighting {
         {
             return Err(BakeError("invalid sky texture or yaw"));
         }
-        Ok(Self {
-            direction_to_sun: unit(self.direction_to_sun)?,
-            ..self
-        })
+        Ok(())
     }
 }
 impl BakeScene {
@@ -104,29 +98,29 @@ impl BakeScene {
         if !(1..=renderer::pbr::BakedLighting::MAX_SCENARIOS).contains(&N) {
             return Err(BakeError("unsupported lighting scenario count"));
         }
-        let mut lights = scenarios.scenarios();
-        for light in &mut lights {
-            *light = light.normalized(self)?;
+        let lights = scenarios.scenarios();
+        for light in &lights {
+            light.validate(self)?;
         }
         Ok(lights)
     }
 
     pub(crate) fn sky_radiance(&self, light: Lighting, ray: Vec3) -> Vec3 {
         let Some(map) = light.environment else {
-            return light.sky;
+            return light.sky_rgb_nits;
         };
         let texture = &self.textures[map.texture];
         let u = 0.5 + (ray[2].atan2(ray[0]) + map.yaw_radians) / TAU;
         let half = 0.5 / texture.height as f32;
         let v = (ray[1].clamp(-1., 1.).acos() / PI).clamp(half, 1. - half);
         let rgba = texture.sample([u, v]);
-        std::array::from_fn(|i| light.sky[i] * rgba[i])
+        std::array::from_fn(|i| light.sky_rgb_nits[i] * rgba[i])
     }
 
     /// Isotropic fallback beyond the baked volume, weighted by texel solid angle.
     pub(crate) fn mean_sky(&self, light: Lighting) -> Vec3 {
         let Some(map) = light.environment else {
-            return light.sky;
+            return light.sky_rgb_nits;
         };
         let t = &self.textures[map.texture];
         let mut sum = [0f64; 3];
@@ -140,7 +134,7 @@ impl BakeScene {
                 }
             }
         }
-        std::array::from_fn(|i| sum[i] as f32 * light.sky[i])
+        std::array::from_fn(|i| sum[i] as f32 * light.sky_rgb_nits[i])
     }
 
     pub(crate) fn incoming(
@@ -153,10 +147,31 @@ impl BakeScene {
         self.incoming_classified(origin, ray, light, state).0
     }
 
-    // Uniform area sampling with an explicit visibility ray. This is evaluated
+    // Point lighting and uniform area sampling with visibility rays are evaluated
     // at secondary surface hits only, including those in reflection captures.
-    fn rect_irradiance(&self, origin: Vec3, normal: Vec3, mut seed: u32) -> Vec3 {
+    fn local_illuminance(&self, origin: Vec3, normal: Vec3, mut seed: u32) -> Vec3 {
         let mut sum = [0.; 3];
+        for point in &self.point_lights {
+            let delta = crate::sub(point.position(), origin);
+            let d2 = dot(delta, delta);
+            let radial = d2 / point.range().powi(2);
+            if radial >= 1. {
+                continue;
+            }
+            let distance = d2.sqrt();
+            let direction = if d2 > 1e-20 {
+                delta.map(|v| v / distance)
+            } else {
+                normal
+            };
+            let cosine = dot(normal, direction).max(0.);
+            if cosine > 0. && self.trace(origin, direction, distance).is_none() {
+                let scale = cosine * (1. - radial * radial).powi(2) / d2.max(0.01);
+                for (channel, intensity) in sum.iter_mut().zip(point.rgb_candela()) {
+                    *channel += intensity * scale;
+                }
+            }
+        }
         for rect in &self.rect_lights {
             let [u, v] = rect.half_edges();
             let center = crate::sub(rect.center(), origin);
@@ -178,7 +193,7 @@ impl BakeScene {
             let cosine = dot(normal, l).max(0.) * (-dot(rect.normal(), l)).max(0.);
             if cosine > 0. && self.trace(origin, l, dist).is_none() {
                 let scale = rect.area() * cosine / d2 * (1. - radial * radial).powi(2);
-                for (channel, radiance) in sum.iter_mut().zip(rect.radiance()) {
+                for (channel, radiance) in sum.iter_mut().zip(rect.rgb_nits()) {
                     *channel += radiance * scale;
                 }
             }
@@ -209,18 +224,19 @@ impl BakeScene {
                 std::array::from_fn(|i| origin[i] + ray[i] * hit.distance),
                 hit.normal,
             );
-            let mut cosine = dot(hit.normal, light.direction_to_sun).max(0.);
+            let mut cosine = dot(hit.normal, light.sun.direction()).max(0.);
             if cosine > 0.
                 && self
-                    .trace(origin, light.direction_to_sun, f32::INFINITY)
+                    .trace(origin, light.sun.direction(), f32::INFINITY)
                     .is_some()
             {
                 cosine = 0.;
             }
-            let rect = self.rect_irradiance(origin, hit.normal, *state ^ 0x9e3779b9);
+            let local = self.local_illuminance(origin, hit.normal, *state ^ 0x9e3779b9);
             for i in 0..3 {
                 result[i] += weight[i]
-                    * (hit.emission[i] + hit.diffuse[i] * (light.sun[i] * cosine + rect[i]) / PI);
+                    * (hit.emission[i]
+                        + hit.diffuse[i] * (light.sun.rgb_lux()[i] * cosine + local[i]) / PI);
                 weight[i] *= hit.diffuse[i];
             }
             ray = hemisphere(hit.normal, random(state), random(state));
@@ -235,14 +251,14 @@ impl BakeScene {
     }
 
     /// Integrate diffuse irradiance at surface samples. The receiver material
-    /// and the sun's direct term are applied later by the renderer.
+    /// and direct illumination are applied later by the renderer.
     pub fn bake_irradiance(
         &self,
         surfaces: &[SurfaceSample],
-        lighting: Lighting,
+        light: Lighting,
         samples: u32,
     ) -> Result<Vec<Vec3>, BakeError> {
-        let light = lighting.normalized(self)?;
+        light.validate(self)?;
         if samples == 0 {
             return Err(BakeError("zero transport samples"));
         }
@@ -311,18 +327,39 @@ mod tests {
         let scene = BakeScene::new(vec![], vec![], vec![]).unwrap();
         let l = Lighting {
             environment: None,
-            sky: [0.5, 0.25, 1.],
-            sun: [10.; 3],
-            direction_to_sun: [0., 1., 0.],
+            sky_rgb_nits: [0.5, 0.25, 1.],
+            sun: renderer::pbr::Sun::from_lux([0., 1., 0.], [1.; 3], 10.).unwrap(),
         };
         let actual = scene.bake_irradiance(&[surface()], l, 16).unwrap()[0];
-        for (v, sky) in actual.into_iter().zip(l.sky) {
+        for (v, sky) in actual.into_iter().zip(l.sky_rgb_nits) {
             assert!((v - PI * sky).abs() < 1e-5);
         }
     }
     #[test]
+    fn calibrated_environment_gives_pi_times_luminance_on_a_white_receiver() {
+        let mut scene = BakeScene::new(vec![], vec![], vec![]).unwrap();
+        let texture = crate::Texture::new(2, 1, vec![[0.5, 0.5, 0.5, 1.]; 2]).unwrap();
+        let map = scene.add_sky_map(texture, 0.).unwrap();
+        let light = Lighting::environment_map(map, 40.);
+        for e in scene.bake_irradiance(&[surface()], light, 32).unwrap()[0] {
+            assert!((e - PI * 20.).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn point_light_illuminance_follows_inverse_square_in_metres() {
+        let mut scene = BakeScene::new(vec![], vec![], vec![]).unwrap();
+        scene.set_point_lights(vec![
+            crate::PointLight::from_candela([0.; 3], 10000., [1.; 3], 100.).unwrap(),
+        ]);
+        for (distance, lux) in [(1., 100.), (2., 25.), (10000., 0.)] {
+            let e = scene.local_illuminance([0., -distance, 0.], [0., 1., 0.], 0);
+            assert_eq!(e, [lux; 3]);
+        }
+    }
+    #[test]
     fn rectangle_illuminates_visible_bounce_surfaces_only() {
-        let rect = crate::RectLight::new(
+        let rect = crate::RectLight::from_lumens(
             [0., 2., 0.],
             [0.5, 0., 0.],
             [0., 0., 0.25],
@@ -338,7 +375,7 @@ mod tests {
             scene.bake_irradiance(&[surface()], dark, 32).unwrap()[0],
             [0.; 3]
         );
-        assert!(scene.rect_irradiance([0.; 3], surface().normal, 1)[0] > 0.);
+        assert!(scene.local_illuminance([0.; 3], surface().normal, 1)[0] > 0.);
         let plane = |y| Triangle {
             positions: [[-10., y, -10.], [10., y, -10.], [0., y, 10.]],
             uv: [[0.; 2]; 3],
@@ -355,7 +392,7 @@ mod tests {
             BakeScene::new(vec![plane(1.)], vec![Material::default()], vec![]).unwrap();
         blocked.set_rect_lights(vec![rect]);
         assert_eq!(
-            blocked.rect_irradiance([0.; 3], surface().normal, 1),
+            blocked.local_illuminance([0.; 3], surface().normal, 1),
             [0.; 3]
         );
     }
@@ -369,16 +406,15 @@ mod tests {
         };
         let material = Material {
             diffuse: [0.; 3],
-            emission: [1., 0., 0.],
+            emissive_nits: [1., 0., 0.],
             base_texture: Some(0),
             alpha_cutoff: Some(0.5),
             ..Default::default()
         };
         let l = Lighting {
             environment: None,
-            sky: [0., 0., 1.],
-            sun: [0.; 3],
-            direction_to_sun: [0., 1., 0.],
+            sky_rgb_nits: [0., 0., 1.],
+            sun: crate::Sun::OFF,
         };
         for (alpha, expected) in [(0., [0., 0., PI]), (1., [PI, 0., 0.])] {
             let texture = crate::Texture::new(1, 1, vec![[1., 1., 1., alpha]]).unwrap();

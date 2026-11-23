@@ -178,7 +178,7 @@ impl DefaultViews {
             diffuse_lighting: Default::default(),
             reflection: black,
             brdf_lut: brdf,
-            strength: 0.0,
+            nits_per_unit: 0.0,
             yaw_radians: 0.0,
             max_prefilter_lod: 0,
         })
@@ -401,7 +401,7 @@ mod tests {
         let environment = views.environment().unwrap();
         assert_eq!(environment.irradiance, environment.reflection);
         assert_ne!(environment.irradiance, environment.brdf_lut);
-        assert_eq!(environment.strength, 0.0);
+        assert_eq!(environment.nits_per_unit, 0.0);
         assert_eq!(
             graph
                 .image_desc(views.unshadowed().unwrap().view().image())

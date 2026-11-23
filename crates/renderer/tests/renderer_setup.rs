@@ -49,13 +49,10 @@ fn plan_counts_shared_assets_and_per_view_work_separately() -> PipelineResult<()
             ..instance
         },
     ];
-    let mut lights = [LocalLight::Point {
-        position: [0.; 3],
-        radius: 1.,
-        color: [1.; 3],
-        intensity: 1.,
-    }; 257];
-    lights[0] = LocalLight::shadowed_rect(renderer::pbr::RectLight::new(
+    let mut lights = [LocalLight::Point(
+        renderer::pbr::PointLight::from_candela([0.; 3], 1., [1.; 3], 1.).unwrap(),
+    ); 257];
+    lights[0] = LocalLight::shadowed_rect(renderer::pbr::RectLight::from_lumens(
         [0.; 3],
         [1., 0., 0.],
         [0., 1., 0.],

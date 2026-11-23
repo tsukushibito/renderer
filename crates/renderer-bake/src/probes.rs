@@ -275,17 +275,16 @@ mod tests {
     fn sky_scenarios_share_a_leaf_and_survive_serialization() {
         let scene = BakeScene::new(vec![], vec![], vec![]).unwrap();
         let sky = Lighting {
-            sun: [0.; 3],
+            sun: crate::Sun::OFF,
             environment: None,
-            sky: [1.; 3],
-            direction_to_sun: [0., 1., 0.],
+            sky_rgb_nits: [1.; 3],
         };
         let volume = scene
             .bake_probes(
                 [
                     sky,
                     Lighting {
-                        sky: [0.25; 3],
+                        sky_rgb_nits: [0.25; 3],
                         ..sky
                     },
                 ],
