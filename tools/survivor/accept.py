@@ -1,6 +1,7 @@
 """Compare a presented research-facility run with the same inputs on the CPU."""
 
 import argparse
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -107,6 +108,32 @@ def run(exe, arena_path, output, backend, playthrough):
         report["model_swap_changed_pixels"] = changed
         if changed == 0:
             raise ValueError("swapping the character model did not change the rendered pixels")
+        # A visual-only edit must reach the rendered frame without changing gameplay.
+        # Older or custom arenas may omit these bundled placements.
+        original = json.loads(open_arena.read_text(encoding="utf-8"))
+        report["view_edits"] = {}
+        for placement, field, value in [("lamp-center", "candela", 0), ("camera", "height", 32)]:
+            layout = copy.deepcopy(original)
+            entity = next((p for p in layout.get("placements", []) if p["id"] == placement), None)
+            if entity is None:
+                continue
+            fields = layout["prefabs"][entity["prefab"]]["fields"]
+            overrides = entity.setdefault("overrides", {})
+            if overrides.get(field, fields.get(field)) == value:
+                continue
+            overrides[field] = value
+            edited_view = output / f"{placement}.json"
+            capture = output / f"{placement}.ppm"
+            write_json(edited_view, layout)
+            state = execute(placement, ["--window", "--backend", backend, "--arena", edited_view,
+                                        "--width", str(CAPTURE_SIZE[0]), "--height", str(CAPTURE_SIZE[1]),
+                                        "--frames", str(len(route)), "--replay", input_path, "--capture", capture])
+            before = struct.iter_unpack("BBB", capture_pixels(output / "open.ppm"))
+            after = struct.iter_unpack("BBB", capture_pixels(capture))
+            count = sum(a != b for a, b in zip(before, after, strict=True))
+            if state != ordinary or count == 0:
+                raise ValueError(f"{placement}: visual edit changed gameplay or did not affect the image")
+            report["view_edits"][placement] = {"field": field, "value": value, "changed_pixels": count}
         if playthrough:
             # This seed lets a stationary player collect XP, choose Pierce and
             # eventually lose to the horde. Only the final input requests a retry.
@@ -128,7 +155,8 @@ def run(exe, arena_path, output, backend, playthrough):
         report["passed"] = True
     finally:
         write_json(output / "report.json", report)
-    print(f"Passed {len(report['cases'])} window/CPU comparisons; model swap changed {changed} pixels.")
+    print(f"Passed {len(report['cases'])} window/CPU comparisons and {len(report['view_edits'])} view edits. "
+          f"Model swap changed {changed} pixels.")
 
 
 if __name__ == "__main__":

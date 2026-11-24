@@ -121,11 +121,9 @@ pub fn registry() -> Registry<RuleContext> {
             .register(name, &["half_extent"], Extent::validate)
             .expect("unique registered type");
     }
-    for kind in ["PlayerSpawn", "Group"] {
-        types
-            .register::<Empty>(kind, &[], |_| Ok(()))
-            .expect("unique registered type");
-    }
+    types
+        .register::<Empty>("PlayerSpawn", &[], |_| Ok(()))
+        .expect("unique registered type");
     types
         .register_behavior("Marker", &["radius"], Marker::validate, Marker::update)
         .expect("unique registered type");

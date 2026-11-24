@@ -11,6 +11,10 @@ use std::{
 
 pub type Fields = Map<String, Value>;
 
+/// A transform-only placement for arranging children. Available in every registry.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct Group {}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Prefab {
@@ -58,11 +62,15 @@ struct RegisteredType<C> {
 pub struct Registry<C = ()> {
     types: BTreeMap<&'static str, RegisteredType<C>>,
 }
-impl<C> Default for Registry<C> {
+impl<C: 'static> Default for Registry<C> {
     fn default() -> Self {
-        Self {
+        let mut registry = Self {
             types: BTreeMap::new(),
-        }
+        };
+        registry
+            .register::<Group>("Group", &[], |_| Ok(()))
+            .expect("fresh registry");
+        registry
     }
 }
 impl<C: 'static> Registry<C> {

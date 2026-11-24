@@ -398,5 +398,57 @@
       },
       "replay_matches": true
     }
+  },
+  "authored_view": {
+    "seed": 506,
+    "tick": 48,
+    "extent": [
+      960,
+      540
+    ],
+    "backends": {
+      "vulkan": {
+        "exe_sha256": "816459ca80ad775a594cae1deb8ce7cb590d0ec000cf9d7768560d3ab17bf31c",
+        "matches_before_authored_lighting_and_camera": {
+          "open": "01694b5863161f6d545156d0b955df40945bf94bde9546daf2b53d762bfec36f",
+          "edited": "069c3de9b47a20edfb15d56f7c28e55ab8662934ea5d42ae9e08092283f03dc8",
+          "alternate": "b5f8c5b58188e98c06530044deaa487314015a26e60c9d9272c0b8efb411dad1"
+        },
+        "model_swap_changed_pixels": 1972,
+        "view_edits_with_unchanged_gameplay": {
+          "lamp-center": {
+            "field": "candela",
+            "value": 0,
+            "changed_pixels": 216442
+          },
+          "camera": {
+            "field": "height",
+            "value": 32,
+            "changed_pixels": 502931
+          }
+        }
+      },
+      "d3d12": {
+        "exe_sha256": "816459ca80ad775a594cae1deb8ce7cb590d0ec000cf9d7768560d3ab17bf31c",
+        "matches_before_authored_lighting_and_camera": {
+          "open": "2fdffb860ff5483910021a0bed0a711274d8c7b948b3871a1d7e0a924bda5d9c",
+          "edited": "05a3ea0fd981662d8dcd28bfa764d616e8c982ca6649bfdfd26a2ea06f084d10",
+          "alternate": "42a3c1fb691dd0c653e04ff3f4591456e72caa6de89d3ea92b23f4c0d1cc6e99"
+        },
+        "model_swap_changed_pixels": 1972,
+        "view_edits_with_unchanged_gameplay": {
+          "lamp-center": {
+            "field": "candela",
+            "value": 0,
+            "changed_pixels": 216443
+          },
+          "camera": {
+            "field": "height",
+            "value": 32,
+            "changed_pixels": 502931
+          }
+        }
+      }
+    }
   }
 }
