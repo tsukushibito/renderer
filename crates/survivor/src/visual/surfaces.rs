@@ -4,11 +4,16 @@ use renderer::{
     material::{MaterialTexture, MaterialTextures, PbrParams},
     pipeline::{AssetPreparation, PipelineResult},
 };
+use sashiko::animation::AnimatedModel;
 use std::time::{Duration, Instant};
 
 const COLOR: ImageDesc = ImageDesc::rgba8_srgb(256, 256).with_mip_levels(9);
 const LINEAR: ImageDesc = ImageDesc::rgba8(256, 256).with_mip_levels(9);
-const CHARACTER: ImageDesc = ImageDesc::rgba8_srgb(256, 256);
+fn character_image(model: &AnimatedModel) -> ImageDesc {
+    let (_, [width, height]) = model.color();
+    ImageDesc::rgba8_srgb(width, height)
+}
+
 const LABEL: &str = "lab surface";
 
 struct SurfaceMaps {
@@ -32,7 +37,7 @@ const STEEL: SurfaceMaps = SurfaceMaps {
 pub(super) struct Surfaces {
     pub(super) floor: PbrParams,
     pub(super) steel: PbrParams,
-    pub(super) character: PbrParams,
+    pub(super) characters: Vec<PbrParams>,
     _images: Vec<ManagedImage>,
 }
 
@@ -44,23 +49,33 @@ impl Surfaces {
     ))]
     pub(super) fn for_window(
         renderer: &mut renderer::WindowRenderer,
-        base_rgba: &[u8],
+        models: &[AnimatedModel],
     ) -> PipelineResult<Self> {
         renderer.prepare_texture(LABEL, COLOR, 2)?;
         renderer.prepare_texture(LABEL, LINEAR, 4)?;
-        renderer.prepare_texture(LABEL, CHARACTER, 1)?;
-        Self::upload(renderer, base_rgba)
+        for model in models {
+            renderer.prepare_texture(LABEL, character_image(model), 1)?;
+        }
+        Self::upload(renderer, models)
     }
 
-    pub(super) fn for_headless(renderer: &mut Renderer, base_rgba: &[u8]) -> PipelineResult<Self> {
+    pub(super) fn for_headless(
+        renderer: &mut Renderer,
+        models: &[AnimatedModel],
+    ) -> PipelineResult<Self> {
         renderer.prepare_texture(LABEL, COLOR, 2)?;
         renderer.prepare_texture(LABEL, LINEAR, 4)?;
-        renderer.prepare_texture(LABEL, CHARACTER, 1)?;
-        Self::upload(renderer, base_rgba)
+        for model in models {
+            renderer.prepare_texture(LABEL, character_image(model), 1)?;
+        }
+        Self::upload(renderer, models)
     }
 
-    fn upload(renderer: &mut impl AssetPreparation, base_rgba: &[u8]) -> PipelineResult<Self> {
-        let mut images = Vec::with_capacity(7);
+    fn upload(
+        renderer: &mut impl AssetPreparation,
+        models: &[AnimatedModel],
+    ) -> PipelineResult<Self> {
+        let mut images = Vec::with_capacity(6 + models.len());
         let drawing = renderer.asset_renderer();
         for format in [COLOR, LINEAR] {
             drawing.check_texture_support(format, true)?;
@@ -91,16 +106,22 @@ impl Surfaces {
             };
             Ok(params)
         };
-        Ok(Self {
-            floor: material(FLOOR)?,
-            steel: material(STEEL)?,
-            character: PbrParams {
+        let floor = material(FLOOR)?;
+        let steel = material(STEEL)?;
+        let mut characters = Vec::with_capacity(models.len());
+        for model in models {
+            characters.push(PbrParams {
                 textures: MaterialTextures {
-                    base_color: upload(CHARACTER, base_rgba)?,
+                    base_color: upload(character_image(model), model.color().0)?,
                     ..Default::default()
                 },
                 ..Default::default()
-            },
+            });
+        }
+        Ok(Self {
+            floor,
+            steel,
+            characters,
             _images: images,
         })
     }
