@@ -3,11 +3,11 @@
   "mount": "assets/survivor",
   "files": [
     "arena.json",
-    "characters/*.json",
-    "characters/*.skin",
-    "characters/*.rgba",
     "characters/README.md",
     "environment/README.md",
     "environment/sources.json"
-  ]
+  ],
+  "references": {
+    "characters/catalog.json": ["models/*/skin", "models/*/color"]
+  }
 }
