@@ -57,6 +57,8 @@ impl ProbeShOrder {
 pub enum DiffuseLighting {
     #[default]
     EnvironmentMap,
+    /// Static placements use lightmap pages. Other draws retain environment diffuse.
+    SurfacePages { blend: f32 },
     /// Upload the diffuse texture from a validated BakedLighting. Zero selects
     /// the first baked scenario and one selects the last. Intermediate scenarios are evenly spaced. A single scenario
     /// supplies the same lighting for every blend value.
@@ -75,10 +77,11 @@ impl DiffuseLighting {
     pub(super) fn uniform(self) -> Result<f32, GraphError> {
         match self {
             Self::EnvironmentMap => Ok(0.),
+            Self::SurfacePages { blend } if (0.0..=1.0).contains(&blend) => Ok(-1. - blend),
             Self::BakedLighting { blend, view } if (0.0..=1.0).contains(&blend) => {
                 Ok(1. + 2. * (view as u32 as f32) + blend)
             }
-            Self::BakedLighting { .. } => {
+            Self::SurfacePages { .. } | Self::BakedLighting { .. } => {
                 Err(GraphError::invalid_input("invalid probe scenario blend"))
             }
         }

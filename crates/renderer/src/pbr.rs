@@ -8,7 +8,9 @@ pub(crate) mod draw;
 mod history;
 mod probes;
 mod surface_lightmaps;
-pub use surface_lightmaps::{LightmapAddress, LightmapPage, SurfaceLightmaps};
+pub use surface_lightmaps::{
+    LightmapAddress, LightmapPage, SurfaceLightmapIndex, SurfaceLightmaps, SurfacePageRecord,
+};
 mod reflections;
 pub use probes::{BakedLighting, BakedLightingView, DiffuseLighting, ProbeShOrder};
 pub use reflections::{
