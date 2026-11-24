@@ -1,7 +1,7 @@
 //! Convert verified cooked stream objects on the equipment reader thread.
 use renderer::{
     core::{graph::ImageDesc, program::SamplerDescriptor},
-    material::{MaterialFactors, MaterialTextures, PbrParams},
+    material::{MaterialTextures, PbrParams},
     mesh::MeshData,
     pbr::PbrVertex,
 };
@@ -14,7 +14,7 @@ pub(super) struct Map {
     pub desc: ImageDesc,
 }
 
-pub(super) struct LoadedArmor {
+pub(super) struct LoadedPart {
     pub mesh: MeshData,
     pub params: PbrParams,
     pub primitive: Primitive,
@@ -27,7 +27,7 @@ pub(super) fn read(
     generation: &Generation,
     store: &ObjectStore,
     id: AssetId,
-) -> Result<LoadedArmor, String> {
+) -> Result<Vec<LoadedPart>, String> {
     read_inner(generation, store, id).map_err(|error| format!("equipment {id}: {error}"))
 }
 
@@ -35,11 +35,26 @@ fn read_inner(
     generation: &Generation,
     store: &ObjectStore,
     id: AssetId,
-) -> Result<LoadedArmor, Box<dyn std::error::Error>> {
+) -> Result<Vec<LoadedPart>, Box<dyn std::error::Error>> {
     let recipe = generation.equipment(&id)?;
-    let [primitive] = recipe.primitives.as_slice() else {
-        return Err("the training-yard armor slot requires a single drawable primitive".into());
-    };
+    if recipe.primitives.is_empty() || recipe.primitives.len() > super::MAX_PARTS {
+        return Err(format!(
+            "armor requires between 1 and {} primitives",
+            super::MAX_PARTS
+        )
+        .into());
+    }
+    recipe
+        .primitives
+        .iter()
+        .map(|p| read_part(store, p))
+        .collect()
+}
+
+fn read_part(
+    store: &ObjectStore,
+    primitive: &Primitive,
+) -> Result<LoadedPart, Box<dyn std::error::Error>> {
     let mesh_obj = store.load(&primitive.mesh)?;
     let mesh = mesh_obj.mesh()?;
     let vertices = mesh
@@ -57,17 +72,12 @@ fn read_inner(
     let mesh = MeshData::pbr(&vertices, &mesh.indices)?;
     let mat_obj = store.load(&primitive.material)?;
     let material = mat_obj.material()?;
-    let factors = MaterialFactors::decode(material.uniform.as_slice().try_into()?)?;
+    let factors = material.factors()?;
     let mut samplers = [SamplerDescriptor::LinearRepeat; 4];
     let mut maps = [None, None, None, None];
     for (i, image_ref) in primitive.images.iter().enumerate() {
         if let Some(s) = &material.samplers[i] {
-            samplers[i] = SamplerDescriptor::from_gltf(
-                Some(s.wrap_s),
-                Some(s.wrap_t),
-                s.mag_filter,
-                s.min_filter,
-            )?;
+            samplers[i] = s.descriptor()?;
         }
         if let Some(reference) = image_ref {
             let object = store.load(reference)?;
@@ -94,7 +104,7 @@ fn read_inner(
         }
     }
     let [base_color, normal, orm, emissive] = samplers;
-    Ok(LoadedArmor {
+    Ok(LoadedPart {
         mesh,
         params: PbrParams {
             factors,

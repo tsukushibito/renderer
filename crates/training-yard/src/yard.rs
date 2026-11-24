@@ -18,6 +18,7 @@ pub use equipment::EquipmentAsset;
 #[cfg(feature = "memory-profiling")]
 pub use equipment::EquipmentStats;
 
+pub(crate) const EQUIPMENT_DRAWS: usize = equipment::MAX_DRAWS;
 pub const REPLAY_FRAMES: usize = 24;
 
 pub struct Yard {
@@ -116,8 +117,8 @@ impl Yard {
     ) -> PipelineResult<Self> {
         let equipment = Equipment::new(root.as_ref(), equipment_slots)?;
         let mut meshes = Meshes::new(MeshCapacity {
-            meshes: 5,
-            retired_mesh_versions: 4,
+            meshes: 1 + 4 * equipment::MAX_PARTS,
+            retired_mesh_versions: 4 * equipment::MAX_PARTS,
         })?;
         let vertices: Vec<_> = [-0.75, 0., 0.75]
             .into_iter()
@@ -201,12 +202,12 @@ impl Yard {
     }
 
     pub fn assets(&mut self) -> SceneAssets<'_> {
-        let equipment = [self.equipment.object(0), self.equipment.object(1)];
+        let equipment = (0..2).flat_map(|i| self.equipment.objects(i));
         let mut assets = SceneAssets::new(&mut self.meshes, &mut self.materials, &[]);
         for actor in self.actors.iter().flatten() {
             assets.add_model(actor);
         }
-        for object in equipment.into_iter().flatten() {
+        for object in equipment {
             assets.add_object(object);
         }
         assets.preload_pair(self.mesh, self.glow);
@@ -241,28 +242,39 @@ impl Yard {
     fn extract_parts(&self, index: usize, camera: &CameraView, out: &mut Vec<RenderObject>) {
         if let Some(actor) = &self.actors[index] {
             for (part, object) in actor.draw_parts(camera) {
-                let replacement = self
-                    .equipment
-                    .object(index)
-                    .filter(|_| part.material_slot == 1);
-                out.push(replacement.map_or(object, |armor| armor.with_transform(actor.transform)));
+                let armor = self.equipment.objects(index);
+                if part.material_slot == 1 && armor.len() > 0 {
+                    out.extend(armor.map(|o| o.with_transform(actor.transform)));
+                } else {
+                    out.push(object);
+                }
             }
         }
     }
 
     /// The GPU sees frame-local IDs. Keep this small lookup with an outstanding
     /// mouse request so reusing an actor slot never redirects the answer.
-    pub(crate) fn pick_targets(&self, camera: &CameraView) -> [Option<(usize, u64, usize)>; 4] {
-        let mut targets = [None; 4];
+    pub(crate) fn pick_targets(
+        &self,
+        camera: &CameraView,
+    ) -> [Option<(usize, u64, usize)>; equipment::MAX_DRAWS] {
+        let mut targets = [None; equipment::MAX_DRAWS];
         let mut entries = targets.iter_mut();
         for (i, actor) in self.actors.iter().enumerate() {
             if let Some(actor) = actor {
                 for (part, _) in actor.draw_parts(camera) {
-                    *entries.next().expect("two parts per training actor") = Some((
-                        i,
-                        if i == 0 { self.occupant } else { 1 },
-                        part.material_slot,
-                    ));
+                    let count = if part.material_slot == 1 {
+                        self.equipment.objects(i).len().max(1)
+                    } else {
+                        1
+                    };
+                    for _ in 0..count {
+                        *entries.next().expect("prepared draw capacity") = Some((
+                            i,
+                            if i == 0 { self.occupant } else { 1 },
+                            part.material_slot,
+                        ));
+                    }
                 }
             }
         }
@@ -505,6 +517,117 @@ mod tests {
         let mut runtime = renderer.into_runtime()?;
         yard.release(&mut runtime)?;
         validation::check_validation(runtime)
+    }
+
+    fn two_parts(config: RuntimeConfig) -> PipelineResult<()> {
+        use super::{EquipmentAsset, Yard};
+        use renderer_asset::{Catalog, Digest, Generation};
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/equipment/dist");
+        let root = std::env::temp_dir().join(format!(
+            "renderer-yard-parts-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("catalogs"))?;
+        let mut yard = Yard::with_asset_catalog(&fixture, 2)?;
+        let old = Generation::open(&fixture)?;
+        let mut catalog: Catalog = serde_json::from_slice(&std::fs::read(
+            fixture.join("catalogs").join(old.id().to_string()),
+        )?)?;
+        let id = EquipmentAsset::Wide.id();
+        let second = catalog.assets[&EquipmentAsset::Narrow.id()].primitives[0].clone();
+        catalog.assets.get_mut(&id).unwrap().primitives.push(second);
+        let publish = |c: &Catalog| -> PipelineResult<Generation> {
+            let bytes = serde_json::to_vec(c)?;
+            let hash = Digest::of(&bytes);
+            std::fs::write(root.join("catalogs").join(hash.to_string()), bytes)?;
+            Ok(Generation::open_id(&root, hash)?)
+        };
+        let camera = super::camera(1, [48, 24])?;
+        let mut renderer = renderer::Renderer::headless_with(
+            config,
+            camera,
+            yard.assets(),
+            std::num::NonZeroUsize::new(2).unwrap(),
+            Yard::reserve_equipment,
+        )?;
+        yard.request_equipment(0, id)?;
+        let poll = |yard: &mut Yard,
+                    renderer: &mut renderer::Renderer,
+                    previous: Vec<renderer::pipeline::RenderObject>|
+         -> PipelineResult<()> {
+            let start = std::time::Instant::now();
+            while yard.pending_equipment() {
+                if start.elapsed() > std::time::Duration::from_secs(30) {
+                    return Err("equipment timeout".into());
+                }
+                yard.advance_equipment(renderer)?;
+                if yard.pending_equipment() {
+                    assert!(
+                        yard.equipment
+                            .objects(0)
+                            .map(|o| o.mesh)
+                            .eq(previous.iter().map(|o| o.mesh))
+                    );
+                }
+                std::thread::yield_now();
+            }
+            Ok(())
+        };
+        poll(&mut yard, &mut renderer, vec![])?;
+        let saved = serde_json::to_vec(&yard.saved_equipment(0).unwrap())?;
+        let old_parts = yard.equipment.objects(0).collect::<Vec<_>>();
+        assert_eq!(old_parts.len(), 1);
+        yard.set_asset_generation(publish(&catalog)?);
+        yard.request_equipment(0, serde_json::from_slice(&saved)?)?;
+        poll(&mut yard, &mut renderer, old_parts.clone())?;
+        let parts = yard.equipment.objects(0).collect::<Vec<_>>();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].mesh, old_parts[0].mesh);
+        assert_ne!(parts[1].mesh, old_parts[0].mesh);
+        let mut objects = Vec::new();
+        let scene = yard.extract(&camera, &mut objects);
+        assert_eq!(scene.objects.len(), 5);
+        let mut frame = renderer.begin_frame()?;
+        frame.draw_scene(scene, 1.)?;
+        let capture = frame.capture()?;
+        let mut pixels = [0; 48 * 24 * 4];
+        assert!(renderer.read_capture(
+            &capture,
+            &mut pixels,
+            std::time::Duration::from_secs(15)
+        )?);
+        catalog.assets.get_mut(&id).unwrap().primitives[1].mesh.hash =
+            Digest::of(b"missing second primitive");
+        yard.set_asset_generation(publish(&catalog)?);
+        yard.request_equipment(0, id)?;
+        poll(&mut yard, &mut renderer, parts.clone())?;
+        assert!(yard.load_error().is_some());
+        assert!(
+            yard.equipment
+                .objects(0)
+                .map(|o| o.mesh)
+                .eq(parts.iter().map(|o| o.mesh))
+        );
+        let mut runtime = renderer.into_runtime()?;
+        yard.release(&mut runtime)?;
+        validation::check_validation(runtime)?;
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires real devices for each enabled backend"]
+    fn multipart_generation_reuses_unchanged_parts_and_publishes_atomically() -> PipelineResult<()>
+    {
+        #[cfg(feature = "vulkan")]
+        two_parts(RuntimeConfig::Vulkan(Default::default()))?;
+        #[cfg(all(windows, feature = "d3d12"))]
+        two_parts(RuntimeConfig::D3D12(Default::default()))?;
+        Ok(())
     }
 
     #[test]

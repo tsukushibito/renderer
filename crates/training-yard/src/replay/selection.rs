@@ -8,12 +8,20 @@ use renderer::{
 use std::time::Duration;
 
 type Target = (usize, u64, usize); // game slot, generation, equipment slot
-const IDS: [u32; 4] = [0xf1234501, 0x81234502, 0x7f234503, 0x01234504];
+const IDS: [u32; crate::yard::EQUIPMENT_DRAWS] = [
+    0xf1234501, 0x81234502, 0x7f234503, 0x01234504, 5, 6, 7, 8, 9, 10,
+];
+
+fn tokens(yard: &Yard, camera: &CameraView) -> [u32; crate::yard::EQUIPMENT_DRAWS] {
+    let targets = yard.pick_targets(camera);
+    // Every primitive attached to one model slot must respond to a single pick/highlight.
+    std::array::from_fn(|i| IDS[targets[..=i].iter().position(|v| *v == targets[i]).unwrap()])
+}
 
 struct Click {
     submission: FrameId,
     pixel: PickReadback,
-    targets: [Option<Target>; 4],
+    targets: [Option<Target>; crate::yard::EQUIPMENT_DRAWS],
 }
 
 pub(super) struct Selection {
@@ -39,7 +47,7 @@ impl Selection {
         outline::prepare(plan, camera.extent)?;
         Ok(Self {
             camera,
-            pick: PickPass::prepare(plan, camera.extent, 4, 4)?,
+            pick: PickPass::prepare(plan, camera.extent, IDS.len(), 4)?,
             pending: None,
         })
     }
@@ -49,10 +57,11 @@ impl Selection {
         yard: &Yard,
         objects: &mut Vec<RenderObject>,
     ) -> PipelineResult<(PickImage, [PickReadback; 4])> {
+        let ids = tokens(yard, &self.camera);
         let scene = yard.extract(&self.camera, objects);
         let image = self
             .pick
-            .record(frame, &self.camera, scene, &IDS[..scene.objects.len()])?;
+            .record(frame, &self.camera, scene, &ids[..scene.objects.len()])?;
         Ok((
             image,
             [
@@ -128,10 +137,11 @@ impl Selection {
             [1., 2.],
             renderer::pbr::Projection::Orthographic,
         )?;
+        let ids = tokens(yard, &camera);
         let scene = yard.extract(&camera, objects);
         let image = self
             .pick
-            .record(&mut frame, &camera, scene, &IDS[..scene.objects.len()])?;
+            .record(&mut frame, &camera, scene, &ids[..scene.objects.len()])?;
         let pixel = image.read_pixel(frame.graph(), [24, 15])?;
         let submission = frame.submit()?.id();
         self.pending = Some(Click {
