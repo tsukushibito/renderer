@@ -207,10 +207,15 @@ def digest(path):
 def measure(args, report, save):
     with tempfile.TemporaryDirectory(prefix="yard-worktrees-") as temporary:
         repo = Path(temporary) / "A"
-        git(ROOT, "clone", "--shared", "--no-checkout", "--quiet", ROOT, repo)
+        revision = git(ROOT, "rev-parse", "--verify", args.revision + "^{commit}")
+        # A shared Git clone exposes the developer's LFS object directory
+        # through alternates. Use a shallow local fetch for a genuinely empty
+        # LFS store and for measurements independent of the author's disk.
+        git(ROOT, "init", "--quiet", repo)
+        git(repo, "fetch", "--quiet", "--depth=1", ROOT.as_uri(), revision)
         # Only the initial clone is bootstrapped with skip-smudge. Every B
         # checkout below uses ordinary Git with the project's one-time setup.
-        git(repo, "checkout", "--quiet", "--detach", args.revision,
+        git(repo, "checkout", "--quiet", "--detach", "FETCH_HEAD",
             env={**os.environ, "GIT_LFS_SKIP_SMUDGE": "1"})
         subprocess.run([args.cooker, "setup"], cwd=repo, check=True)
         report["revision"] = git(repo, "rev-parse", "HEAD")
