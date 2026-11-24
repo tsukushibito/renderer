@@ -80,6 +80,10 @@ MaterialSample sample_material(
                       : unit_or(cross(float3(0.0, 1.0, 0.0), n), float3(1.0, 0.0, 0.0)));
     float3 b = cross(n, t) * (world_tangent.w < 0.0 ? -1.0 : 1.0);
     float3 mapped = normal_image.SampleGrad(material_sampler, texcoord, dx, dy).xyz * 2.0 - 1.0;
+    if (material.flags.z != 0u) {
+        if (material.flags.z == 2u) mapped.y = -mapped.y;
+        mapped.z = sqrt(saturate(1.0 - dot(mapped.xy, mapped.xy)));
+    }
     mapped.xy *= material.emissive_normal_scale.w;
     n = unit_or(t * mapped.x + b * mapped.y + n * mapped.z, n);
     result.surface.normal = front_facing ? n : -n;

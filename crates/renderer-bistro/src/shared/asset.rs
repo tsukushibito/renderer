@@ -10,6 +10,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use renderer::pbr::NormalEncoding;
+use renderer_core::ImageFormat;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -40,8 +42,17 @@ pub(crate) struct TextureImage {
     pub width: u32,
     pub height: u32,
     pub srgb: bool,
+    pub(crate) compressed: Option<CompressedImage>,
     pub mips: Vec<Range<usize>>,
     pub(crate) pixels: Pixels,
+}
+
+pub(crate) struct CompressedImage {
+    format: ImageFormat,
+    normal: NormalEncoding,
+    maximum_alpha: Option<u8>,
+    #[cfg(feature = "bake-tool")]
+    bake_pixels: Pixels,
 }
 
 pub(crate) enum Pixels {
@@ -53,12 +64,12 @@ pub(crate) enum Pixels {
     Owned(Vec<u8>),
 }
 
-impl TextureImage {
+impl Pixels {
     /// Called once at the upload/change boundary, then promptly dropped. The
     /// full Bistro has several GiB of decoded pixels; it must not be retained
     /// beside the GPU-resident copy or copied into a per-frame Graph.
-    pub fn load_bytes(&self) -> Result<Vec<u8>> {
-        match &self.pixels {
+    fn read(&self) -> Result<Vec<u8>> {
+        match self {
             Pixels::Owned(bytes) => Ok(bytes.clone()),
             Pixels::File {
                 path,
@@ -77,9 +88,122 @@ impl TextureImage {
             }
         }
     }
+}
+
+impl TextureImage {
+    #[cfg(test)]
+    pub(crate) fn constant_bc5(x: u8, y: u8, normal: NormalEncoding) -> Self {
+        // Each BC4 component selects its first endpoint at every texel.
+        let mut block = vec![0; 16];
+        block[0] = x;
+        block[8] = y;
+        Self {
+            width: 1,
+            height: 1,
+            srgb: false,
+            compressed: Some(CompressedImage {
+                format: ImageFormat::Bc5RgUnorm,
+                normal,
+                maximum_alpha: None,
+                #[cfg(feature = "bake-tool")]
+                bake_pixels: Pixels::Owned(vec![x, y, 0, 255]),
+            }),
+            mips: std::iter::once(0..16).collect(),
+            pixels: Pixels::Owned(block),
+        }
+    }
+    pub fn load_bytes(&self) -> Result<Vec<u8>> {
+        self.pixels.read()
+    }
+    pub fn format(&self) -> ImageFormat {
+        match &self.compressed {
+            Some(info) => info.format,
+            None if self.srgb => ImageFormat::Rgba8Srgb,
+            None => ImageFormat::Rgba8Unorm,
+        }
+    }
+    pub fn desc(&self) -> renderer_core::graph::ImageDesc {
+        renderer_core::graph::ImageDesc {
+            mip_levels: self.mips.len() as u32,
+            ..renderer_core::graph::ImageDesc::texture_2d(self.width, self.height, self.format())
+        }
+    }
+    /// The per-mip diagnostic writes known RGBA values into an opaque base texture.
+    pub fn probe_desc(&self) -> renderer_core::graph::ImageDesc {
+        renderer_core::graph::ImageDesc {
+            format: if self.srgb {
+                ImageFormat::Rgba8Srgb
+            } else {
+                ImageFormat::Rgba8Unorm
+            },
+            ..self.desc()
+        }
+    }
+    #[cfg(feature = "bake-tool")]
+    pub fn bake_pixels(&self) -> Result<(usize, Vec<u8>)> {
+        let level = bake_level(self.width, self.height);
+        let bytes = match &self.compressed {
+            Some(info) => info.bake_pixels.read()?,
+            None => self.load_bytes()?[self.mips[level].clone()].to_vec(),
+        };
+        Ok((level, bytes))
+    }
+    fn maximum_alpha(&self) -> Result<u8> {
+        if let Some(info) = &self.compressed {
+            return info
+                .maximum_alpha
+                .ok_or_else(|| invalid("base texture lacks alpha metadata"));
+        }
+        Ok(self
+            .load_bytes()?
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[3])
+            .max()
+            .unwrap_or(255))
+    }
     pub fn byte_length(&self) -> usize {
         self.mips.last().map_or(0, |mip| mip.end)
     }
+}
+
+pub(crate) fn staging_bytes(desc: renderer_core::graph::ImageDesc) -> usize {
+    (0..desc.mip_levels).fold(0usize, |end, mip| {
+        let width = (desc.width >> mip).max(1);
+        let height = (desc.height >> mip).max(1);
+        let row = desc.format.packed_row_bytes(width) as usize;
+        end.next_multiple_of(512)
+            + row.next_multiple_of(256) * desc.format.packed_rows(height) as usize
+    })
+}
+
+pub(crate) fn mip_color(level: usize) -> [u8; 3] {
+    [
+        24 + (level as u8) * 7,
+        172 - (level as u8) * 5,
+        80 + (level as u8) * 3,
+    ]
+}
+
+pub(crate) fn changed_texture(scene: &Scene, index: usize, original: &[u8]) -> Vec<u8> {
+    let image = &scene.images[index];
+    let mut changed = if image.format().is_block_compressed() {
+        vec![255; image.probe_desc().byte_len().unwrap() as usize]
+    } else {
+        original.to_vec()
+    };
+    let mut remaining = changed.as_mut_slice();
+    for level in 0..image.mips.len() {
+        let length =
+            (image.width >> level).max(1) as usize * (image.height >> level).max(1) as usize * 4;
+        let (pixels, next) = remaining.split_at_mut(length);
+        for rgba in pixels.as_chunks_mut::<4>().0 {
+            rgba[..3].copy_from_slice(&mip_color(level));
+        }
+        remaining = next;
+    }
+    changed
 }
 
 #[derive(Clone)]
@@ -334,6 +458,34 @@ fn validate_geometry(
     Ok(result)
 }
 
+#[cfg(feature = "bake-tool")]
+fn bake_level(width: u32, height: u32) -> usize {
+    let mut edge = width.max(height);
+    let mut level = 0;
+    while edge > 128 {
+        edge >>= 1;
+        level += 1;
+    }
+    level
+}
+
+fn image_blob(root: &Path, record: &Value) -> Result<Pixels> {
+    let path = blob_path(root, record)?;
+    let sha256 = text(&record["sha256"])?;
+    if sha256.len() != 64
+        || !sha256
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
+        return Err(invalid("invalid image SHA-256"));
+    }
+    Ok(Pixels::File {
+        path,
+        sha256: sha256.to_owned(),
+        byte_length: integer(&record["byte_length"])?,
+    })
+}
+
 fn image(root: &Path, record: &Value, id: usize) -> Result<TextureImage> {
     if integer(&record["id"])? != id {
         return Err(invalid("image ids must be dense and ordered"));
@@ -361,26 +513,55 @@ fn image(root: &Path, record: &Value, id: usize) -> Result<TextureImage> {
     if integer(&record["mip_levels"])? != levels as usize || records.len() != levels as usize {
         return Err(invalid("image must contain its complete mip chain"));
     }
-    let path = blob_path(root, record)?;
-    let sha256 = text(&record["sha256"])?;
-    if sha256.len() != 64
-        || !sha256
-            .bytes()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-    {
-        return Err(invalid(
-            "image SHA-256 must contain 64 lowercase hexadecimal digits",
-        ));
-    }
+    let format_name = record
+        .get("format")
+        .map(text)
+        .transpose()?
+        .unwrap_or("rgba8");
+    let format = match (format_name, srgb) {
+        ("rgba8", true) => ImageFormat::Rgba8Srgb,
+        ("rgba8", false) => ImageFormat::Rgba8Unorm,
+        ("bc1", true) => ImageFormat::Bc1RgbaSrgb,
+        ("bc1", false) => ImageFormat::Bc1RgbaUnorm,
+        ("bc3", true) => ImageFormat::Bc3RgbaSrgb,
+        ("bc3", false) => ImageFormat::Bc3RgbaUnorm,
+        ("bc7", true) => ImageFormat::Bc7RgbaSrgb,
+        ("bc7", false) => ImageFormat::Bc7RgbaUnorm,
+        ("bc5", false) if record["role"] == "normal" => ImageFormat::Bc5RgUnorm,
+        _ => return Err(invalid("unsupported material texture format/role")),
+    };
+    let normal = match (
+        format,
+        record
+            .get("normal_encoding")
+            .map(text)
+            .transpose()?
+            .unwrap_or("xyz"),
+    ) {
+        (ImageFormat::Bc5RgUnorm, "xy") => NormalEncoding::Xy,
+        (ImageFormat::Bc5RgUnorm, "xy_directx") => NormalEncoding::XyDirectX,
+        (f, "xyz") if f != ImageFormat::Bc5RgUnorm => NormalEncoding::Xyz,
+        _ => return Err(invalid("normal encoding disagrees with format")),
+    };
+    let mut maximum_alpha = None;
+    let pixels = image_blob(root, record)?;
     let byte_length = integer(&record["byte_length"])?;
     let mut mips = Vec::with_capacity(records.len());
     let mut cursor = 0;
     for (level, mip) in records.iter().enumerate() {
         let [w, h] = [(width >> level).max(1), (height >> level).max(1)];
-        let len = (w as usize)
-            .checked_mul(h as usize)
-            .and_then(|n| n.checked_mul(4))
+        let len = format
+            .packed_byte_len(w, h)
+            .and_then(|n| usize::try_from(n).ok())
             .ok_or_else(|| invalid("image byte size overflow"))?;
+        if format.is_block_compressed() && record["role"] == "base_color" {
+            let min = u8::try_from(integer(&mip["alpha_min"])?)?;
+            let max = u8::try_from(integer(&mip["alpha_max"])?)?;
+            if min > max {
+                return Err(invalid("invalid mip alpha bounds"));
+            }
+            maximum_alpha = Some(maximum_alpha.unwrap_or(0).max(max));
+        }
         if integer(&mip["level"])? != level
             || u32_value(&mip["width"])? != w
             || u32_value(&mip["height"])? != h
@@ -399,16 +580,37 @@ fn image(root: &Path, record: &Value, id: usize) -> Result<TextureImage> {
     if cursor != byte_length {
         return Err(invalid("unreferenced image bytes"));
     }
+    let compressed = if format.is_block_compressed() {
+        #[cfg(feature = "bake-tool")]
+        let bake_pixels = {
+            let mip = &record["bake_mip"];
+            let level = bake_level(width, height);
+            let w = (width >> level).max(1);
+            let h = (height >> level).max(1);
+            if integer(&mip["level"])? != level
+                || integer(&mip["byte_length"])? != (w * h * 4) as usize
+            {
+                return Err(invalid("invalid decoded CPU bake mip"));
+            }
+            image_blob(root, mip)?
+        };
+        Some(CompressedImage {
+            format,
+            normal,
+            maximum_alpha,
+            #[cfg(feature = "bake-tool")]
+            bake_pixels,
+        })
+    } else {
+        None
+    };
     Ok(TextureImage {
         width,
         height,
         srgb,
+        compressed,
         mips,
-        pixels: Pixels::File {
-            path,
-            sha256: sha256.to_owned(),
-            byte_length,
-        },
+        pixels,
     })
 }
 
@@ -450,6 +652,7 @@ pub(crate) fn fallback_images(images: &mut Vec<TextureImage>) -> [usize; 4] {
         ([255, 255, 255, 255], true),
     ] {
         images.push(TextureImage {
+            compressed: None,
             width: 1,
             height: 1,
             srgb,
@@ -540,16 +743,7 @@ pub(crate) fn material(
     let maximum_alpha = if alpha_mode == 0 {
         1.
     } else {
-        images[slots[0]]
-            .load_bytes()?
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|rgba| rgba[3])
-            .max()
-            .unwrap_or(255) as f32
-            / 255.
-            * base[3]
+        f32::from(images[slots[0]].maximum_alpha()?) / 255. * base[3]
     };
     let alpha_zero =
         (alpha_mode == 1 && maximum_alpha < cutoff) || (alpha_mode == 2 && maximum_alpha == 0.);
@@ -570,7 +764,10 @@ pub(crate) fn material(
     for (out, value) in uniform[48..].as_chunks_mut::<4>().0.iter_mut().zip([
         effective_mode,
         u32::from(double_sided),
-        0,
+        images[slots[1]]
+            .compressed
+            .as_ref()
+            .map_or(NormalEncoding::Xyz, |c| c.normal) as u32,
         0,
     ]) {
         out.copy_from_slice(&value.to_le_bytes());
@@ -763,6 +960,15 @@ impl Scene {
             Value::String(format!("{:x}", Sha256::digest(&manifest_bytes)));
         source["image_count"] = Value::from(image_records.len());
         source["texture_count"] = Value::from(textures.len());
+        let source_images = &images[..image_records.len()];
+        source["material_texture_mips"] =
+            Value::from(source_images.iter().map(|i| i.mips.len()).sum::<usize>());
+        source["material_texture_bytes"] = Value::from(
+            source_images
+                .iter()
+                .map(TextureImage::byte_length)
+                .sum::<usize>(),
+        );
         source["primitive_count"] = Value::from(primitives.len());
         source["triangle_count"] = Value::from(triangle_count);
         Ok(Self {
@@ -785,6 +991,7 @@ impl Scene {
         let defaults = fallback_images(&mut images);
         let zero = images.len();
         images.push(TextureImage {
+            compressed: None,
             width: 1,
             height: 1,
             srgb: true,
@@ -793,6 +1000,7 @@ impl Scene {
         });
         let tilted = images.len();
         images.push(TextureImage {
+            compressed: None,
             width: 1,
             height: 1,
             srgb: false,
@@ -1082,6 +1290,37 @@ mod tests {
         std::fs::write(fixture.root.join("image-0.bin"), [0; 4]).unwrap();
         assert!(scene.images[0].load_bytes().is_err());
         assert_eq!(scene.images[4].load_bytes().unwrap(), [255, 128, 64, 0]);
+    }
+
+    #[test]
+    fn compressed_alpha_and_bake_mip_use_cooked_semantics() {
+        let mut fixture = CookedFixture::new();
+        let mut gpu = [0xff; 16];
+        // BC3 alpha endpoints and indices select zero; the color block is opaque white.
+        gpu[..8].fill(0);
+        let rgba = [255, 255, 255, 0];
+        std::fs::write(fixture.root.join("image-4.bin"), gpu).unwrap();
+        std::fs::write(fixture.root.join("small.rgba"), rgba).unwrap();
+        let image = &mut fixture.doc["images"][4];
+        image["format"] = Value::from("bc3");
+        image["byte_length"] = Value::from(16);
+        image["sha256"] = Value::from(format!("{:x}", Sha256::digest(gpu)));
+        image["mips"][0]["byte_length"] = Value::from(16);
+        image["mips"][0]["alpha_min"] = Value::from(0);
+        image["mips"][0]["alpha_max"] = Value::from(0);
+        image["bake_mip"] = serde_json::json!({"level":0,"path":"small.rgba","byte_length":4,"sha256":format!("{:x}",Sha256::digest(rgba))});
+        let scene = Scene::load(&fixture.manifest(), false).unwrap();
+        assert_eq!(scene.images[4].format(), ImageFormat::Bc3RgbaSrgb);
+        assert_eq!(scene.images[4].load_bytes().unwrap(), gpu);
+        assert_eq!(scene.materials.iter().filter(|m| m.alpha_zero).count(), 2);
+        #[cfg(feature = "bake-tool")]
+        {
+            assert_eq!(scene.images[4].bake_pixels().unwrap(), (0, rgba.to_vec()));
+            std::fs::write(fixture.root.join("small.rgba"), [1; 4]).unwrap();
+            assert!(scene.images[4].bake_pixels().is_err());
+        }
+        fixture.doc["images"][4]["mips"][0]["byte_length"] = Value::from(4);
+        assert!(Scene::load(&fixture.manifest(), false).is_err());
     }
 
     #[test]

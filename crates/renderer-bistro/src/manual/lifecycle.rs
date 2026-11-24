@@ -189,23 +189,8 @@ fn stale_plans(
     Ok((pool, image, buffer))
 }
 
-fn mip_color(level: usize) -> [u8; 3] {
-    [
-        24 + (level as u8) * 7,
-        172 - (level as u8) * 5,
-        80 + (level as u8) * 3,
-    ]
-}
-
-fn changed_texture(scene: &Scene, image: usize, original: &[u8]) -> Vec<u8> {
-    let mut changed = original.to_vec();
-    for (level, range) in scene.images[image].mips.iter().enumerate() {
-        for rgba in changed[range.clone()].as_chunks_mut::<4>().0 {
-            rgba[..3].copy_from_slice(&mip_color(level));
-        }
-    }
-    changed
-}
+#[cfg(any(test, feature = "vulkan", all(windows, feature = "d3d12")))]
+use crate::shared::asset::{changed_texture, mip_color};
 
 #[cfg(any(test, feature = "vulkan", all(windows, feature = "d3d12")))]
 fn expected_encoded(code: u8, srgb: bool) -> u8 {
@@ -235,7 +220,7 @@ fn mip_probes(
     pool: &mut GraphPool,
     directory: &Path,
 ) -> Result<Vec<Value>, Error> {
-    let desc = pipeline::image_desc(&scene.images[image_index]);
+    let desc = scene.images[image_index].desc();
     let mut reports = Vec::new();
     for mip in 0..desc.mip_levels {
         let width = (desc.width >> mip).max(1);
@@ -439,7 +424,7 @@ pub(super) fn execute(
     let mut upload_pool = budget.upload_pool()?;
     let mut cycles = Vec::new();
     let mut memory_samples = Vec::new();
-    let desc = pipeline::image_desc(&scene.images[image_index]);
+    let desc = scene.images[image_index].desc();
     for cycle in 0..4 {
         // Target the material-detail View, with all source assets still resident.
         let built = build_frame(
@@ -456,8 +441,12 @@ pub(super) fn execute(
         let old_buffer = resident.materials[material_index].clone();
         let (stale_pool, stale_image, stale_buffer) = stale_plans(&old_image, &old_buffer)?;
         backend.delete(old_image.key())?;
-        resident.images[image_index] =
-            upload_texture(backend, &mut upload_pool, desc, &changed_texture)?;
+        resident.images[image_index] = upload_texture(
+            backend,
+            &mut upload_pool,
+            scene.images[image_index].probe_desc(),
+            &changed_texture,
+        )?;
         require_stale(backend, &stale_image)?;
         resident.images[image_index].refresh(backend)?;
         // Isolate the texture binding: the original material is still registered
@@ -594,7 +583,7 @@ pub(super) fn execute(
                 "limit":capacity.limit,"required":capacity.required,"retry_matches":true,"retry_captures":retry_report}},
         "replacement":{"material_index":material_index,"image_index":image_index,"mip_levels":desc.mip_levels,"cycles":cycles},
         "memory_samples":memory_samples,"plateau":plateau,
-        "scope":"full resident source set; explicit change boundary outside steady-state ROI; pending means completion not yet observed, not proof GPU is still executing; all-mip RGB sampling probes preserve source alpha and test every texel via nearest sampling; original assets restored"}))
+        "scope":"full resident source set; explicit change boundary outside steady-state ROI; pending means completion not yet observed, not proof GPU is still executing; all-mip RGB sampling probes on the opaque replacement test every texel via nearest sampling; original assets restored"}))
 }
 
 #[cfg(test)]
@@ -625,6 +614,8 @@ mod tests {
     fn replacement_updates_distinct_mip_contents_without_touching_alpha() {
         let mut scene = Scene::fixture(false);
         let (_, image) = selection(&scene).unwrap();
+        scene.images[image].width = 2;
+        scene.images[image].height = 2;
         scene.images[image].mips = vec![0..16, 16..20];
         let original: Vec<_> = (0..5).flat_map(|index| [0, 0, 0, index]).collect();
         let changed = changed_texture(&scene, image, &original);

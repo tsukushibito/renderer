@@ -10,8 +10,44 @@ import unittest
 import numpy as np
 from PIL import Image
 
+import texture_codec as codec
 from cook import cook, cook_materials, cook_primitive, dds_levels, relative_file
 from mikk import Generator, build
+
+
+class TextureCodecTests(unittest.TestCase):
+    def test_format_precedence_and_semantics(self):
+        policy = {"default": "rgba8", "roles": {"normal": "bc5"}, "images": {"detail.png": "bc7"}}
+        codec.validate_policy(policy, ["detail.png"])
+        self.assertEqual(codec.choose_format(policy, "detail.png", "normal", None), "bc7")
+        self.assertEqual(codec.choose_format(policy, "other.png", "normal", None), "bc5")
+        self.assertEqual(codec.choose_format(policy, "other.png", "orm", None), "rgba8")
+        self.assertEqual(codec.choose_format({}, "color.png", "base_color", "bc3"), "bc3")
+        with self.assertRaises(ValueError):
+            codec.choose_format({"default": "bc5"}, "color.png", "orm", None)
+        with self.assertRaises(ValueError):
+            codec.validate_policy(policy, [])
+
+    def test_partial_edge_blocks_and_channel_order(self):
+        pixels = np.full((5, 9, 4), 255, dtype=np.uint8)
+        y, x = np.indices(pixels.shape[:2])
+        pixels[:, :, 0] = (x // 4) * 80
+        pixels[:, :, 1] = (y // 4) * 180
+        pixels[:, :, 2] = 100
+        for fmt in ("bc1", "bc3", "bc5", "bc7"):
+            with self.subTest(fmt=fmt):
+                block = codec.encode(pixels, fmt)
+                self.assertEqual(len(block), 6 * (8 if fmt == "bc1" else 16))
+                actual = codec.decode(block, fmt, 9, 5)
+                channels = 2 if fmt == "bc5" else 3
+                error = np.abs(actual[:, :, :channels].astype(int) - pixels[:, :, :channels])
+                self.assertLessEqual(error.max(), 8)
+        pixels[:, :, 3] = (x // 4) * 90
+        for fmt in ("bc3", "bc7"):
+            decoded = codec.decode(codec.encode(pixels, fmt), fmt, 9, 5)
+            self.assertLessEqual(np.abs(decoded[:, :, 3].astype(int) - pixels[:, :, 3]).max(), 1)
+        with self.assertRaises(ValueError):
+            codec.encode(pixels, "bc1")
 
 
 class Geometry:

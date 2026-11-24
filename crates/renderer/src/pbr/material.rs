@@ -18,6 +18,18 @@ const SIZE: u64 = MATERIAL_BYTES as u64;
 
 use crate::material::AlphaMode;
 
+/// Tangent-space normal channels delivered by the sampled view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u32)]
+pub enum NormalEncoding {
+    #[default]
+    Xyz = 0,
+    /// glTF tangent-space XY; reconstruct the positive Z component.
+    Xy = 1,
+    /// Authored DirectX XY; invert Y and reconstruct positive Z.
+    XyDirectX = 2,
+}
+
 /// Material constants encoded at asset creation or update. Pass them to
 /// [`super::MaterialUniform::upload`] before using the material in a recipe.
 /// The default is a white dielectric with unit normal and AO strengths.
@@ -33,6 +45,7 @@ pub struct MaterialFactors {
     pub alpha_cutoff: f32,
     pub alpha_mode: AlphaMode,
     pub double_sided: bool,
+    pub normal_encoding: NormalEncoding,
 }
 
 impl Default for MaterialFactors {
@@ -47,6 +60,7 @@ impl Default for MaterialFactors {
             alpha_cutoff: 0.5,
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
+            normal_encoding: NormalEncoding::Xyz,
         }
     }
 }
@@ -77,6 +91,12 @@ impl MaterialFactors {
             occlusion_strength: floats(10),
             alpha_cutoff: floats(11),
             alpha_mode,
+            normal_encoding: match u32::from_le_bytes(block[14]) {
+                0 => NormalEncoding::Xyz,
+                1 => NormalEncoding::Xy,
+                2 => NormalEncoding::XyDirectX,
+                _ => return Err(GraphError::invalid_input("invalid normal encoding")),
+            },
             double_sided: u32::from_le_bytes(block[13]) != 0,
         };
         if factors.encode()? != *bytes {
@@ -121,9 +141,15 @@ impl MaterialFactors {
             AlphaMode::Blend => 2,
         };
         let mut bytes = [0; MATERIAL_BYTES];
-        let words = floats
-            .map(f32::to_le_bytes)
-            .chain([mode, u32::from(self.double_sided), 0, 0].map(u32::to_le_bytes));
+        let words = floats.map(f32::to_le_bytes).chain(
+            [
+                mode,
+                u32::from(self.double_sided),
+                self.normal_encoding as u32,
+                0,
+            ]
+            .map(u32::to_le_bytes),
+        );
         for (out, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
             *out = value;
         }
@@ -329,8 +355,13 @@ mod tests {
             alpha_cutoff: 2.0,
             alpha_mode: AlphaMode::Mask,
             double_sided: true,
+            normal_encoding: NormalEncoding::XyDirectX,
         };
         let bytes = values.encode().unwrap();
+        assert_eq!(
+            MaterialFactors::decode(&bytes).unwrap().normal_encoding,
+            NormalEncoding::XyDirectX
+        );
         let words = bytes.as_chunks::<4>().0;
         assert_eq!(
             words[..12],
@@ -339,7 +370,7 @@ mod tests {
             ]
             .map(f32::to_le_bytes)
         );
-        assert_eq!(words[12..], [1u32, 1, 0, 0].map(u32::to_le_bytes));
+        assert_eq!(words[12..], [1u32, 1, 2, 0].map(u32::to_le_bytes));
         assert!(
             MaterialFactors {
                 roughness: f32::NAN,

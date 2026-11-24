@@ -1600,12 +1600,14 @@ collapseで有効な接線が得られないcornerはnormalと直交する決定
 world transformの反射・非一様scaleでもnormal、接線の直交性・単位長とhandednessを保持する。
 元のnode/mesh/primitive/materialとtransformの対応を残し、頂点分割や順序の変化で欠落を隠さない。
 
-runtime画像は元DDSの3,529 mipを独立にRGBA8へ復号し、base mipを既存PNGと照合する。
-BC5 normalは正Z復元と緑成分反転を全mipへ同じ規則で適用する。
-供給済みchainを保持する方針であり、PNG baseからの新しいmip生成や、圧縮DDSのGPU直接利用とは区別する。
-base colorとemissiveは`Rgba8Srgb`、normalとORMは`Rgba8Unorm`とし、
-色成分はnative samplingで線形化してからfilterする。alphaは線形の不透明度として保持する。
-全画像のpacked byte量5,011,178,404 byteはnative allocation量やVRAM予算の代用にはしない。
+材質の圧縮設定、DDS ブロックの保持、glTF 画像の mip 生成とエンコードは consumer の
+オフライン cook が所有する。Renderer は選択済みの形式・寸法・全 mip を受け取り、
+形式に応じたブロック行で転送する。Bistro の既定値は元 DDS の BC1/BC3/BC5 と全 3,529 mip を保持する。
+Sponza は base color・emissive に BC7 sRGB、ORM に BC7 UNORM、法線に BC5 UNORM を使う。
+標準材質の flags.z に XYZ、XY、DirectX XY の区別を記録し、BC5 はサンプル後に正 Z を復元する。
+元 DDS の BC5 だけは Y を反転する。alpha は線形値で、圧縮後の全 mip の範囲から完全透明材質を識別する。
+CPU ベイクは最長辺 128 以下の復号済み RGBA8 mip のみを利用する。未指定の旧形式は RGBA8 として読める。
+GPU ペイロードは画像の論理バイト数で計上し、native 確保量と CPU データ量は別に記録する。
 全量を一度にstagingへ複製せず、ロード境界で画像ごとにuploadし、定常描画用の資源を保持する。
 
 cookのhashは同じ入力・生成物を識別するために使い、意味的な正しさの証明とはしない。

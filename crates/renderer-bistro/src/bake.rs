@@ -26,11 +26,8 @@ fn import(scene: &Scene) -> Result<BakeScene, Error> {
                 let image = &scene.images[slot];
                 // Use a filtered cook mip for diffuse transport, keeping working
                 // memory independent of full-resolution GPU material textures.
-                let mip = (0..image.mips.len())
-                    .find(|&i| (image.width.max(image.height) >> i) <= 128)
-                    .unwrap_or(image.mips.len() - 1);
-                let bytes = image.load_bytes()?;
-                let pixels = bytes[image.mips[mip].clone()]
+                let (mip, bytes) = image.bake_pixels()?;
+                let pixels = bytes
                     .as_chunks::<4>()
                     .0
                     .iter()

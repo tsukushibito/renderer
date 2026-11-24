@@ -1,6 +1,7 @@
 """Measure specular transport at visible fabric pixels in the ORCA daylight camera."""
 
 import argparse
+from functools import lru_cache
 import hashlib
 import json
 import subprocess
@@ -13,6 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 from compare_daylight import PLATE_HASH
 from diagnose_daylight import SIZE, display, neutral, read_buffer
 from ibl import sample_environment
+from texture_codec import decode
 
 EYE = np.array([-23.01494, 6.42312, -0.15436])
 BANDS = {"Wall": 205, "Middle": 238, "Edge": 265}
@@ -57,6 +59,13 @@ def intersection(tris, normal, x, y):
     return distance, np.stack([1 - v - w, v, w], axis=1)
 
 
+@lru_cache(maxsize=8)
+def read_level(path, offset, length, fmt, w, h):
+    with path.open("rb") as stream:
+        stream.seek(offset)
+        return decode(stream.read(length), fmt, w, h)
+
+
 def texture(image, root, uv, grad):
     """Repeating trilinear texture lookup at the receiver's screen-space footprint."""
     chain = image["mips"]
@@ -65,7 +74,7 @@ def texture(image, root, uv, grad):
 
     def level(m):
         h, w = m["height"], m["width"]
-        data = np.memmap(root / image["path"], "u1", "r", offset=m["offset"], shape=(h, w, 4))
+        data = read_level(root / image["path"], m["offset"], m["byte_length"], image.get("format", "rgba8"), w, h)
         x, y = uv * [w, h] - 0.5
         ix, iy = int(np.floor(x)), int(np.floor(y))
         fx, fy = x - ix, y - iy
@@ -79,7 +88,14 @@ def texture(image, root, uv, grad):
         )
 
     lo = int(lod)
-    return level(chain[lo]) * (1 - lod + lo) + level(chain[min(lo + 1, len(chain) - 1)]) * (lod - lo)
+    value = level(chain[lo]) * (1 - lod + lo) + level(chain[min(lo + 1, len(chain) - 1)]) * (lod - lo)
+    encoding = image.get("normal_encoding", "xyz")
+    if encoding in ("xy", "xy_directx"):
+        if encoding == "xy_directx":
+            value[1] = 1 - value[1]
+        xy = value[:2] * 2 - 1
+        value[2] = 0.5 + 0.5 * np.sqrt(max(0.0, 1.0 - xy @ xy))
+    return value
 
 
 def receiver(cook, root, tris, faces, materials, depth, base, x, y):

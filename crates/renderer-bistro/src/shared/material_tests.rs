@@ -12,6 +12,8 @@ use super::camera::Camera;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::{backend, tests::build_material_test_frame};
 
+use renderer::pbr::NormalEncoding;
+
 const WIDTH: u32 = 256;
 const HEIGHT: u32 = 256;
 const NEAR: f32 = 0.02;
@@ -35,6 +37,7 @@ struct Case {
     tangent: V3,
     sign: f64,
     normal_map: Option<[u8; 4]>,
+    encoding: NormalEncoding,
     normal_scale: f64,
     base: [f64; 4],
     base_map: [u8; 4],
@@ -113,6 +116,7 @@ fn cases() -> Vec<Case> {
             tangent: [1., 0., 0.],
             sign: 1.,
             normal_map: None,
+            encoding: NormalEncoding::Xyz,
             normal_scale: 1.,
             base: [0.8, 0.4, 0.2, 1.],
             base_map: [255; 4],
@@ -133,6 +137,8 @@ fn cases() -> Vec<Case> {
         case.normal_map = Some([128, 220, 220, 255]);
     }
     output[4].normal_scale = 0.;
+    output[5].encoding = NormalEncoding::Xy;
+    output[6].encoding = NormalEncoding::XyDirectX;
     output[6].sign = -1.;
     output[7].tangent = [0., 1., 0.];
     output[8].emissive = [0.15, 0.05, 0.025];
@@ -213,6 +219,7 @@ fn probe(case: &Case) -> ([u32; 2], V3, f64) {
 fn image(images: &mut Vec<TextureImage>, bytes: [u8; 4], srgb: bool) -> usize {
     let id = images.len();
     images.push(TextureImage {
+        compressed: None,
         width: 1,
         height: 1,
         srgb,
@@ -238,6 +245,7 @@ fn base_image(images: &mut Vec<TextureImage>, case: &Case) -> usize {
     bytes.push(255);
     let id = images.len();
     images.push(TextureImage {
+        compressed: None,
         width: 2,
         height: 2,
         srgb: true,
@@ -298,11 +306,23 @@ fn scene(cases: &[Case], force_opaque: bool) -> Scene {
     let mut primitives = Vec::new();
     for (id, case) in cases.iter().enumerate() {
         let base_image = base_image(&mut images, case);
-        let normal_image = image(
-            &mut images,
-            case.normal_map.unwrap_or([128, 128, 255, 255]),
-            false,
-        );
+        let normal_texel = case.normal_map.unwrap_or([128, 128, 255, 255]);
+        let normal_image = if case.encoding == NormalEncoding::Xyz {
+            image(&mut images, normal_texel, false)
+        } else {
+            let y = if case.encoding == NormalEncoding::XyDirectX {
+                255 - normal_texel[1]
+            } else {
+                normal_texel[1]
+            };
+            let index = images.len();
+            images.push(TextureImage::constant_bc5(
+                normal_texel[0],
+                y,
+                case.encoding,
+            ));
+            index
+        };
         let emissive_image = image(&mut images, case.emissive_map, true);
         let record = serde_json::json!({"id":id,"base_factor":case.base,"emissive":case.emissive,
             "normal_scale":case.normal_scale,"metallic":case.metallic,"roughness":case.roughness,
@@ -393,11 +413,14 @@ fn surface_with_base(case: &Case, position: V3, sampled_base: V3) -> V3 {
     let t = unit(case.tangent);
     let b = cross(geometric, t).map(|x| x * case.sign);
     let mapped = case.normal_map.map_or([0., 0., 1.], |bytes| {
-        [
-            (f64::from(bytes[0]) / 127.5 - 1.) * case.normal_scale,
-            (f64::from(bytes[1]) / 127.5 - 1.) * case.normal_scale,
-            f64::from(bytes[2]) / 127.5 - 1.,
-        ]
+        let x = f64::from(bytes[0]) / 127.5 - 1.;
+        let y = f64::from(bytes[1]) / 127.5 - 1.;
+        let z = if case.encoding == NormalEncoding::Xyz {
+            f64::from(bytes[2]) / 127.5 - 1.
+        } else {
+            (1. - x * x - y * y).max(0.).sqrt()
+        };
+        [x * case.normal_scale, y * case.normal_scale, z]
     });
     let mut n = unit(std::array::from_fn(|i| {
         t[i] * mapped[0] + b[i] * mapped[1] + geometric[i] * mapped[2]

@@ -20,6 +20,7 @@ import zipfile
 import numpy as np
 from PIL import Image, __version__ as pillow_version
 
+import texture_codec as codec
 from lightmap_uv import parameterize, TEXELS_PER_METRE
 from importlib.metadata import version
 from compare_geometry import Gltf
@@ -29,7 +30,7 @@ from mikk import Generator, UPSTREAM_COMMIT, source_hashes
 VERTEX_STRIDE = 48
 TOOL_HASHES = {
     name: hashlib.sha256((Path(__file__).parent / name).read_text(encoding="utf-8").encode("utf-8")).hexdigest()
-    for name in ("cook.py", "lightmap_uv.py", "mikk.py", "compare_geometry.py")
+    for name in ("cook.py", "lightmap_uv.py", "mikk.py", "compare_geometry.py", "texture_codec.py")
 }
 MATERIAL_TEXTURES = (
     ("base_color_texture", "base_color", "pbrMetallicRoughness", "baseColorTexture"),
@@ -298,7 +299,8 @@ def generated_levels(pixels, role):
         pixels = np.rint(np.clip(values, 0, 1) * 255).astype(np.uint8)
 
 
-def cook_images(gltf, roles, output, archive):
+def cook_images(gltf, roles, output, archive, policy):
+    codec.validate_policy(policy, [i["uri"] for i in gltf.data.get("images", [])])
     entries = {}
     if archive:
         for entry in archive.infolist():
@@ -325,18 +327,40 @@ def cook_images(gltf, roles, output, archive):
             record["source_dds"] = {"archive_path": entry.filename, **metadata}
         else:
             levels = generated_levels(baseline, role)
+        source_format = codec.DDS_FORMAT[metadata["fourcc"]] if archive else None
+        fmt = codec.choose_format(policy, source["uri"], role, source_format)
+        passthrough = source_format == fmt
+        record["format"] = fmt
+        record["normal_encoding"] = ("xy_directx" if passthrough else "xy") if fmt == "bc5" else "xyz"
+        source_at = 128
         offset = 0
         with (output / record["path"]).open("wb") as stream:
             for level, pixels in enumerate(levels):
                 if level == 0:
                     require(np.array_equal(pixels, baseline), f"DDS base conversion differs from fixed PNG: {path.name}")
-                raw_pixels = pixels.tobytes()
+                h, w = pixels.shape[:2]
+                if passthrough:
+                    size = codec.mip_bytes(fmt, w, h)
+                    raw_pixels = raw[source_at:source_at + size]
+                    source_at += size
+                else:
+                    raw_pixels = codec.encode(pixels, fmt)
+                if fmt != "rgba8" and (role == "base_color" or (max(w, h) <= 128 and "bake_mip" not in record)):
+                    decoded = codec.decode(raw_pixels, fmt, w, h)
+                    if max(w, h) <= 128 and "bake_mip" not in record:
+                        relative = f"images/{index:04}.bake-rgba8"
+                        data = decoded.tobytes()
+                        (output / relative).write_bytes(data)
+                        record["bake_mip"] = {"level": level, "path": relative, "byte_length": len(data),
+                                              "sha256": hashlib.sha256(data).hexdigest()}
+                else:
+                    decoded = pixels
                 stream.write(raw_pixels)
                 mip = {"level": level, "width": pixels.shape[1], "height": pixels.shape[0],
                        "offset": offset, "byte_length": len(raw_pixels)}
                 if role == "base_color":
-                    mip["alpha_min"] = int(pixels[:, :, 3].min())
-                    mip["alpha_max"] = int(pixels[:, :, 3].max())
+                    mip["alpha_min"] = int(decoded[:, :, 3].min())
+                    mip["alpha_max"] = int(decoded[:, :, 3].max())
                 record["mips"].append(mip)
                 offset += len(raw_pixels)
         record.update(mip_levels=len(record["mips"]), byte_length=offset,
@@ -345,7 +369,7 @@ def cook_images(gltf, roles, output, archive):
     return records
 
 
-def _cook(gltf_path, output, generator, source_zip, texels_per_metre):
+def _cook(gltf_path, output, generator, source_zip, texels_per_metre, texture_policy):
     output = Path(output).resolve()
     require(not output.exists() or not any(output.iterdir()), "Cook output must be a new or empty directory")
     gltf = checked_gltf(gltf_path)
@@ -404,7 +428,7 @@ def _cook(gltf_path, output, generator, source_zip, texels_per_metre):
     del layouts
     archive_context = zipfile.ZipFile(source_zip) if source_zip else nullcontext(None)
     with archive_context as archive:
-        images = cook_images(gltf, roles, output, archive)
+        images = cook_images(gltf, roles, output, archive, texture_policy)
     textures = [{"id": index, "source": item["source"], "sampler": item.get("sampler")}
                 for index, item in enumerate(gltf.data.get("textures", []))]
     summary = {"mesh_count": len(mesh_records), "primitive_count": len(primitive_records),
@@ -432,7 +456,7 @@ def _cook(gltf_path, output, generator, source_zip, texels_per_metre):
                 "meshes": mesh_records, "primitives": primitive_records, "materials": materials,
                 "images": images, "textures": textures, "samplers": gltf.data.get("samplers", []),
                 "summary": summary,
-                "recipe": {"mikk_commit": UPSTREAM_COMMIT, "mikk_sources": source_hashes(),
+                "recipe": {"texture_policy": texture_policy, "ispc_texcomp": version("ispc-texcomp"), "mikk_commit": UPSTREAM_COMMIT, "mikk_sources": source_hashes(),
                            "tool_sha256_utf8_lf": TOOL_HASHES,
                            "mikk_compiler": generator.build_record["compiler"],
                            "mikk_flags": generator.build_record["flags"],
@@ -443,12 +467,12 @@ def _cook(gltf_path, output, generator, source_zip, texels_per_metre):
                            "tangent_fallback": "Finite Mikk tangent with collapsed projected length (including degenerate UV/geometry or collapsed projected-angle basis): least-aligned Cartesian axis projected onto normal plane; preserve Mikk handedness. Non-finite output/generation failure is rejected",
                            "mips": "complete authored DDS levels" if archive else "linear-color and normalized tangent-space glTF mip chain",
                            "color": "base/emissive RGB sRGB, base alpha linear; normal/ORM linear; use native sRGB sampled formats for color",
-                           "normal": "BC5 positive-Z reconstruction and DirectX-to-OpenGL green inversion for every provided mip"}}
+                           "normal": "BC5 reconstructs positive Z at sampling; xy_directx negates authored DDS Y, xy and xyz use glTF Y"}}
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     return manifest
 
 
-def cook(gltf_path, output, library, source_zip=None, texels_per_metre=TEXELS_PER_METRE):
+def cook(gltf_path, output, library, source_zip=None, texels_per_metre=TEXELS_PER_METRE, texture_policy=None):
     output = Path(output).resolve()
     require(not output.exists() or not any(output.iterdir()), "Cook output must be a new or empty directory")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -456,7 +480,7 @@ def cook(gltf_path, output, library, source_zip=None, texels_per_metre=TEXELS_PE
     # leave the requested destination untouched and can be retried.
     with tempfile.TemporaryDirectory(prefix=".lightmap-cook-", dir=output.parent) as work, Generator(library) as generator:
         staged = Path(work) / "asset"
-        result = _cook(gltf_path, staged, generator, source_zip, texels_per_metre)
+        result = _cook(gltf_path, staged, generator, source_zip, texels_per_metre, {} if texture_policy is None else texture_policy)
         if output.exists():
             output.rmdir()  # succeeds only if it is still empty
         staged.rename(output)
@@ -470,6 +494,8 @@ if __name__ == "__main__":
     parser.add_argument("--mikk-library", type=Path, required=True)
     parser.add_argument("--source-zip", type=Path)
     parser.add_argument("--texels-per-metre", type=float, default=TEXELS_PER_METRE)
+    parser.add_argument("--texture-policy", type=Path, help="JSON default, roles and image URI overrides")
     args = parser.parse_args()
-    result = cook(args.gltf, args.output, args.mikk_library, args.source_zip, args.texels_per_metre)
+    result = cook(args.gltf, args.output, args.mikk_library, args.source_zip, args.texels_per_metre,
+                  json.loads(args.texture_policy.read_text(encoding="utf-8")) if args.texture_policy else None)
     print(json.dumps(result["summary"], sort_keys=True))

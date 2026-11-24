@@ -301,12 +301,27 @@ Linuxのhelper名は`libbistro_mikk.so`である。出力先は新規または�
 manifestはsource、変換recipe、Mikk source、全mesh/node/primitive/material/texture対応、transform、
 各streamの長さ/hashと接線fallback等の件数を記録する。
 
-全1,296 mesh・132材質・405画像を保持する。元DDSの全3,529 mipを復号し、baseを既存PNGと照合する。
-normalは各mipでBC5の正Z復元と緑成分反転を行い、色画像とdata画像を区別する。
-1×1 normalのDDS headerにあるmip数0は有効1段として扱う。
-供給済みmipを使い、PNG baseからのmip生成とは扱わない。
-RGBA8画像streamの合計は5,011,178,404 byteで、cook再現性比較には別の出力先も必要になる。
-packed byte量、native allocation量、CPU保持量は別々に確認する。
+Bistro の既定設定は元 DDS の全 405 画像・3,529 mip を BC1/BC3/BC5 のまま GPU に送る。
+cook 時に base mip を既存 PNG と照合する。Sponza のように元画像が PNG/JPEG の場合、
+色は線形空間、法線は方向を正規化して mip を生成し、色と ORM に BC7、法線に BC5 を使う。
+色は sRGB ビュー、ORM と法線は線形ビューでサンプルする。CPU ベイカー用には、最長辺が
+128 texel 以下になる最初の mip を圧縮結果から復号して画像ごとに保存する。
+
+`cook.py --texture-policy settings.json` で形式を指定できる。例えば次の設定では ORM を BC7 にし、
+指定した画像を RGBA8 にできる。`images` のキーは glTF 内の画像 URI と完全に一致させる。
+
+```json
+{"default":"auto","roles":{"orm":"bc7"},"images":{"textures/detail.png":"rgba8"}}
+```
+
+優先順は画像 URI、用途、全体設定の順。用途は `base_color`、`emissive`、`normal`、`orm`、
+形式は `auto`、`rgba8`、`bc1`、`bc3`、`bc5`、`bc7`。BC5 は法線専用で、BC1 の新規エンコードは
+不透明画像に限る。全画像を非圧縮で比較するには `{"default":"rgba8"}` を使う。
+出力 manifest の各画像に形式・ミップ範囲・SHA-256、各 base color mip に alpha の最小値と最大値が入る。
+runner report の `material_texture_bytes` は全 mip の GPU 転送用ペイロードの合計で、既定テクスチャ、
+CPU ベイク用画像、ネイティブアロケーションのパディングを含まない。D3D12 で最上位 mip の幅または高さが
+4 の倍数でない BC 画像を使うには `UnalignedBlockTexturesSupported` が必要になる。該当機能のない対象では
+その画像のインポート形式に `rgba8` を指定する。
 
 接線は正しいnormalとUVからMikkTSpaceで生成する。退化UV/geometryとfloat32角度重みのcollapseを
 別に数え、接線が得られないcornerでは有効なhandednessを保って決定的な直交fallbackを使う。

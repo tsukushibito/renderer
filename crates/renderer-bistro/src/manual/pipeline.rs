@@ -10,8 +10,12 @@ use super::{
     shadow,
 };
 use renderer_core::runtime::ManagedImage;
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer_core::{
-    ImageFormat,
+    graph::BufferDesc,
+    runtime::{FrameSubmission, Runtime},
+};
+use renderer_core::{
     graph::{
         Attachment, Binding, BindingResource, BufferHandle, Graph, GraphCapacity, GraphPool,
         ImageDesc, ImageHandle, ImportBuffer, ImportImage, IndexedIndirectArgs, LoadOp, PassHandle,
@@ -19,11 +23,6 @@ use renderer_core::{
         StoreOp,
     },
     program::{ManagedRasterProgram, SamplerDescriptor},
-};
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer_core::{
-    graph::BufferDesc,
-    runtime::{FrameSubmission, Runtime},
 };
 use std::sync::Arc;
 
@@ -44,18 +43,6 @@ pub(super) struct Budget {
     extent: [u32; 2],
     packed: Option<Arc<indirect::Layout>>,
     indirect: bool,
-}
-
-pub(super) fn image_desc(image: &super::asset::TextureImage) -> ImageDesc {
-    ImageDesc {
-        format: if image.srgb {
-            ImageFormat::Rgba8Srgb
-        } else {
-            ImageFormat::Rgba8Unorm
-        },
-        mip_levels: image.mips.len() as u32,
-        ..ImageDesc::rgba8(image.width, image.height)
-    }
 }
 
 fn environment_desc(image: &ibl::Image) -> ImageDesc {
@@ -280,15 +267,17 @@ impl Budget {
             }
         };
         for image in &scene.images {
-            add_image(image_desc(image), 1);
+            add_image(image.desc(), 1);
         }
         for image in environment.images() {
             add_image(environment_desc(image), 1);
         }
         let mut check_images = 0;
+        let mut probe_upload_bytes = 0;
         if options.resource_checks {
             let (_, image) = super::lifecycle::selection(scene)?;
-            let desc = image_desc(&scene.images[image]);
+            let desc = scene.images[image].probe_desc();
+            probe_upload_bytes = crate::shared::asset::staging_bytes(desc);
             add_image(desc, 1);
             check_images += 1;
             // Whole-image transfer APIs intentionally expose one mip. Probe
@@ -404,18 +393,11 @@ impl Budget {
         let upload_bytes = scene
             .images
             .iter()
-            .map(|image| {
-                let mut end = 0usize;
-                for mip in 0..image.mips.len() {
-                    let width = (image.width as usize >> mip).max(1);
-                    let height = (image.height as usize >> mip).max(1);
-                    end = end.next_multiple_of(512) + (width * 4).next_multiple_of(256) * height;
-                }
-                end.max(image.byte_length())
-            })
+            .map(|image| crate::shared::asset::staging_bytes(image.desc()))
             .max()
             .unwrap_or(0)
             .max(geometry_upload_bytes)
+            .max(probe_upload_bytes)
             .max(
                 environment
                     .images()
@@ -756,12 +738,8 @@ impl Resident {
             // This is the immutable publication boundary. Read/hash one chain,
             // upload all its subresources, then release CPU pixels before ROI.
             let pixels = image.load_bytes()?;
-            let (frame, texture) = backend.upload_texture(
-                &mut pool,
-                "material texture",
-                image_desc(image),
-                &pixels,
-            )?;
+            let (frame, texture) =
+                backend.upload_texture(&mut pool, "material texture", image.desc(), &pixels)?;
             drop(super::backend::wait_for(backend, frame)?);
             images.push(texture);
             if (index + 1).is_multiple_of(32) {
@@ -1676,6 +1654,7 @@ pub(super) fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use renderer_core::ImageFormat;
 
     #[test]
     fn shadow_reuse_keys_use_exact_cascade_bits_and_caster_policy() {

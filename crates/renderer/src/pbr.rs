@@ -33,7 +33,7 @@ pub(crate) use history::MapHistory;
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::Transform;
-pub use material::{MaterialFactors, MaterialUniform, ResidentMaterialUniform};
+pub use material::{MaterialFactors, MaterialUniform, NormalEncoding, ResidentMaterialUniform};
 pub use rect_shadows::{RectShadowFace, RectShadowFrame, RectShadowHistory, RectShadowUpdates};
 pub use unshadowed::UnshadowedView;
 pub use vertex::PbrVertex;

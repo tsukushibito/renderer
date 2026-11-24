@@ -2,3 +2,4 @@ numpy==1.26.4
 Pillow==11.1.0
 xatlas==0.0.11
 shapely==2.1.1
+ispc-texcomp==1.0.1
