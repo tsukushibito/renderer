@@ -1,6 +1,7 @@
 //! Interactive and measured runs share the simulation, asset setup, and render path.
 mod audio;
 mod input;
+mod memory;
 mod metrics;
 
 mod validation {
@@ -33,6 +34,7 @@ pub struct Options {
     pub volume: f32,
     pub frames: Option<usize>,
     pub metrics: Option<PathBuf>,
+    pub memory: Option<PathBuf>,
     pub gpu_profile: bool,
     pub replay: Option<Vec<Input>>,
     pub record: Option<PathBuf>,
@@ -199,6 +201,8 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
                 shots: game.shots.len(),
                 drops: game.drops.len(),
                 tick: game.tick,
+                pulse: game.pulse_radius > 0.,
+                upgrades: game.upgrades,
             });
         }
     }
@@ -242,6 +246,7 @@ pub fn run(
     if o.gpu_profile {
         renderer.set_profiling(true)?;
     }
+    let mut memory = memory::Snapshots::start(o.memory.as_deref(), &mut renderer, &game)?;
     let mut measured = o
         .metrics
         .as_ref()
@@ -275,12 +280,20 @@ pub fn run(
     };
     host.run(&mut client, limit, TIMEOUT)?;
     let last_extent = client.last_extent;
+    memory.observe("active", &mut renderer, &app.game)?;
     if let Some(mut measured) = measured {
         if !renderer.wait_idle(TIMEOUT)? {
             return Err("presentation drain timed out".into());
         }
         measured.poll(&mut renderer);
         measured.save(o.metrics.as_deref().expect("metrics path"), o.warmup)?;
+    }
+    if o.memory.is_some() {
+        if !renderer.wait_idle(TIMEOUT)? {
+            return Err("memory observation drain timed out".into());
+        }
+        memory.observe("drained", &mut renderer, &app.game)?;
+        memory.save()?;
     }
     if let (Some(path), Some(tape)) = (&o.record, recorded) {
         let mut output = BufWriter::new(File::create(path)?);

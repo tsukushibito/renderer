@@ -88,6 +88,11 @@ impl WindowRenderer {
         })
     }
 
+    /// Read runtime limits and on-demand backend telemetry at observation boundaries.
+    pub fn runtime_info(&mut self) -> &Runtime {
+        self.renderer.drawing.runtime()
+    }
+
     /// Check format/extent and filtering on the device used by this renderer.
     pub fn check_texture_support(
         &mut self,
