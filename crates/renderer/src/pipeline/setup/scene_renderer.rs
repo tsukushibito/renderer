@@ -68,7 +68,6 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     ) -> PipelineResult<()> {
         self.collect_retired_views()?;
         self.driver.check_idle()?;
-        let runtime = self.runtime.as_mut().expect("live renderer").borrow_mut();
         // Keep every transient class and program the original cameras could
         // need if the new pipeline rejects an asset or fails to initialize.
         // Registered images and buffers retain their separate native leases.
@@ -76,12 +75,8 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         old.add_working_set(self.configured.working_set())?;
         let mut overlap = Preparation::new(old.frames_in_flight());
         overlap.add_alternatives(&[&old, plan.preparation()])?;
-        let streaming_transfer = if let Some((streaming, transfer)) = &self.streaming {
-            overlap.add_requirements(streaming.graph_requirements(), streaming.working_set())?;
-            *transfer
-        } else {
-            0
-        };
+        let streaming_transfer = self.include_streaming(&mut overlap)?;
+        let runtime = self.runtime.as_mut().expect("live renderer").borrow_mut();
         prepare(&plan, runtime, &overlap, streaming_transfer)?;
         let mut next = plan.begin_with_runtime(runtime)?.wait()?;
         self.retired = Some(std::mem::replace(
@@ -106,16 +101,25 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         Ok(())
     }
 
+    fn include_streaming(&self, set: &mut Preparation) -> PipelineResult<u64> {
+        if let Some((streaming, transfer)) = &self.streaming {
+            set.add_requirements(streaming.graph_requirements(), streaming.working_set())?;
+            Ok(*transfer)
+        } else {
+            Ok(0)
+        }
+    }
+
     pub(crate) fn prepare_native_set(
         &mut self,
         set: Preparation,
         transfer: u64,
     ) -> PipelineResult<()> {
-        if let Some((streaming, bytes)) = &self.streaming {
+        if self.streaming.is_some() {
             let mut combined = Preparation::new(set.frames_in_flight());
             combined.add_requirements(set.graph_requirements(), set.working_set())?;
-            combined.add_requirements(streaming.graph_requirements(), streaming.working_set())?;
-            self.apply_native_set(&combined, transfer.max(*bytes))?;
+            let streaming_transfer = self.include_streaming(&mut combined)?;
+            self.apply_native_set(&combined, transfer.max(streaming_transfer))?;
         } else {
             self.apply_native_set(&set, transfer)?;
         }
@@ -342,8 +346,9 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
             ..Default::default()
         })?;
         let mut pool = GraphPool::new(startup.graph_capacity(Default::default())?, 1)?;
+        let streaming_transfer = self.include_streaming(&mut startup)?;
         let runtime = self.runtime();
-        runtime.prepare_fitted_working_set(&startup, footprint, 0)?;
+        runtime.prepare_fitted_working_set(&startup, footprint.max(streaming_transfer), 0)?;
         let mut upload =
             |name: &str, (desc, data): (ImageDesc, &[u8])| -> PipelineResult<ManagedImage> {
                 let (frame, image) = runtime.upload_texture(&mut pool, name, desc, data)?;

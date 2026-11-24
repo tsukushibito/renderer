@@ -647,6 +647,24 @@ mod tests {
         for handle in fillers {
             yard.meshes.remove(handle)?;
         }
+        // An unrelated baked-lighting upload must keep the last prepared streaming
+        // working set usable when the same item is retried with no capacity change.
+        use renderer::pbr::{ReflectionProbeDesc, ReflectionProbes};
+        let probes = ReflectionProbes::new(
+            vec![ReflectionProbeDesc {
+                position: [0.; 3],
+                min: [-1.; 3],
+                max: [1.; 3],
+                blend_distance: 1.,
+            }],
+            1,
+            renderer::core::ImageFormat::Rgba32Float,
+            vec![0; 16 * ReflectionProbes::WIDTH * ReflectionProbes::SCENARIO_ROWS],
+        )?;
+        let lighting = renderer.load_probe_lighting(renderer::pipeline::ProbeLighting {
+            diffuse: None,
+            reflections: Some(&probes),
+        })?;
         let mut previous = parts;
         for next in [comparison, triangle, id, comparison, triangle, id] {
             yard.request_equipment(0, next)?;
@@ -680,6 +698,7 @@ mod tests {
                 .map(|o| o.mesh)
                 .eq(parts.iter().map(|o| o.mesh))
         );
+        drop(lighting);
         let mut runtime = renderer.into_runtime()?;
         yard.release(&mut runtime)?;
         validation::check_validation(runtime)?;
