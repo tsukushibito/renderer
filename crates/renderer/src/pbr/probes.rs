@@ -1,6 +1,56 @@
-//! Cooked first-order spherical harmonic irradiance. Lighting scenarios share one
+//! Cooked spherical harmonic irradiance. Lighting scenarios share one
 //! world-space octree, eight corner probes per leaf and visibility data.
 use renderer_core::graph::GraphError;
+
+/// Highest spherical harmonic degree stored for every probe in a volume.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProbeShOrder {
+    #[default]
+    L1,
+    L2,
+}
+
+impl ProbeShOrder {
+    /// Number of RGB irradiance coefficients per probe and lighting scenario.
+    pub const fn coefficient_count(self) -> usize {
+        match self {
+            Self::L1 => 4,
+            Self::L2 => 9,
+        }
+    }
+
+    /// GPU atlas header tag for a scenario count in `1..=BakedLighting::MAX_SCENARIOS`.
+    pub const fn atlas_tag(self, scenario_count: usize) -> f32 {
+        match (self, scenario_count) {
+            (Self::L1, 2) => 0.,
+            (Self::L1, count) => count as f32,
+            (Self::L2, count) => -(count as f32),
+        }
+    }
+
+    fn from_atlas_tag(tag: f32) -> Option<(Self, usize)> {
+        if tag == 0. {
+            return Some((Self::L1, 2));
+        }
+        let count = tag.abs();
+        if !(1.0..=BakedLighting::MAX_SCENARIOS as f32).contains(&count)
+            || count.fract() != 0.
+            || tag == 2.
+        {
+            return None;
+        }
+        Some((if tag < 0. { Self::L2 } else { Self::L1 }, count as usize))
+    }
+
+    fn file_magic(self, scenarios: usize) -> [u8; 8] {
+        match (self, scenarios) {
+            (Self::L1, 1) => BakedLighting::SINGLE_MAGIC,
+            (Self::L1, 2) => BakedLighting::MAGIC,
+            (Self::L1, _) => BakedLighting::SEQUENCE_MAGIC,
+            (Self::L2, _) => *b"RBKLSH02",
+        }
+    }
+}
 
 /// Interpretation of the environment's diffuse image.
 #[derive(Clone, Copy, Debug, Default)]
@@ -40,6 +90,8 @@ pub struct BakedLighting {
     bytes: Vec<u8>,
     extent: [u32; 2],
     payload_len: usize,
+    sh_order: ProbeShOrder,
+    scenarios: usize,
 }
 impl BakedLighting {
     pub const MAGIC: [u8; 8] = *b"RBKLGI01";
@@ -53,19 +105,12 @@ impl BakedLighting {
         let (magic, payload) = file
             .split_at_checked(8)
             .ok_or_else(|| GraphError::invalid_input("truncated diffuse atlas"))?;
-        let tag = payload
+        let matches_magic = payload
             .get(28..32)
             .and_then(|b| b.try_into().ok())
-            .map(f32::from_le_bytes);
-        let matches = match tag {
-            Some(0.) => magic == Self::MAGIC,
-            Some(1.) => magic == Self::SINGLE_MAGIC,
-            Some(n) if n >= 3. && n <= Self::MAX_SCENARIOS as f32 && n.fract() == 0. => {
-                magic == Self::SEQUENCE_MAGIC
-            }
-            _ => false,
-        };
-        if payload.len() > 256 * 16384 * 16 || !matches {
+            .and_then(|b| ProbeShOrder::from_atlas_tag(f32::from_le_bytes(b)))
+            .is_some_and(|(order, scenarios)| order.file_magic(scenarios) == magic);
+        if payload.len() > 256 * 16384 * 16 || !matches_magic {
             return Err(GraphError::invalid_input(
                 "invalid diffuse atlas header or size",
             ));
@@ -99,14 +144,9 @@ impl BakedLighting {
         }
         let nodes = integer(4)?;
         let probes = integer(5)?;
-        let scenarios = match word(7) {
-            0. => 2,
-            1. => 1,
-            n if (3.0..=Self::MAX_SCENARIOS as f32).contains(&n) && n.fract() == 0. => n as usize,
-            _ => return Err(invalid()),
-        };
+        let (sh_order, scenarios) = ProbeShOrder::from_atlas_tag(word(7)).ok_or_else(invalid)?;
         let header = 2 + scenarios.max(2);
-        let probe_texels = 2 + 4 * scenarios;
+        let probe_texels = 2 + sh_order.coefficient_count() * scenarios;
         let surface_start = header + Self::NODE_TEXELS * nodes + probe_texels * probes;
         let charts = integer(6)?;
         let count = bytes.len() / 16;
@@ -159,6 +199,8 @@ impl BakedLighting {
             bytes,
             extent: [width as u32, height as u32],
             payload_len,
+            sh_order,
+            scenarios,
         })
     }
     /// Uniform probe irradiance for each lighting scenario.
@@ -171,7 +213,7 @@ impl BakedLighting {
         let header = 2 + N.max(2);
         let mut texels = vec![[0f32; 4]; header + 5 + 4 * N];
         texels[0][3] = 1.;
-        texels[1] = [1., 1., 0., if N == 2 { 0. } else { N as f32 }];
+        texels[1] = [1., 1., 0., ProbeShOrder::L1.atlas_tag(N)];
         texels[header + 3] = [1.; 4];
         texels[header + 4] = [1.; 4];
         for (i, rgb) in fallback.into_iter().enumerate() {
@@ -212,10 +254,10 @@ impl BakedLighting {
         )
     }
     pub fn scenario_count(&self) -> usize {
-        match f32::from_le_bytes(self.bytes[28..32].try_into().unwrap()) as usize {
-            0 => 2,
-            count => count,
-        }
+        self.scenarios
+    }
+    pub fn sh_order(&self) -> ProbeShOrder {
+        self.sh_order
     }
     pub fn extent(&self) -> [u32; 2] {
         self.extent
@@ -227,11 +269,7 @@ impl BakedLighting {
         &self.bytes
     }
     pub fn write(&self, mut output: impl std::io::Write) -> std::io::Result<()> {
-        output.write_all(match self.scenario_count() {
-            1 => &Self::SINGLE_MAGIC,
-            2 => &Self::MAGIC,
-            _ => &Self::SEQUENCE_MAGIC,
-        })?;
+        output.write_all(&self.sh_order.file_magic(self.scenarios))?;
         output.write_all(&self.bytes[..self.payload_len])
     }
 }
@@ -239,6 +277,50 @@ impl BakedLighting {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn probe_files_preserve_order_scenarios_and_all_coefficients() {
+        for keys in 1..=BakedLighting::MAX_SCENARIOS {
+            let l1_magic = match keys {
+                1 => b"RBKLST01",
+                2 => b"RBKLGI01",
+                _ => b"RBKLTS01",
+            };
+            for (order, magic, tag, coeffs) in [
+                (
+                    ProbeShOrder::L1,
+                    l1_magic,
+                    if keys == 2 { 0. } else { keys as f32 },
+                    4,
+                ),
+                (ProbeShOrder::L2, b"RBKLSH02", -(keys as f32), 9),
+            ] {
+                let header = 2 + keys.max(2);
+                let mut texels = vec![[0f32; 4]; header + 3 + 2 + keys * coeffs];
+                texels[0][3] = 1.;
+                texels[1] = [1., 1., 0., tag];
+                texels[header + 3][3] = 1.;
+                // The highest coefficient of the last scenario can be negative.
+                texels.last_mut().unwrap()[2] = -1.5;
+                let mut file = magic.to_vec();
+                file.extend(texels.into_iter().flatten().flat_map(f32::to_le_bytes));
+                let atlas = BakedLighting::from_bytes(&file).unwrap();
+                assert_eq!(atlas.sh_order(), order);
+                assert_eq!(atlas.scenario_count(), keys);
+                let mut written = Vec::new();
+                atlas.write(&mut written).unwrap();
+                assert_eq!(written, file);
+
+                if order == ProbeShOrder::L2 {
+                    file[..8].copy_from_slice(l1_magic);
+                    assert!(BakedLighting::from_bytes(&file).is_err());
+                    file[..8].copy_from_slice(magic);
+                    file.truncate(file.len() - 16);
+                    assert!(BakedLighting::from_bytes(&file).is_err());
+                }
+            }
+        }
+    }
 
     #[test]
     fn sequence_roundtrips_and_rejects_mismatched_or_truncated_keys() {

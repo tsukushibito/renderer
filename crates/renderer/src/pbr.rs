@@ -10,7 +10,7 @@ mod probes;
 mod surface_lightmaps;
 pub use surface_lightmaps::{LightmapAddress, LightmapPage, SurfaceLightmaps};
 mod reflections;
-pub use probes::{BakedLighting, BakedLightingView, DiffuseLighting};
+pub use probes::{BakedLighting, BakedLightingView, DiffuseLighting, ProbeShOrder};
 pub use reflections::{
     LocalReflections, ReflectionProbeDesc, ReflectionProbeView, ReflectionProbes,
 };
