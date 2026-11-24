@@ -5,6 +5,7 @@ use super::{
     device::DeviceOwner,
     raster_storage::{DescriptorHeap, checked_handle_capacity},
 };
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
 use crate::program::{AddressMode, FilterMode, MipFilter, SamplerDescriptor};
 use std::sync::{Arc, OnceLock};
 
@@ -109,8 +110,14 @@ impl SamplerHeap {
             .get()
             .copied()
             .ok_or_else(|| {
-                D3D12RuntimeError::invalid(
+                D3D12RuntimeError::capacity_with(
                     "prepare this sampler on the recording device before use",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Samplers,
+                        CapacityRecovery::Prepare,
+                        None,
+                        None,
+                    ),
                 )
             })
     }

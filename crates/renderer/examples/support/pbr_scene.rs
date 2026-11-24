@@ -145,6 +145,7 @@ impl Triangle {
     }
 
     pub fn reserve(&self, preparation: &mut Preparation, copy_hdr: bool) -> Result<(), GraphError> {
+        preparation.reserve_sampler(renderer_core::program::SamplerDescriptor::default());
         for desc in self.buffer_descs() {
             preparation.reserve_buffer(desc, 1)?;
         }
@@ -440,7 +441,6 @@ pub fn reserve(
     let recipe = prepared.preparation();
     let mut preparation = Preparation::new(recipe.frames_in_flight());
     preparation.add_requirements(recipe.graph_requirements(), recipe.working_set())?;
-    preparation.reserve_sampler(renderer_core::program::SamplerDescriptor::NearestClamp);
     let defaults = Defaults::Materials.prepare(&mut preparation)?;
     triangle.reserve(&mut preparation, copy_hdr)?;
     let bloom = if bloom == Bloom::Off {
