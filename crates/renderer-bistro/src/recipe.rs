@@ -296,12 +296,10 @@ impl Options {
             look["reflection_view"] = serde_json::json!(format!("{:?}", self.reflection_debug));
         }
         if let Some(path) = &self.baked_lighting {
-            let bytes = std::fs::read(path)?;
-            let (identity, file) = bytes
-                .split_at_checked(64)
-                .ok_or("invalid Bistro probe asset")?;
-            let lighting = renderer::pbr::SurfaceLightmaps::from_bytes(file)?;
-            let (pages, placements, volume) = lighting.into_parts();
+            let generation = crate::shared::baked_assets::LightingGeneration::open(path)?;
+            let identity = generation.identity();
+            let (pages, placements, volume) = generation.load()?.into_parts();
+            let volume = volume.ok_or("Bistro lighting requires diffuse probes")?;
             let matches = match volume.scenario_count() {
                 1 | 2 => matches_bake(identity),
                 3 => std::iter::once(&base).chain(hdr.iter()).any(|id| {
@@ -314,26 +312,28 @@ impl Options {
                     "baked lighting belongs to a different Bistro cook or lighting preset".into(),
                 );
             }
+            if placements.keys().any(|&id| {
+                scene
+                    .primitives
+                    .get(id as usize)
+                    .is_none_or(|p| p.lightmap.is_none() || scene.materials[p.material].blend)
+            }) {
+                return Err("invalid baked placement".into());
+            }
+            if scene.primitives.iter().enumerate().any(|(id, p)| {
+                let m = &scene.materials[p.material];
+                !m.blend && !m.alpha_zero && !placements.contains_key(&(id as u32))
+            }) {
+                return Err("incomplete static lightmap coverage".into());
+            }
             env.identity["diffuse_scenarios"] = serde_json::json!(volume.scenario_count());
             env.identity["diffuse_sh_order"] =
                 serde_json::json!(format!("{:?}", volume.sh_order()));
             let mut triangles = 0u64;
             for (id, address) in placements {
-                let p = scene
-                    .primitives
-                    .get_mut(id as usize)
-                    .ok_or("unknown lightmap placement")?;
-                if p.lightmap.is_none() || scene.materials[p.material].blend {
-                    return Err("invalid baked placement".into());
-                }
+                let p = &mut scene.primitives[id as usize];
                 triangles += u64::from(p.index_count / 3);
                 p.surface = Some(address);
-            }
-            if scene.primitives.iter().any(|p| {
-                let m = &scene.materials[p.material];
-                !m.blend && !m.alpha_zero && p.surface.is_none()
-            }) {
-                return Err("incomplete static lightmap coverage".into());
             }
             env.lightmaps = pages
                 .into_iter()
@@ -359,7 +359,7 @@ impl Options {
                 mips: std::iter::once(0..bytes.len()).collect(),
                 bytes,
             };
-            env.identity["baked_lighting_sha256"] = serde_json::json!(digest(file));
+            env.identity["baked_lighting_sha256"] = serde_json::json!(generation.index_sha256());
         }
         env.identity["scenario_blend"] = serde_json::json!(self.scenario_blend);
         let light = camera::BakeScenario::for_look(self.scenario_blend, self.look);
