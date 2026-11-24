@@ -397,15 +397,16 @@ impl Equipment {
             if matches!(&self.items[i], State::Decoded(d) if !d.prepared) && admitted {
                 let reservations = Reservations::for_items(self.requirements.iter().flatten());
                 if reservations != self.reservations {
-                    if let Err(error) = renderer.asset_renderer().replace_asset_reservations(
+                    match renderer.replace_asset_reservations(
                         IMAGE_NAME,
                         &reservations.buffers,
                         &reservations.images,
                         &reservations.samplers,
                     ) {
-                        return self.handle_upload_error(i, error);
+                        Ok(Poll::Ready(())) => self.reservations = reservations,
+                        Ok(Poll::Pending) => return Ok(()),
+                        Err(error) => return self.handle_upload_error(i, error),
                     }
-                    self.reservations = reservations;
                 }
                 let State::Decoded(decoded) = &mut self.items[i] else {
                     unreachable!()

@@ -10,7 +10,7 @@ use renderer::{
     material::Materials,
     mesh::{MeshCapacity, Meshes},
     pbr::{Projection, ViewInput},
-    pipeline::{CameraView, PipelineResult, SceneAssets, SceneInput, ViewId},
+    pipeline::{AssetPreparation, CameraView, PipelineResult, SceneAssets, SceneInput, ViewId},
     unlit_forward::IDENTITY,
 };
 use renderer_core::{PresentOutcome, runtime::RuntimeConfig};
@@ -95,7 +95,18 @@ fn present_before_and_after_suspension_and_resize() -> PipelineResult<()> {
         })?;
         let mut presented = 0;
         let mut resized = false;
+        let mut streaming_ready = false;
         while presented < 6 {
+            if presented >= 2 && !streaming_ready {
+                streaming_ready = view
+                    .replace_asset_reservations(
+                        "streaming texture",
+                        &[],
+                        &[renderer_core::graph::ImageDesc::rgba8(7, 3)],
+                        &[],
+                    )?
+                    .is_ready();
+            }
             if presented == 3 && !resized {
                 window.set_minimized(true);
                 view.resize([0, 0], SceneAssets::new(&mut meshes, &mut materials, &[]))?;
@@ -135,8 +146,67 @@ fn present_before_and_after_suspension_and_resize() -> PipelineResult<()> {
             }
             assert!(Instant::now() < deadline, "presentation timed out");
         }
+        assert!(streaming_ready, "window starved the stream reservation");
         drop(lighting);
         validation::check_validation(view.into_runtime()?)?;
     }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a Windows desktop and a real GPU"]
+fn replay_streams_a_new_image_class_during_window_presentation() -> PipelineResult<()> {
+    use renderer_asset::{AssetId, Catalog, Digest, ImageBlob};
+    use std::{fs, path::Path, process::Command};
+    let dist = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/equipment/dist");
+    let root = std::env::temp_dir().join(format!("renderer-stream-window-{}", std::process::id()));
+    fs::create_dir_all(root.join("catalogs"))?;
+    fs::create_dir_all(root.join("objects"))?;
+    for object in fs::read_dir(dist.join("objects"))? {
+        let object = object?;
+        fs::copy(object.path(), root.join("objects").join(object.file_name()))?;
+    }
+    let old = fs::read_to_string(dist.join("current"))?;
+    let mut catalog: Catalog =
+        serde_json::from_slice(&fs::read(dist.join("catalogs").join(old.trim()))?)?;
+    let wide = catalog.assets.get_mut(&AssetId::from_u128(2)).unwrap();
+    let image = wide.primitives[0]
+        .images
+        .iter_mut()
+        .flatten()
+        .next()
+        .unwrap();
+    let mut swatch = ImageBlob::decode(&fs::read(
+        root.join("objects").join(image.hash.to_string()),
+    )?)?;
+    assert_eq!((swatch.width, swatch.height, swatch.mip_levels), (1, 1, 1));
+    swatch.width = 2;
+    swatch.pixels.extend_from_within(..);
+    let bytes = swatch.encode()?;
+    image.hash = Digest::of(&bytes);
+    image.size = bytes.len() as u64;
+    fs::write(root.join("objects").join(image.hash.to_string()), bytes)?;
+    let bytes = serde_json::to_vec(&catalog)?;
+    let id = Digest::of(&bytes).to_string();
+    fs::write(root.join("catalogs").join(&id), bytes)?;
+    fs::write(root.join("current"), format!("{id}\n"))?;
+    // Both the standard window and the externally presented security monitor run
+    // the normal replay, including drawing old equipment, resizing and selection.
+    for api in [
+        #[cfg(feature = "vulkan")]
+        "vulkan",
+        #[cfg(feature = "d3d12")]
+        "d3d12",
+    ] {
+        let status = Command::new(env!("CARGO_BIN_EXE_training-yard"))
+            .args(["--api", api, "--mode", "window"])
+            .env("TRAINING_YARD_ASSETS", &root)
+            .status()?;
+        assert!(
+            status.success(),
+            "{api} alternate catalog replay exited with {status}"
+        );
+    }
+    fs::remove_dir_all(root)?;
     Ok(())
 }

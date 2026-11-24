@@ -430,7 +430,8 @@ impl Renderer {
             accesses: uniforms,
             ..Default::default()
         })?;
-        self.drawing.prepare_native_set(active, transfer)?;
+        self.drawing
+            .replace_resource_reservations(active, transfer)?;
         self.drawing.prepare_assets_inner(assets)
     }
 

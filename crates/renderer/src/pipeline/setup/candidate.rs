@@ -266,6 +266,9 @@ impl Transfers {
 pub trait AssetTarget {
     type Device: BorrowMut<Runtime>;
     fn asset_renderer(&mut self) -> &mut SceneRenderer<Self::Device>;
+    fn poll_presentation_for_asset_change(&mut self) -> PipelineResult<bool> {
+        Ok(true)
+    }
 }
 
 impl<R: BorrowMut<Runtime>> AssetTarget for SceneRenderer<R> {
@@ -279,6 +282,29 @@ impl<R: BorrowMut<Runtime>> AssetTarget for SceneRenderer<R> {
 /// Prepare mesh, uniform, texture, draw and transfer capacities up front.
 /// The engine must submit or cancel recorded graphs before retiring their assets.
 pub trait AssetPreparation: AssetTarget {
+    /// Install one reservation per simultaneously needed buffer or image without
+    /// recreating cameras. Texture transfers are serialized. At a change boundary,
+    /// return external result/export owners before calling. A window may yield a
+    /// draw to retire its own presentation; keep pumping events and drawing until ready.
+    fn replace_asset_reservations(
+        &mut self,
+        texture_name: &str,
+        buffers: &[renderer_core::graph::BufferDesc],
+        images: &[ImageDesc],
+        samplers: &[renderer_core::program::SamplerDescriptor],
+    ) -> PipelineResult<Poll<()>> {
+        if !self.poll_presentation_for_asset_change()? {
+            return Ok(Poll::Pending);
+        }
+        self.asset_renderer().install_asset_reservations(
+            texture_name,
+            buffers,
+            images,
+            samplers,
+        )?;
+        Ok(Poll::Ready(()))
+    }
+
     /// Progress a candidate without waiting. Already accepted work survives
     /// backpressure; retry the same candidate after recovering the reported capacity.
     fn poll_candidate(

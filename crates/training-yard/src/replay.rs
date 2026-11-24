@@ -62,10 +62,15 @@ pub(crate) trait Viewport {
     /// Break on close, or continue with the size of the drawable output.
     fn begin(
         &mut self,
-        _: &mut Runtime,
+        _: &mut SceneRenderer,
         _: bool,
     ) -> PipelineResult<std::ops::ControlFlow<(), Option<[u32; 2]>>> {
         Ok(std::ops::ControlFlow::Continue(None))
+    }
+    /// Keep the prior screen responsive and retire its presentation references
+    /// while the replay waits for an asynchronous equipment change.
+    fn poll_loading(&mut self) -> PipelineResult<std::ops::ControlFlow<()>> {
+        Ok(std::ops::ControlFlow::Continue(()))
     }
     fn present(&mut self, _: &mut Runtime, _: ManagedImage) -> PipelineResult<()>;
 }
@@ -151,9 +156,9 @@ pub(crate) fn squad<P: Viewport>(
     let mut shadow_reads = Vec::with_capacity(renderer::pbr::CASCADE_COUNT);
     let mut storage = vec![0; 48 * 24 * 4];
     let mut screen = [0; 48 * 24 * 4];
-    for step in 0..REPLAY_FRAMES {
+    'frames: for step in 0..REPLAY_FRAMES {
         let std::ops::ControlFlow::Continue(window_extent) =
-            destination.begin(drawing.runtime(), selection.has_pending_click())?
+            destination.begin(&mut drawing, selection.has_pending_click())?
         else {
             selection.discard_pending(&mut drawing)?;
             break;
@@ -171,6 +176,10 @@ pub(crate) fn squad<P: Viewport>(
             yard.advance_equipment(&mut drawing)?;
             if !yard.pending_equipment() {
                 break;
+            }
+            if destination.poll_loading()?.is_break() {
+                selection.discard_pending(&mut drawing)?;
+                break 'frames;
             }
             if started.elapsed() > Duration::from_secs(15) {
                 return Err("equipment replay timed out".into());

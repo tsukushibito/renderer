@@ -110,7 +110,10 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         }
     }
 
-    pub(crate) fn prepare_native_set(
+    /// Replace the host and scene resource reservations on the live device after
+    /// returning outstanding frame results. The caller includes all ordinary passes.
+    /// Stream reservations, registered assets and camera histories remain active.
+    pub fn replace_resource_reservations(
         &mut self,
         set: Preparation,
         transfer: u64,
@@ -140,11 +143,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         }
         Ok(())
     }
-    /// Replace the physical reservations for a stream of immutable assets without
-    /// recreating cameras or changing their history. Supply one descriptor per
-    /// simultaneously needed buffer or image. Texture transfers are serialized.
-    /// Call at an explicit change boundary after returning outstanding frame results.
-    pub fn replace_asset_reservations(
+    pub(super) fn install_asset_reservations(
         &mut self,
         texture_name: &str,
         buffers: &[renderer_core::graph::BufferDesc],
@@ -421,7 +420,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
             self.configured.working_set(),
         )?;
         let bytes = reserve_texture_upload(&mut next, name, desc, simultaneous)?;
-        self.prepare_native_set(next, bytes)
+        self.replace_resource_reservations(next, bytes)
     }
 
     /// Upload selected mips into a fresh immutable version. Other levels are undefined.
