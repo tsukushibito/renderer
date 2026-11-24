@@ -33,6 +33,18 @@ const STEEL: SurfaceMaps = SurfaceMaps {
     orm: include_bytes!("../../../../assets/survivor/environment/steel-orm.rgba"),
 };
 
+pub(super) fn content_digests() -> [sashiko::asset::Digest; 6] {
+    [
+        FLOOR.base,
+        FLOOR.normal,
+        FLOOR.orm,
+        STEEL.base,
+        STEEL.normal,
+        STEEL.orm,
+    ]
+    .map(sashiko::asset::Digest::of)
+}
+
 /// The material registry borrows snapshots. These owners retain the registrations.
 pub(super) struct Surfaces {
     pub(super) floor: PbrParams,

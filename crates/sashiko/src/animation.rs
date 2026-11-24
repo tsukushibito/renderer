@@ -1,6 +1,6 @@
 //! Load-time skin preparation and deterministic playback of sampled model-space poses.
-use renderer_asset::AssetId;
-use serde::Deserialize;
+use renderer_asset::{AssetId, Digest};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
@@ -8,14 +8,14 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CatalogFile {
     version: u32,
     models: BTreeMap<String, ModelEntry>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ModelEntry {
     id: AssetId,
@@ -25,7 +25,7 @@ struct ModelEntry {
     clips: BTreeMap<String, Clip>,
 }
 
-#[derive(Deserialize, Clone, Copy)]
+#[derive(Deserialize, Serialize, Clone, Copy)]
 #[serde(deny_unknown_fields)]
 struct Clip {
     first: usize,
@@ -35,6 +35,7 @@ struct Clip {
 }
 
 pub struct CharacterCatalog {
+    definition: Digest,
     directory: PathBuf,
     models: BTreeMap<String, ModelEntry>,
 }
@@ -65,10 +66,16 @@ impl CharacterCatalog {
             }
         }
         Ok(Self {
+            definition: Digest::of(&serde_json::to_vec(&file)?),
             directory: path.parent().ok_or("missing catalog directory")?.into(),
             models: file.models,
         })
     }
+    /// Digest of the typed catalog, independent of formatting or its installation path.
+    pub fn definition_digest(&self) -> Digest {
+        self.definition
+    }
+
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.models.keys().map(String::as_str)
     }
@@ -98,7 +105,8 @@ impl CharacterCatalog {
             }
             fs::read(&resolved).map_err(|e| format!("{}: {e}", resolved.display()).into())
         };
-        let model = SkinnedModel::decode(&read(&entry.skin)?)
+        let skin_bytes = read(&entry.skin)?;
+        let model = SkinnedModel::decode(&skin_bytes)
             .map_err(|e| format!("{}: {e}", entry.skin.display()))?;
         if entry.clips.is_empty() {
             return Err(format!("no animation clips for {id}").into());
@@ -130,6 +138,7 @@ impl CharacterCatalog {
             .into());
         }
         Ok(AnimatedModel {
+            content: [Digest::of(&skin_bytes), Digest::of(&pixels)],
             model,
             color: pixels,
             extent: entry.extent,
@@ -139,6 +148,7 @@ impl CharacterCatalog {
 }
 
 pub struct AnimatedModel {
+    content: [Digest; 2],
     pub model: SkinnedModel,
     color: Vec<u8>,
     extent: [u32; 2],
@@ -146,6 +156,11 @@ pub struct AnimatedModel {
 }
 
 impl AnimatedModel {
+    /// Digests of the exact skin and color bytes consumed during preparation.
+    pub fn content_digests(&self) -> [Digest; 2] {
+        self.content
+    }
+
     /// Top-row-first sRGB RGBA8 pixels.
     pub fn color(&self) -> (&[u8], [u32; 2]) {
         (&self.color, self.extent)

@@ -50,8 +50,17 @@ fn draw(frame: &mut Frame<'_>, visual: &mut Visual, game: &Game) -> PipelineResu
     Ok(())
 }
 
-fn capture(game: &Game, o: &Options, extent: [u32; 2], path: &Path) -> PipelineResult<()> {
+fn capture(
+    game: &Game,
+    o: &Options,
+    extent: [u32; 2],
+    path: &Path,
+    content: &crate::RecordedVisual,
+) -> PipelineResult<()> {
     let mut visual = Visual::new(game, &o.catalog, &o.character)?;
+    if &visual.content(&o.character) != content {
+        return Err("assets changed before final capture".into());
+    }
     let camera = visual.camera(game, extent)?;
     let mut renderer = Renderer::headless(o.config, camera, visual.assets())?;
     visual.prepare_headless(&mut renderer)?;
@@ -205,7 +214,7 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
 }
 pub fn run(
     game: Game,
-    initial: RunStart,
+    mut initial: RunStart,
     o: Options,
     profile: &mut crate::profile::Player,
 ) -> PipelineResult<Game> {
@@ -233,6 +242,15 @@ pub fn run(
         .into());
     }
     let mut visual = Visual::new(&game, &o.catalog, &o.character)?;
+    let content = (initial.visual.is_some() || o.record.is_some() || o.capture.is_some())
+        .then(|| visual.content(&o.character));
+    if initial.visual.is_some() && initial.visual != content {
+        return Err(
+            "visual replay assets differ from recording (catalog, model, color or environment)"
+                .into(),
+        );
+    }
+    initial.visual.clone_from(&content);
     let camera = visual.camera(&game, extent)?;
     let mut renderer = WindowRenderer::new(window.clone(), o.config, camera, visual.assets())?;
     visual.prepare_window(&mut renderer)?;
@@ -291,7 +309,13 @@ pub fn run(
     visual.release(&mut runtime)?;
     check_validation(runtime)?;
     if let Some(path) = &o.capture {
-        capture(&app.game, &o, last_extent, path)?;
+        capture(
+            &app.game,
+            &o,
+            last_extent,
+            path,
+            content.as_ref().expect("capture content recorded"),
+        )?;
     }
     Ok(app.game)
 }
