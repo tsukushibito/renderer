@@ -218,7 +218,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     ) -> PipelineResult<ResidentBakedLighting> {
         self.upload_baked_lighting(
             ProbeLighting {
-                diffuse: Some(&surfaces.probes),
+                diffuse: surfaces.probes(),
                 reflections,
             },
             Some(surfaces),
@@ -230,8 +230,12 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         assets: ProbeLighting<'_>,
         surfaces: Option<&crate::pbr::SurfaceLightmaps>,
     ) -> PipelineResult<ResidentBakedLighting> {
-        if assets.diffuse.is_none() && assets.reflections.is_none() {
+        if assets.diffuse.is_none()
+            && assets.reflections.is_none()
+            && surfaces.is_none_or(|s| s.pages.is_empty())
+        {
             return Ok(ResidentBakedLighting {
+                complete: true,
                 pages: Vec::new(),
                 placements: Default::default(),
                 diffuse: None,
@@ -297,6 +301,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
                 Ok(image)
             };
         Ok(ResidentBakedLighting {
+            complete: surfaces.is_none_or(|s| s.complete),
             pages: surfaces
                 .into_iter()
                 .flat_map(|s| &s.pages)

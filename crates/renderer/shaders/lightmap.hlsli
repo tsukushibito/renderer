@@ -9,7 +9,7 @@ float3 surface_texel(uint index, uint2 dims, uint keys, float phase, uint start)
 }
 void apply_lightmap(inout Surface s, uint slot, bool front, float2 uv) {
     if (baked_debug() > 0u) { s.occlusion = 1.0; s.emissive = 0.0; }
-    if (slot == 0u || camera.shadow_bias.w < 1.0) return;
+    if (slot == 0u || camera.shadow_bias.w == 0.0) return;
     uint2 dims;
     irradiance_image.GetDimensions(dims.x, dims.y);
     uint last = dims.x * dims.y - 1u;
@@ -24,7 +24,9 @@ void apply_lightmap(inout Surface s, uint slot, bool front, float2 uv) {
     float2 coord = saturate(uv) * extent - 0.5;
     int2 xy = (int2)floor(coord);
     uint i = uint(int(origin) + xy.x + xy.y * int(pitch));
-    float phase = saturate(baked_blend()) * (keys - 1u);
+    // A negative scenario word selects surface pages with ordinary environment diffuse.
+    float blend = camera.shadow_bias.w < 0.0 ? saturate(-1.0 - camera.shadow_bias.w) : baked_blend();
+    float phase = blend * (keys - 1u);
     float3 a = lerp(surface_texel(i,dims,keys,phase,start),surface_texel(i+1u,dims,keys,phase,start),frac(coord.x));
     float3 b = lerp(surface_texel(i+pitch,dims,keys,phase,start),surface_texel(i+pitch+1u,dims,keys,phase,start),frac(coord.x));
     float3 irradiance = lerp(a,b,frac(coord.y));

@@ -174,6 +174,7 @@ pub struct ProbeLighting<'a> {
 
 /// Owns the GPU registrations until dropped. Share across cameras on the same renderer.
 pub struct ResidentBakedLighting {
+    pub(super) complete: bool,
     pub(super) pages: Vec<renderer_core::runtime::ManagedImage>,
     pub(super) placements: std::collections::BTreeMap<u32, crate::pbr::LightmapAddress>,
     pub(super) diffuse: Option<renderer_core::runtime::ManagedImage>,
@@ -226,7 +227,7 @@ impl<'a> ReflectionProbeInput<'a> {
 /// Borrow the same object list for any number of cameras.
 #[derive(Clone, Copy)]
 pub struct SceneInput<'a> {
-    pub(super) surfaces: Option<&'a ResidentBakedLighting>,
+    pub(super) surfaces: Option<(&'a ResidentBakedLighting, f32)>,
     pub(super) poses: Option<&'a crate::mesh::FramePoses>,
     pub meshes: &'a Meshes,
     pub materials: &'a Materials,
@@ -261,7 +262,7 @@ impl<'a> SceneInput<'a> {
     }
     /// Apply the same scenario interpolation to diffuse and specular lighting.
     pub fn with_baked_lighting(mut self, lighting: &'a ResidentBakedLighting, blend: f32) -> Self {
-        self.surfaces = Some(lighting);
+        self.surfaces = Some((lighting, blend));
         self.baked_lighting = lighting
             .diffuse
             .as_ref()

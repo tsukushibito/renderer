@@ -227,21 +227,31 @@ impl StandardPipeline {
                 blend: baked.blend,
                 view: baked.view,
             };
+        } else if let Some((baked, blend)) = input.surfaces
+            && !baked.pages.is_empty()
+        {
+            environment.diffuse_lighting = pbr::DiffuseLighting::SurfacePages { blend };
         }
         let prepared = self.prepare_view(camera.camera, input.sun, input.bounds, environment)?;
         self.connected.clear();
         for obj in input.objects {
             let mesh = input.import_mesh(graph, obj)?;
             let lightmap = match (obj.placement(), input.surfaces) {
-                (Some(id), Some(baked)) if !baked.pages.is_empty() => {
-                    let address = *baked
-                        .placements
-                        .get(&id)
-                        .ok_or_else(|| GraphError::invalid_input("unknown baked placement"))?;
-                    let uv = input.meshes.import_lightmap_uvs(graph, obj.mesh)?;
-                    let image =
-                        crate::material::texture_view(graph, baked.pages[address.page].snapshot())?;
-                    Some(pbr::DrawLightmap::new(uv, image, address))
+                (Some(id), Some((baked, _))) if !baked.pages.is_empty() => {
+                    match baked.placements.get(&id).copied() {
+                        Some(address) => {
+                            let uv = input.meshes.import_lightmap_uvs(graph, obj.mesh)?;
+                            let image = crate::material::texture_view(
+                                graph,
+                                baked.pages[address.page].snapshot(),
+                            )?;
+                            Some(pbr::DrawLightmap::new(uv, image, address))
+                        }
+                        None if baked.complete => {
+                            return Err(GraphError::invalid_input("unknown baked placement"));
+                        }
+                        None => None,
+                    }
                 }
                 _ => None,
             };
