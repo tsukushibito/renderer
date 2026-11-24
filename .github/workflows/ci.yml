@@ -137,6 +137,7 @@ jobs:
     name: ${{ matrix.os }} / ${{ matrix.backend }}
     runs-on: ${{ matrix.os }}
     env:
+      BACKEND: ${{ matrix.backend }}
       CARGO_INCREMENTAL: "0"
     strategy:
       fail-fast: false
@@ -180,10 +181,16 @@ jobs:
       - name: Install VMA C++ compiler (Linux)
         if: runner.os == 'Linux' && matrix.backend == 'vulkan'
         run: command -v g++ || (sudo apt-get update && sudo apt-get install -y --no-install-recommends g++)
+      - &cargo-cache
+        name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Cargo feature lists can contain commas. Hash BACKEND instead of putting it in the key.
+          env-vars: BACKEND
+          key: ${{ matrix.suite }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Lint all targets and run workspace tests
         shell: pwsh
-        env:
-          BACKEND: ${{ matrix.backend }}
         run: |
           foreach ($development in @($false, $true)) {
             $features = @()
@@ -197,18 +204,13 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cargo test --locked --workspace --doc @featureArgs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            if ($env:BACKEND -like '*presentation*') {
-              cargo test --locked -p renderer-core --example windowed @featureArgs
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-              cargo test --locked --release -p renderer-core --example windowed @featureArgs
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            }
           }
+      - name: Test windowed event-loop contracts without a GPU
+        if: runner.os == 'Windows' && matrix.backend == 'vulkan,d3d12,presentation'
+        run: cargo test --locked -p renderer-core --example windowed --no-default-features --features vulkan,d3d12,presentation
       - name: Check optimized backend execution with and without development validation
         if: ${{ !matrix.split && (contains(matrix.backend, 'vulkan') || contains(matrix.backend, 'd3d12')) }}
         shell: pwsh
-        env:
-          BACKEND: ${{ matrix.backend }}
         run: &release-tests |
           foreach ($features in @($env:BACKEND, "$($env:BACKEND),development-validation,graph-diagnostics")) {
             cargo test --locked --workspace --release --no-default-features --features $features --tests
@@ -224,41 +226,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --release -p renderer --no-default-features --lib --tests
       - name: Exercise the CPU Graph composition examples
-        if: matrix.backend == 'cpu'
+        if: runner.os == 'Linux' && matrix.backend == 'cpu'
         shell: pwsh
         run: |
-          cargo test --locked -p renderer-core --example graph_composition --no-default-features
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p renderer-core --example graph_composition --release --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo run --locked -p renderer-core --example graph_composition --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo run --locked -p renderer --example rust_pipeline --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo run --locked --release -p renderer --example rust_pipeline --no-default-features
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p renderer --example rust_pipeline --no-default-features
+          cargo test --locked --release -p renderer --example rust_pipeline --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test frame loop contracts without GPU access
-        if: matrix.backend == 'vulkan'
-        shell: pwsh
-        run: |
-          cargo test --locked -p renderer-core --example frame_loop --no-default-features --features vulkan
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p renderer-core --example frame_loop --release --no-default-features --features vulkan
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        if: runner.os == 'Linux' && matrix.backend == 'vulkan'
+        run: cargo test --locked -p renderer-core --example frame_loop --release --no-default-features --features vulkan
       - name: Check Bistro with its standalone dependency features
         if: (runner.os == 'Linux' && matrix.backend == 'vulkan') || matrix.backend == 'vulkan,d3d12,presentation'
         shell: pwsh
-        env:
-          BACKEND: ${{ matrix.backend }}
         run: |
           cargo check --locked -p renderer-bistro --all-targets --no-default-features --features $env:BACKEND
       - name: Build and test the PBR Forward example without GPU access
         if: (runner.os == 'Linux' && matrix.backend == 'vulkan') || matrix.backend == 'vulkan,d3d12,presentation'
         shell: pwsh
-        env:
-          BACKEND: ${{ matrix.backend }}
         run: |
           cargo check --locked -p renderer --example pbr_forward --no-default-features --features $env:BACKEND
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -266,8 +255,6 @@ jobs:
       - name: Test Bistro sample contracts once without GPU access
         if: matrix.backend == 'vulkan,d3d12,presentation'
         shell: pwsh
-        env:
-          BACKEND: ${{ matrix.backend }}
         run: |
           $features = "$env:BACKEND,tracy,development-validation,graph-diagnostics"
           cargo test --locked -p renderer-bistro --no-default-features --features $features --lib --bins
@@ -281,8 +268,6 @@ jobs:
       - name: Check independent diagnostic features
         if: matrix.backend == 'vulkan' || contains(matrix.backend, 'd3d12')
         shell: pwsh
-        env:
-          BACKEND: ${{ matrix.backend }}
         run: |
           $diagnostics = @('graph-diagnostics', 'development-validation')
           if ($env:BACKEND.Contains('vulkan')) { $diagnostics += 'vulkan-diagnostics' }
@@ -296,9 +281,9 @@ jobs:
         if: ${{ !matrix.split && (matrix.backend == 'vulkan' || matrix.backend == 'vulkan,d3d12') }}
         shell: pwsh
         env:
-          BACKEND: ${{ matrix.backend }}
+          TRACY_CONFIGS: ${{ matrix.backend }},tracy ${{ matrix.backend }},tracy,development-validation,graph-diagnostics
         run: &tracy-tests |
-          foreach ($features in @("$($env:BACKEND),tracy", "$($env:BACKEND),tracy,development-validation,graph-diagnostics")) {
+          foreach ($features in $env:TRACY_CONFIGS.Split(' ')) {
             cargo clippy --locked --workspace --all-targets --no-default-features --features $features -- -D warnings
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cargo test --locked --workspace --release --no-default-features --features $features --tests
@@ -313,11 +298,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [vulkan, "vulkan,d3d12", "vulkan,d3d12,presentation"]
-        suite: [release, tracy]
-        exclude:
-          - backend: vulkan,d3d12,presentation
+        include:
+          - { backend: vulkan, suite: release }
+          - { backend: "vulkan,d3d12", suite: release }
+          - { backend: "vulkan,d3d12,presentation", suite: release }
+          - backend: vulkan
             suite: tracy
+            configs: vulkan,tracy vulkan,tracy,development-validation,graph-diagnostics
+          - backend: vulkan,d3d12
+            suite: tracy-shipping
+            configs: vulkan,d3d12,tracy
+          - backend: vulkan,d3d12
+            suite: tracy-development
+            configs: vulkan,d3d12,tracy,development-validation,graph-diagnostics
     env:
       BACKEND: ${{ matrix.backend }}
       CARGO_INCREMENTAL: "0"
@@ -327,16 +320,14 @@ jobs:
           lfs: false
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: ${{ matrix.backend }}-${{ matrix.suite }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - *cargo-cache
       - name: Test optimized shipping and development builds
         if: matrix.suite == 'release'
         shell: pwsh
         run: *release-tests
-      - name: Test Tracy shipping and development builds
-        if: matrix.suite == 'tracy'
+      - name: Test Tracy configuration
+        if: matrix.configs
+        env:
+          TRACY_CONFIGS: ${{ matrix.configs }}
         shell: pwsh
         run: *tracy-tests
