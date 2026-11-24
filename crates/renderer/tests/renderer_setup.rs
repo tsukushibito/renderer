@@ -314,4 +314,124 @@ mod candidate_gpu {
     fn d3d12_switches_ready_asset_after_retirement_is_reserved() -> PipelineResult<()> {
         exercise(RuntimeConfig::D3D12(Default::default()))
     }
+
+    fn shared_uploads(mut backend: RuntimeConfig) -> PipelineResult<()> {
+        use renderer_core::runtime::{Runtime, RuntimeLimits};
+        let mut meshes = Meshes::new(MeshCapacity {
+            meshes: 2,
+            retired_mesh_versions: 1,
+        })?;
+        let mut materials = Materials::default();
+        let v = PbrVertex::new([0.; 3], [0., 0., 1.], [1., 0., 0., 1.], [0.; 2])?;
+        let triangle = || MeshData::pbr(&[v; 3], &[0, 1, 2]);
+        let old = RenderObject::new(
+            meshes.create(triangle()?)?,
+            materials.create_pbr(PbrParams::color([1.; 4]))?,
+        );
+        let mut setup = RendererSetup::standard(camera(1)?);
+        setup.frames_in_flight = NonZeroUsize::MIN;
+        let initial = [old];
+        let mut plan = setup.prepare(SceneAssets::new(&mut meshes, &mut materials, &initial))?;
+        plan.reserve_mesh_replacement(old.mesh)?;
+        plan.preparation_mut()
+            .reserve_buffer(renderer::pbr::MaterialUniform::DESC, 1)?;
+        plan.fit_backend(&mut backend)?;
+        let limits = plan.runtime_limits(RuntimeLimits {
+            frames: 1,
+            ..Default::default()
+        })?;
+        let runtime = Runtime::new(backend, limits, plan.preparation().working_set())?;
+        let mut renderer = plan.begin_with_runtime(runtime)?.wait()?;
+        let next = RenderObject::new(
+            meshes.create(triangle()?)?,
+            materials.create_pbr(PbrParams::color([0.5; 4]))?,
+        );
+        let budget = UploadBudget {
+            bytes: 4096,
+            submissions: 2,
+        };
+        let mut producer = AssetCandidate::new(&meshes, &materials, &[next])?;
+        // With one execution slot the mesh is accepted, then the uniform upload fails.
+        let error = renderer
+            .poll_candidate(&mut producer, &mut meshes, &mut materials, budget)
+            .expect_err("the second submission must hit backpressure");
+        assert!(error.capacity().is_some(), "{error}");
+        assert_eq!(renderer.runtime().pending_frames(), 1);
+        renderer.cancel_candidate(
+            &mut producer,
+            &mut meshes,
+            &mut materials,
+            RetireAssets::default(),
+        )?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while renderer.collect_assets(&mut meshes, &mut materials)? != 0 {
+            assert!(Instant::now() < deadline);
+        }
+        let mut first_user = AssetCandidate::new(&meshes, &materials, &[next])?;
+        assert!(
+            renderer
+                .poll_candidate(&mut first_user, &mut meshes, &mut materials, budget)?
+                .is_pending()
+        );
+        // Duplicating the resident material shares the same in-flight uniform revision.
+        let alias = RenderObject::new(next.mesh, materials.duplicate(next.material)?);
+        let mut second_user = AssetCandidate::new(&meshes, &materials, &[alias])?;
+        while renderer
+            .poll_candidate(&mut second_user, &mut meshes, &mut materials, budget)?
+            .is_pending()
+        {
+            assert!(Instant::now() < deadline);
+        }
+        assert_eq!(renderer.runtime().pending_frames(), 0);
+
+        // A ready consumer must recheck if a different producer re-uploads its
+        // unchanged mesh revision between Ready and commit.
+        meshes.release_gpu(renderer.runtime())?;
+        let mut reload = AssetCandidate::new(&meshes, &materials, &[next])?;
+        assert!(
+            renderer
+                .poll_candidate(&mut reload, &mut meshes, &mut materials, budget)?
+                .is_pending()
+        );
+        assert!(
+            renderer
+                .commit_candidate(
+                    &mut second_user,
+                    &mut meshes,
+                    &mut materials,
+                    RetireAssets::default()
+                )
+                .is_err()
+        );
+        while renderer
+            .poll_candidate(&mut second_user, &mut meshes, &mut materials, budget)?
+            .is_pending()
+        {
+            assert!(Instant::now() < deadline);
+        }
+        renderer.commit_candidate(
+            &mut second_user,
+            &mut meshes,
+            &mut materials,
+            RetireAssets::default(),
+        )?;
+        let mut runtime = renderer.into_runtime()?;
+        meshes.release_gpu(&mut runtime)?;
+        materials.clear(&mut runtime)?;
+        validation::check_validation(runtime)
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    #[ignore = "requires a real Vulkan device"]
+    fn vulkan_shared_candidate_waits_for_the_producing_submission() -> PipelineResult<()> {
+        shared_uploads(RuntimeConfig::Vulkan(Default::default()))
+    }
+
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires a real D3D12 device"]
+    fn d3d12_shared_candidate_waits_for_the_producing_submission() -> PipelineResult<()> {
+        shared_uploads(RuntimeConfig::D3D12(Default::default()))
+    }
 }

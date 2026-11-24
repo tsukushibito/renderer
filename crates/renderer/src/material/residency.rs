@@ -188,6 +188,7 @@ impl Materials {
             let snapshot = Arc::new(resident.snapshot()?.clone());
             let lease = Arc::downgrade(&snapshot);
             material.source = PbrSource::Imported(snapshot);
+            material.uploaded_by = Some(submission.id());
             let revision = Arc::new(MaterialInstance::Pbr(material));
             self.owned_uniforms.push((lease, resident));
             replacements.insert(key, (original, revision));
