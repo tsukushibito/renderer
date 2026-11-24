@@ -157,6 +157,7 @@ impl Pipeline {
     }
 }
 pub(super) struct Transport<const N: usize> {
+    pub(super) execution: crate::BakeExecution,
     pipeline: Pipeline,
     commands: Commands,
     input: Buffer,
@@ -178,6 +179,11 @@ impl<const N: usize> Transport<N> {
             return Ok(None);
         };
         let monitor = runtime.validation_monitor();
+        let execution = crate::BakeExecution::vulkan(
+            &runtime,
+            crate::BakeMethod::VulkanRayQuery,
+            include_bytes!("../../renderer/shaders/bake_surface_rt.comp.spv"),
+        );
         let dev = Device::new(runtime.external_device())?;
         drop(runtime);
         let Some(alignment) = geometry::scratch_alignment(&dev, scene.triangles.len()) else {
@@ -253,6 +259,7 @@ impl<const N: usize> Transport<N> {
         let pipeline = Pipeline::new(&dev, [&world, &input, &output], &tlas)?;
         eprintln!("Baking surface lightmaps with Vulkan Ray Query");
         Ok(Some(Self {
+            execution,
             pipeline,
             commands,
             input,

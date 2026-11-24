@@ -1,4 +1,5 @@
 //! Bistro's adapter from its validated, world-space cook to offline GI inputs.
+mod provenance;
 use crate::{
     Error,
     shared::{asset::Scene, camera::Look},
