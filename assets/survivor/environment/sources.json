@@ -1,0 +1,27 @@
+{
+  "license": "CC0-1.0",
+  "license_url": "https://polyhaven.com/license",
+  "base_url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k",
+  "surfaces": {
+    "floor": {
+      "asset": "concrete_floor_worn_001",
+      "page": "https://polyhaven.com/a/concrete_floor_worn_001",
+      "authors": ["Dimitrios Savva", "Rico Cilliers"],
+      "sha256": {
+        "diff": "dde1944b011f2536fba8d1d611213bb76ab27e49155763bbe449397967e738fa",
+        "nor_gl": "156fd005f3e675fc25e8afb73d65252a3534d78485ad4cc9c2377ae1a0ff1fbe",
+        "arm": "5a6388552e247d193124ecea50ac6700957d7935f3cf62060b694bab726d3b7a"
+      }
+    },
+    "steel": {
+      "asset": "blue_metal_plate",
+      "page": "https://polyhaven.com/a/blue_metal_plate",
+      "authors": ["Rob Tuytel"],
+      "sha256": {
+        "diff": "90eaf269bbfb5a9b456bd414f6d270bb3eabb086ff326b5931f435d985e1a162",
+        "nor_gl": "9f03852e15eadef3b0e6610ed6f040f2e8f0fd818ca31b76c94711e43b4c4e7a",
+        "arm": "9d049e208e52f6bd702a80cfa804786b5ea3fa7f0c70c668636f9f0e7eeafa62"
+      }
+    }
+  }
+}

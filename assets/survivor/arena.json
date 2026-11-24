@@ -1,0 +1,11 @@
+{
+  "half_extent": [18.0, 14.0],
+  "player_spawn": [0.0, 6.0],
+  "marker": [0.0, 3.0],
+  "obstacles": [
+    { "center": [-3.2, 0.0], "half_extent": [2.3, 1.1] },
+    { "center": [3.2, 0.0], "half_extent": [2.3, 1.1] },
+    { "center": [-10.0, -6.0], "half_extent": [1.4, 2.0] },
+    { "center": [10.0, 6.0], "half_extent": [1.4, 2.0] }
+  ]
+}

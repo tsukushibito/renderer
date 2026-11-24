@@ -26,7 +26,7 @@ def capture_pixels(path):
     return data[len(header):]
 
 
-def run(exe, arena_path, output, backend):
+def run(exe, arena_path, output, backend, playthrough):
     output.mkdir(parents=True, exist_ok=False)
     report = {
         "backend": backend,
@@ -103,6 +103,24 @@ def run(exe, arena_path, output, backend):
         report["model_swap_changed_pixels"] = changed
         if changed == 0:
             raise ValueError("swapping the character model did not change the rendered pixels")
+        if playthrough:
+            # This seed lets a stationary player collect XP, choose Pierce and
+            # eventually lose to the horde. Only the final input requests a retry.
+            inputs = [{"upgrade": "pierce"}] * 3000 + [{"restart": True}]
+            replay = output / "retry.json"
+            write_json(replay, inputs)
+            common = ["--arena", open_arena, "--replay", replay]
+            initial = execute("initial", ["--headless", *common, "--ticks", "0"])
+            defeated = execute("defeated", ["--headless", *common, "--ticks", str(len(inputs) - 1)])
+            if (defeated["phase"].lower() != "defeated" or defeated["hp"] != 0
+                    or defeated["level"] <= initial["level"] or defeated["upgrades"][1] == 0):
+                raise ValueError(f"replay did not choose Pierce and reach defeat: {defeated}")
+            retry = execute("retry-window", ["--window", "--backend", backend, *common,
+                            "--frames", str(len(inputs)), "--width", "640", "--height", "360"])
+            replayed = execute("retry-cpu", ["--headless", *common])
+            if retry != replayed or retry != (initial | {"tick": len(inputs)}):
+                raise ValueError(f"retry did not restore initial game state: {retry}, replay {replayed}")
+            report["playthrough"] = {"defeated": defeated, "retry": retry}
         report["passed"] = True
     finally:
         write_json(output / "report.json", report)
@@ -113,7 +131,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", type=Path, required=True)
     parser.add_argument("--backend", choices=["vulkan", "d3d12"], default="vulkan")
+    parser.add_argument("--playthrough", action="store_true", help="also replay a complete upgrade/defeat/retry run")
     parser.add_argument("--arena", type=Path, default=ROOT / "assets/survivor/arena.json")
     parser.add_argument("--output", type=Path, required=True, help="new directory for logs, input, images and report")
     args = parser.parse_args()
-    run(args.exe.resolve(), args.arena.resolve(), args.output.resolve(), args.backend)
+    run(args.exe.resolve(), args.arena.resolve(), args.output.resolve(), args.backend, args.playthrough)
