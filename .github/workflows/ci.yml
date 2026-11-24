@@ -10,18 +10,30 @@ permissions:
 jobs:
   documentation:
     runs-on: ubuntu-24.04
-    env:
-      PLAYWRIGHT_BROWSERS_PATH: .tools/playwright-browsers
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: false
+          fetch-depth: 2
+      - name: Detect changes affecting browser verification
+        id: docs
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # A new branch or unavailable comparison base gets the full check.
+          browser=true
+          if [[ -n "$BASE" && ! "$BASE" =~ ^0+$ ]]; then
+            if git cat-file -e "$BASE^{commit}" || git fetch --no-tags --depth=1 origin "$BASE"; then
+              if git diff --quiet "$BASE" HEAD -- docs tools/docs .gitattributes .github/workflows/ci.yml; then
+                browser=false
+              fi
+            fi
+          fi
+          echo "browser=$browser" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
       - name: Download and verify pinned mdBook 0.5.4
         shell: bash
         run: |
@@ -38,17 +50,21 @@ jobs:
           echo '42aca57eea8521971cc595fe4bb853c5b8b7d9f7138a2ec9f14a0a72c210922d  .tools/mdbook-mermaid-0.17.1/mdbook-mermaid.tar.gz' | sha256sum --check
           tar -xzf .tools/mdbook-mermaid-0.17.1/mdbook-mermaid.tar.gz -C .tools/mdbook-mermaid-0.17.1
           echo "$GITHUB_WORKSPACE/.tools/mdbook-mermaid-0.17.1" >> "$GITHUB_PATH"
-      - name: Install documentation checks and verify the vendored Mermaid bundle
-        run: |
-          npm ci --ignore-scripts --prefix tools/docs
-          npm run bundle --prefix tools/docs -- --check
-          node tools/docs/node_modules/playwright/cli.js install --with-deps chromium --only-shell
       - name: Build and check portable HTML documentation
         run: |
           git lfs pull --include="docs/verification/*-preview.png" --exclude=""
           .tools/mdbook-0.5.4/mdbook build docs
           python -B tools/docs/check_html.py build/docs
-          npm run check --prefix tools/docs
+      - name: Verify the Mermaid bundle and render diagrams in Chromium
+        if: steps.docs.outputs.browser == 'true'
+        run: |
+          # Match tools/docs/package-lock.json; the image includes Chromium, fonts and OS libraries.
+          docker run --rm --ipc=host --user "$(id -u):$(id -g)" --env HOME=/tmp \
+            --volume "$PWD:/work" --workdir /work \
+            mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579 \
+            bash -ec 'npm ci --ignore-scripts --prefix tools/docs
+                      npm run bundle --prefix tools/docs -- --check
+                      npm run check --prefix tools/docs'
       - uses: actions/upload-artifact@v4
         with:
           name: rendergraph-html
@@ -129,6 +145,9 @@ jobs:
         backend: [cpu, vulkan]
         include:
           - os: windows-2022
+            backend: vulkan
+            split: true
+          - os: windows-2022
             backend: presentation
           - os: windows-2022
             backend: vulkan,presentation
@@ -136,10 +155,12 @@ jobs:
             backend: d3d12,presentation
           - os: windows-2022
             backend: vulkan,d3d12,presentation
+            split: true
           - os: windows-2022
             backend: d3d12
           - os: windows-2022
             backend: vulkan,d3d12
+            split: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -155,10 +176,10 @@ jobs:
         run: rustup show active-toolchain
       - name: Install native C compiler for development dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc
+        run: command -v gcc || (sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc)
       - name: Install VMA C++ compiler (Linux)
         if: runner.os == 'Linux' && matrix.backend == 'vulkan'
-        run: sudo apt-get install -y --no-install-recommends g++
+        run: command -v g++ || (sudo apt-get update && sudo apt-get install -y --no-install-recommends g++)
       - name: Lint all targets and run workspace tests
         shell: pwsh
         env:
@@ -184,11 +205,11 @@ jobs:
             }
           }
       - name: Check optimized backend execution with and without development validation
-        if: contains(matrix.backend, 'vulkan') || contains(matrix.backend, 'd3d12')
+        if: ${{ !matrix.split && (contains(matrix.backend, 'vulkan') || contains(matrix.backend, 'd3d12')) }}
         shell: pwsh
         env:
           BACKEND: ${{ matrix.backend }}
-        run: |
+        run: &release-tests |
           foreach ($features in @($env:BACKEND, "$($env:BACKEND),development-validation,graph-diagnostics")) {
             cargo test --locked --workspace --release --no-default-features --features $features --tests
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -272,11 +293,11 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Check optional Tracy instrumentation in shipping and development configurations
-        if: matrix.backend == 'vulkan' || matrix.backend == 'vulkan,d3d12'
+        if: ${{ !matrix.split && (matrix.backend == 'vulkan' || matrix.backend == 'vulkan,d3d12') }}
         shell: pwsh
         env:
           BACKEND: ${{ matrix.backend }}
-        run: |
+        run: &tracy-tests |
           foreach ($features in @("$($env:BACKEND),tracy", "$($env:BACKEND),tracy,development-validation,graph-diagnostics")) {
             cargo clippy --locked --workspace --all-targets --no-default-features --features $features -- -D warnings
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -285,3 +306,37 @@ jobs:
             cargo test --locked --workspace --release --no-default-features --features $features --doc
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+
+  windows-backend-tests:
+    name: windows-2022 / ${{ matrix.backend }} / ${{ matrix.suite }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [vulkan, "vulkan,d3d12", "vulkan,d3d12,presentation"]
+        suite: [release, tracy]
+        exclude:
+          - backend: vulkan,d3d12,presentation
+            suite: tracy
+    env:
+      BACKEND: ${{ matrix.backend }}
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.backend }}-${{ matrix.suite }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test optimized shipping and development builds
+        if: matrix.suite == 'release'
+        shell: pwsh
+        run: *release-tests
+      - name: Test Tracy shipping and development builds
+        if: matrix.suite == 'tracy'
+        shell: pwsh
+        run: *tracy-tests

@@ -830,9 +830,12 @@ cargo test --locked --workspace --no-default-features --features vulkan
 別jobで[cargo-deny](tooling.md#cargo-deny)の依存検査を実行します。
 Windowsではbackendを選ばない`presentation`単独と、`vulkan,presentation`／`d3d12,presentation`／二API表示でも、全targetをClippyで型検査し、CPU試験を実行します。
 LinuxのVulkanとWindowsの二API表示では、BistroとPBRをパッケージ単独でも確認します。Cargoが有効にする依存featureは、ワークスペース全体を対象にしたときと異なるためです。
+WindowsのVulkan単独・Vulkan＋D3D12・二API表示では、release試験を通常試験と並列に実行します。前二者ではTracy有効時の試験も独立したジョブで実行し、各ジョブはバックエンドと試験の組み合わせごとにCargo依存のキャッシュを再利用します。
 各backendは製品／開発検証＋dumpの両構成を確認し、Vulkanはrelease両構成と独立診断featureも確認します。
 これは表示の実GPU受入をCIで実行するという意味ではありません。
 依存更新ではlockfile差分と両feature構成を確認します。
+
+ドキュメントはすべてのpushとPRでHTMLを生成し、ローカルリンク・アンカー・画像を検査してHTML成果物を保存します。`docs/`、`tools/docs/`、`.gitattributes`、CIワークフローの変更時と差分の比較元を取得できない場合には、Mermaidの再ビルドとChromiumでの描画検証も実行します。Playwright更新時は、CIの公式コンテナのバージョンとダイジェストをnpmのロックファイルに合わせて更新してください。
 
 <a id="public-api-comparison"></a>
 <a id="foundation-comparison"></a>
