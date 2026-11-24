@@ -33,6 +33,8 @@ pub use surface_pages::{
 };
 mod probes;
 mod reflection_placement;
+mod reflection_quality;
+pub use reflection_quality::{PlacementDecision, PlacementQuality, QualityMetrics};
 mod reflection_reference;
 mod reflections;
 

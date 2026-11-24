@@ -248,6 +248,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut reflection_format = None;
     let mut placement_spacing = None;
     let mut placement_method = None;
+    let mut repair_placement = false;
     let mut max_probes = None;
     let mut reference = None;
     let mut diffuse_reference = None;
@@ -296,6 +297,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
                         .parse()?,
                 );
             }
+            "--repair-placement" => repair_placement = true,
             "--placement-method" => {
                 use renderer_bake::ReflectionPlacementMethod;
                 placement_method = Some(match args.next().as_deref() {
@@ -345,7 +347,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
                     "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--probe-sh l1|l2] [--samples N] [--backend auto|vulkan|vulkan-rt|vulkan-software|d3d12|cpu] [--estimate] [--benchmark-seed N --day-only] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json [--reflection-format bc6h|rgba32f] | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
                 );
                 println!(
-                    "Placement options: --placement-method floor|remedy --max-probes N (1..32)"
+                    "Placement options: --placement-method floor|remedy --max-probes N (1..32) [--repair-placement (daylight quality report on stdout)]"
                 );
                 return Ok(());
             }
@@ -363,7 +365,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     {
         return Err("benchmark requires a daylight surface bake".into());
     }
-    if placement_spacing.is_none() && (placement_method.is_some() || max_probes.is_some()) {
+    if placement_spacing.is_none()
+        && (placement_method.is_some() || max_probes.is_some() || repair_placement)
+    {
         return Err("placement options require --place-reflection-probes".into());
     }
     if day_only && endpoints_only {
@@ -386,26 +390,23 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     if reflection_format.is_some() && layout.is_none() {
         return Err("--reflection-format requires --reflection-probes".into());
     }
+    if repair_placement && endpoints_only {
+        return Err("--repair-placement evaluates daylight only".into());
+    }
     let scene = match (manifest, fixture) {
         (None, true) => Scene::fixture(false),
         (Some(path), false) => Scene::load(&path, false)?,
         _ => return Err("select --manifest or --fixture".into()),
     };
-    if let Some(spacing) = placement_spacing {
-        if layout.is_some() || reference.is_some() || diffuse_reference.is_some() || estimate {
-            return Err(
-                "choose one reflection layout, reference, estimate or bake operation".into(),
-            );
-        }
-        let output = output.ok_or("missing --output for generated reflection layout")?;
-        let probes = import(&scene)?.place_reflection_probes(
-            renderer_bake::ReflectionPlacementSettings {
-                spacing,
-                method: placement_method.unwrap_or_default(),
-                max_probes: max_probes.unwrap_or(renderer::pbr::ReflectionProbes::MAX_COUNT),
-                ..Default::default()
-            },
-        )?;
+    if placement_spacing.is_some()
+        && (layout.is_some() || reference.is_some() || diffuse_reference.is_some() || estimate)
+    {
+        return Err("choose one reflection layout, reference, estimate or bake operation".into());
+    }
+    fn write_layout(
+        output: &std::path::Path,
+        probes: Vec<renderer::pbr::ReflectionProbeDesc>,
+    ) -> Result<(), Error> {
         let placements: Vec<_> = probes
             .into_iter()
             .enumerate()
@@ -420,15 +421,34 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         let bytes = serde_json::to_vec_pretty(&placements)?;
         std::fs::File::create_new(output)?.write_all(&bytes)?;
         eprintln!("Generated {} reflection probe placements", placements.len());
+        Ok(())
+    }
+    let placement = placement_spacing.map(|spacing| renderer_bake::ReflectionPlacementSettings {
+        spacing,
+        method: placement_method.unwrap_or_default(),
+        max_probes: max_probes.unwrap_or(renderer::pbr::ReflectionProbes::MAX_COUNT),
+        ..Default::default()
+    });
+    if let Some(settings) = placement
+        && !repair_placement
+    {
+        let output = output
+            .as_deref()
+            .ok_or("missing --output for generated reflection layout")?;
+        write_layout(output, import(&scene)?.place_reflection_probes(settings)?)?;
         return Ok(());
     }
-    let receivers = if reference.is_none() && diffuse_reference.is_none() && layout.is_none() {
+    let surface_bake = placement.is_none()
+        && reference.is_none()
+        && diffuse_reference.is_none()
+        && layout.is_none();
+    let receivers = if surface_bake {
         receivers(&scene)?
     } else {
         Vec::new()
     };
     let surfaces = renderer_bake::SurfaceLayout::new(&receivers, 2048, texel_budget)?;
-    if reference.is_none() && diffuse_reference.is_none() && layout.is_none() {
+    if surface_bake {
         eprintln!(
             "{} static placements, {} receiver triangles, {} sides in {} pages, {} allocated texels/scenario",
             receivers.len(),
@@ -456,7 +476,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let output = output.ok_or("missing --output")?;
     // Surface generations can replace an earlier manifest after all dependencies are ready.
     if output.exists()
-        && (layout.is_some()
+        && (repair_placement
+            || layout.is_some()
             || benchmark.is_some()
             || reference.is_some()
             || diffuse_reference.is_some())
@@ -518,6 +539,29 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             })
         };
     let lights = [lighting(scenarios[0])?, lighting(scenarios[1])?];
+    if let Some(settings) = placement {
+        let mut probes = bake.place_reflection_probes(settings)?;
+        let started = std::time::Instant::now();
+        let quality = bake.repair_reflection_placement(&mut probes, settings.spacing, lights[0])?;
+        let seconds = started.elapsed().as_secs_f64();
+        let metrics = |m: renderer_bake::QualityMetrics| {
+            serde_json::json!({
+                "samples": m.samples, "mean_rgb_error": m.mean_rgb_error, "p90_rgb_error": m.p90_rgb_error,
+                "worst_position": m.worst_position, "worst_rgb_error": m.worst_rgb_error,
+            })
+        };
+        write_layout(&output, probes)?;
+        println!(
+            "{}",
+            serde_json::json!({
+                "decision": format!("{:?}", quality.decision), "proposed": quality.proposed.map(metrics), "before": metrics(quality.before), "after": metrics(quality.after), "quality_seconds": seconds,
+                "training_samples": quality.training_samples, "candidates_tested": quality.candidates_tested,
+                "replacement_captures": quality.replacement_captures, "changed_probe_index": quality.changed_probe,
+                "moved_capture": quality.moved_capture,
+            })
+        );
+        return Ok(());
+    }
     if let Some(path) = diffuse_reference {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
