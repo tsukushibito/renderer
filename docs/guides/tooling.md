@@ -255,6 +255,21 @@ histories.publish(&receipt)?;
 
 ホストは自分の受理票で表示・読み戻しを続ける。提出を取り消す場合は Graph と `histories` を破棄する。投入が受理された後でビュー履歴の確定が中断した場合は、その受理票で `histories.publish` を再試行できる。トークンを手放した後は `drawing.finish_host_submission(&receipt)` で残りを確定する。[ホスト提出と履歴の回復試験](../../crates/renderer/tests/view_pipelines/publication.rs)
 
+<a id="equipment-cook"></a>
+
+### glTF 装備の取込と配布
+
+制作側は Rust の `renderer-asset-cook` を使う。次の例では、制作ディレクトリ `source` に静的装備の `armor.gltf` と、それが参照するバッファ・PNG を置いている。
+
+```powershell
+cargo run --locked -p renderer-asset-cook -- import source/armor.gltf
+cargo run --locked -p renderer-asset-cook -- cook source dist --cache .tools/armor-cache
+```
+
+`import` が作る `armor.gltf.meta.json` は原本と一緒に版管理する。改名時は両方を移動し、glTF 内の相対参照も維持する。新しい装備として複製するときは新しい原本に対して `import` を実行する。セーブはメタデータの装備 ID を保持するので、同じ装備の画像を編集して再 cook しても、セーブを書き換えずに新版を利用できる。
+
+ゲームには `dist` の内容を配布する。`objects/` の成果物と `catalogs/` の索引を先に転送し、最後に `current` を切り替える。ゲームが使用中の世代と復帰先の世代が参照するファイルは保持する。変換キャッシュは制作側に置き、空の状態からも同じ原本と設定で再生成できる。
+
 訓練場は同じ隊員と操作を使って次のように起動できる。Windows では `--api d3d12` でも実行できる。
 
 ```powershell
