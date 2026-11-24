@@ -17,15 +17,33 @@
 ```rust
 let scene = BakeScene::new(occluders, materials, textures)?;
 let layout = SurfaceLayout::pack(&receivers)?;
-layout.bake_to(&scene, [day, afternoon, dusk], ProbeSettings::default(), 128, writer)?;
+let lights = [day, afternoon, dusk];
+let settings = ProbeSettings::default();
+let transport = scene.prepare_surface_bake(lights, settings.backend, 128)?;
+let selected: Vec<_> = (0..layout.gpu_page_count()).collect();
+let mut records = Vec::new();
+layout.bake_gpu_pages(transport, &selected, |_, record, bytes| {
+    write_blob(record.sha256(), &bytes)?;
+    records.push(record);
+    Ok(())
+})?;
+let mut probes = Vec::new();
+scene.bake_probes(lights, settings)?.write(&mut probes)?;
+let probe_hash = <[u8; 32]>::from(sha2::Sha256::digest(&probes));
+write_blob(&probe_hash, &probes)?;
+let index = SurfaceLightmapIndex::new(lights.len(), records, probe_hash)?;
+publish_index(&index.to_bytes())?;
 ```
+
+この例の `write_blob` と `publish_index` は配布先に応じてアプリ側が用意します。前者は SHA-256 に対応する不変のバイト列を書き出し、後者は必要なページとプローブの確定後に索引を公開します。ハッシュ計算には `sha2::Digest` を使います。レイアウトを固定してページを再ベイクする場合は `selected` に対象ページの番号だけを渡し、対応する索引レコードを差し替えます。プローブは独立して生成できます。光源や遮蔽物の変更が影響する範囲はビルド側で判定します。
 
 固定照明には `day` を直接渡します。表裏を描く受光面には `double_sided: true` を指定すると、それぞれの向きで焼きます。透過マスクの判定には材質 UV とアルファカットオフを使います。ページの予算を検査する場合は `SurfaceLayout::new(&receivers, 2048, Some(texel_budget))?` を使います。全配置の収録に足りなければ必要なサイズとページ数を返します。単一の配置の UV 矩形は境界を含めて１ページに収めます。巨大なメッシュはクック時にプリミティブを分割してください。
 
 ```rust
 // メッシュのロード時。uvs は頂点と同じ順序の正規化 UV。
 let mesh = meshes.create(MeshData::pbr(&vertices, &indices)?.with_lightmap_uvs(&uvs)?)?;
-let baked = SurfaceLightmaps::from_bytes(&level_lighting_bytes)?;
+let index = SurfaceLightmapIndex::from_bytes(&level_index_bytes)?;
+let baked = index.load(visible_pages, Some(&probe_bytes), read_blob)?;
 let lighting = renderer.load_surface_lighting(&baked, Some(&reflections))?;
 
 let mut curtain = RenderObject::new(mesh, cloth);
@@ -34,6 +52,8 @@ let objects = [curtain.with_lightmap(curtain_placement_id), actor];
 let input = SceneInput::new(&meshes, &materials, &objects)
     .with_baked_lighting(&lighting, time_of_day);
 ```
+
+`visible_pages` はロードする GPU ページ番号の列です。`read_blob` は指定ハッシュのバイト列を返します。索引は読み込んだページとプローブを照合し、GPU 用のバイト列を保持します。静的な表面だけが必要なら `probe_bytes` の引数に `None` を渡せます。
 
 `with_lightmap` は呼び出し時のメッシュと変換を記録します。配置を動かしたとき、別メッシュの LOD に切り替えたとき、またはスキンポーズを指定したときは照度プローブを参照します。変形や遮蔽物、照明、材質の変更を静的 GI に取り込むには再ベイクが必要です。プローブのみなら `scene.bake_probes(day, settings)?` と `renderer.load_probe_lighting(...)?` を使えます。鏡面プローブは独立して `scene.bake_reflection_probes(&boxes, day)?` で生成します。
 
