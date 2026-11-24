@@ -2,7 +2,7 @@
 
 Sashiko（刺し子）は、AI エージェントと人がゲームを共同開発するための Rust 製ゲームエンジンを目指しています。シーンやアセットを編集し、その結果を再現可能な実行・検証で確かめられることを設計の軸にします。
 
-現在の開発基盤は描画、アセットの変換・配布、これらを利用するサンプルアプリ [training-yard](crates/training-yard/) です。
+最初のゲームは、研究施設を舞台にした 3D 見下ろし型ローグライトサバイバーです。Windows では `cargo run --locked --release -p survivor` で起動します。描画とアセットの回帰にはサンプルアプリ [training-yard](crates/training-yard/) を使います。[ゲームの操作とリプレイ](docs/guides/examples.md#survivor)
 
 ## 描画サブシステム
 

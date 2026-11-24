@@ -8,6 +8,7 @@ members = [
     "crates/renderer-example-support",
     "crates/renderer",
     "crates/training-yard",
+    "crates/survivor",
 ]
 resolver = "3"
 

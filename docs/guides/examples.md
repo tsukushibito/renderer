@@ -4,6 +4,26 @@
 [必要なツール](development.md#必要なツール)、GPUの検証設定は
 [製品・開発用の検証設定](development.md#validation-settings)を参照してください。
 
+<a id="survivor"></a>
+
+## 研究施設のサバイバーを遊ぶ
+
+Windows の既定構成では Vulkan のウィンドウが開きます。WASD で実験台を回り込み、敵を自動攻撃して経験値を拾います。レベルアップ時は 1・2・3 で強化を選びます。
+
+```powershell
+cargo run --locked --release -p survivor
+cargo run --locked --release -p survivor -- --scenario endgame --seed 506
+```
+
+配置は [arena.json](../../assets/survivor/arena.json) を編集し、`--arena assets/survivor/arena.json` で読み直せます。座標は水平面の X・Z をメートルで指定します。次の例はウィンドウの各更新で消費した入力を保存し、同じ開始条件で GPU なしで再生します。終了時の JSON にはゲーム状態と接触・到達の累計が含まれます。
+
+```powershell
+cargo run --locked --release -p survivor -- --seed 506 --record run-input.json
+cargo run --locked --release -p survivor --no-default-features -- --headless --seed 506 --replay run-input.json
+```
+
+終盤直行では実験体 500 体を活動させます。初回の計測条件と受入の範囲は[ゲームの制作計画](../design/survivor-game.md)にまとめています。
+
 <a id="bistro-baked-lighting"></a>
 
 ## ライトマップと照度プローブを使う
