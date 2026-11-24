@@ -1,6 +1,7 @@
 //! Incremental publication of an armor item per actor's equipment slot.
 mod cooked;
 mod resources;
+use super::project::AssetGeneration;
 use cooked::LoadedPart;
 use renderer::{
     core::{
@@ -15,7 +16,7 @@ use renderer::{
         AssetCandidate, AssetPreparation, PipelineResult, RenderObject, RetireAssets, UploadBudget,
     },
 };
-use renderer_asset::{AssetId, Digest, Generation, ObjectBytes, ObjectStore, Primitive};
+use renderer_asset::{AssetId, Digest, ObjectBytes, ObjectStore, Primitive};
 use resources::{Requirements, Reservations};
 use std::collections::VecDeque;
 use std::{
@@ -134,13 +135,15 @@ struct Slot {
     active: Option<Choice>,
     wanted: Option<Choice>,
     admitted: bool,
+    #[cfg(all(windows, feature = "presentation"))]
+    refresh: Option<(AssetId, bool)>,
 }
 
 pub(crate) struct Equipment {
     slots: Vec<Slot>,
     items: [State; ITEMS],
     keys: [Option<(Digest, AssetId)>; ITEMS],
-    generation: Arc<Generation>,
+    generation: Arc<AssetGeneration>,
     pub store: ObjectStore,
     images: HashMap<Digest, Weak<ManagedImage>>,
     requirements: [Option<Requirements>; ITEMS],
@@ -154,7 +157,7 @@ pub(crate) struct Equipment {
 }
 
 impl Equipment {
-    pub fn new(root: &Path, owners: usize) -> PipelineResult<Self> {
+    pub fn new(root: &Path, generation: AssetGeneration, owners: usize) -> PipelineResult<Self> {
         if owners < 2 {
             return Err("training yard requires two equipment slots".into());
         }
@@ -162,7 +165,7 @@ impl Equipment {
             slots: vec![Slot::default(); owners],
             items: Default::default(),
             keys: [None; ITEMS],
-            generation: Arc::new(Generation::open(root)?),
+            generation: Arc::new(generation),
             store: ObjectStore::new(root),
             images: HashMap::new(),
             requirements: Default::default(),
@@ -175,36 +178,82 @@ impl Equipment {
             stats: Default::default(),
         })
     }
-    pub fn set_generation(&mut self, generation: Generation) {
+    pub fn set_generation(&mut self, generation: AssetGeneration) {
         self.generation = Arc::new(generation);
         for slot in &mut self.slots {
             slot.wanted = None;
             slot.admitted = false;
+            #[cfg(all(windows, feature = "presentation"))]
+            {
+                slot.refresh = None;
+            }
         }
     }
+
+    #[cfg(all(windows, feature = "presentation"))]
+    pub fn refresh(&mut self, generation: AssetGeneration) {
+        self.generation = Arc::new(generation);
+        for slot in &mut self.slots {
+            slot.refresh = slot
+                .wanted
+                .map(|c| (c.id, slot.admitted))
+                .or(slot.refresh)
+                .or_else(|| slot.active.map(|c| (c.id, true)));
+            slot.wanted = None;
+            slot.admitted = false;
+        }
+    }
+
+    #[cfg(all(windows, feature = "presentation"))]
+    pub fn retry_refresh(&mut self) -> PipelineResult<()> {
+        for owner in 0..self.slots.len() {
+            if let Some((id, admitted)) = self.slots[owner].refresh
+                && self.try_request(owner, id, admitted)?
+            {
+                self.slots[owner].refresh = None;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(all(windows, feature = "presentation", feature = "memory-profiling"))]
+    pub fn visible_generation(&self, owner: usize) -> Option<Digest> {
+        let active = self.slots.get(owner)?.active?;
+        self.keys[active.item].map(|(generation, _)| generation)
+    }
+
     pub fn saved(&self, owner: usize) -> Option<AssetId> {
         self.slots.get(owner)?.active.map(|c| c.id)
     }
     #[cfg(feature = "memory-profiling")]
     pub fn lookups(&self) -> u64 {
-        self.generation.lookups()
+        self.generation.catalog.lookups()
     }
     pub fn request(&mut self, owner: usize, id: AssetId, admitted: bool) -> PipelineResult<()> {
+        if !self.try_request(owner, id, admitted)? {
+            return Err("all prepared equipment entries are in use".into());
+        }
+        #[cfg(all(windows, feature = "presentation"))]
+        {
+            self.slots[owner].refresh = None;
+        }
+        Ok(())
+    }
+
+    fn try_request(&mut self, owner: usize, id: AssetId, admitted: bool) -> PipelineResult<bool> {
         let slot = self.slots.get_mut(owner).ok_or("unknown equipment slot")?;
-        let key = (*self.generation.id(), id);
+        let key = (*self.generation.catalog.id(), id);
         let index = match self.keys.iter().position(|k| *k == Some(key)) {
             Some(index) => index,
             None => {
-                let index = self
-                    .items
-                    .iter()
-                    .position(|s| matches!(s, State::Empty))
-                    .ok_or("all prepared equipment entries are in use")?;
+                let Some(index) = self.items.iter().position(|s| matches!(s, State::Empty)) else {
+                    return Ok(false);
+                };
                 let generation = self.generation.clone();
                 let store = self.store.clone();
                 self.items[index] = State::Reading(
                     std::thread::Builder::new()
-                        .spawn(move || cooked::read(&generation, &store, id))?,
+                        .spawn(move || cooked::read(&generation.catalog, &store, id))?,
                 );
                 self.keys[index] = Some(key);
                 index
@@ -212,10 +261,16 @@ impl Equipment {
         };
         slot.wanted = Some(Choice { id, item: index });
         slot.admitted = admitted;
-        Ok(())
+        Ok(true)
     }
     pub fn deliver(&mut self, asset: EquipmentAsset) {
         for slot in &mut self.slots {
+            #[cfg(all(windows, feature = "presentation"))]
+            if let Some((id, admitted)) = &mut slot.refresh
+                && *id == asset.id()
+            {
+                *admitted = true;
+            }
             if slot.wanted.is_some_and(|choice| choice.id == asset.id()) {
                 slot.admitted = true
             }

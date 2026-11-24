@@ -121,7 +121,13 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
     };
     let size = window.inner_size();
     let mut camera = camera(1, [size.width, size.height])?;
-    let mut yard = Yard::new()?;
+    let (mut yard, preview) = if interactive {
+        Yard::for_interactive_preview()?
+    } else {
+        (Yard::new()?, None)
+    };
+    #[cfg(feature = "memory-profiling")]
+    let mut reported_generation = None;
     let mut lane = FiringLane::new()?;
     let mut active_lane = false;
     let mut lane_step = None;
@@ -159,6 +165,9 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
         #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
         let measured = (!interactive && (4..14).contains(&step))
             .then(renderer::core::measurement::Snapshot::now);
+        if let Some(preview) = &preview {
+            yard.poll_preview(preview)?;
+        }
         if advance {
             lane_step = if interactive {
                 input.lane_step
@@ -205,6 +214,19 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
             }
         })? {
             PresentOutcome::Presented { .. } => {
+                #[cfg(feature = "memory-profiling")]
+                if preview.is_some() {
+                    if step == 0 {
+                        println!("asset-preview interactive");
+                    }
+                    let visible = yard.visible_preview_generation();
+                    if let Some(id) = visible
+                        && visible != reported_generation
+                    {
+                        println!("asset-preview presented {id}");
+                        reported_generation = visible;
+                    }
+                }
                 if interactive || !yard.pending_equipment() {
                     step += 1;
                     advance = true;

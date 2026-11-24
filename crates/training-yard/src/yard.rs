@@ -10,13 +10,17 @@ use renderer::{
     unlit_forward::IDENTITY,
 };
 use renderer_asset::{AssetId, Generation, ObjectStore};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 mod equipment;
+#[cfg(all(windows, feature = "presentation"))]
+pub(crate) mod preview;
+mod project;
 use equipment::Equipment;
 pub use equipment::EquipmentAsset;
 #[cfg(feature = "memory-profiling")]
 pub use equipment::EquipmentStats;
+use project::{AssetGeneration, Project};
 
 pub(crate) const EQUIPMENT_DRAWS: usize = equipment::MAX_DRAWS;
 pub const REPLAY_FRAMES: usize = 24;
@@ -95,19 +99,35 @@ pub fn camera(id: u64, extent: [u32; 2]) -> PipelineResult<CameraView> {
 }
 impl Yard {
     pub fn new() -> PipelineResult<Self> {
-        let packaged = std::env::current_exe()?
-            .with_file_name("assets")
-            .join("equipment/dist");
-        let root = std::env::var_os("TRAINING_YARD_ASSETS")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                if packaged.is_dir() {
-                    packaged
-                } else {
-                    Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/equipment/dist")
-                }
-            });
-        Self::with_asset_catalog(root, 2)
+        if let Some(root) = project::packaged()? {
+            return Self::with_asset_catalog(root, 2);
+        }
+        let (root, generation) = Project::discover()?.open()?;
+        Self::with_generation(&root, generation, 2)
+    }
+
+    #[cfg(all(windows, feature = "presentation"))]
+    pub(crate) fn for_interactive_preview() -> PipelineResult<(Self, Option<preview::Preview>)> {
+        if let Some(root) = project::packaged()? {
+            return Ok((Self::with_asset_catalog(root, 2)?, None));
+        }
+        let (preview, (root, generation)) = preview::Preview::start(Project::discover()?)?;
+        let mut yard = Self::with_generation(&root, generation, 2)?;
+        yard.request_equipment(0, EquipmentAsset::Narrow.id())?;
+        Ok((yard, Some(preview)))
+    }
+
+    #[cfg(all(windows, feature = "presentation"))]
+    pub(crate) fn poll_preview(&mut self, preview: &preview::Preview) -> PipelineResult<()> {
+        if let Some(generation) = preview.update() {
+            self.equipment.refresh(generation);
+        }
+        self.equipment.retry_refresh()
+    }
+
+    #[cfg(all(windows, feature = "presentation", feature = "memory-profiling"))]
+    pub(crate) fn visible_preview_generation(&self) -> Option<renderer_asset::Digest> {
+        self.equipment.visible_generation(0)
     }
 
     /// Open a local distribution. Extra slots can retain equipment for off-screen actors.
@@ -115,7 +135,20 @@ impl Yard {
         root: impl AsRef<Path>,
         equipment_slots: usize,
     ) -> PipelineResult<Self> {
-        let equipment = Equipment::new(root.as_ref(), equipment_slots)?;
+        let root = root.as_ref();
+        Self::with_generation(
+            root,
+            AssetGeneration::distribution(Generation::open(root)?),
+            equipment_slots,
+        )
+    }
+
+    fn with_generation(
+        root: &Path,
+        generation: AssetGeneration,
+        equipment_slots: usize,
+    ) -> PipelineResult<Self> {
+        let equipment = Equipment::new(root, generation, equipment_slots)?;
         let mut meshes = Meshes::new(MeshCapacity {
             meshes: 1 + 4 * equipment::MAX_PARTS,
             retired_mesh_versions: 4 * equipment::MAX_PARTS,
@@ -300,7 +333,8 @@ impl Yard {
     }
     /// Pin subsequent requests to a verified generation in the same object store.
     pub fn set_asset_generation(&mut self, generation: Generation) {
-        self.equipment.set_generation(generation);
+        self.equipment
+            .set_generation(AssetGeneration::distribution(generation));
     }
     pub fn equipment_store(&self) -> &ObjectStore {
         &self.equipment.store
