@@ -81,7 +81,7 @@ pub(super) fn validate_sampled_operands(
                 .is_none()
             {
                 return Err(RuntimeError::unsupported(
-                    "native image bindings support one mip or the complete mip chain",
+                    "native image binding exceeds its prepared mip range",
                 ));
             }
             if slot.kind == BindingType::SampledImage

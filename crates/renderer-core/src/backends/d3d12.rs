@@ -200,6 +200,14 @@ pub struct D3D12Runtime {
     pool: Arc<frame::FramePool>,
 }
 impl D3D12Runtime {
+    pub(crate) fn check_texture_support(
+        &self,
+        desc: crate::graph::ImageDesc,
+    ) -> Result<(), D3D12RuntimeError> {
+        self.device.ensure_active()?;
+        raster_storage::check_image_class(&self.device, D3D12ImageClass { desc, count: 1 })
+    }
+
     pub fn new(config: D3D12RuntimeConfig) -> Result<Self, D3D12RuntimeError> {
         let device = DeviceOwner::new(config.validation)?;
         let pool = frame::FramePool::new(Arc::clone(&device), config.capacity)?;

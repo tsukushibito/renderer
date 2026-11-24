@@ -106,6 +106,37 @@ impl Runtime {
         }
     }
 
+    /// Check the real device's sampled-color and transfer capabilities for the
+    /// complete description, including any additional native Graph image usages.
+    /// An unsupported result permits choosing another cooked representation.
+    pub fn check_texture_support(
+        &self,
+        desc: crate::graph::ImageDesc,
+        linear_filtering: bool,
+    ) -> Result<(), ExecutionError> {
+        if desc.byte_len().is_none()
+            || desc.array_layers != 1
+            || desc.sample_count != crate::graph::SampleCount::X1
+            || desc.format == crate::ImageFormat::Depth32Float
+        {
+            return Err(ExecutionError::invalid(
+                "texture requires a valid single-sample, single-layer color image",
+            ));
+        }
+        match self.inner {
+            #[cfg(feature = "vulkan")]
+            RuntimeInner::Vulkan(ref runtime) => {
+                Ok(runtime.check_texture_support(desc, linear_filtering)?)
+            }
+            #[cfg(all(feature = "d3d12", windows))]
+            RuntimeInner::D3D12(ref runtime) => {
+                // All supported sampled color formats require SHADER_SAMPLE at creation.
+                let _ = linear_filtering;
+                Ok(runtime.check_texture_support(desc)?)
+            }
+        }
+    }
+
     /// Current logical capacities. Explicit fitted preparation can raise the
     /// recording limits while preserving the configured queue concurrency.
     pub fn limits(&self) -> RuntimeLimits {

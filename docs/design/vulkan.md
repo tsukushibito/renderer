@@ -254,8 +254,9 @@ readbackはmip数1。任意のmipは対応する1-mip画像へ矩形copyして�
 矩形の周囲を保持する場合はそのmipのproducerを要求し、mip全域の上書きは以前のproducerへの依存を増やさない。
 D3D12は矩形のblock行だけを配置する。row pitchを256 byte、開始offsetを512 byteに揃え、`CopyTextureRegion` に位置を渡す。
 [画像転送の仕様](https://docs.vulkan.org/spec/latest/chapters/copies.html)・[D3D12の配置条件](https://learn.microsoft.com/en-us/windows/win32/direct3d12/upload-and-readback-of-texture-data)
-sampled Viewは準備時に全chainと各単一mipを作成し、任意のbaseのcount1、またはbase0の全chainを選べる。
-一部だけの複数mip範囲は未対応として拒否し、Viewを作るnative呼出しを通常frameへ遅延しない。
+sampled View は準備時に全連続 mip 範囲を作成する。N 段の画像では N(N+1)/2 個で、1 段なら従来どおり 1 個になる。
+部分常駐時に初期化済み範囲の任意の組を通常フレームで選べる。範囲長と先頭レベルから準備済み表を直接参照する。
+これは部分範囲の描画に要る機能上の選択で、長い mip chain の準備時間と native View 数が増える。必要範囲を資源クラスの準備引数で列挙する方式は、その費用が問題になる場合の候補である。
 Graphは選択範囲の全mipをread footprintへ含め、未初期化levelをfilter設定で隠さない。
 linear filteringに必要な実format featureも確認する。
 
@@ -343,7 +344,7 @@ color-only、depth-only、RGBA16Fとdescriptor-bound Programも同じowned列を
 MRTは最大8色と任意のD32を一つのDynamic Rendering区間に設定し、Program切り替えも同じ区間で記録する。
 色形式と個数はDevice上限と照合し、共通のblend状態を各カラー出力に使う。
 複数subresourceを覆うattachment／storage Viewやarray等の未対応live計画は物理取得前に拒否する。
-sampled Viewの単一mip／全2D mip chainは対応範囲に含む。
+sampled View は単一 layer の任意の連続 mip 範囲を扱う。
 
 `prepare_raster_programs(&[ManagedRasterProgram])`は`prepare_working_set`に続く明示準備境界である。
 選択したtrusted Program（prepassedの深度stateも含む）とcolor形式・depth有無をkeyとしてpipelineを保持し、

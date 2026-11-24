@@ -399,25 +399,7 @@ impl<'a> PreparedSetup<'a> {
 
     /// One persistent image and a standalone full-texture upload.
     pub fn reserve_texture(&mut self, name: &str, desc: ImageDesc) -> PipelineResult<()> {
-        if desc.array_layers != 1 || desc.format == renderer_core::ImageFormat::Depth32Float {
-            return Err("texture upload requires a single-layer color image".into());
-        }
-        let footprint = transfer_footprint(desc)?;
-        let bytes = usize::try_from(desc.byte_len().ok_or("invalid texture")?)?;
-        self.preparation.add_requirements(
-            GraphRequirements {
-                resources: 1,
-                passes: 1,
-                accesses: 1,
-                upload_bytes: bytes,
-                name_bytes: name.len().checked_mul(2).ok_or("texture name overflow")?,
-                ..Default::default()
-            },
-            WorkingSet {
-                resources: &[ResourceClass::Image { desc, count: 1 }],
-                ..Default::default()
-            },
-        )?;
+        let footprint = reserve_texture_upload(&mut self.preparation, name, desc, 1)?;
         self.transfer = self.transfer.max(footprint);
         Ok(())
     }
@@ -534,6 +516,48 @@ impl<'a> PreparedSetup<'a> {
         }
         Ok(())
     }
+}
+
+pub(crate) fn reserve_texture_upload(
+    set: &mut Preparation,
+    name: &str,
+    desc: ImageDesc,
+    simultaneous: usize,
+) -> PipelineResult<u64> {
+    if desc.array_layers != 1
+        || desc.format == renderer_core::ImageFormat::Depth32Float
+        || simultaneous == 0
+    {
+        return Err(
+            "texture reservation requires a single-layer color image and positive count".into(),
+        );
+    }
+    let footprint = transfer_footprint(desc)?;
+    let bytes = usize::try_from(desc.byte_len().ok_or("invalid texture")?)?;
+    let levels = usize::try_from(desc.mip_levels)?;
+    set.add_requirements(
+        GraphRequirements {
+            // Promotion reads one previous version and writes into a fresh image.
+            resources: 2,
+            passes: levels,
+            accesses: levels * 2,
+            initial_ranges: levels.div_ceil(2),
+            upload_bytes: bytes,
+            name_bytes: name
+                .len()
+                .checked_mul(levels + 2)
+                .ok_or("texture name overflow")?,
+            ..Default::default()
+        },
+        WorkingSet {
+            resources: &[ResourceClass::Image {
+                desc,
+                count: simultaneous,
+            }],
+            ..Default::default()
+        },
+    )?;
+    Ok(footprint)
 }
 
 fn transfer_footprint(desc: ImageDesc) -> PipelineResult<u64> {

@@ -67,7 +67,7 @@ Vulkanの経路は、単一Graphics＋Computeキュー、物理aliasingなしを
 |---|---|
 | Raster・attachment操作 | RGBA8_UNORM／RGBA16Fのcolor attachmentを最大8枚、任意のD32 depth。各画像1 mipでextentとsample数を揃える |
 | MSAA | 実Deviceが対応する形式の4× color/depth attachment。colorは同形式・同extentの1×画像へresolveできる |
-| sampled入力・upload | 1×画像でsampled Viewは単一mipまたは全chain。uploadは対応するcolor形式の全chain・選択したmip・矩形 |
+| sampled入力・upload | 1×画像でsampled Viewは初期化済みの連続mip範囲。uploadは対応するcolor形式の全chain・選択したmip・矩形 |
 | storage・copy・readback | 1×。storage/readbackは1 mip。矩形copyは同形式の別color画像の指定mip間。readbackは対応するcolor形式とD32 |
 
 4×画像はattachment用途に限定する。形式ごとのshaderの型・用途と、実Deviceの上限も適用する。
@@ -301,8 +301,7 @@ owner・範囲を作成境界で確認し、aspectを色形式のColor／D32のD
 `ImageView`は画像を別resourceとして登録せず、複数Viewの重なりを元の画像で解析する。
 `Graph::sampled_image_view(image, base_mip, mip_level_count)`は単一layerの連続mip範囲を選ぶ。
 `ImageView::mip_level_count()`で範囲を確認でき、`image_view`のcountは1である。
-storage/attachment Viewはcount1を要求する。native sampled実行はcount1の任意mip、または
-base0から全chainまでのViewを扱い、部分的な複数mip範囲は明示的に未対応とする。
+storage/attachment View は count1 を要求する。native sampled 実行は単一 layer の連続 mip 範囲を扱う。
 論理解析は`layer * mip_levels + mip`の区間へ写像し、producer・未初期化拒否・RAW/WAR/WAW・cullingを共通解析へ接続する。
 `declare_analysis_pass`の画像範囲も同じ各subresourceを扱う。エラーでは最初の未初期化subresourceをmip/layer/aspectへ戻す。
 `export_image`は全subresourceの有効内容を要求する。単一layerでは `export_image_mips(image, levels)` で公開するmipを指定・累積できる。
