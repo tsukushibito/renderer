@@ -2,6 +2,7 @@
 mod camera;
 mod geometry;
 mod hud;
+mod instruments;
 mod lab;
 mod surfaces;
 
@@ -164,8 +165,22 @@ impl Visual {
         // Reserving draws at startup covers spawn/kill/pickup changes. The repeated
         // entries bound transform and draw storage; uploads deduplicate shared meshes.
         prepared.resize(maximum, RenderObject::new(block, palette.drop));
+        for obj in &mut prepared[hall.len()..] {
+            obj.casts_shadow = false;
+        }
         let [w, d] = game.arena.half_extent;
-        let mut lights = Vec::new();
+        // A broad ceiling fixture shades the permanent hall. Moving subjects
+        // retain their floor contacts without invalidating the static lamp atlas.
+        let mut lights = vec![LocalLight::shadowed_rect(
+            renderer::pbr::RectLight::from_lumens(
+                [-6., 6., -5.],
+                [2.1, 0., 0.],
+                [0., 0., 0.65],
+                [0.94, 0.98, 1.],
+                1800.,
+                36.,
+            )?,
+        )];
         for (x, z, tint, power) in [
             (-0.55, -0.52, [0.69, 0.84, 1.], 72.),
             (0.52, -0.45, [1., 0.72, 0.48], 67.),
@@ -196,7 +211,7 @@ impl Visual {
             ring,
             disk,
             lights,
-            sun: Sun::from_lux([-0.44, 0.84, 0.32], [0.87, 0.94, 1.], 3.6)?,
+            sun: Sun::from_lux([-0.44, 0.84, 0.32], [0.87, 0.94, 1.], 2.8)?,
             bounds: Bounds::new([-w - 4., -1., -d - 4.], [w + 4., 6., d + 4.])?,
             visible: 0,
             drawn: 0,
@@ -238,7 +253,21 @@ impl Visual {
     }
 
     pub fn camera(&self, game: &Game, extent: [u32; 2]) -> PipelineResult<CameraView> {
-        camera::tracking(game.player, extent)
+        let [w, d] = game.arena.half_extent;
+        // Keep the player in frame at the boundary while retaining the visual
+        // landmark of the service wall as long as the viewport permits.
+        let focus = game.player.map(|v| v * 0.70);
+        let hx = 11. * extent[0] as f32 / extent[1].max(1) as f32;
+        let hz = 11. / 54f32.to_radians().sin();
+        let focus = [
+            focus[0]
+                .clamp(game.player[0] - hx * 0.85, game.player[0] + hx * 0.85)
+                .clamp(-w, w),
+            focus[1]
+                .clamp(game.player[1] - hz * 0.85, game.player[1] + hz * 0.85)
+                .clamp(-d, d),
+        ];
+        camera::tracking(focus, extent)
     }
 
     fn instance(
@@ -249,8 +278,10 @@ impl Visual {
         scale: [f32; 3],
         facing: [f32; 2],
     ) -> PipelineResult<()> {
-        self.objects
-            .push(RenderObject::new(mesh, material).with_transform(transform(pos, scale, facing)?));
+        let mut object =
+            RenderObject::new(mesh, material).with_transform(transform(pos, scale, facing)?);
+        object.casts_shadow = false;
+        self.objects.push(object);
         Ok(())
     }
 
@@ -295,6 +326,7 @@ impl Visual {
         let mut player = RenderObject::new(self.body, self.palette.player)
             .with_transform(transform([px, 0., pz], [1.; 3], self.player_facing)?);
         player.pose = Some(self.poses[0]);
+        player.casts_shadow = false;
         self.objects.push(player);
         self.visible = 0;
         self.drawn = 0;
@@ -305,6 +337,7 @@ impl Visual {
                 let mut object = RenderObject::new(self.body, self.palette.subject)
                     .with_transform(transform([x, 0., z], [1.; 3], enemy.facing)?);
                 object.pose = Some(self.poses[(enemy.id % WALK_PHASES as u64) as usize]);
+                object.casts_shadow = false;
                 self.objects.push(object);
                 self.drawn += 1;
                 self.instance(

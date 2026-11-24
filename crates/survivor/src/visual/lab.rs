@@ -1,4 +1,4 @@
-use super::{Palette, geometry::Geometry};
+use super::{Palette, geometry::Geometry, instruments::Equipment};
 use renderer::{
     mesh::Meshes,
     pipeline::{PipelineResult, RenderObject},
@@ -88,6 +88,25 @@ pub(super) fn build(
     for i in 0..(w * 4.) as usize {
         steel.slab([-w + i as f32 * 0.5, 0.009, -d + 0.75], [0.04, 0.01, 0.22])?;
     }
+    // Recessed floor panels conceal the service branches to the benches. Ribs,
+    // perimeter bolts and contrasting metal surrounds read at gameplay distance.
+    for x in [-w * 0.72, 0., w * 0.72] {
+        for z in [-d * 0.62, d * 0.62] {
+            steel.slab([x, 0.013, z], [2.46, 0.020, 1.34])?;
+            rubber.slab([x, 0.028, z], [2.24, 0.013, 1.12])?;
+            for n in 0..15 {
+                ivory.slab(
+                    [x - 1.04 + n as f32 * 0.147, 0.039, z],
+                    [0.047, 0.014, 1.08],
+                )?;
+            }
+            for dx in [-1.15, 1.15] {
+                for dz in [-0.57, 0.57] {
+                    rubber.slab([x + dx, 0.027, z + dz], [0.08, 0.013, 0.065])?;
+                }
+            }
+        }
+    }
     // The simulation supplies the occupied footprints. Build a plinth, drawers,
     // worktop and instrument racks wholly inside each collision rectangle.
     for (i, obstacle) in arena.obstacles.iter().enumerate() {
@@ -105,7 +124,9 @@ pub(super) fn build(
         }
         rubber.slab([x, 0.085, z], [1.85 * hx, 0.17, 1.85 * hz])?;
         ivory.slab([x, 0.52, z], [1.93 * hx, 0.72, 1.85 * hz])?;
-        steel.slab([x, 0.94, z], [2. * hx, 0.15, 2. * hz])?;
+        steel.slab([x, 0.90, z], [2. * hx, 0.10, 2. * hz])?;
+        // Chemical-resistant enamel worktop over a narrow stainless edge.
+        ivory.slab([x, 0.982, z], [1.99 * hx, 0.065, 1.99 * hz])?;
         for side in [-1., 1.] {
             let front = z + side * hz * 0.94;
             for drawer in 0..3 {
@@ -117,28 +138,21 @@ pub(super) fn build(
                 )?;
             }
         }
-        let sx = hx.min(0.85);
-        let sz = hz.min(0.65);
-        let instrument = x - hx * 0.38;
-        rubber.slab([instrument, 1.15, z], [sx, 0.27, sz])?;
-        ivory.slab([instrument, 1.47, z], [sx * 0.94, 0.38, sz * 0.82])?;
-        lcd.slab([instrument, 1.49, z + sz * 0.416], [sx * 0.72, 0.22, 0.015])?;
-        for n in 0..3 {
-            lamps.slab(
-                [
-                    instrument - sx * 0.24 + n as f32 * sx * 0.15,
-                    1.28,
-                    z + sz * 0.51,
-                ],
-                [0.035, 0.023, 0.012],
-            )?;
-        }
-        if i % 2 == 0 {
-            for n in 0..4 {
-                steel.slab(
-                    [x + hx * 0.40, 1.14, z + (n as f32 - 1.5) * sz * 0.30],
-                    [sx * 0.38, 0.25, sz * 0.16],
-                )?;
+        if hx >= 1.1 && hz >= 0.72 {
+            let mut equipment = Equipment {
+                enamel: &mut ivory,
+                alloy: &mut steel,
+                dark: &mut rubber,
+                teal: &mut lcd,
+                amber: &mut safety,
+            };
+            if i % 2 == 0 {
+                equipment.microscope(x - hx * 0.49, z + 0.18)?;
+                equipment.rack(x + hx * 0.42, z + hz * 0.36)?;
+                equipment.display(x + hx * 0.38, z - hz * 0.48)?;
+            } else {
+                equipment.tank(x - hx * 0.45, z)?;
+                equipment.display(x + hx * 0.43, z - hz * 0.30)?;
             }
         }
     }
@@ -159,6 +173,12 @@ pub(super) fn build(
         (lcd, p.lcd),
     ]
     .into_iter()
-    .map(|(batch, material)| Ok(RenderObject::new(meshes.create(batch.data()?)?, material)))
+    .map(|(batch, material)| {
+        let mut object = RenderObject::new(meshes.create(batch.data()?)?, material);
+        // The ceiling source is above the entire floor. The slab only receives
+        // shadows, avoiding self-shadowing on its grazing, distant corners.
+        object.casts_shadow = material != p.floor && material != p.safety;
+        Ok(object)
+    })
     .collect()
 }
