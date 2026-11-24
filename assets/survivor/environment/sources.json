@@ -4,13 +4,13 @@
   "base_url": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k",
   "surfaces": {
     "floor": {
-      "asset": "concrete_floor_worn_001",
-      "page": "https://polyhaven.com/a/concrete_floor_worn_001",
-      "authors": ["Dimitrios Savva", "Rico Cilliers"],
+      "asset": "concrete_floor_02",
+      "page": "https://polyhaven.com/a/concrete_floor_02",
+      "authors": ["Rob Tuytel"],
       "sha256": {
-        "diff": "dde1944b011f2536fba8d1d611213bb76ab27e49155763bbe449397967e738fa",
-        "nor_gl": "156fd005f3e675fc25e8afb73d65252a3534d78485ad4cc9c2377ae1a0ff1fbe",
-        "arm": "5a6388552e247d193124ecea50ac6700957d7935f3cf62060b694bab726d3b7a"
+        "diff": "11d05474d61b47db27dcda8de7cdeb616328c6c0670ddd0837dcd57bd3132c52",
+        "nor_gl": "2899c1338a39369d33edc02effbfa4eb14c82b70c6efa2f13c6a0e088ee0c606",
+        "arm": "96dc02b61003ce8eb4894f43302f3ce0dab0d0af9108f66490d0e4ea5141af53"
       }
     },
     "steel": {
