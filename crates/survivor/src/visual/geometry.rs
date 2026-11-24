@@ -8,6 +8,74 @@ pub(super) struct Geometry {
 }
 
 impl Geometry {
+    /// A capped circular fitting between arbitrary points. Vary the radii for a
+    /// vessel shoulder or an objective lens barrel. Axial normals at either end
+    /// keep the metal rims sharp while the body shades continuously.
+    pub fn tube(&mut self, a: [f32; 3], b: [f32; 3], ra: f32, rb: f32) -> PipelineResult<()> {
+        const N: u32 = 18;
+        let delta: [f32; 3] = std::array::from_fn(|i| b[i] - a[i]);
+        let length = delta[0].hypot(delta[1]).hypot(delta[2]);
+        let axis = delta.map(|v| v / length);
+        let cross = |u: [f32; 3], v: [f32; 3]| {
+            [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ]
+        };
+        let basis = cross(
+            axis,
+            if axis[0].abs() < 0.8 {
+                [1., 0., 0.]
+            } else {
+                [0., 0., 1.]
+            },
+        );
+        let norm = basis[0].hypot(basis[1]).hypot(basis[2]);
+        let u = basis.map(|v| v / norm);
+        let v = cross(axis, u);
+        let start = u32::try_from(self.vertices.len())?;
+        for k in 0..=N {
+            let (s, c) = (TAU * k as f32 / N as f32).sin_cos();
+            let dir: [f32; 3] = std::array::from_fn(|j| c * u[j] + s * v[j]);
+            let tangent: [f32; 3] = std::array::from_fn(|j| -s * u[j] + c * v[j]);
+            let slope = (ra - rb) / length;
+            let normal =
+                std::array::from_fn(|j| (dir[j] + axis[j] * slope) / (1. + slope * slope).sqrt());
+            for (center, r, height) in [(a, ra, 0.), (b, rb, length)] {
+                self.vertices.push(PbrVertex::new(
+                    std::array::from_fn(|j| center[j] + r * dir[j]),
+                    normal,
+                    [tangent[0], tangent[1], tangent[2], 1.],
+                    [k as f32 / N as f32, height],
+                )?);
+            }
+            if k < N {
+                let i = start + 2 * k;
+                self.indices.extend([i, i + 2, i + 3, i, i + 3, i + 1]);
+            }
+        }
+        for (center, r, sign) in [(a, ra, -1.), (b, rb, 1.)] {
+            let base = u32::try_from(self.vertices.len())?;
+            let n = axis.map(|v| v * sign);
+            let t = [u[0], u[1], u[2], sign];
+            self.vertices
+                .push(PbrVertex::new(center, n, t, [0.5, 0.5])?);
+            for k in 0..=N {
+                let (s, c) = (sign * TAU * k as f32 / N as f32).sin_cos();
+                self.vertices.push(PbrVertex::new(
+                    std::array::from_fn(|j| center[j] + r * (c * u[j] + s * v[j])),
+                    n,
+                    t,
+                    [(1. + c) / 2., (1. + s) / 2.],
+                )?);
+                if k < N {
+                    self.indices.extend([base, base + k + 1, base + k + 2]);
+                }
+            }
+        }
+        Ok(())
+    }
     // Axes extend from the centre to each edge. UV scale stays in metres so decals and
     // acquisition textures remain the same size on the floor, cabinet doors and trims.
     fn face(
