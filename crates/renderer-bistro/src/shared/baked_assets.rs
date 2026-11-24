@@ -196,28 +196,48 @@ mod tests {
         }
         let _cleanup = Cleanup(dir.clone());
         let manifest = dir.join("scene.gi");
-        let identity = "a".repeat(64);
-        let publish = LightingPublisher::new(&manifest)?;
-        let first = publish.store(b"first generation")?;
-        publish.publish(&identity, &first, serde_json::Value::Null)?;
+        let bake = |order: &str| {
+            crate::bake::run(
+                [
+                    "--fixture",
+                    "--day-only",
+                    "--samples",
+                    "8",
+                    "--max-depth",
+                    "1",
+                    "--backend",
+                    "cpu",
+                    "--probe-sh",
+                    order,
+                    "--output",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .chain(std::iter::once(manifest.to_str().unwrap().to_owned())),
+            )
+        };
+        bake("l1")?;
         let old = LightingGeneration::open(&manifest)?;
+        assert!(!old.load()?.pages().is_empty());
+        let old_probe_order = old.load()?.into_parts().2.unwrap().sh_order();
         let staging = LightingPublisher::new(&manifest)?;
-        let second = staging.store(b"second generation")?;
+        staging.store(b"incomplete cook")?;
         drop(staging);
-        assert_eq!(LightingGeneration::open(&manifest)?.index, first);
-        assert_eq!(
-            fs::read(old.dir.join(object_name(&first)))?,
-            b"first generation"
+        assert_eq!(LightingGeneration::open(&manifest)?.index, old.index);
+        bake("l1")?;
+        assert_eq!(LightingGeneration::open(&manifest)?.index, old.index);
+        bake("l2")?;
+        let new = LightingGeneration::open(&manifest)?;
+        assert_ne!(new.index, old.index);
+        assert_ne!(
+            new.load()?.into_parts().2.unwrap().sh_order(),
+            old_probe_order
         );
-        let publish = LightingPublisher::new(&manifest)?;
-        assert_eq!(publish.store(b"second generation")?, second);
-        publish.publish(&identity, &second, serde_json::Value::Null)?;
-        assert_eq!(LightingGeneration::open(&manifest)?.index, second);
         assert_eq!(
-            fs::read(old.dir.join(object_name(&first)))?,
-            b"first generation"
+            old.load()?.into_parts().2.unwrap().sh_order(),
+            old_probe_order
         );
-        fs::write(old.dir.join(object_name(&first)), b"mismatch")?;
+        fs::write(old.dir.join(object_name(&old.index)), b"mismatch")?;
         assert!(
             old.load()
                 .err()
