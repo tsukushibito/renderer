@@ -736,6 +736,7 @@ impl Resident {
         budget: &Budget,
         camera: &crate::shared::camera::CameraInput,
     ) -> Result<Self, Error> {
+        scene.prepare_samplers(backend)?;
         let mut pool = budget.upload_pool()?;
         let mut geometry_pool = GraphPool::new(
             GraphCapacity {
@@ -1326,7 +1327,7 @@ fn append_shadows(
                         &[
                             materials.camera(),
                             materials.texture(graph, scene, base_color, 0)?,
-                            sampler_binding(1, 4, SamplerDescriptor::LinearRepeat),
+                            sampler_binding(1, 4, scene.materials[material].samplers.base_color),
                         ],
                     )?;
                     *slot = Some(bindings);
@@ -1464,7 +1465,10 @@ fn scene_bindings(
             materials.texture(graph, scene, normal, 1)?,
             materials.texture(graph, scene, orm, 2)?,
             materials.texture(graph, scene, emissive, 3)?,
-            sampler_binding(1, 4, SamplerDescriptor::LinearRepeat),
+            sampler_binding(1, 4, material.samplers.base_color),
+            sampler_binding(1, 5, material.samplers.normal),
+            sampler_binding(1, 6, material.samplers.orm),
+            sampler_binding(1, 7, material.samplers.emissive),
         ];
         let mut all = [material_bindings[0]; MAX_RASTER_BINDINGS];
         let shared = material_bindings.len() + lighting.len();

@@ -1,7 +1,7 @@
 //! Connect Bistro's materials, draws and history to the public PBR recipes.
 
 use super::{Scene, shadow};
-use renderer::pbr::{Draw, GraphMaterial};
+use renderer::pbr::{Draw, GraphMaterial, MaterialSamplers};
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::{
@@ -24,7 +24,7 @@ use renderer_core::runtime::ManagedImage;
 pub(super) struct SurfaceTable {
     materials: Materials,
     handles: Vec<MaterialHandle>,
-    maps: Vec<[usize; 4]>,
+    maps: Vec<([usize; 4], MaterialSamplers)>,
 }
 impl SurfaceTable {
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
@@ -36,7 +36,11 @@ impl SurfaceTable {
         let mut table = Self {
             materials: Materials::default(),
             handles: Vec::with_capacity(uniforms.len()),
-            maps: scene.materials.iter().map(|m| m.textures).collect(),
+            maps: scene
+                .materials
+                .iter()
+                .map(|m| (m.textures, m.samplers))
+                .collect(),
         };
         table.refresh(uniforms, images)?;
         Ok(table)
@@ -46,7 +50,7 @@ impl SurfaceTable {
         uniforms: &[ResidentMaterialUniform],
         images: &[ManagedImage],
     ) -> Result<(), GraphError> {
-        for (index, (maps, uniform)) in self.maps.iter().zip(uniforms).enumerate() {
+        for (index, ((maps, samplers), uniform)) in self.maps.iter().zip(uniforms).enumerate() {
             let [base_color, normal, orm, emissive] = maps.map(|i| images[i].snapshot().clone());
             let material = PbrMaterial::resident(
                 uniform,
@@ -56,6 +60,7 @@ impl SurfaceTable {
                     orm,
                     emissive,
                 },
+                *samplers,
             )?;
             if let Some(&handle) = self.handles.get(index) {
                 self.materials.update_resident_pbr(handle, material)?

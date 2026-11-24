@@ -7,7 +7,9 @@
 //! light with IBL/shadows/AA explicitly disabled. SDR is independently computed
 //! through B3's fixed exposure, Neutral transform, half storage and sRGB encode.
 
-use super::asset::{Material, Pixels, Primitive, Scene, TextureImage, fallback_images, material};
+use super::asset::{
+    Material, Pixels, Primitive, Scene, TextureBinding, TextureImage, fallback_images, material,
+};
 use super::camera::Camera;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::{backend, tests::build_material_test_frame};
@@ -333,7 +335,7 @@ fn scene(cases: &[Case], force_opaque: bool) -> Scene {
             material(
                 &record,
                 id,
-                &[base_image, normal_image, emissive_image],
+                &[base_image, normal_image, emissive_image].map(TextureBinding::fixture),
                 &images,
                 defaults,
                 force_opaque,

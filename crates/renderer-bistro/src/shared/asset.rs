@@ -10,8 +10,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use renderer::pbr::NormalEncoding;
+use renderer::pbr::{MaterialSamplers, NormalEncoding};
 use renderer_core::ImageFormat;
+use renderer_core::program::SamplerDescriptor;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -211,6 +212,7 @@ pub(crate) struct Material {
     pub uniform: [u8; 64],
     /// Base, normal, ORM and emissive image indices, with defaults resolved.
     pub textures: [usize; 4],
+    pub samplers: MaterialSamplers,
     pub blend: bool,
     /// Original material coverage, retained when the diagnostic override is used.
     pub alpha_zero: bool,
@@ -614,33 +616,79 @@ fn image(root: &Path, record: &Value, id: usize) -> Result<TextureImage> {
     })
 }
 
-fn validate_samplers(doc: &Value) -> Result<Vec<usize>> {
-    let samplers = array(&doc["samplers"])?;
-    for sampler in samplers {
-        for (key, expected) in [
-            ("magFilter", 9729),
-            ("minFilter", 9987),
-            ("wrapS", 10497),
-            ("wrapT", 10497),
-        ] {
-            if !sampler[key].is_null() && sampler[key].as_u64() != Some(expected) {
-                return Err(invalid(
-                    "Bistro consumer requires linear/trilinear repeat sampler",
-                ));
+/// A glTF texture selects an image and its own sampler. Several textures may
+/// share one decoded image while retaining different sampling behavior.
+#[derive(Clone, Copy)]
+pub(crate) struct TextureBinding {
+    image: usize,
+    sampler: SamplerDescriptor,
+}
+
+impl TextureBinding {
+    pub(crate) fn fixture(image: usize) -> Self {
+        Self {
+            image,
+            sampler: SamplerDescriptor::default(),
+        }
+    }
+}
+
+fn texture_bindings(doc: &Value) -> Result<Vec<TextureBinding>> {
+    let samplers = array(&doc["samplers"])?
+        .iter()
+        .enumerate()
+        .map(|(id, sampler)| {
+            let object = sampler
+                .as_object()
+                .ok_or_else(|| invalid(format!("sampler {id} must be an object")))?;
+            if let Some(extensions) = object.get("extensions")
+                && extensions.as_object().is_none_or(|ext| !ext.is_empty())
+            {
+                return Err(invalid(format!(
+                    "sampler {id}: unsupported extensions {extensions}"
+                )));
             }
-        }
-    }
-    let mut textures = Vec::new();
-    for (id, texture) in array(&doc["textures"])?.iter().enumerate() {
-        if integer(&texture["id"])? != id {
-            return Err(invalid("texture ids must be dense and ordered"));
-        }
-        if !texture["sampler"].is_null() && integer(&texture["sampler"])? >= samplers.len() {
-            return Err(invalid("texture references unknown sampler"));
-        }
-        textures.push(integer(&texture["source"])?);
-    }
-    Ok(textures)
+            let value = |name: &str| {
+                object
+                    .get(name)
+                    .map(|v| {
+                        u32_value(v)
+                            .map_err(|_| invalid(format!("sampler {id}: invalid {name}={v}")))
+                    })
+                    .transpose()
+            };
+            SamplerDescriptor::from_gltf(
+                value("wrapS")?,
+                value("wrapT")?,
+                value("magFilter")?,
+                value("minFilter")?,
+            )
+            .map_err(|error| invalid(format!("sampler {id}: {error}")))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    array(&doc["textures"])?
+        .iter()
+        .enumerate()
+        .map(|(id, texture)| {
+            if integer(&texture["id"])? != id {
+                return Err(invalid("texture ids must be dense and ordered"));
+            }
+            let sampler = if texture["sampler"].is_null() {
+                SamplerDescriptor::default()
+            } else {
+                *samplers.get(integer(&texture["sampler"])?).ok_or_else(|| {
+                    invalid(format!(
+                        "texture {id} references unknown sampler {}",
+                        texture["sampler"]
+                    ))
+                })?
+            };
+            Ok(TextureBinding {
+                image: integer(&texture["source"])?,
+                sampler,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn fallback_images(images: &mut Vec<TextureImage>) -> [usize; 4] {
@@ -666,7 +714,7 @@ pub(crate) fn fallback_images(images: &mut Vec<TextureImage>) -> [usize; 4] {
 pub(crate) fn material(
     record: &Value,
     id: usize,
-    textures: &[usize],
+    textures: &[TextureBinding],
     images: &[TextureImage],
     defaults: [usize; 4],
     force_opaque: bool,
@@ -712,6 +760,7 @@ pub(crate) fn material(
     };
     let double_sided = boolean(&record["double_sided"])?;
     let mut slots = defaults;
+    let mut samplers = [SamplerDescriptor::default(); 4];
     for (slot, key) in [
         "base_color_texture",
         "normal_texture",
@@ -722,9 +771,11 @@ pub(crate) fn material(
     .enumerate()
     {
         if !record[key].is_null() {
-            slots[slot] = *textures
+            let binding = textures
                 .get(integer(&record[key])?)
                 .ok_or_else(|| invalid("material references unknown texture"))?;
+            slots[slot] = binding.image;
+            samplers[slot] = binding.sampler;
             let image = images
                 .get(slots[slot])
                 .ok_or_else(|| invalid("texture references unknown image"))?;
@@ -775,12 +826,32 @@ pub(crate) fn material(
     Ok(Material {
         uniform,
         textures: slots,
+        samplers: MaterialSamplers {
+            base_color: samplers[0],
+            normal: samplers[1],
+            orm: samplers[2],
+            emissive: samplers[3],
+        },
         blend: effective_mode == 2,
         alpha_zero,
     })
 }
 
 impl Scene {
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub(crate) fn prepare_samplers(
+        &self,
+        runtime: &mut renderer_core::runtime::Runtime,
+    ) -> Result<()> {
+        let mut selected = std::collections::BTreeSet::new();
+        for material in &self.materials {
+            let s = material.samplers;
+            selected.extend([s.base_color, s.normal, s.orm, s.emissive]);
+        }
+        runtime.prepare_samplers(&selected.into_iter().collect::<Vec<_>>())?;
+        Ok(())
+    }
+
     /// A sphere of known material used to inspect spatial lighting. Inserted
     /// after the bake, so it receives the same lighting as a moving object.
     pub fn add_inspection_sphere(&mut self, center: [f32; 3], roughness: f32, metallic: f32) {
@@ -795,6 +866,7 @@ impl Scene {
         self.materials.push(Material {
             uniform: factors.encode().expect("constant sphere material"),
             textures,
+            samplers: MaterialSamplers::default(),
             blend: false,
             alpha_zero: false,
         });
@@ -882,8 +954,11 @@ impl Scene {
         for (id, record) in image_records.iter().enumerate() {
             images.push(image(root, record, id)?);
         }
-        let textures = validate_samplers(&doc)?;
-        if textures.iter().any(|id| *id >= image_records.len()) {
+        let textures = texture_bindings(&doc)?;
+        if textures
+            .iter()
+            .any(|binding| binding.image >= image_records.len())
+        {
             return Err(invalid("texture references unknown source image"));
         }
         let defaults = fallback_images(&mut images);
@@ -1066,7 +1141,7 @@ impl Scene {
             let mat = material(
                 &record,
                 id,
-                &[zero, tilted],
+                &[zero, tilted].map(TextureBinding::fixture),
                 &images,
                 defaults,
                 force_opaque,
@@ -1247,10 +1322,30 @@ mod tests {
             "normal_scale":1.,"metallic":0.,"roughness":1.,"occlusion_strength":1.,"alpha_cutoff":0.5,
             "alpha_mode":"OPAQUE","double_sided":false,"base_color_texture":null,"normal_texture":null,
             "orm_texture":null,"occlusion_texture":0,"emissive_texture":null});
-        assert!(material(&material_doc, 0, &[defaults[2]], &images, defaults, false).is_err());
+        assert!(
+            material(
+                &material_doc,
+                0,
+                &[TextureBinding::fixture(defaults[2])],
+                &images,
+                defaults,
+                false
+            )
+            .is_err()
+        );
         material_doc["occlusion_texture"] = Value::Null;
         material_doc["base_color_texture"] = Value::from(0);
-        assert!(material(&material_doc, 0, &[defaults[2]], &images, defaults, false).is_err());
+        assert!(
+            material(
+                &material_doc,
+                0,
+                &[TextureBinding::fixture(defaults[2])],
+                &images,
+                defaults,
+                false
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1261,7 +1356,15 @@ mod tests {
             "normal_scale":1.,"metallic":0.5,"roughness":0.5,"occlusion_strength":1.,"alpha_cutoff":2.,
             "alpha_mode":"MASK","double_sided":false,"base_color_texture":null,"normal_texture":null,
             "orm_texture":0,"occlusion_texture":null,"emissive_texture":null});
-        let material = material(&doc, 0, &[defaults[2]], &images, defaults, false).unwrap();
+        let material = material(
+            &doc,
+            0,
+            &[TextureBinding::fixture(defaults[2])],
+            &images,
+            defaults,
+            false,
+        )
+        .unwrap();
         assert_eq!(
             f32::from_le_bytes(material.uniform[28..32].try_into().unwrap()),
             0.,
@@ -1281,6 +1384,37 @@ mod tests {
             material.alpha_zero,
             "a legal cutoff greater than one masks the complete surface"
         );
+    }
+
+    #[test]
+    fn cooked_textures_share_images_and_preserve_per_map_samplers() {
+        let mut fixture = CookedFixture::new();
+        let mirrored =
+            serde_json::json!({"wrapS":33648,"wrapT":33071,"minFilter":9986,"magFilter":9728});
+        fixture.doc["samplers"]
+            .as_array_mut()
+            .unwrap()
+            .push(mirrored);
+        fixture.doc["textures"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"id":6,"source":0,"sampler":1}));
+        fixture.doc["materials"][0]["base_color_texture"] = 6.into();
+        fixture.doc["materials"][0]["emissive_texture"] = 0.into();
+
+        let scene = Scene::load(&fixture.manifest(), false).unwrap();
+        let material = &scene.materials[0];
+        assert_eq!(material.textures[0], material.textures[3]);
+        assert_eq!(
+            material.samplers.base_color,
+            SamplerDescriptor::from_gltf(Some(33648), Some(33071), Some(9728), Some(9986)).unwrap()
+        );
+        assert_eq!(material.samplers.emissive, SamplerDescriptor::LinearRepeat);
+        fixture.doc["samplers"][1]["wrapS"] = 1234.into();
+        let error = Scene::load(&fixture.manifest(), false)
+            .err()
+            .expect("bad sampler");
+        assert!(error.to_string().contains("sampler 1"));
     }
 
     #[test]

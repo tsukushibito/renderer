@@ -634,6 +634,7 @@ impl Resident {
         budget: &Budget,
         camera: &crate::shared::camera::CameraInput,
     ) -> Result<Self, Error> {
+        scene.prepare_samplers(backend)?;
         let mut pool = budget.upload_pool()?;
         let mut geometry_pool = GraphPool::new(
             GraphCapacity {
@@ -1142,7 +1143,7 @@ pub(super) fn build(
             Binding {
                 group: 1,
                 binding: 4,
-                resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeat),
+                resource: BindingResource::Sampler(material.samplers.base_color),
             },
         ];
         workspace
@@ -1321,12 +1322,27 @@ pub(super) fn build(
                 Binding {
                     group: 1,
                     binding: 4,
-                    resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeat),
+                    resource: BindingResource::Sampler(material.samplers.base_color),
+                },
+                Binding {
+                    group: 1,
+                    binding: 5,
+                    resource: BindingResource::Sampler(material.samplers.normal),
+                },
+                Binding {
+                    group: 1,
+                    binding: 6,
+                    resource: BindingResource::Sampler(material.samplers.orm),
+                },
+                Binding {
+                    group: 1,
+                    binding: 7,
+                    resource: BindingResource::Sampler(material.samplers.emissive),
                 },
             ];
             let bindings = if deferred && !material.blend {
-                let mut bindings = [lighting_bindings[0]; 8];
-                bindings[..7].copy_from_slice(&material_bindings);
+                let mut bindings = [lighting_bindings[0]; 11];
+                bindings[..material_bindings.len()].copy_from_slice(&material_bindings);
                 graph.raster_bindings(&program::deferred::gbuffer_program(), &bindings)?
             } else {
                 let program = options.pipeline.forward_program(material.blend);
