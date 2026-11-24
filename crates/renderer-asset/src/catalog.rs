@@ -15,7 +15,7 @@ fn parse_hex<const N: usize>(s: &str) -> io::Result<[u8; N]> {
         return Err(invalid("incorrect hexadecimal identifier length"));
     }
     let mut result = [0; N];
-    for (dst, pair) in result.iter_mut().zip(s.as_bytes().chunks_exact(2)) {
+    for (dst, pair) in result.iter_mut().zip(s.as_bytes().as_chunks::<2>().0) {
         *dst = digit(pair[0])? * 16 + digit(pair[1])?;
     }
     Ok(result)
@@ -46,9 +46,17 @@ macro_rules! identifier {
         }
         impl<'de> Deserialize<'de> for $name {
             fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-                <&str>::deserialize(d)?
-                    .parse()
-                    .map_err(serde::de::Error::custom)
+                struct ReadId;
+                impl serde::de::Visitor<'_> for ReadId {
+                    type Value = $name;
+                    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        f.write_str("a lowercase hexadecimal identifier")
+                    }
+                    fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<Self::Value, E> {
+                        s.parse().map_err(E::custom)
+                    }
+                }
+                d.deserialize_str(ReadId)
             }
         }
     };
