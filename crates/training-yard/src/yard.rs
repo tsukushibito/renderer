@@ -9,10 +9,14 @@ use renderer::{
     },
     unlit_forward::IDENTITY,
 };
+use renderer_asset::{AssetId, Generation, ObjectStore};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 mod equipment;
 use equipment::Equipment;
 pub use equipment::EquipmentAsset;
+#[cfg(feature = "memory-profiling")]
+pub use equipment::EquipmentStats;
 
 pub const REPLAY_FRAMES: usize = 24;
 
@@ -90,6 +94,27 @@ pub fn camera(id: u64, extent: [u32; 2]) -> PipelineResult<CameraView> {
 }
 impl Yard {
     pub fn new() -> PipelineResult<Self> {
+        let packaged = std::env::current_exe()?
+            .with_file_name("assets")
+            .join("equipment/dist");
+        let root = std::env::var_os("TRAINING_YARD_ASSETS")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                if packaged.is_dir() {
+                    packaged
+                } else {
+                    Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/equipment/dist")
+                }
+            });
+        Self::with_asset_catalog(root, 2)
+    }
+
+    /// Open a local distribution. Extra slots can retain equipment for off-screen actors.
+    pub fn with_asset_catalog(
+        root: impl AsRef<Path>,
+        equipment_slots: usize,
+    ) -> PipelineResult<Self> {
+        let equipment = Equipment::new(root.as_ref(), equipment_slots)?;
         let mut meshes = Meshes::new(MeshCapacity {
             meshes: 5,
             retired_mesh_versions: 4,
@@ -166,7 +191,7 @@ impl Yard {
             model,
             mesh,
             occupant: 1,
-            equipment: Equipment::default(),
+            equipment,
             poses,
             body,
             glow,
@@ -254,6 +279,29 @@ impl Yard {
         self.equipment.pending_delivery()
     }
 
+    /// Request the saved persistent ID for one owner. Its old armor remains visible until adoption.
+    pub fn request_equipment(&mut self, slot: usize, id: AssetId) -> PipelineResult<()> {
+        self.equipment.request(slot, id, true)
+    }
+    pub fn saved_equipment(&self, slot: usize) -> Option<AssetId> {
+        self.equipment.saved(slot)
+    }
+    /// Pin subsequent requests to a verified generation in the same object store.
+    pub fn set_asset_generation(&mut self, generation: Generation) {
+        self.equipment.set_generation(generation);
+    }
+    pub fn equipment_store(&self) -> &ObjectStore {
+        &self.equipment.store
+    }
+    #[cfg(feature = "memory-profiling")]
+    pub fn equipment_stats(&self) -> EquipmentStats {
+        self.equipment.stats
+    }
+    #[cfg(feature = "memory-profiling")]
+    pub fn equipment_lookups(&self) -> u64 {
+        self.equipment.lookups()
+    }
+
     pub fn load_error(&self) -> Option<&renderer::core::graph::GraphError> {
         self.equipment.error.as_ref()
     }
@@ -297,12 +345,12 @@ impl Yard {
             }
             Action::Request(asset) | Action::RequestFor(0, asset) => {
                 if self.actors[0].is_some() {
-                    self.equipment.request(0, asset)?;
+                    self.equipment.request(0, asset.id(), false)?;
                 }
             }
             Action::RequestFor(slot, asset) => {
                 if self.actors.get(slot).ok_or("unknown actor")?.is_some() {
-                    self.equipment.request(slot, asset)?;
+                    self.equipment.request(slot, asset.id(), false)?;
                 }
             }
             Action::Deliver(asset) => self.equipment.deliver(asset),
@@ -327,10 +375,7 @@ impl Yard {
         Ok(())
     }
 
-    pub(crate) fn release(
-        self,
-        runtime: &mut renderer::core::runtime::Runtime,
-    ) -> PipelineResult<()> {
+    pub fn release(self, runtime: &mut renderer::core::runtime::Runtime) -> PipelineResult<()> {
         let mut yard = self;
         yard.equipment.finish_upload(runtime)?;
         yard.meshes.release_gpu(runtime)?;

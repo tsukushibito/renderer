@@ -1715,7 +1715,9 @@ name = "training-yard"
 version = "0.1.0"
 dependencies = [
  "renderer",
+ "renderer-asset",
  "renderer-core",
+ "serde_json",
  "winit",
 ]
 
