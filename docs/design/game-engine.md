@@ -66,3 +66,7 @@ cargo run --locked --release -p survivor --bin survivor --no-default-features --
 ```
 
 記録には開始シーンの原型・上書き・階層、ゲームルールの版、seed、更新ごとの入力が入る。ヘッドレス再生は記録したシーンからゲームを構築し、終了時に HP、撃破数、目印への到達回数などを JSON で出力する。
+
+### 提示フレームの計測
+
+Windows のゲーム側は、表示したフレーム数をエンジンの WindowTimings に渡す。描画と提示が返した GPU 時間を退役時に回収し、最後に両方の完了を待って提示数と照合する。描画準備や終了時の明示的な観測には renderer_memory と working_set を使う。GPU の資源量、論理容量、プロセスの現在・ピークのワーキングセットを区別して保存する。敵や弾などの負荷の意味とリプレイ区間はゲーム側が定義する。[計測API](../../crates/sashiko/src/profiling.rs)

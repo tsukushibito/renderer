@@ -8,9 +8,12 @@ publish = false
 [features]
 cli = ["dep:clap"]
 audio-output = ["dep:cpal"]
-presentation = ["dep:winit"]
+presentation = ["dep:winit", "renderer/presentation", "dep:windows-sys"]
+vulkan = ["renderer/vulkan"]
+d3d12 = ["renderer/d3d12"]
 
 [target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", optional = true, features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
 cpal = { version = "0.16", optional = true }
 winit = { version = "0.30", default-features = false, features = ["rwh_06"], optional = true }
 
