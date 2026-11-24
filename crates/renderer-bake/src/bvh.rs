@@ -112,16 +112,17 @@ impl BakeScene {
                 let uv = std::array::from_fn(|i| {
                     t.uv[0][i] * (1. - u - v) + t.uv[1][i] * u + t.uv[2][i] * v
                 });
-                let sample =
-                    |id: Option<usize>| id.map_or([1.; 4], |i| self.textures[i].sample(uv));
-                let tex = sample(m.base_texture);
+                let sample = |id: Option<usize>, sampler| {
+                    id.map_or([1.; 4], |i| self.textures[i].sample(uv, sampler))
+                };
+                let tex = sample(m.base_texture, m.samplers.base_color);
                 if m.alpha_cutoff
                     .is_some_and(|cutoff| m.opacity * tex[3] < cutoff)
                 {
                     continue;
                 }
-                let dielectric = 1. - m.metallic * sample(m.orm_texture)[2].min(1.);
-                let emitted = sample(m.emission_texture);
+                let dielectric = 1. - m.metallic * sample(m.orm_texture, m.samplers.orm)[2].min(1.);
+                let emitted = sample(m.emission_texture, m.samplers.emissive);
                 let n = t.normal();
                 let scale = det.signum() / dot(n, n).sqrt();
                 hit = Some(Hit {

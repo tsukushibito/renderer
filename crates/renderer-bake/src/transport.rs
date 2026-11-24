@@ -113,7 +113,7 @@ impl BakeScene {
         let u = 0.5 + (ray[2].atan2(ray[0]) + map.yaw_radians) / TAU;
         let half = 0.5 / texture.height as f32;
         let v = (ray[1].clamp(-1., 1.).acos() / PI).clamp(half, 1. - half);
-        let rgba = texture.sample([u, v]);
+        let rgba = texture.sample([u, v], crate::SamplerDescriptor::default());
         std::array::from_fn(|i| light.sky_rgb_nits[i] * rgba[i])
     }
 
