@@ -1,5 +1,6 @@
 [package]
 name = "survivor"
+default-run = "survivor"
 version = "0.1.0"
 publish = false
 edition.workspace = true

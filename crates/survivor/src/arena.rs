@@ -12,6 +12,8 @@ pub struct Arena {
     pub obstacles: Vec<Obstacle>,
     #[serde(default = "crate::authoring::default_subjects")]
     pub subjects: Vec<crate::authoring::SubjectType>,
+    #[serde(skip)]
+    pub(crate) authored_scene: Option<std::sync::Arc<sashiko::scene::Scene>>,
 }
 
 impl Default for Arena {
