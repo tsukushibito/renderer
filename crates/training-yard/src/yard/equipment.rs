@@ -1,6 +1,6 @@
 //! Incremental publication of one armor primitive per actor's equipment slot.
 mod cooked;
-use cooked::LoadedArmor;
+use cooked::LoadedPart;
 use renderer::{
     core::{
         capacity::{GraphRequirements, Preparation},
@@ -15,6 +15,7 @@ use renderer::{
     },
 };
 use renderer_asset::{AssetId, Digest, Generation, ObjectBytes, ObjectStore, Primitive};
+use std::collections::VecDeque;
 use std::{
     collections::HashMap,
     path::Path,
@@ -26,14 +27,26 @@ use std::{
 // Two visible pieces plus two replacements. Requests from additional owners can
 // share any of these entries; a fifth distinct revision reports backpressure.
 const ITEMS: usize = 4;
+pub(super) const MAX_PARTS: usize = 4;
+pub(super) const MAX_DRAWS: usize = 2 * (1 + MAX_PARTS);
+const IMAGE_BUDGET_BYTES: usize = 4 * 1024 * 1024;
 const IMAGE_NAME: &str = "yard armor texture";
+fn can_retry(recovery: renderer::CapacityRecovery) -> bool {
+    matches!(
+        recovery,
+        renderer::CapacityRecovery::Poll
+            | renderer::CapacityRecovery::ReleaseOwners
+            | renderer::CapacityRecovery::ReleaseResults
+    )
+}
+
 pub(crate) fn reserve(prep: &mut Preparation) -> Result<(), GraphError> {
     for size in [
         4 * renderer::passes::pbr::VERTEX_BYTES as u64,
         6 * 4,
         MaterialUniform::DESC.size,
     ] {
-        prep.reserve_buffer(BufferDesc { size }, ITEMS)?;
+        prep.reserve_buffer(BufferDesc { size }, ITEMS * MAX_PARTS)?;
     }
     prep.reserve_image(ImageDesc::rgba8_srgb(1, 1), ITEMS)?;
     prep.add_graph_requirements(GraphRequirements {
@@ -74,19 +87,26 @@ pub struct EquipmentStats {
     pub material_registrations: u64,
 }
 
-struct Armor {
+struct Part {
     object: RenderObject,
     recipe: Primitive,
     _sources: [Arc<ObjectBytes>; 2],
     _maps: [Option<(Arc<ObjectBytes>, Arc<ManagedImage>)>; 4],
 }
 
+type Armor = Vec<Part>;
+struct Decoded {
+    remaining: VecDeque<LoadedPart>,
+    parts: Armor,
+    images: [Option<Arc<ManagedImage>>; 4],
+}
+
 #[derive(Default)]
 enum State {
     #[default]
     Empty,
-    Reading(JoinHandle<Result<LoadedArmor, String>>),
-    Decoded(Box<LoadedArmor>, [Option<Arc<ManagedImage>>; 4]),
+    Reading(JoinHandle<Result<Vec<LoadedPart>, String>>),
+    Decoded(Decoded),
     Registered(Armor),
     Loading(Armor, AssetCandidate),
     Resident(Armor),
@@ -95,6 +115,7 @@ impl State {
     fn armor(&self) -> Option<&Armor> {
         match self {
             Self::Resident(a) | Self::Registered(a) | Self::Loading(a, _) => Some(a),
+            Self::Decoded(d) => Some(&d.parts),
             _ => None,
         }
     }
@@ -193,9 +214,14 @@ impl Equipment {
             }
         }
     }
-    pub fn object(&self, owner: usize) -> Option<RenderObject> {
-        let choice = self.slots[owner].active?;
-        self.items[choice.item].armor().map(|a| a.object)
+    pub fn objects(&self, owner: usize) -> impl ExactSizeIterator<Item = RenderObject> + '_ {
+        self.slots[owner]
+            .active
+            .and_then(|c| self.items[c.item].armor())
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .map(|p| p.object)
     }
     pub fn pending_delivery(&self) -> bool {
         self.slots.iter().any(|s| s.admitted && s.wanted.is_some())
@@ -286,27 +312,29 @@ impl Equipment {
         let mut pairs = Vec::new();
         let mut meshes = Vec::new();
         let mut materials = Vec::new();
-        for (i, state) in self.items.iter().enumerate().filter(|(i, _)| retiring[*i]) {
-            let Some(armor) = state.armor() else { continue };
-            let live = || {
-                self.items.iter().enumerate().filter_map(|(j, s)| {
-                    if j != i && !retiring[j] {
-                        s.armor().map(|a| a.object)
-                    } else {
-                        None
-                    }
-                })
-            };
-            let m = armor.object.mesh;
-            let a = armor.object.material;
-            if !live().any(|o| o.mesh == m && o.material == a) && !pairs.contains(&(m, a)) {
-                pairs.push((m, a))
+        let parts = || {
+            self.items.iter().enumerate().flat_map(|(i, state)| {
+                state
+                    .armor()
+                    .into_iter()
+                    .flatten()
+                    .map(move |p| (i, p.object))
+            })
+        };
+        for (_, object) in parts().filter(|(i, _)| retiring[*i]) {
+            let live = || parts().filter(|(j, _)| !retiring[*j]).map(|(_, o)| o);
+            let mesh = object.mesh;
+            let material = object.material;
+            if !live().any(|o| o.mesh == mesh && o.material == material)
+                && !pairs.contains(&(mesh, material))
+            {
+                pairs.push((mesh, material));
             }
-            if !live().any(|o| o.mesh == m) && !meshes.contains(&m) {
-                meshes.push(m)
+            if !live().any(|o| o.mesh == mesh) && !meshes.contains(&mesh) {
+                meshes.push(mesh);
             }
-            if !live().any(|o| o.material == a) && !materials.contains(&a) {
-                materials.push(a)
+            if !live().any(|o| o.material == material) && !materials.contains(&material) {
+                materials.push(material);
             }
         }
         (pairs, meshes, materials)
@@ -317,7 +345,16 @@ impl Equipment {
         self.images.retain(|_, w| w.strong_count() > 0);
     }
     fn fail(&mut self, i: usize, error: String) {
-        self.empty(i);
+        if let State::Decoded(data) = &mut self.items[i]
+            && !data.parts.is_empty()
+        {
+            self.items[i] = State::Registered(std::mem::take(&mut data.parts));
+        } else {
+            self.empty(i);
+        }
+        self.revoke(i, error);
+    }
+    fn revoke(&mut self, i: usize, error: String) {
         for slot in &mut self.slots {
             if slot.wanted.is_some_and(|c| c.item == i) {
                 slot.wanted = None;
@@ -362,14 +399,26 @@ impl Equipment {
                             .unwrap_or_else(|_| Err("equipment reader panicked".into()))
                         {
                             Ok(loaded) => {
-                                self.items[i] = State::Decoded(Box::new(loaded), Default::default())
+                                self.items[i] = State::Decoded(Decoded {
+                                    remaining: loaded.into(),
+                                    parts: Vec::new(),
+                                    images: Default::default(),
+                                })
                             }
                             Err(error) => self.fail(i, error),
                         }
                     }
                 }
-                State::Decoded(..) if !wanted => self.empty(i),
-                State::Decoded(loaded, maps) if admitted => {
+                State::Decoded(data) if !wanted => {
+                    if data.parts.is_empty() {
+                        self.empty(i)
+                    } else {
+                        self.items[i] = State::Registered(std::mem::take(&mut data.parts));
+                    }
+                }
+                State::Decoded(data) if admitted => {
+                    let loaded = data.remaining.front().expect("one pending primitive");
+                    let maps = &mut data.images;
                     for (slot, map) in maps.iter_mut().zip(&loaded.maps) {
                         if slot.is_some() {
                             continue;
@@ -380,7 +429,28 @@ impl Equipment {
                             continue;
                         }
                         let bytes = &map.object.image()?.pixels;
-                        let (id, image) = upload(renderer, IMAGE_NAME, map.desc, bytes)?;
+                        if bytes.len() > IMAGE_BUDGET_BYTES {
+                            self.fail(i,format!("image transfer exceeds the training-yard budget of {IMAGE_BUDGET_BYTES} bytes"));
+                            return Ok(());
+                        }
+                        let (id, image) = match upload(renderer, IMAGE_NAME, map.desc, bytes) {
+                            Ok(uploaded) => uploaded,
+                            Err(error) => {
+                                if let Some(runtime) =
+                                    error.downcast_ref::<renderer::core::runtime::ExecutionError>()
+                                {
+                                    if runtime.capacity().is_some_and(|c| can_retry(c.recovery)) {
+                                        self.collect = true;
+                                        return Ok(());
+                                    }
+                                    if matches!(runtime.kind(),renderer::core::runtime::ExecutionErrorKind::Unsupported|renderer::core::runtime::ExecutionErrorKind::InvalidInput|renderer::core::runtime::ExecutionErrorKind::CapacityExhausted) {
+                                        self.fail(i,error.to_string());
+                                        return Ok(())
+                                    }
+                                }
+                                return Err(error);
+                            }
+                        };
                         let image = Arc::new(image);
                         self.images.insert(map.hash, Arc::downgrade(&image));
                         *slot = Some(image.clone());
@@ -395,7 +465,8 @@ impl Equipment {
                     self.register(i, meshes, materials)?;
                 }
                 State::Registered(armor) => {
-                    let candidate = AssetCandidate::new(meshes, materials, &[armor.object])?;
+                    let objects: Vec<_> = armor.iter().map(|p| p.object).collect();
+                    let candidate = AssetCandidate::new(meshes, materials, &objects)?;
                     let State::Registered(armor) = std::mem::take(&mut self.items[i]) else {
                         unreachable!()
                     };
@@ -420,7 +491,7 @@ impl Equipment {
                     self.collect = true;
                 }
                 State::Loading(_, candidate) if admitted => {
-                    if let Poll::Ready(()) = renderer.poll_candidate(
+                    let progress = renderer.poll_candidate(
                         candidate,
                         meshes,
                         materials,
@@ -428,8 +499,17 @@ impl Equipment {
                             bytes: 128,
                             submissions: 1,
                         },
-                    )? {
-                        self.adopt(i, renderer, meshes, materials)?
+                    );
+                    match progress {
+                        Ok(Poll::Ready(())) => self.adopt(i, renderer, meshes, materials)?,
+                        Ok(Poll::Pending) => {}
+                        Err(error) if error.capacity().is_some_and(|c| can_retry(c.recovery())) => {
+                            self.collect = true
+                        }
+                        Err(error) if error.capacity().is_some() => {
+                            self.revoke(i, error.to_string());
+                        }
+                        Err(error) => return Err(error.into()),
                     }
                 }
                 State::Resident(_) if admitted => self.adopt(i, renderer, meshes, materials)?,
@@ -455,17 +535,18 @@ impl Equipment {
         meshes: &mut Meshes,
         materials: &mut Materials,
     ) -> PipelineResult<()> {
-        let State::Decoded(data, maps) = std::mem::take(&mut self.items[i]) else {
+        let State::Decoded(data) = &mut self.items[i] else {
             unreachable!()
         };
-        let LoadedArmor {
+        let maps = std::mem::take(&mut data.images);
+        let LoadedPart {
             mesh,
             mut params,
             primitive,
             maps: src,
             sources,
-        } = *data;
-        let others = || self.items.iter().filter_map(State::armor);
+        } = data.remaining.pop_front().expect("one pending primitive");
+        let others = || self.items.iter().filter_map(State::armor).flatten();
         let reused_mesh = others()
             .find(|a| a.recipe.mesh == primitive.mesh)
             .map(|a| a.object.mesh);
@@ -518,12 +599,18 @@ impl Equipment {
                 .zip(map)
                 .map(|(m, owner)| (m.object, owner))
         });
-        self.items[i] = State::Registered(Armor {
+        let State::Decoded(data) = &mut self.items[i] else {
+            unreachable!()
+        };
+        data.parts.push(Part {
             object: RenderObject::new(mesh, material),
             recipe: primitive,
             _sources: sources,
             _maps: retained,
         });
+        if data.remaining.is_empty() {
+            self.items[i] = State::Registered(std::mem::take(&mut data.parts));
+        }
         Ok(())
     }
     fn adopt(
@@ -540,7 +627,18 @@ impl Equipment {
                 s.admitted = false;
             }
         }
-        self.publish(Some(i), next, renderer, meshes, materials)
+        match self.publish(Some(i), next, renderer, meshes, materials) {
+            Err(error)
+                if error
+                    .downcast_ref::<renderer::AssetPrepareError>()
+                    .and_then(|e| e.capacity())
+                    .is_some_and(|c| can_retry(c.recovery())) =>
+            {
+                self.collect = true;
+                Ok(())
+            }
+            result => result,
+        }
     }
     pub fn finish_upload(
         &mut self,

@@ -134,7 +134,7 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
         std::num::NonZeroUsize::new(2).unwrap(),
         Yard::reserve_equipment,
     )?;
-    let mut objects = Vec::with_capacity(4);
+    let mut objects = Vec::with_capacity(crate::yard::EQUIPMENT_DRAWS);
     let mut step = 0;
     let mut advance = true;
     let mut last_progress = Instant::now();

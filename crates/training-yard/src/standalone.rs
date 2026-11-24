@@ -37,7 +37,7 @@ pub fn headless(config: RuntimeConfig, output: Option<&Path>) -> PipelineResult<
         std::num::NonZeroUsize::new(2).unwrap(),
         Yard::reserve_equipment,
     )?;
-    let mut scratch = Vec::with_capacity(4);
+    let mut scratch = Vec::with_capacity(crate::yard::EQUIPMENT_DRAWS);
     let mut pixels = [0; 48 * 24 * 4];
     if let Some(dir) = output {
         std::fs::create_dir_all(dir)?;

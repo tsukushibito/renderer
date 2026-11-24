@@ -103,6 +103,7 @@ pub(crate) fn squad<P: Viewport>(
     let mut monitor = SecurityMonitor::new()?;
     monitors.add_view(monitor.camera)?;
     setup.add_group(monitors);
+    setup.additional_objects = crate::yard::EQUIPMENT_DRAWS - 4;
     // A mouse query can remain outstanding while the main view submits its next frame.
     setup.frames_in_flight = std::num::NonZeroUsize::new(2).unwrap();
     let mut plan = setup.prepare(yard.assets())?;
@@ -142,7 +143,7 @@ pub(crate) fn squad<P: Viewport>(
         }
     }
     let mut host_pool = GraphPool::new(drawing.runtime().limits().graph, 1)?;
-    let mut objects = Vec::with_capacity(4);
+    let mut objects = Vec::with_capacity(crate::yard::EQUIPMENT_DRAWS);
     let mut rest_shadow = vec![false; 32 * 32 * renderer::pbr::CASCADE_COUNT];
     let mut depth = Vec::with_capacity(rest_shadow.len());
     let mut rest_mask = [vec![false; 24 * 24], vec![false; 24 * 24]];
