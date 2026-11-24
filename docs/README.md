@@ -16,6 +16,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | Git worktree で大型の素材を扱いたい | [原本の選択取得、変換済みデータの共有、worktree 別の世代管理と受け入れ条件](design/asset-pipeline.md#worktree-storage) |
 | ゲームエンジンに組み込みたい | [シーンの所有、カメラごとの描画方式、1 フレームの組み立て](guides/tooling.md#scene-materials)、[Windows の複数表示](design/rendergraph.md#windows-presentation)、[組み込み機能の検証](verification/current.md#engine-integration) |
 | 二つのクレートの使い分けと判断根拠を知りたい | [renderer と renderer-core の責務と利用コード](design/implementation-policy.md#renderer-core-plan)、[訓練場と Bistro の実機結果](verification/current.md#engine-integration) |
+| 数学ライブラリの配置や差し替え方を決めたい | [座標変換の責務、公開型と trait の選び方、共通の挙動テスト](design/implementation-policy.md#math-library-policy) |
 | ライトマップと照度プローブを使いたい | [ベイクと描画](guides/examples.md#bistro-baked-lighting)、[Bistro の比較画像と精度](verification/current.md#bistro-baked-lighting) |
 | Examplesを動かしたい | [Examplesの実行と選び方](guides/examples.md) |
 | Rustで標準パスやレシピを使いたい | [`renderer`の標準部品](design/rendergraph.md#公開標準パスと標準グラフ) |
