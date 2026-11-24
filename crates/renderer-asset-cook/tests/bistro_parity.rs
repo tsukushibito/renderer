@@ -38,11 +38,15 @@ fn asymmetric_uvs_reproduce_bistro_corner_tangent_frames() {
     assert!(color.srgb && !normal.srgb);
     assert_eq!(
         color.pixels[..16],
-        [255, 0, 0, 0, 0, 255, 0, 255, 0, 0, 255, 255, 128, 128, 128, 255]
+        [
+            255, 0, 0, 0, 0, 255, 0, 255, 0, 0, 255, 255, 128, 128, 128, 255
+        ]
     );
     assert_eq!(
         normal.pixels[..16],
-        [255, 128, 128, 255, 128, 255, 128, 255, 128, 128, 255, 255, 128, 128, 255, 255]
+        [
+            255, 128, 128, 255, 128, 255, 128, 255, 128, 128, 255, 255, 128, 128, 255, 255
+        ]
     );
     assert_eq!(primitive.images[0], primitive.images[3]);
     let bytes = store.load(&primitive.material).unwrap();
