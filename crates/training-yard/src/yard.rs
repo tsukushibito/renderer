@@ -397,6 +397,10 @@ impl Yard {
 }
 
 #[cfg(test)]
+#[path = "../tests/support/distribution.rs"]
+mod distribution;
+
+#[cfg(test)]
 mod tests {
     use super::PipelineResult;
     use crate::validation;
@@ -404,7 +408,8 @@ mod tests {
     fn exercise_shared_equipment(config: RuntimeConfig) -> PipelineResult<()> {
         use super::{Action, EquipmentAsset, Yard};
         use renderer::Renderer;
-        let mut yard = Yard::new()?;
+        let fixture = super::distribution::Distribution::cook()?;
+        let mut yard = Yard::with_asset_catalog(&fixture.root, 2)?;
         let camera = super::camera(1, [48, 24])?;
         let mut renderer = Renderer::headless_with(
             config,
@@ -522,31 +527,12 @@ mod tests {
     fn two_parts(config: RuntimeConfig) -> PipelineResult<()> {
         use super::{EquipmentAsset, Yard};
         use renderer_asset::{Catalog, Digest, Generation};
-        let fixture =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/equipment/dist");
-        let root = std::env::temp_dir().join(format!(
-            "renderer-yard-parts-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(root.join("catalogs"))?;
-        std::fs::create_dir_all(root.join("objects"))?;
-        for entry in std::fs::read_dir(fixture.join("objects"))? {
-            let entry = entry?;
-            std::fs::copy(entry.path(), root.join("objects").join(entry.file_name()))?;
-        }
-        let old = Generation::open(&fixture)?;
-        let original = old.id().to_string();
-        std::fs::copy(
-            fixture.join("catalogs").join(&original),
-            root.join("catalogs").join(&original),
-        )?;
-        std::fs::copy(fixture.join("current"), root.join("current"))?;
-        let mut yard = Yard::with_asset_catalog(&root, 2)?;
+        let fixture = super::distribution::Distribution::cook()?;
+        let root = fixture.root.as_path();
+        let old = Generation::open(root)?;
+        let mut yard = Yard::with_asset_catalog(root, 2)?;
         let mut catalog: Catalog = serde_json::from_slice(&std::fs::read(
-            fixture.join("catalogs").join(old.id().to_string()),
+            root.join("catalogs").join(old.id().to_string()),
         )?)?;
         let id = EquipmentAsset::Wide.id();
         let second = catalog.assets[&EquipmentAsset::Narrow.id()].primitives[0].clone();
@@ -568,7 +554,7 @@ mod tests {
             let bytes = serde_json::to_vec(c)?;
             let hash = Digest::of(&bytes);
             std::fs::write(root.join("catalogs").join(hash.to_string()), bytes)?;
-            Ok(Generation::open_id(&root, hash)?)
+            Ok(Generation::open_id(root, hash)?)
         };
         let camera = super::camera(1, [48, 24])?;
         let mut renderer = renderer::Renderer::headless_with(
@@ -702,7 +688,6 @@ mod tests {
         let mut runtime = renderer.into_runtime()?;
         yard.release(&mut runtime)?;
         validation::check_validation(runtime)?;
-        std::fs::remove_dir_all(root)?;
         Ok(())
     }
 

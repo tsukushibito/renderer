@@ -1,9 +1,12 @@
 use renderer_asset::{AssetId, Generation, ObjectStore};
-use std::path::Path;
+#[path = "support/project.rs"]
+mod project;
 
 #[test]
-fn cooked_material_preserves_bistro_maps_and_sampler_settings() {
-    let dist = Path::new(env!("CARGO_MANIFEST_DIR")).join("../training-yard/assets/equipment/dist");
+fn cooked_material_preserves_bistro_maps_and_sampler_settings() -> project::Result {
+    let fixture = project::Project::new()?;
+    fixture.report()?;
+    let dist = fixture.0.join("dist");
     let generation = Generation::open(&dist).unwrap();
     let id: AssetId = "00000000000000000000000000000005".parse().unwrap();
     let primitive = &generation.equipment(&id).unwrap().primitives[0];
@@ -35,4 +38,5 @@ fn cooked_material_preserves_bistro_maps_and_sampler_settings() {
     assert!(factors.double_sided);
     assert_eq!(factors.emissive_nits, [1.0; 3]);
     assert_ne!(material.samplers[0], material.samplers[3]);
+    Ok(())
 }

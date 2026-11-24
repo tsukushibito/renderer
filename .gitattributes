@@ -47,9 +47,8 @@
 # Upstream template-literal whitespace is content; verify the reproduced digest.
 /docs/theme/vendor/mermaid.min.js -whitespace linguist-vendored=true
 
-# Keep fixture inputs and published content-addressed objects reproducible.
+# Keep equipment fixture inputs reproducible.
 /crates/training-yard/assets/equipment/source/*.gltf text eol=lf
 /crates/training-yard/assets/equipment/source/*.json text eol=lf
 /crates/training-yard/assets/equipment/source/*.bin binary
 /crates/training-yard/assets/equipment/source/*.png binary
-/crates/training-yard/assets/equipment/dist/** -text

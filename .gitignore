@@ -19,3 +19,6 @@
 
 # Generated documentation
 /build/
+
+# Exported equipment distributions
+/crates/training-yard/assets/equipment/dist/

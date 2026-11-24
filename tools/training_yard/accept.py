@@ -94,7 +94,9 @@ def run(output):
                 package.mkdir()
                 app = shutil.copy2(executable, package)
                 distribution = package / "assets/equipment/dist"
-                shutil.copytree(ROOT / "crates/training-yard/assets/equipment/dist", distribution)
+                execute(["cargo", "run", "--locked", "--release", "-p", "renderer-asset-cook", "--",
+                         "cook", ROOT / "crates/training-yard/assets/equipment/source", distribution,
+                         "--cache", output / "cook-cache"], build / "package-assets.log")
                 report[profile + "_asset_generation"] = (distribution / "current").read_text().strip()
                 environment = os.environ.copy()
                 environment.pop("TRAINING_YARD_ASSETS", None)
@@ -113,6 +115,7 @@ def run(output):
                         delta = compare(name, (case / name).read_bytes(), expected)
                         if delta is not None:
                             report["differences"].append({"case": f"{profile}/{api}", "file": name, **delta})
+                environment["TRAINING_YARD_ASSETS"] = str(distribution)
                 # Exercise resize/suspension, core-only compute, external devices and frame ownership.
                 for crate, targets, log in [
                     ("training-yard", ["--tests"], "integration"),
@@ -120,7 +123,7 @@ def run(output):
                     ("renderer-core", ["--lib", "host_device_survives_adopted_graphs_and_failed_adoption"], "vulkan-host"),
                 ]:
                     execute(["cargo", "test", "--locked", "--release", "-p", crate, "--features", features,
-                             *targets, "--", "--ignored", "--test-threads=1"], build / (log + ".log"))
+                             *targets, "--", "--ignored", "--test-threads=1"], build / (log + ".log"), env=environment)
         if report["differences"]:
             raise ValueError(f"capture mismatch, see {output / 'report.json'}")
         report["passed"] = True

@@ -4,6 +4,8 @@
     any(feature = "vulkan", all(windows, feature = "d3d12"))
 ))]
 
+#[path = "support/distribution.rs"]
+mod distribution;
 use renderer::{core::runtime::RuntimeConfig, pipeline::PipelineResult};
 #[cfg(feature = "memory-profiling")]
 #[global_allocator]
@@ -32,7 +34,8 @@ fn changing_1024_targets_and_recovering_capacity() -> PipelineResult<()> {
 
 #[test]
 fn prepared_draw_count_tracks_simultaneous_parts() -> PipelineResult<()> {
-    let mut yard = training_yard::Yard::new()?;
+    let fixture = distribution::Distribution::cook()?;
+    let mut yard = training_yard::Yard::with_asset_catalog(&fixture.root, 2)?;
     let camera = training_yard::camera(1, [48, 24])?;
     let setup = renderer::pipeline::RendererSetup::standard(camera).prepare(yard.assets())?;
     // Two actors with two near parts or one far part, plus a preloaded material variant.
