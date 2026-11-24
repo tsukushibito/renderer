@@ -6,7 +6,7 @@ use crate::{
 };
 use raw_window_handle::HasWindowHandle;
 use renderer_core::{
-    PresentOutcome,
+    PresentOutcome, PresentationMetrics, SubmissionMetrics,
     graph::ImageDesc,
     runtime::{FrameId, ManagedImage, Runtime, RuntimeConfig, WindowPresenter, WindowReadiness},
 };
@@ -19,6 +19,7 @@ pub struct WindowRenderer {
     presenter: WindowPresenter,
     renderer: Renderer,
     accepted: Option<FrameId>,
+    profile: Option<Box<Option<SubmissionMetrics>>>,
     defer_for_asset_change: bool,
 }
 
@@ -82,6 +83,7 @@ impl WindowRenderer {
                 host,
             },
             accepted: None,
+            profile: None,
             defer_for_asset_change: false,
         })
     }
@@ -202,6 +204,58 @@ impl WindowRenderer {
         Ok(())
     }
 
+    /// Configure timestamps at an idle change boundary. The graph and the
+    /// fullscreen presentation commands have separate GPU intervals.
+    pub fn set_profiling(&mut self, enabled: bool) -> PipelineResult<()> {
+        if self.profile.is_some() == enabled {
+            return Ok(());
+        }
+        self.ready_for_change()?;
+        self.renderer.drawing.runtime().set_profiling(enabled)?;
+        if let Err(error) = self.presenter.set_profiling(enabled) {
+            self.renderer.drawing.runtime().set_profiling(!enabled)?;
+            return Err(error.into());
+        }
+        self.profile = enabled.then(|| Box::new(None));
+        Ok(())
+    }
+
+    /// Take the most recently retired graph sample. Drain after each draw
+    /// attempt and after the final idle wait to retain every measured frame.
+    pub fn take_graph_profile(&mut self) -> Option<SubmissionMetrics> {
+        self.profile.as_deref_mut()?.take()
+    }
+
+    /// Drain completed presentation samples after draw attempts and idle waits.
+    pub fn take_presentation_profile(&mut self) -> Option<PresentationMetrics> {
+        self.presenter.take_profile()
+    }
+
+    /// Apply the presenter's supported VSync mode at a change boundary.
+    pub fn set_vsync(&mut self, enabled: bool) -> PipelineResult<()> {
+        self.ready_for_change()?;
+        self.presenter.set_vsync(enabled)?;
+        Ok(())
+    }
+
+    fn retire_graph(&mut self, timeout: Duration) -> PipelineResult<bool> {
+        if let Some(id) = self.accepted {
+            let Some(result) = self
+                .renderer
+                .drawing
+                .runtime()
+                .wait_for_frame(id, timeout)?
+            else {
+                return Ok(false);
+            };
+            if let Some(slot) = self.profile.as_deref_mut() {
+                *slot = result.metrics().copied();
+            }
+            self.accepted = None;
+        }
+        Ok(true)
+    }
+
     /// Retire the last render result and the presenter's source leases within
     /// one timeout. A queued but unpresented image still needs a draw retry.
     pub fn wait_idle(&mut self, timeout: Duration) -> PipelineResult<bool> {
@@ -209,17 +263,8 @@ impl WindowRenderer {
             return Ok(false);
         }
         let start = Instant::now();
-        if let Some(id) = self.accepted {
-            if self
-                .renderer
-                .drawing
-                .runtime()
-                .wait_for_frame(id, timeout)?
-                .is_none()
-            {
-                return Ok(false);
-            }
-            self.accepted = None;
+        if !self.retire_graph(timeout)? {
+            return Ok(false);
         }
         Ok(self
             .presenter
@@ -283,17 +328,8 @@ impl WindowRenderer {
         if std::mem::take(&mut self.defer_for_asset_change) {
             return Ok(PresentOutcome::NotReady);
         }
-        if let Some(id) = self.accepted {
-            if self
-                .renderer
-                .drawing
-                .runtime()
-                .wait_for_frame(id, Duration::ZERO)?
-                .is_none()
-            {
-                return Ok(PresentOutcome::NotReady);
-            }
-            self.accepted = None;
+        if !self.retire_graph(Duration::ZERO)? {
+            return Ok(PresentOutcome::NotReady);
         }
         match self.presenter.prepare()? {
             WindowReadiness::Pending => return Ok(PresentOutcome::NotReady),
