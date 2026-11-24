@@ -12,6 +12,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 
 | 読みたいこと | 入口 |
 |---|---|
+| ゲーム用の素材を取り込み、配布・差し替えたい | [既存エンジンの比較、オフラインと実行時の責務、規模別の受け入れ条件](design/asset-pipeline.md) |
 | ゲームエンジンに組み込みたい | [シーンの所有、カメラごとの描画方式、1 フレームの組み立て](guides/tooling.md#scene-materials)、[Windows の複数表示](design/rendergraph.md#windows-presentation)、[組み込み機能の検証](verification/current.md#engine-integration) |
 | 二つのクレートの使い分けと判断根拠を知りたい | [renderer と renderer-core の責務と利用コード](design/implementation-policy.md#renderer-core-plan)、[訓練場と Bistro の実機結果](verification/current.md#engine-integration) |
 | ライトマップと照度プローブを使いたい | [ベイクと描画](guides/examples.md#bistro-baked-lighting)、[Bistro の比較画像と精度](verification/current.md#bistro-baked-lighting) |

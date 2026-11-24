@@ -9,6 +9,7 @@
 - [RenderGraph の詳細な契約](design/rendergraph.md)
 - [Vulkan の実行基盤](design/vulkan.md)
 - [実装方針と今後の計画](design/implementation-policy.md)
+- [ゲームエンジン向けアセットパイプラインの到達設計](design/asset-pipeline.md)
 
 # 設計を読むための指針
 
