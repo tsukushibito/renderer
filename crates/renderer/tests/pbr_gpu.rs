@@ -125,9 +125,13 @@ mod cpu {
     }
 
     #[test]
-    fn transformed_scene_declares_all_cascades() {
+    fn transformed_and_masked_casters_declare_all_cascades() {
         for placement in [
             Placement::Individual,
+            Placement::SampleMaps {
+                base: renderer_core::program::SamplerDescriptor::LinearRepeat,
+                emission: renderer_core::program::SamplerDescriptor::NearestClamp,
+            },
             Placement::Instanced,
             Placement::PagedInstanced,
             Placement::Tilted(Some(-40)),
