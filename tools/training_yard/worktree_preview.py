@@ -57,6 +57,7 @@ class Events:
     def __init__(self, process):
         self.received = queue.Queue()
         self.lines = []
+        self.cook_at = None
         self.process = process
         self.thread = threading.Thread(target=self.read, daemon=True)
         self.thread.start()
@@ -76,6 +77,8 @@ class Events:
             if line is None:
                 break
             self.lines.append(line)
+            if line.startswith("asset-preview cook "):
+                self.cook_at = at
             if predicate(line):
                 return at, line
         raise RuntimeError(f"Preview event missing (exit={self.process.poll()}): {self.lines[-15:]}")
@@ -88,7 +91,7 @@ class Events:
                  if s.startswith("asset-preview cook ")]
         if not cooks or cooks[-1]["generation"] != value or cooks[-1].get("diagnostic"):
             raise ValueError(f"Displayed generation has no successful matching cook: {self.lines}")
-        return at, cooks[-1]
+        return at, cooks[-1], self.cook_at
 
 
 def close_windows(pid):
@@ -144,10 +147,11 @@ def sample(repo, app, api, number, resident, reference):
     base_objects = objects(store / "objects")
     start = time.perf_counter()
     git(repo, "worktree", "add", "--quiet", "--detach", tree, "HEAD")
+    checked_out = time.perf_counter()
     try:
         with preview(tree, app, api) as view:
             ready, _ = view.until(lambda s: s == "asset-preview interactive")
-            _, warm = view.generation()
+            _, warm, selected = view.generation()
             if (warm["generation"] != resident["generation"] or Path(warm["root"]) != store
                     or warm["snapshot_hit"] is not True or warm["conversions"] != 0
                     or warm["object_bytes_written"] != 0):
@@ -165,10 +169,13 @@ def sample(repo, app, api, number, resident, reference):
             staged.write_bytes(edit_image(number))
             saved = time.perf_counter()
             staged.replace(paint)
-            changed_at, changed = view.generation(warm["generation"])
+            changed_at, changed, cooked = view.generation(warm["generation"])
             if changed["conversions"] != 1 or changed["object_bytes_written"] <= 0:
                 raise AssertionError(f"Expected a single converted image: {changed}")
             result = {"checkout_seconds": ready - start, "edit_seconds": changed_at - saved,
+                      "checkout_components": {"git": checked_out - start, "select": selected - checked_out,
+                                              "first_frame": ready - selected},
+                      "edit_components": {"select": cooked - saved, "display": changed_at - cooked},
                       "warm": warm, "edit": changed, "bistro_pointers": checked}
             if reference is not None:
                 if capture(repo, app, api) != reference:
@@ -228,7 +235,7 @@ def measure(args, report, save):
             if index:
                 scale_up(repo)
             with preview(repo, args.app, args.api) as first:
-                _, resident = first.generation()
+                _, resident, _ = first.generation()
                 reference = capture(repo, args.app, args.api)
                 result = {"asset_count": len(list((repo / SOURCE).glob("*.gltf"))), "samples": []}
                 report[case] = result
@@ -246,10 +253,16 @@ def measure(args, report, save):
                 report["limits"] = {key: {"seconds": result["p95"][key] + margin, "ratio": 1.5}
                                     for key, margin in (("checkout_seconds", 1.), ("edit_seconds", .5))}
             else:
+                checks = {}
                 for key, value in result["p95"].items():
                     limits = report["limits"][key]
-                    if value > min(limits["seconds"], report["baseline"]["p95"][key] * limits["ratio"]):
-                        raise AssertionError(f"10x {key} exceeded pre-scale p95 limits: {value}, {limits}")
+                    ceiling = min(limits["seconds"], report["baseline"]["p95"][key] * limits["ratio"])
+                    if "prior_ceilings" in report:
+                        ceiling = min(ceiling, report["prior_ceilings"][key])
+                    checks[key] = {"p95": value, "ceiling": ceiling, "passed": value <= ceiling}
+                result["checks"] = checks
+                if not all(c["passed"] for c in checks.values()):
+                    raise AssertionError(f"10x p95 exceeded pre-scale limits: {checks}")
             save()
 
 
@@ -262,6 +275,7 @@ def main():
     parser.add_argument("--api", choices=["vulkan", "d3d12"], default="vulkan")
     parser.add_argument("--revision", default="HEAD")
     parser.add_argument("--samples", type=int, default=20, help="independent worktrees per scale")
+    parser.add_argument("--prior", type=Path, help="also enforce absolute and relative p95 limits from a previous report")
     args = parser.parse_args()
     if sys.platform != "win32" or not 1 <= args.samples <= 10000:
         parser.error("requires Windows and 1–10000 samples")
@@ -272,6 +286,12 @@ def main():
     report = {"passed": False, "api": args.api, "samples_per_scale": args.samples,
               "platform": platform.platform(), "cpu": platform.processor(),
               "git": git(ROOT, "--version"), "app_sha256": digest(args.app), "cooker_sha256": digest(args.cooker)}
+    if args.prior:
+        prior = json.loads(args.prior.read_bytes())
+        if (prior["api"], prior["samples_per_scale"], prior["platform"]) != (args.api, args.samples, report["platform"]):
+            parser.error("prior report must use the same platform, API and sample count")
+        report["prior_ceilings"] = {key: min(limit["seconds"], prior["baseline"]["p95"][key] * limit["ratio"])
+                                    for key, limit in prior["limits"].items()}
     args.report.parent.mkdir(exist_ok=True, parents=True)
     args.report.touch(exist_ok=False)
 
