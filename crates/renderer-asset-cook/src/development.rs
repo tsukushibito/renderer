@@ -245,6 +245,7 @@ pub(super) fn serve(source: &Path) -> Result<(), Error> {
 pub(super) fn release(source: &Path, apply: bool) -> Result<(), Error> {
     let project = Project::open(source)?;
     let guard = project.guard()?;
+    let selected = guard.selected(&project.git_dir)?;
     let bytes = if apply {
         guard.release(&project.git_dir)?
     } else {
@@ -253,7 +254,8 @@ pub(super) fn release(source: &Path, apply: bool) -> Result<(), Error> {
     println!(
         "{}",
         serde_json::json!({
-            "released": apply, "reclaimable_bytes": bytes,
+            "released": apply && selected.is_some(), "reclaimable_bytes": bytes,
+            "source": source, "profile": PROFILE, "selected_generation": selected,
             "restore": "Reopen with the project's pinned cooker. Evicted data requires the original Git or LFS objects and your local edits."
         })
     );
