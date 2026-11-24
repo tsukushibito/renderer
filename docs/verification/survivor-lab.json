@@ -1,0 +1,628 @@
+{
+  "schema": 1,
+  "measured_on": "2026-11-25T03:06:07+09:00",
+  "tested_revision": "cc39e69fcdc6102b7fba54ccfd294509d1ee8849",
+  "executable_sha256": "2a67bc71ac1b9afe20b52989eb8aeadf20aaea3bc8b4b824e780f28dbdd31908",
+  "hardware": {
+    "cpu": "Intel Core i5-14600KF",
+    "gpu": "NVIDIA GeForce RTX 3060, 610.88, 12288 MiB",
+    "os": "Windows-10-10.0.26200-SP0"
+  },
+  "configuration": {
+    "profile": "release",
+    "development_validation": false,
+    "backend": "vulkan",
+    "extent": [
+      1920,
+      1080
+    ],
+    "vsync": false,
+    "seed": 506,
+    "warmup_presented_frames": 120,
+    "measured_presented_frames": 600,
+    "repetitions_per_mode": 3,
+    "frame_budget_ms": 16.666666666666668,
+    "quality": "Standard Forward PBR at native resolution, tracking orthographic camera, 4 shared body animation phases, textured lab, 4 point lights + rectangle + sun.",
+    "clock": "One fixed simulation tick for each presented benchmark frame."
+  },
+  "observations": {
+    "interval_ms": "Wall time between successful presentation calls, excluding warmup.",
+    "update_ms": "Host wall time advancing the simulation.",
+    "draw_ms": "Wall time in visual extraction and draw calls, including GPU/presenter polling attempts.",
+    "graph_gpu_ms": "Graph queue command timestamp interval.",
+    "present_gpu_ms": "Fullscreen presentation command interval; excludes scanout and display latency.",
+    "native_cpu": "Graph CPU preparation, recording, submission and retirement phases in timestamp runs.",
+    "memory": "Largest OS process peak working set sampled every 250 ms from launch through shutdown (bytes); includes initialization and warmup.",
+    "quantiles": "Linear interpolation over the sorted 600 values for each run.",
+    "visible": "Animated enemy bounds passing the conservative camera cull.",
+    "drawn": "Enemy body RenderObjects submitted after that cull."
+  },
+  "scenarios": {
+    "early": {
+      "verified_trace_sha256": "00ef42f35432a713c58374f19d7e0bcca22d982a900de38113142ef3132df00b",
+      "counts_min_median_max": {
+        "active": [
+          8,
+          10.0,
+          12
+        ],
+        "visible": [
+          8,
+          9.0,
+          11
+        ],
+        "drawn": [
+          8,
+          9.0,
+          11
+        ],
+        "shots": [
+          0,
+          1.0,
+          2
+        ],
+        "drops": [
+          2,
+          3.0,
+          8
+        ]
+      },
+      "final_game_state": {
+        "tick": 720,
+        "phase": "playing",
+        "player": [
+          -1.1999997,
+          -10.199983
+        ],
+        "hp": 100,
+        "xp": 1,
+        "level": 1,
+        "kills": 9,
+        "enemies": 12,
+        "shots": 0,
+        "drops": 8,
+        "upgrades": [
+          0,
+          0,
+          0
+        ],
+        "contacts": 0,
+        "marker_entries": 0
+      }
+    },
+    "endgame": {
+      "verified_trace_sha256": "a738e61cc52281ed9a7e4bcd74a460f7f737e8cc6d4247a02dd45d29c37c2cf7",
+      "counts_min_median_max": {
+        "active": [
+          500,
+          500.0,
+          500
+        ],
+        "visible": [
+          378,
+          471.0,
+          492
+        ],
+        "drawn": [
+          378,
+          471.0,
+          492
+        ],
+        "shots": [
+          0,
+          3.0,
+          6
+        ],
+        "drops": [
+          180,
+          245.0,
+          347
+        ]
+      },
+      "final_game_state": {
+        "tick": 720,
+        "phase": "playing",
+        "player": [
+          -0.67499965,
+          -10.199983
+        ],
+        "hp": 32,
+        "xp": 13,
+        "level": 13,
+        "kills": 358,
+        "enemies": 500,
+        "shots": 2,
+        "drops": 340,
+        "upgrades": [
+          2,
+          2,
+          8
+        ],
+        "contacts": 50,
+        "marker_entries": 0
+      }
+    }
+  },
+  "runs": [
+    {
+      "scenario": "early",
+      "mode": "ordinary",
+      "repeat": 1,
+      "csv": "early-ordinary-1.csv",
+      "csv_sha256": "0947aa6062797ededc403fc33d932596c72f73d6728447ee3903ee65a25b9bda",
+      "peak_process_working_set_bytes": 1964310528,
+      "timing_ms_median_p95_p99": {
+        "interval_ms": [
+          2.5965,
+          2.9778,
+          3.225
+        ],
+        "update_ms": [
+          0.0015,
+          0.0096,
+          0.0136
+        ],
+        "draw_ms": [
+          2.4879,
+          2.8378,
+          3.0341
+        ]
+      }
+    },
+    {
+      "scenario": "endgame",
+      "mode": "ordinary",
+      "repeat": 1,
+      "csv": "endgame-ordinary-1.csv",
+      "csv_sha256": "0bc3adbb7bfc3ca36779bef7dbb1e83a7d15a1717b8858ca7600b9467c5add7e",
+      "peak_process_working_set_bytes": 1926438912,
+      "timing_ms_median_p95_p99": {
+        "interval_ms": [
+          8.7602,
+          9.4905,
+          9.9237
+        ],
+        "update_ms": [
+          0.0754,
+          0.105,
+          0.1867
+        ],
+        "draw_ms": [
+          8.277,
+          8.949,
+          9.3911
+        ]
+      }
+    },
+    {
+      "scenario": "early",
+      "mode": "timestamps",
+      "repeat": 1,
+      "csv": "early-timestamps-1.csv",
+      "csv_sha256": "1e7790747368c63731bb38f8322bf793a3cc79b5d27a66525c71fc968b50192a",
+      "peak_process_working_set_bytes": 1926119424,
+      "timing_ms_median_p95_p99": {
+        "interval_ms": [
+          2.6287,
+          2.959,
+          3.1627
+        ],
+        "update_ms": [
+          0.0014,
+          0.0096,
+          0.0142
+        ],
+        "draw_ms": [
+          2.5158,
+          2.8217,
+          3.0493
+        ],
+        "graph_gpu_ms": [
+          2.26,
+          2.5279,
+          2.5985
+        ],
+        "present_gpu_ms": [
+          0.0284,
+          0.029,
+          0.0293
+        ],
+        "graph_prepare_ms": [
+          0.028,
+          0.0493,
+          0.1121
+        ],
+        "graph_record_ms": [
+          0.031,
+          0.0705,
+          0.1036
+        ],
+        "graph_submit_ms": [
+          0.0143,
+          0.0407,
+          0.0648
+        ],
+        "graph_retire_ms": [
+          0.006,
+          0.0144,
+          0.0416
+        ]
+      }
+    },
+    {
+      "scenario": "endgame",
+      "mode": "timestamps",
+      "repeat": 1,
+      "csv": "endgame-timestamps-1.csv",
+      "csv_sha256": "b38476dfd6ba1d3b851dcef89889d9bfc072ebf8f4d929b81600aa1bd532d4f3",
+      "peak_process_working_set_bytes": 1925652480,
+      "timing_ms_median_p95_p99": {
+        "interval_ms": [
+          8.828,
+          9.5883,
+          9.9548
+        ],
+        "update_ms": [
+          0.0754,
+          0.1256,
+          0.1814
+        ],
+        "draw_ms": [
+          8.3536,
+          9.0477,
+          9.4299
+        ],
+        "graph_gpu_ms": [
+          7.9428,
+          8.5882,
+          8.8922
+        ],
+        "present_gpu_ms": [
+          0.0301,
+          0.031,
+          0.0317
+        ],
+        "graph_prepare_ms": [
+          0.0462,
+          0.0781,
+          0.1244
+        ],
+        "graph_record_ms": [
+          0.1196,
+          0.1887,
+          0.2894
+        ],
+        "graph_submit_ms": [
+          0.0226,
+          0.0403,
+          0.0586
+        ],
+        "graph_retire_ms": [
+          0.0095,
+          0.034,
+          0.0554
+        ]
+      }
+    },
+    {
+      "scenario": "early",
+      "mode": "ordinary",
+      "repeat": 2,
+      "csv": "early-ordinary-2.csv",
+      "csv_sha256": "ecc2c1ed2ba35aa554f94c6bdaa545f58bec394b0be2d444a6f2f00863c80173",
+      "peak_process_working_set_bytes": 1926299648,
+      "timing_ms_median_p95_p99": {
+        "interval_ms": [
+          2.6057,
+          2.9155,
+          3.056
+        ],
+        "update_ms": [
+          0.0016,
+          0.0096,
+          0.0124
+        ],
+        "draw_ms": [
+          2.494,
+          2.7954,
+          2.9394
+        ]
+      }
+    },
+    {
+      "scenario": "endgame",
+      "mode": "ordinary",
+      "repeat": 2,
+      "csv": "endgame-ordinary-2.csv",
+      "csv_sha256": "b36632fabbc0a459dbc17805278c487922b5c8e5c5579ba02249a8fa150c3da3",
+      "peak_process_working_set_bytes": 1926365184,
+      "timing_ms_median_p95_p99": {
+        "interval_ms": [
+          8.8093,
+          9.7586,
+          10.3296
+        ],
+        "update_ms": [
+          0.0755,
+          0.1223,
+          0.1478
+        ],
+        "draw_ms": [
+          8.3329,
+          9.201,
+          9.6341
+        ]
+      }
+    },
+    {
+      "scenario": "early",
+      "mode": "timestamps",
+      "repeat": 2,
+      "csv": "early-timestamps-2.csv",
+      "csv_sha256": "826d1f60c156b378d113c9b6c7e6b50220a62e4c154f62719cf5304999859498",
+      "peak_process_working_set_bytes": 1926549504,
+      "timing_ms_median_p95_p99": {
+        "interval_ms": [
+          2.6356,
+          2.9731,
+          3.1497
+        ],
+        "update_ms": [
+          0.0016,
+          0.0097,
+          0.012
+        ],
+        "draw_ms": [
+          2.521,
+          2.8491,
+          3.0193
+        ],
+        "graph_gpu_ms": [
+          2.2704,
+          2.5221,
+          2.6212
+        ],
+        "present_gpu_ms": [
+          0.0285,
+          0.029,
+          0.0292
+        ],
+        "graph_prepare_ms": [
+          0.029,
+          0.0507,
+          0.1103
+        ],
+        "graph_record_ms": [
+          0.033,
+          0.0856,
+          0.1217
+        ],
+        "graph_submit_ms": [
+          0.0151,
+          0.0527,
+          0.0724
+        ],
+        "graph_retire_ms": [
+          0.0066,
+          0.019,
+          0.0469
+        ]
+      }
+    },
+    {
+      "scenario": "endgame",
+      "mode": "timestamps",
+      "repeat": 2,
+      "csv": "endgame-timestamps-2.csv",
+      "csv_sha256": "334558de02a0569d8a177ecd54d96c06142e9dfa409d2be12944f5ca791620da",
+      "peak_process_working_set_bytes": 1926287360,
+      "timing_ms_median_p95_p99": {
+        "interval_ms": [
+          8.8052,
+          9.6179,
+          9.8875
+        ],
+        "update_ms": [
+          0.0733,
+          0.0967,
+          0.1256
+        ],
+        "draw_ms": [
+          8.3171,
+          9.106,
+          9.3029
+        ],
+        "graph_gpu_ms": [
+          7.9563,
+          8.6497,
+          8.8959
+        ],
+        "present_gpu_ms": [
+          0.03,
+          0.0309,
+          0.0314
+        ],
+        "graph_prepare_ms": [
+          0.0447,
+          0.0635,
+          0.0847
+        ],
+        "graph_record_ms": [
+          0.1165,
+          0.1636,
+          0.2039
+        ],
+        "graph_submit_ms": [
+          0.0217,
+          0.034,
+          0.0393
+        ],
+        "graph_retire_ms": [
+          0.0097,
+          0.0413,
+          0.0568
+        ]
+      }
+    },
+    {
+      "scenario": "early",
+      "mode": "ordinary",
+      "repeat": 3,
+      "csv": "early-ordinary-3.csv",
+      "csv_sha256": "d72cb3cfbabcf44b1be6411805d4e0c2b40af9d3351351be384b2e827793fe65",
+      "peak_process_working_set_bytes": 1926086656,
+      "timing_ms_median_p95_p99": {
+        "interval_ms": [
+          2.6449,
+          2.9233,
+          3.2043
+        ],
+        "update_ms": [
+          0.0014,
+          0.0097,
+          0.0246
+        ],
+        "draw_ms": [
+          2.5291,
+          2.8079,
+          3.0765
+        ]
+      }
+    },
+    {
+      "scenario": "endgame",
+      "mode": "ordinary",
+      "repeat": 3,
+      "csv": "endgame-ordinary-3.csv",
+      "csv_sha256": "e190d2988475f7ed1773d84e568d84dc11658f327a8510caa8d067a24184a644",
+      "peak_process_working_set_bytes": 1926156288,
+      "timing_ms_median_p95_p99": {
+        "interval_ms": [
+          8.8537,
+          9.6365,
+          9.9193
+        ],
+        "update_ms": [
+          0.0749,
+          0.1085,
+          0.1391
+        ],
+        "draw_ms": [
+          8.3376,
+          9.0886,
+          9.3871
+        ]
+      }
+    },
+    {
+      "scenario": "early",
+      "mode": "timestamps",
+      "repeat": 3,
+      "csv": "early-timestamps-3.csv",
+      "csv_sha256": "f8122bbdedc6576fb30411b58a29a2ca0553c21a189a1d280e53c4c841220150",
+      "peak_process_working_set_bytes": 1926320128,
+      "timing_ms_median_p95_p99": {
+        "interval_ms": [
+          2.6151,
+          2.9651,
+          3.22
+        ],
+        "update_ms": [
+          0.0015,
+          0.0095,
+          0.0135
+        ],
+        "draw_ms": [
+          2.5061,
+          2.8405,
+          3.0988
+        ],
+        "graph_gpu_ms": [
+          2.2564,
+          2.5236,
+          2.6383
+        ],
+        "present_gpu_ms": [
+          0.0285,
+          0.029,
+          0.0294
+        ],
+        "graph_prepare_ms": [
+          0.0289,
+          0.0565,
+          0.1063
+        ],
+        "graph_record_ms": [
+          0.0322,
+          0.0734,
+          0.1042
+        ],
+        "graph_submit_ms": [
+          0.0154,
+          0.0501,
+          0.0685
+        ],
+        "graph_retire_ms": [
+          0.0065,
+          0.0193,
+          0.0493
+        ]
+      }
+    },
+    {
+      "scenario": "endgame",
+      "mode": "timestamps",
+      "repeat": 3,
+      "csv": "endgame-timestamps-3.csv",
+      "csv_sha256": "73df3f03d68e6b2dcc97124c3286db71b172c80cc8df08802df6886a15a1a6bb",
+      "peak_process_working_set_bytes": 1926250496,
+      "timing_ms_median_p95_p99": {
+        "interval_ms": [
+          8.7946,
+          9.5649,
+          9.9581
+        ],
+        "update_ms": [
+          0.0726,
+          0.0988,
+          0.1354
+        ],
+        "draw_ms": [
+          8.3202,
+          9.0228,
+          9.4355
+        ],
+        "graph_gpu_ms": [
+          7.9571,
+          8.63,
+          8.8618
+        ],
+        "present_gpu_ms": [
+          0.0301,
+          0.031,
+          0.0312
+        ],
+        "graph_prepare_ms": [
+          0.0429,
+          0.065,
+          0.0999
+        ],
+        "graph_record_ms": [
+          0.1139,
+          0.162,
+          0.2241
+        ],
+        "graph_submit_ms": [
+          0.021,
+          0.033,
+          0.0469
+        ],
+        "graph_retire_ms": [
+          0.0081,
+          0.0181,
+          0.0385
+        ]
+      }
+    }
+  ]
+}
