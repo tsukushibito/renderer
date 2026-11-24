@@ -116,7 +116,18 @@ fn arguments() -> Command {
                 .help("Write a PPM after measurement"),
         )
         .arg(flag("gpu-profile").requires("metrics"))
-        .arg(flag("alternate-model").conflicts_with("headless"))
+        .arg(flag("alternate-model").conflicts_with_all(["headless", "character"]))
+        .arg(
+            Arg::new("character")
+                .long("character")
+                .help("Character alias from the appearance catalog")
+                .conflicts_with("headless"),
+        )
+        .arg(
+            path("character-catalog")
+                .help("Load a cooked character catalog")
+                .conflicts_with("headless"),
+        )
 }
 
 fn packaged_arena() -> Result<Arena, Box<dyn Error>> {
@@ -249,11 +260,27 @@ fn play(
             metrics: args.get_one("metrics").cloned(),
             capture: args.get_one("capture").cloned(),
             gpu_profile: args.get_flag("gpu-profile"),
-            alternate_model: args.get_flag("alternate-model")
-                || (profile.prefs.alternate_suit_unlocked
-                    && !["record", "replay", "frames"]
-                        .iter()
-                        .any(|key| args.contains_id(key))),
+            character: args
+                .get_one::<String>("character")
+                .cloned()
+                .unwrap_or_else(|| {
+                    if args.get_flag("alternate-model")
+                        || (profile.prefs.alternate_suit_unlocked
+                            && !["record", "replay", "frames"]
+                                .iter()
+                                .any(|key| args.contains_id(key)))
+                    {
+                        "alternate"
+                    } else {
+                        "primary"
+                    }
+                    .into()
+                }),
+            catalog: args
+                .get_one::<PathBuf>("character-catalog")
+                .cloned()
+                .map(Ok)
+                .unwrap_or_else(character::catalog_path)?,
         },
         profile,
     )

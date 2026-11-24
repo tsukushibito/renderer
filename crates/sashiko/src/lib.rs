@@ -5,6 +5,7 @@ pub use app::App;
 pub mod window;
 pub use renderer_asset as asset;
 
+pub mod animation;
 pub mod audio;
 pub mod effects;
 pub mod save;

@@ -6,21 +6,18 @@ mod instruments;
 mod lab;
 mod surfaces;
 
-use crate::character::Character;
-pub(super) use crate::character::CharacterVariant;
+use crate::character::{Cast, WALK_PHASES};
 use renderer::{
     Renderer, WindowRenderer,
     canvas::Layer,
     core::runtime::Runtime,
     material::{AlphaMode, MaterialHandle, Materials, PbrParams},
-    mesh::{MeshCapacity, MeshHandle, Meshes, SkinPoseId},
+    mesh::{MeshCapacity, MeshHandle, Meshes},
     pbr::{Bounds, LocalLight, PointLight, Sun},
     pipeline::{CameraView, PipelineResult, RenderObject, SceneAssets, SceneInput},
 };
 use surfaces::Surfaces;
 use survivor::{Game, MAX_DROPS, MAX_ENEMIES, MAX_SHOTS};
-
-const WALK_PHASES: usize = 4;
 
 struct Palette {
     floor: MaterialHandle,
@@ -85,10 +82,7 @@ pub struct Visual {
     prepared: Vec<RenderObject>,
     objects: DrawList,
     hud: Vec<Layer>,
-    character: Character,
-    base_rgba: &'static [u8],
-    body: MeshHandle,
-    poses: [SkinPoseId; WALK_PHASES],
+    cast: Cast,
     block: MeshHandle,
     ring: MeshHandle,
     disk: MeshHandle,
@@ -103,7 +97,7 @@ pub struct Visual {
 }
 
 impl Visual {
-    pub fn new(game: &Game, variant: CharacterVariant) -> PipelineResult<Self> {
+    pub fn new(game: &Game, catalog: &std::path::Path, character: &str) -> PipelineResult<Self> {
         let mut meshes = Meshes::new(MeshCapacity {
             meshes: 20,
             retired_mesh_versions: 4,
@@ -116,21 +110,24 @@ impl Visual {
         let block = meshes.create(cube.data()?)?;
         let ring = meshes.create(geometry::disk(0.91)?)?;
         let disk = meshes.create(geometry::disk(0.0001)?)?;
-        let character = Character::load(variant)?;
-        let body = meshes.create(character.mesh_data()?)?;
-        let poses = [
-            meshes.create_pose(body)?,
-            meshes.create_pose(body)?,
-            meshes.create_pose(body)?,
-            meshes.create_pose(body)?,
-        ];
+        let cast = Cast::load(
+            catalog,
+            character,
+            [(None, "walk")],
+            &mut meshes,
+            &mut materials,
+            palette.subject,
+        )?;
+        let body = cast.actors[0].mesh;
         let maximum = hall.len() + 6 + 3 * MAX_ENEMIES + MAX_DROPS + MAX_SHOTS;
         let mut prepared = Vec::with_capacity(maximum);
         prepared.extend_from_slice(&hall);
-        for pose in poses {
-            let mut obj = RenderObject::new(body, palette.subject);
-            obj.pose = Some(pose);
-            prepared.push(obj);
+        for actor in &cast.actors {
+            for pose in actor.poses {
+                let mut obj = RenderObject::new(actor.mesh, actor.material);
+                obj.pose = Some(pose);
+                prepared.push(obj);
+            }
         }
         for (mesh, material) in [
             (body, palette.player),
@@ -145,7 +142,10 @@ impl Visual {
         }
         // Reserving draws at startup covers spawn/kill/pickup changes. The repeated
         // entries bound transform and draw storage; uploads deduplicate shared meshes.
-        prepared.resize(maximum, RenderObject::new(block, palette.drop));
+        prepared.resize(
+            maximum.max(prepared.len()),
+            RenderObject::new(block, palette.drop),
+        );
         for obj in &mut prepared[hall.len()..] {
             obj.casts_shadow = false;
         }
@@ -183,10 +183,7 @@ impl Visual {
             prepared,
             objects: DrawList::new(hall, 6 + 3 * MAX_ENEMIES + MAX_DROPS + MAX_SHOTS)?,
             hud: Vec::with_capacity(256),
-            character,
-            base_rgba: variant.base_rgba(),
-            body,
-            poses,
+            cast,
             block,
             ring,
             disk,
@@ -211,23 +208,25 @@ impl Visual {
             .update_pbr(self.palette.floor, maps.floor.clone())?;
         self.materials
             .update_pbr(self.palette.steel, maps.steel.clone())?;
-        let mut player = maps.character.clone();
+        let mut player = maps.characters[0].clone();
         player.factors.base_color = [0.84, 0.96, 1., 1.];
         player.factors.emissive_nits = [0.025, 0.05, 0.06];
-        let mut subject = maps.character.clone();
-        subject.factors.base_color = [0.84, 0.43, 0.32, 1.];
         self.materials.update_pbr(self.palette.player, player)?;
-        self.materials.update_pbr(self.palette.subject, subject)?;
+        for actor in &self.cast.actors {
+            let mut subject = maps.characters[actor.texture].clone();
+            subject.factors.base_color = [0.84, 0.43, 0.32, 1.];
+            self.materials.update_pbr(actor.material, subject)?;
+        }
         self.texture_owners = Some(maps);
         Ok(())
     }
     pub fn prepare_window(&mut self, r: &mut WindowRenderer) -> PipelineResult<()> {
-        self.install(Surfaces::for_window(r, self.base_rgba)?)?;
+        self.install(Surfaces::for_window(r, &self.cast.models)?)?;
         r.prepare_scene(self.assets())?;
         Ok(())
     }
     pub fn prepare_headless(&mut self, r: &mut Renderer) -> PipelineResult<()> {
-        self.install(Surfaces::for_headless(r, self.base_rgba)?)?;
+        self.install(Surfaces::for_headless(r, &self.cast.models)?)?;
         r.prepare_scene(self.assets())?;
         Ok(())
     }
@@ -276,12 +275,7 @@ impl Visual {
         // Sparse animation phases share the same posed vertex stream across the crowd.
         // Fixed tick controls animation time even when a presentation gets repeated.
         if self.last_step != Some(game.tick) {
-            for (phase, pose) in self.poses.iter().enumerate() {
-                self.meshes.set_joint_transforms(
-                    *pose,
-                    self.character.palette(game.tick + phase as u64 * 13),
-                )?;
-            }
+            self.cast.animate(game.tick, &mut self.meshes)?;
             let dx = game.player[0] - self.previous_player[0];
             let dz = game.player[1] - self.previous_player[1];
             let dist = dx.hypot(dz);
@@ -308,9 +302,9 @@ impl Visual {
             [0.63, 1., 0.63],
             aligned,
         )?;
-        let mut player = RenderObject::new(self.body, self.palette.player)
+        let mut player = RenderObject::new(self.cast.actors[0].mesh, self.palette.player)
             .with_transform(transform([px, 0., pz], [1.; 3], self.player_facing)?);
-        player.pose = Some(self.poses[0]);
+        player.pose = Some(self.cast.actors[0].poses[0]);
         player.casts_shadow = false;
         self.objects.push(player)?;
         self.visible = 0;
@@ -319,9 +313,10 @@ impl Visual {
             if on_screen(view, enemy.pos, 1.9, 0.65) {
                 self.visible += 1;
                 let [x, z] = enemy.pos;
-                let mut object = RenderObject::new(self.body, self.palette.subject)
+                let actor = &self.cast.actors[self.cast.subjects[0]];
+                let mut object = RenderObject::new(actor.mesh, actor.material)
                     .with_transform(transform([x, 0., z], [1.; 3], enemy.facing)?);
-                object.pose = Some(self.poses[(enemy.id % WALK_PHASES as u64) as usize]);
+                object.pose = Some(actor.poses[(enemy.id % WALK_PHASES as u64) as usize]);
                 object.casts_shadow = false;
                 self.objects.push(object)?;
                 self.drawn += 1;
