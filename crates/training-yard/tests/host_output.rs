@@ -55,6 +55,7 @@ fn capture(
         config,
         Default::default(),
         WorkingSet {
+            samplers: &[SdrOutput::capture(false).sampler()],
             resources: &[ResourceClass::Image {
                 desc: EXTENT,
                 count: 2,

@@ -17,6 +17,7 @@ fn nested_canvas(config: RuntimeConfig) -> Result<(), Box<dyn std::error::Error>
         config,
         Default::default(),
         WorkingSet {
+            samplers: &[renderer::canvas::IMAGE_SAMPLER],
             resources: &[icon_desc, preview_desc, screen_desc]
                 .map(|desc| ResourceClass::Image { desc, count: 1 }),
             raster: &[RasterPipelineRequest {

@@ -126,11 +126,18 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
     let mut active_lane = false;
     let mut lane_step = None;
     let mut scene_extent = None;
-    let mut renderer = WindowRenderer::new(Arc::clone(&window), config, camera, yard.assets())?;
+    let mut renderer = WindowRenderer::new_with(
+        Arc::clone(&window),
+        config,
+        camera,
+        yard.assets(),
+        std::num::NonZeroUsize::new(2).unwrap(),
+        Yard::reserve_equipment,
+    )?;
     let mut objects = Vec::with_capacity(4);
     let mut step = 0;
     let mut advance = true;
-    let mut last_present = Instant::now();
+    let mut last_progress = Instant::now();
     while !input.closed && (interactive || step < REPLAY_FRAMES + effects::FRAMES) {
         events.pump_app_events(Some(Duration::from_millis(4)), &mut input);
         if interactive && input.show_monitor_replay {
@@ -166,10 +173,13 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
                 replay_action(step)
             };
             if let Some(action) = action {
-                yard.apply(action, |assets| Ok(renderer.prepare_scene(assets)?))?;
+                yard.apply(action, &mut renderer, |r, assets| {
+                    Ok(r.prepare_scene(assets)?)
+                })?;
             }
             advance = false;
         }
+        yard.advance_equipment(&mut renderer)?;
         let next_extent = lane_step
             .filter(|s| effects::reduced(*s))
             .map(|_| camera.extent.map(|v| (v / 2).max(1)));
@@ -195,9 +205,11 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
             }
         })? {
             PresentOutcome::Presented { .. } => {
-                step += 1;
-                advance = true;
-                last_present = Instant::now();
+                if interactive || !yard.pending_equipment() {
+                    step += 1;
+                    advance = true;
+                    last_progress = Instant::now();
+                }
             }
             PresentOutcome::RecreateRequired => {
                 let size = window.inner_size();
@@ -216,7 +228,7 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
                 "window replay step {step}: {events:?}"
             );
         }
-        if !interactive && last_present.elapsed() > Duration::from_secs(30) {
+        if !interactive && last_progress.elapsed() > Duration::from_secs(30) {
             return Err(format!("presentation timed out at replay step {step}").into());
         }
     }
@@ -270,6 +282,7 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
 
 fn reserve_screen(prep: &mut Preparation, [w, h]: [u32; 2]) -> PipelineResult<()> {
     let desc = ImageDesc::rgba8(w, h);
+    prep.reserve_sampler(canvas::IMAGE_SAMPLER);
     prep.reserve_raster_pass("canvas", SampleCount::X1, |pass| {
         pass.transient_attachment("window viewport", desc)?;
         pass.draws(&canvas::programs(ImageFormat::Rgba8Unorm)?[0], 1)

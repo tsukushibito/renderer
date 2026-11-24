@@ -30,7 +30,13 @@ pub(crate) fn draw(
 pub fn headless(config: RuntimeConfig, output: Option<&Path>) -> PipelineResult<()> {
     let mut yard = Yard::new()?;
     let camera = camera(1, [48, 24])?;
-    let mut renderer = Renderer::headless(config, camera, yard.assets())?;
+    let mut renderer = Renderer::headless_with(
+        config,
+        camera,
+        yard.assets(),
+        std::num::NonZeroUsize::new(2).unwrap(),
+        Yard::reserve_equipment,
+    )?;
     let mut scratch = Vec::with_capacity(4);
     let mut pixels = [0; 48 * 24 * 4];
     if let Some(dir) = output {
@@ -39,7 +45,7 @@ pub fn headless(config: RuntimeConfig, output: Option<&Path>) -> PipelineResult<
     let mut delayed = None;
     for step in 0..REPLAY_FRAMES {
         if let Some(action) = replay_action(step) {
-            yard.apply(action, |mut assets| {
+            yard.apply(action, &mut renderer, |renderer, mut assets| {
                 if let Err(error) = renderer.prepare_scene(assets.reborrow()) {
                     let recovery = error.capacity().map(|c| c.recovery());
                     if recovery != Some(renderer::CapacityRecovery::ReleaseOwners) {
@@ -48,13 +54,33 @@ pub fn headless(config: RuntimeConfig, output: Option<&Path>) -> PipelineResult<
                     let Some((previous, capture)) = delayed.take() else {
                         return Err(error.into());
                     };
-                    consume(&mut renderer, capture, &mut pixels, previous, output)?;
+                    consume(renderer, capture, &mut pixels, previous, output)?;
                     renderer.prepare_scene(assets)?;
                 }
                 Ok(())
             })?;
         }
-        assert_eq!(yard.load_error.is_some(), step >= 19);
+        let started = std::time::Instant::now();
+        loop {
+            yard.advance_equipment(&mut renderer)?;
+            if !yard.pending_equipment() {
+                break;
+            }
+            if started.elapsed() > Duration::from_secs(15) {
+                return Err("equipment replay timed out".into());
+            }
+            // Draw the current equipment while the replay awaits its next input checkpoint.
+            if let Some((previous, capture)) = delayed.take() {
+                consume(&mut renderer, capture, &mut pixels, previous, output)?;
+            }
+            let mut frame = renderer.begin_frame()?;
+            draw(&mut frame, &yard, &mut scratch)?;
+            let capture = frame.capture()?;
+            if !renderer.read_capture(&capture, &mut pixels, Duration::from_secs(15))? {
+                return Err("old equipment capture timed out".into());
+            }
+        }
+        assert_eq!(yard.load_error().is_some(), step >= 19);
         if let Some((step, capture)) = delayed.take() {
             consume(&mut renderer, capture, &mut pixels, step, output)?;
         }

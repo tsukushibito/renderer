@@ -110,15 +110,7 @@ pub(crate) fn squad<P: Viewport>(
         plan.reserve_readback("main depth", ImageDesc::depth32(48, 24))?;
     }
     let mut selection = Selection::prepare(&mut plan, cameras[0])?;
-    // The host's known asset pack can stream one four-vertex armor and its material.
-    for size in [
-        4 * renderer::passes::pbr::VERTEX_BYTES as u64,
-        6 * 4,
-        renderer::pbr::MaterialUniform::DESC.size,
-    ] {
-        plan.preparation_mut()
-            .reserve_buffer(renderer::core::graph::BufferDesc { size }, 1)?;
-    }
+    Yard::reserve_equipment(plan.preparation_mut())?;
     monitor.prepare(&mut plan)?;
     for [w, h] in cameras.map(|c| c.extent) {
         plan.reserve_readback("viewport", ImageDesc::rgba8(w, h))?;
@@ -169,7 +161,31 @@ pub(crate) fn squad<P: Viewport>(
         #[cfg(all(feature = "memory-profiling", not(feature = "development-validation")))]
         let before = renderer::core::measurement::Snapshot::now();
         if let Some(action) = replay_action(step) {
-            yard.apply(action, |assets| Ok(drawing.prepare_assets(assets)?))?;
+            yard.apply(action, &mut drawing, |r, assets| {
+                Ok(r.prepare_assets(assets)?)
+            })?;
+        }
+        let started = std::time::Instant::now();
+        loop {
+            yard.advance_equipment(&mut drawing)?;
+            if !yard.pending_equipment() {
+                break;
+            }
+            if started.elapsed() > Duration::from_secs(15) {
+                return Err("equipment replay timed out".into());
+            }
+            let graph = host_pool.begin()?;
+            let (mut frame, runtime) = drawing.begin_host_frame(graph)?;
+            let scene = frame.draw_scene(&cameras[0], yard.extract(&cameras[0], &mut objects))?;
+            let out = frame.write_output(cameras[0].id, scene.color, 1., None)?;
+            frame.graph().readback_image("viewport", out.raw_image())?;
+            let (graph, mut views) = frame.finish_recording()?;
+            let submission = runtime.submit(&graph.compile()?)?;
+            views.publish(&submission)?;
+            drop(views);
+            runtime
+                .wait_for_frame(submission.id(), Duration::from_secs(15))?
+                .ok_or("old equipment render timed out")?;
         }
         if step == 8 || step == 9 {
             if step == 8 {
