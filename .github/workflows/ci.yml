@@ -120,6 +120,8 @@ jobs:
   check:
     name: ${{ matrix.os }} / ${{ matrix.backend }}
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_INCREMENTAL: "0"
     strategy:
       fail-fast: false
       matrix:
@@ -157,11 +159,10 @@ jobs:
       - name: Install VMA C++ compiler (Linux)
         if: runner.os == 'Linux' && matrix.backend == 'vulkan'
         run: sudo apt-get install -y --no-install-recommends g++
-      - name: Check, lint, and test
+      - name: Lint all targets and run workspace tests
         shell: pwsh
         env:
           BACKEND: ${{ matrix.backend }}
-          CARGO_INCREMENTAL: "0"
         run: |
           foreach ($development in @($false, $true)) {
             $features = @()
@@ -169,8 +170,6 @@ jobs:
             if ($development) { $features += 'development-validation,graph-diagnostics' }
             $featureArgs = @('--no-default-features')
             if ($features.Count) { $featureArgs += @('--features', ($features -join ',')) }
-            cargo check --locked --workspace --all-targets @featureArgs
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cargo clippy --locked --workspace --all-targets @featureArgs -- -D warnings
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cargo test --locked --workspace --tests @featureArgs
@@ -189,7 +188,6 @@ jobs:
         shell: pwsh
         env:
           BACKEND: ${{ matrix.backend }}
-          CARGO_INCREMENTAL: "0"
         run: |
           foreach ($features in @($env:BACKEND, "$($env:BACKEND),development-validation,graph-diagnostics")) {
             cargo test --locked --workspace --release --no-default-features --features $features --tests
@@ -228,14 +226,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p renderer-core --example frame_loop --release --no-default-features --features vulkan
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Check both Bistro demos on representative platforms
+      - name: Check Bistro with its standalone dependency features
         if: (runner.os == 'Linux' && matrix.backend == 'vulkan') || matrix.backend == 'vulkan,d3d12,presentation'
         shell: pwsh
         env:
           BACKEND: ${{ matrix.backend }}
         run: |
-          cargo clippy --locked -p renderer-bistro --all-targets --no-default-features --features $env:BACKEND -- -D warnings
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo check --locked -p renderer-bistro --all-targets --no-default-features --features $env:BACKEND
       - name: Build and test the PBR Forward example without GPU access
         if: (runner.os == 'Linux' && matrix.backend == 'vulkan') || matrix.backend == 'vulkan,d3d12,presentation'
         shell: pwsh

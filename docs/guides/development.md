@@ -813,7 +813,6 @@ CPU経路の確認にはVulkan SDK、ローダー、GPU、ウィンドウシス�
 
 ```sh
 cargo fmt --all -- --check
-cargo check --locked --workspace --all-targets --no-default-features
 cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
 cargo test --locked --workspace --no-default-features
 ```
@@ -823,14 +822,14 @@ ashは実行時ロードするため、ビルドにVulkan SDKやリンクライ�
 以下の通常テストはVulkanローダーを読み込まず、Instanceも作成しません。
 
 ```sh
-cargo check --locked --workspace --all-targets --no-default-features --features vulkan
 cargo clippy --locked --workspace --all-targets --no-default-features --features vulkan -- -D warnings
 cargo test --locked --workspace --no-default-features --features vulkan
 ```
 
 [CI](../../.github/workflows/ci.yml)はWindows／LinuxとCPU／Vulkan featureを確認し、
 別jobで[cargo-deny](tooling.md#cargo-deny)の依存検査を実行します。
-Windowsではbackendを選ばない`presentation`単独と、`vulkan,presentation`／`d3d12,presentation`／二API表示の全target check・Clippy・CPU試験も実行します。
+Windowsではbackendを選ばない`presentation`単独と、`vulkan,presentation`／`d3d12,presentation`／二API表示でも、全targetをClippyで型検査し、CPU試験を実行します。
+LinuxのVulkanとWindowsの二API表示では、BistroとPBRをパッケージ単独でも確認します。Cargoが有効にする依存featureは、ワークスペース全体を対象にしたときと異なるためです。
 各backendは製品／開発検証＋dumpの両構成を確認し、Vulkanはrelease両構成と独立診断featureも確認します。
 これは表示の実GPU受入をCIで実行するという意味ではありません。
 依存更新ではlockfile差分と両feature構成を確認します。
@@ -987,10 +986,8 @@ bindingsとshaderの生成手順・固定入力は[ツールガイド](tooling.m
 Windowsの`d3d12`と`vulkan,d3d12`構成にも、実GPUを起動しない品質確認を実行します。
 
 ```powershell
-cargo check --locked --workspace --all-targets --no-default-features --features d3d12
 cargo clippy --locked --workspace --all-targets --no-default-features --features d3d12 -- -D warnings
 cargo test --locked --workspace --no-default-features --features d3d12
-cargo check --locked --workspace --all-targets --no-default-features --features vulkan,d3d12
 cargo clippy --locked --workspace --all-targets --no-default-features --features vulkan,d3d12 -- -D warnings
 cargo test --locked --workspace --no-default-features --features vulkan,d3d12
 ```
