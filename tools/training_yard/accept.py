@@ -6,6 +6,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import shutil
 import struct
 import subprocess
 import sys
@@ -71,11 +72,11 @@ def run(output):
         "reference_sha256": hashlib.sha256(REFERENCE.read_bytes()).hexdigest(), "commands": [], "differences": [],
     }
 
-    def execute(args, log):
+    def execute(args, log, *, cwd=ROOT, env=None):
         record = {"args": [str(arg) for arg in args], "log": str(log.relative_to(output))}
         report["commands"].append(record)
         with log.open("w", encoding="utf-8") as stream:
-            result = subprocess.run(args, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT)
+            result = subprocess.run(args, cwd=cwd, env=env, stdout=stream, stderr=subprocess.STDOUT)
         record["status"] = result.returncode
         if result.returncode:
             raise RuntimeError(f"{args[0]} failed, see {log}")
@@ -89,14 +90,22 @@ def run(output):
                 execute(["cargo", "build", "--locked", "--release", "-p", "training-yard",
                          "--features", features], build / "build.log")
                 report[profile + "_exe_sha256"] = hashlib.sha256(executable.read_bytes()).hexdigest()
+                package = build / "package"
+                package.mkdir()
+                app = shutil.copy2(executable, package)
+                distribution = package / "assets/equipment/dist"
+                shutil.copytree(ROOT / "crates/training-yard/assets/equipment/dist", distribution)
+                report[profile + "_asset_generation"] = (distribution / "current").read_text().strip()
+                environment = os.environ.copy()
+                environment.pop("TRAINING_YARD_ASSETS", None)
                 for api in ["vulkan", "d3d12"]:
                     case = build / api
                     case.mkdir()
                     for mode in ["window", "headless", "host", "host-measured"]:
-                        command = [executable, "--api", api, "--mode", mode.split("-")[0]]
+                        command = [app, "--api", api, "--mode", mode.split("-")[0]]
                         if mode in ("headless", "host"):
                             command += ["--output", case / mode]
-                        execute(command, case / (mode + ".log"))
+                        execute(command, case / (mode + ".log"), cwd=package, env=environment)
                     for name, size in artifacts():
                         expected = baseline.read(name)
                         if size is not None and len(expected) != size:
