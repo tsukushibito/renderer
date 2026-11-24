@@ -1409,6 +1409,7 @@ dependencies = [
  "renderer-asset",
  "serde",
  "serde_json",
+ "winit",
 ]
 
 [[package]]
@@ -1544,7 +1545,6 @@ dependencies = [
  "sashiko",
  "serde",
  "serde_json",
- "winit",
 ]
 
 [[package]]
@@ -1744,6 +1744,7 @@ dependencies = [
  "renderer",
  "renderer-asset",
  "renderer-core",
+ "sashiko",
  "serde",
  "serde_json",
  "windows-sys 0.61.2",

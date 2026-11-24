@@ -19,8 +19,10 @@ cargo run --locked --release -p survivor -- --scenario endgame --seed 506
 
 ```powershell
 cargo run --locked --release -p survivor -- --seed 506 --record run-input.json
-cargo run --locked --release -p survivor --no-default-features -- --headless --seed 506 --replay run-input.json
+cargo run --locked --release -p survivor --no-default-features -- --headless --replay run-input.json
 ```
+
+記録には入力列、開始時の配置、seed、シナリオ、ゲームルールの版、更新周波数を保存します。再生時は記録した設定を使い、明示した設定と矛盾した場合はエラーを返します。入力だけの JSON 配列は CLI の開始条件で再生できます。
 
 終盤直行では実験体 500 体を活動させます。初回の計測条件と受入の範囲は[ゲームの制作計画](../design/survivor-game.md)にまとめています。
 
