@@ -4,9 +4,13 @@ Sashiko（刺し子）は、AI エージェントと人がゲームを共同開�
 
 最初のゲームは、研究施設を舞台にした 3D 見下ろし型ローグライトサバイバーです。Windows では `cargo run --locked --release -p survivor` で起動します。描画とアセットの回帰にはサンプルアプリ [training-yard](crates/training-yard/) を使います。[ゲームの操作とリプレイ](docs/guides/examples.md#survivor)
 
-## 描画サブシステム
+## ゲームを作る
 
-ゲームの実行、編集データと描画の境界は[ゲーム制作 API の設計](docs/design/game-engine.md)にまとめています。
+[sashiko クレート](crates/sashiko/src/lib.rs)は固定更新、入力とリプレイ、シーンと原型、アニメーション、空間検索、HUD、音声、セーブを提供します。GPU なしで固定更新を使う最小例は `cargo run --locked -p sashiko --example fixed_game` で実行できます。
+
+研究施設ではシーンの JSON を編集すると、実験台を動かしたり、既存のモデルと動作を組み合わせて敵を追加したりできます。新しい動作はゲームの Rust 型として登録します。[敵を追加する例](docs/design/game-engine.md#研究施設で敵を追加して再生する)・[GUI と CLI の編集手順](docs/guides/examples.md#配置プロパティクリップを編集する)
+
+## 描画サブシステム
 
 Bistroの原本・検証済み素材と比較画像はGit LFSで共有します。
 取得・ライセンス・容量は[素材ガイド](assets/bistro/README.md)を参照してください。
