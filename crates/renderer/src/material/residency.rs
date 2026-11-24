@@ -12,8 +12,9 @@ impl MaterialCheckpoint {
     pub(crate) fn begin(
         materials: &Materials,
         selected: &BTreeSet<MaterialHandle>,
-        runtime: &Runtime,
-    ) -> Result<Self, ExecutionError> {
+        runtime: &mut Runtime,
+    ) -> Result<Self, pbr::DefaultResourceError> {
+        materials.prepare_samplers(runtime, selected.iter().copied())?;
         let mut original = Vec::new();
         for &handle in selected {
             let entry = &materials.entries[&handle];
@@ -122,6 +123,27 @@ impl MaterialCheckpoint {
 }
 
 impl Materials {
+    /// Prepare the immutable sampler combinations used by these material revisions.
+    /// Call at creation or update when using a host-owned runtime.
+    pub fn prepare_samplers(
+        &self,
+        runtime: &mut Runtime,
+        selected: impl IntoIterator<Item = MaterialHandle>,
+    ) -> Result<(), pbr::DefaultResourceError> {
+        let mut seen = [false; SamplerDescriptor::COUNT];
+        let mut samplers = [SamplerDescriptor::LinearRepeat; SamplerDescriptor::COUNT];
+        let mut count = 0;
+        for handle in selected {
+            self.get(handle)?.visit_samplers(|sampler| {
+                if !std::mem::replace(&mut seen[sampler.index()], true) {
+                    samplers[count] = sampler;
+                    count += 1;
+                }
+            });
+        }
+        Ok(runtime.prepare_samplers(&samplers[..count])?)
+    }
+
     /// Upload new or edited inline PBR factors together at an asset-change boundary.
     /// Reserve one 64-byte buffer per distinct new revision, including overlap
     /// with old versions. The preparation pool must accommodate these uploads.

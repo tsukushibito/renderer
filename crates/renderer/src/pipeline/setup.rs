@@ -289,6 +289,12 @@ impl RendererSetup {
                 .ok_or("light capacity overflow")?,
         };
         let mut preparation = Preparation::new(self.frames_in_flight);
+        for &material in &materials {
+            assets
+                .materials
+                .get(material)?
+                .visit_samplers(|sampler| preparation.reserve_sampler(sampler));
+        }
         let mut driver = ViewRenderer::new();
         let mut groups = Vec::new();
         for group in self.groups {

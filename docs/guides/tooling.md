@@ -465,8 +465,9 @@ Runtime作成後に`defaults.initialize`を一度呼び、アプリのフレー�
 `PbrVertex`をエンコードし、`MaterialUniform::upload`で`MaterialFactors`をアップロードする。
 `GraphMaterial::new`へ係数と、`MaterialTextures`の名前付きベースカラー・法線・ORM・発光ビューを渡す。
 省略したマップは`DefaultViews::material_textures`で補え、`environment`でIBLの寄与を無効にできる。
-標準材質は全マップで一つのサンプラーを共有する。既定は`LinearRepeat`で、`with_sampler`により`LinearClamp`などの既存設定を選べる。
-マスク材質が影を描くときも、同じサンプラーでベースカラーのアルファを読む。
+標準材質では、ベースカラー・法線・ORM・発光の各マップに独立したサンプラーを指定できる。各マップの既定は `LinearRepeat`。登録材質には `PbrParams::samplers`、Graph へ直接渡す材質には `GraphMaterial::with_samplers` を使う。全マップを同じ設定にする場合は `MaterialSamplers::uniform` でまとめて指定する。
+マスク材質の影もベースカラーと同じサンプラーと mip 範囲でアルファを読む。部分常駐する登録画像は `MaterialTexture::new(snapshot, mips)` で初期化済みの連続範囲を指定し、昇格時に材質を更新する。
+高水準のセットアップは選択した材質のサンプラーを準備する。ホストが Runtime を管理する場合は、登録材質なら `Materials::prepare_samplers`、Graph へ直接渡す設定なら `Preparation::reserve_sampler` をロード時や変更時に使う。
 同じ係数から得たアルファ分類に従い、Opaque／Maskは不透明・影リストへ、Blendは奥から手前に並べた半透明リストへ入れる。
 毎フレーム、アプリ側でカメラを更新し、最終的なビュー投影行列と視点・投影情報を`pbr::ViewInput`で渡す。
 `prepare_view`でその入力と太陽光・シーンの範囲・環境照明を組み合わせ、`pbr::PbrDrawInput::new`に

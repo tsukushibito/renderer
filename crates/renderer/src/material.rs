@@ -233,6 +233,25 @@ pub enum MaterialInstance {
     Custom(CustomMaterial),
 }
 impl MaterialInstance {
+    pub(crate) fn visit_samplers(&self, mut visit: impl FnMut(SamplerDescriptor)) {
+        match self {
+            Self::Pbr(material) => {
+                let maps = material.samplers;
+                for sampler in [maps.base_color, maps.normal, maps.orm, maps.emissive] {
+                    visit(sampler);
+                }
+            }
+            Self::Custom(material) => {
+                for parameter in material.definition().parameters() {
+                    if let Some(Value::Sampler(sampler)) = material.value(parameter.name()) {
+                        visit(*sampler);
+                    }
+                }
+            }
+            Self::Unlit(_) => {}
+        }
+    }
+
     pub fn alpha_mode(&self) -> AlphaMode {
         match self {
             Self::Pbr(p) => p.alpha,

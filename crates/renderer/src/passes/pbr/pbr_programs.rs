@@ -510,6 +510,29 @@ mod tests {
     }
 
     #[test]
+    fn surface_and_shadow_programs_declare_their_per_map_sampler_pairs() {
+        let expected = [pair(1, 0, 4), pair(1, 1, 5), pair(1, 2, 6), pair(1, 3, 7)];
+        for program in [
+            opaque_program(),
+            blend_program(),
+            instancing_program(),
+            deferred::gbuffer_program(),
+            forward_plus::raster_program(false, false),
+            forward_plus::raster_program(true, false),
+            forward_plus::raster_program(true, true),
+        ] {
+            let material_pairs: Vec<_> = program
+                .sampling_pairs()
+                .iter()
+                .copied()
+                .filter(|pair| pair.image_group == 1)
+                .collect();
+            assert_eq!(material_pairs, expected);
+        }
+        assert_eq!(shadow_program().sampling_pairs(), &expected[..1]);
+    }
+
+    #[test]
     fn real_shader_reflection_matches_the_host_vertex_and_binding_abi() {
         use std::collections::BTreeMap;
         let vertex: serde_json::Value = serde_json::from_str(include_str!(
