@@ -54,6 +54,7 @@ fn limits(options: &Options, budget: &Budget) -> RuntimeLimits {
 fn with_working_set<T>(
     resource_checks: bool,
     buffers: &[(u64, usize)],
+    samplers: &[renderer_core::program::SamplerDescriptor],
     images: &[(ImageDesc, usize)],
     prepared: &PreparedSet,
     prepare: impl FnOnce(WorkingSet<'_>) -> Result<T, ExecutionError>,
@@ -75,6 +76,7 @@ fn with_working_set<T>(
     let mut preparation = Preparation::new(NonZeroUsize::MIN);
     preparation.add_working_set(WorkingSet {
         resources: &resources,
+        samplers,
         ..WorkingSet::default()
     })?;
     let programs = prepared.working_set();
@@ -82,6 +84,7 @@ fn with_working_set<T>(
         resources: &[],
         raster: programs.raster,
         compute: programs.compute,
+        samplers: programs.samplers,
     })?;
     if resource_checks {
         preparation.add_working_set(WorkingSet {
@@ -108,6 +111,7 @@ pub(super) fn create(options: &Options, budget: &Budget) -> Result<Runtime, Erro
     let runtime = with_working_set(
         options.resource_checks,
         &budget.buffers,
+        &budget.samplers,
         &budget.images,
         prepared,
         |set| Runtime::new(config, limits(options, budget), set),
@@ -128,6 +132,7 @@ pub(super) fn open(
     let (runtime, presenter) = with_working_set(
         options.resource_checks,
         &budget.buffers,
+        &budget.samplers,
         &budget.images,
         prepared,
         |set| Runtime::for_window(config, limits(options, budget), set, window, presentation),
@@ -146,6 +151,7 @@ pub(super) fn resize(
     with_working_set(
         options.resource_checks,
         &budget.resized_buffers(prepared),
+        &budget.samplers,
         &Budget::frame_images(options, prepared),
         prepared,
         |set| runtime.prepare_working_set(set),

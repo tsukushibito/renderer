@@ -838,18 +838,21 @@ pub(crate) fn material(
 }
 
 impl Scene {
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub(crate) fn prepare_samplers(
-        &self,
-        runtime: &mut renderer_core::runtime::Runtime,
-    ) -> Result<()> {
-        let mut selected = std::collections::BTreeSet::new();
+    /// Fixed lighting, tone mapping and output samplers join the material descriptors
+    /// at the device preparation boundary, including across a window resize.
+    pub(crate) fn render_samplers(&self, uses_fxaa: bool) -> Vec<SamplerDescriptor> {
+        let mut selected = std::collections::BTreeSet::from([
+            SamplerDescriptor::NearestClamp,
+            SamplerDescriptor::LinearRepeatUClampV,
+        ]);
+        if uses_fxaa {
+            selected.insert(SamplerDescriptor::LinearClamp);
+        }
         for material in &self.materials {
             let s = material.samplers;
             selected.extend([s.base_color, s.normal, s.orm, s.emissive]);
         }
-        runtime.prepare_samplers(&selected.into_iter().collect::<Vec<_>>())?;
-        Ok(())
+        selected.into_iter().collect()
     }
 
     /// A sphere of known material used to inspect spatial lighting. Inserted
@@ -1410,6 +1413,13 @@ mod tests {
             SamplerDescriptor::from_gltf(Some(33648), Some(33071), Some(9728), Some(9986)).unwrap()
         );
         assert_eq!(material.samplers.emissive, SamplerDescriptor::LinearRepeat);
+        let mut required = scene.render_samplers(false);
+        assert!(required.contains(&material.samplers.base_color));
+        assert!(required.contains(&material.samplers.emissive));
+        assert!(!required.contains(&SamplerDescriptor::LinearClamp));
+        required.push(SamplerDescriptor::LinearClamp);
+        required.sort_unstable();
+        assert_eq!(scene.render_samplers(true), required);
         fixture.doc["samplers"][1]["wrapS"] = 1234.into();
         let error = Scene::load(&fixture.manifest(), false)
             .err()

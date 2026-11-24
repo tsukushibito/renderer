@@ -120,6 +120,7 @@ impl PreparedSet {
 
 pub(super) struct Budget {
     pub graph: GraphCapacity,
+    pub samplers: Vec<SamplerDescriptor>,
     pub prepared: Option<PreparedSet>,
     #[cfg(feature = "vulkan")]
     pub vulkan_shader_bindings: u32,
@@ -492,6 +493,7 @@ impl Budget {
         };
         Ok(Self {
             graph,
+            samplers: scene.render_samplers(!options.windowed || options.sdr_output().fxaa),
             prepared: Some(prepared),
             #[cfg(feature = "vulkan")]
             vulkan_shader_bindings,
@@ -736,7 +738,6 @@ impl Resident {
         budget: &Budget,
         camera: &crate::shared::camera::CameraInput,
     ) -> Result<Self, Error> {
-        scene.prepare_samplers(backend)?;
         let mut pool = budget.upload_pool()?;
         let mut geometry_pool = GraphPool::new(
             GraphCapacity {

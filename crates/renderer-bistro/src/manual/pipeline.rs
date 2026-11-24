@@ -30,6 +30,7 @@ mod indirect;
 
 pub(super) struct Budget {
     pub graph: GraphCapacity,
+    pub samplers: Vec<SamplerDescriptor>,
     pub buffers: Vec<(u64, usize)>,
     pub images: Vec<(ImageDesc, usize)>,
     pub buffer_count: usize,
@@ -449,6 +450,7 @@ impl Budget {
         };
         Ok(Self {
             graph,
+            samplers: scene.render_samplers(!options.windowed || options.sdr_output().fxaa),
             buffers,
             images,
             buffer_count: buffer_count + frame_buffers + tiled_lights,
@@ -634,7 +636,6 @@ impl Resident {
         budget: &Budget,
         camera: &crate::shared::camera::CameraInput,
     ) -> Result<Self, Error> {
-        scene.prepare_samplers(backend)?;
         let mut pool = budget.upload_pool()?;
         let mut geometry_pool = GraphPool::new(
             GraphCapacity {
