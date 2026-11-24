@@ -335,6 +335,41 @@ mod tests {
     }
 
     #[test]
+    fn remedy_can_capture_inside_a_partially_occupied_passage_cell() {
+        let mut triangles = Vec::new();
+        for axis in [0, 2] {
+            for (distance, inward) in [(0.2, 1.), (0.8, -1.)] {
+                let mut corners = [[0.; 3]; 4];
+                for (point, [u, v]) in
+                    corners
+                        .iter_mut()
+                        .zip([[0., 0.], [1., 0.], [1., 1.], [0., 1.]])
+                {
+                    point[axis] = distance;
+                    point[(axis + 1) % 3] = u;
+                    point[(axis + 2) % 3] = v;
+                }
+                if inward < 0. {
+                    corners.reverse();
+                }
+                triangles.extend(quad(corners, 0));
+            }
+        }
+        let scene = BakeScene::new(triangles, vec![Material::default()], vec![]).unwrap();
+        let settings = ReflectionPlacementSettings {
+            method: ReflectionPlacementMethod::Remedy,
+            spacing: 1.,
+            max_probes: 1,
+            bounds: Some(([0.; 3], [1.; 3])),
+            ..Default::default()
+        };
+        let probes = scene.place_reflection_probes(settings).unwrap();
+        assert_eq!(probes.len(), 1);
+        assert_eq!(probes[0].position, [0.5; 3]);
+        assert!(probes[0].position[0] - probes[0].min[0] >= probes[0].blend_distance);
+    }
+
+    #[test]
     fn remedy_covers_both_levels_of_a_free_standing_shelf_within_budget() {
         let mut triangles = floor(0.).to_vec();
         triangles.extend(floor(4.));
