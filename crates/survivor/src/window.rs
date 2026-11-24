@@ -91,7 +91,7 @@ fn capture(game: &Game, o: &Options, extent: [u32; 2], path: &Path) -> PipelineR
     }
     let mut output = BufWriter::new(File::create(path)?);
     writeln!(output, "P6\n{} {}\n255", extent[0], extent[1])?;
-    for rgba in pixels.chunks_exact(4) {
+    for rgba in pixels.as_chunks::<4>().0 {
         output.write_all(&rgba[..3])?;
     }
     output.flush()?;
@@ -271,10 +271,10 @@ pub fn run(mut game: Game, o: Options) -> PipelineResult<Game> {
     if limit.is_some_and(|limit| presented < limit) {
         return Err(format!("window closed early after {presented} frames").into());
     }
-    if !renderer.wait_idle(TIMEOUT)? {
-        return Err("presentation drain timed out".into());
-    }
     if let Some(mut measured) = measured {
+        if !renderer.wait_idle(TIMEOUT)? {
+            return Err("presentation drain timed out".into());
+        }
         measured.poll(&mut renderer);
         measured.save(o.metrics.as_deref().expect("metrics path"), o.warmup)?;
     }
