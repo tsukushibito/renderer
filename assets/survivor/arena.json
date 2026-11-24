@@ -4,7 +4,7 @@
     "hall": {"kind": "Room", "fields": {"half_extent": [18.0, 14.0]}},
     "table": {"kind": "Bench", "fields": {"half_extent": [2.3, 1.1]}},
     "spawn": {"kind": "PlayerSpawn", "fields": {}},
-    "goal": {"kind": "Marker", "fields": {}},
+    "goal": {"kind": "Marker", "fields": {"radius": 0.65}},
     "lunger": {"kind": "Subject", "fields": {"copies": 1, "hp": 3, "walk_speed": 1.25, "model": null, "clip": "walk", "lunge": {"range": 3.5, "speed": 8.0, "windup_ticks": 30, "dash_ticks": 16, "recovery_ticks": 120}}},
     "walker": {"kind": "Subject", "fields": {"copies": 3, "hp": 1, "walk_speed": 1.7, "model": null, "clip": "walk", "lunge": null}}
   },
