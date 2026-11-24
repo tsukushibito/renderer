@@ -77,6 +77,7 @@ pub fn render(
     let preparation = {
         let mut prep = preparation;
         if settings.blockers.iter().any(|b| b.cutout) {
+            prep.reserve_sampler(renderer_core::program::SamplerDescriptor::NearestClamp);
             prep.reserve_image(renderer_core::graph::ImageDesc::rgba8(3, 1), 1)?;
             prep.reserve_buffer(renderer::pbr::MaterialUniform::DESC, 1)?;
         }
