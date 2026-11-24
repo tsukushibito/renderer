@@ -8,29 +8,44 @@ permissions:
   contents: read
 
 jobs:
-  documentation:
+  changes:
     runs-on: ubuntu-24.04
+    outputs:
+      guides_only: ${{ steps.diff.outputs.guides_only }}
+      browser: ${{ steps.diff.outputs.browser }}
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: false
           fetch-depth: 2
-      - name: Detect changes affecting browser verification
-        id: docs
+      - name: Select checks from the changed paths
+        id: diff
         shell: bash
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           # A new branch or unavailable comparison base gets the full check.
           browser=true
+          guides_only=false
           if [[ -n "$BASE" && ! "$BASE" =~ ^0+$ ]]; then
             if git cat-file -e "$BASE^{commit}" || git fetch --no-tags --depth=1 origin "$BASE"; then
               if git diff --quiet "$BASE" HEAD -- docs tools/docs .gitattributes .github/workflows/ci.yml; then
                 browser=false
+              elif [[ $? == 1 ]] && git diff --quiet --no-renames "$BASE" HEAD -- . ':(exclude,glob)docs/guides/*.md'; then
+                guides_only=true
               fi
             fi
           fi
           echo "browser=$browser" >> "$GITHUB_OUTPUT"
+          echo "guides_only=$guides_only" >> "$GITHUB_OUTPUT"
+
+  documentation:
+    needs: changes
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -56,7 +71,7 @@ jobs:
           .tools/mdbook-0.5.4/mdbook build docs
           python -B tools/docs/check_html.py build/docs
       - name: Verify the Mermaid bundle and render diagrams in Chromium
-        if: steps.docs.outputs.browser == 'true'
+        if: needs.changes.outputs.browser == 'true'
         run: |
           # Match tools/docs/package-lock.json; the image includes Chromium, fonts and OS libraries.
           docker run --rm --ipc=host --user "$(id -u):$(id -g)" --env HOME=/tmp \
@@ -72,6 +87,8 @@ jobs:
           if-no-files-found: error
 
   asset-tools:
+    needs: changes
+    if: needs.changes.outputs.guides_only != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -104,6 +121,8 @@ jobs:
           python -B tools/shaders/verify_pipeline_manifest.py
 
   dependencies:
+    needs: changes
+    if: needs.changes.outputs.guides_only != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -123,6 +142,8 @@ jobs:
           arguments: --locked --config deny.toml
 
   format:
+    needs: changes
+    if: needs.changes.outputs.guides_only != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -134,6 +155,8 @@ jobs:
       - run: cargo fmt --manifest-path tools/d3d12-bindings/Cargo.toml -- --check
 
   check:
+    needs: changes
+    if: needs.changes.outputs.guides_only != 'true'
     name: ${{ matrix.os }} / ${{ matrix.backend }}
     runs-on: ${{ matrix.os }}
     env:
@@ -197,9 +220,10 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cargo test --locked --workspace --tests @featureArgs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            cargo test --locked --workspace --doc @featureArgs
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+      - name: Test workspace documentation on Linux CPU
+        if: runner.os == 'Linux' && matrix.backend == 'cpu'
+        run: cargo test --locked --workspace --doc --no-default-features
       - name: Test windowed event-loop contracts without a GPU
         if: runner.os == 'Windows' && matrix.backend == 'vulkan,d3d12,presentation'
         run: cargo test --locked -p renderer-core --example windowed --no-default-features --features vulkan,d3d12,presentation
@@ -209,8 +233,6 @@ jobs:
         run: &release-tests |
           foreach ($features in @($env:BACKEND, "$($env:BACKEND),development-validation,graph-diagnostics")) {
             cargo test --locked --workspace --release --no-default-features --features $features --tests
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            cargo test --locked --workspace --release --no-default-features --features $features --doc
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Test optimized Rust pipeline preparation and composition
@@ -283,11 +305,11 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cargo test --locked --workspace --release --no-default-features --features $features --tests
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            cargo test --locked --workspace --release --no-default-features --features $features --doc
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
   windows-backend-tests:
+    needs: changes
+    if: needs.changes.outputs.guides_only != 'true'
     name: windows-2022 / ${{ matrix.backend }} / ${{ matrix.suite }}
     runs-on: windows-2022
     strategy:
