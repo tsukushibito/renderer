@@ -19,6 +19,7 @@ pub(super) struct Controls {
     keys: [bool; 4],
     choice: Option<Upgrade>,
     restart: bool,
+    menu: sashiko::ui::MenuInput,
     pub window: Option<Arc<Window>>,
     pub resize: Option<[u32; 2]>,
     pub closed: bool,
@@ -32,6 +33,7 @@ impl Controls {
             keys: [false; 4],
             choice: None,
             restart: false,
+            menu: Default::default(),
             window: None,
             resize: None,
             closed: false,
@@ -45,6 +47,7 @@ impl Controls {
             movement: [right - left, back - forward],
             upgrade: self.choice.take(),
             restart: std::mem::take(&mut self.restart),
+            menu: std::mem::take(&mut self.menu),
         }
     }
 }
@@ -72,6 +75,7 @@ impl ApplicationHandler for Controls {
                 self.keys.fill(false);
                 self.restart = false;
                 self.choice = None;
+                self.menu = Default::default();
             }
             WindowEvent::KeyboardInput { event, .. } if !event.repeat => {
                 let PhysicalKey::Code(code) = event.physical_key else {
@@ -86,7 +90,13 @@ impl ApplicationHandler for Controls {
                     KeyCode::Digit1 if pressed => self.choice = Some(Upgrade::Rapid),
                     KeyCode::Digit2 if pressed => self.choice = Some(Upgrade::Pierce),
                     KeyCode::Digit3 if pressed => self.choice = Some(Upgrade::Pulse),
-                    KeyCode::KeyR | KeyCode::Enter if pressed => self.restart = true,
+                    KeyCode::ArrowLeft if pressed => self.menu.direction = -1,
+                    KeyCode::ArrowRight if pressed => self.menu.direction = 1,
+                    KeyCode::Enter if pressed => {
+                        self.menu.activate = true;
+                        self.restart = true;
+                    }
+                    KeyCode::KeyR if pressed => self.restart = true,
                     KeyCode::Escape if pressed => self.closed = true,
                     _ => {}
                 }

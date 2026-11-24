@@ -41,6 +41,8 @@ pub struct Input {
     pub movement: [f32; 2],
     pub upgrade: Option<Upgrade>,
     pub restart: bool,
+    #[serde(default, skip_serializing_if = "sashiko::ui::MenuInput::is_idle")]
+    pub menu: sashiko::ui::MenuInput,
 }
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize)]
@@ -93,6 +95,7 @@ pub struct Game {
     pub arena: Arena,
     pub tick: u64,
     pub phase: Phase,
+    pub upgrade_focus: sashiko::ui::Focus,
     pub player: [f32; 2],
     pub hp: u32,
     pub xp: u32,
@@ -126,6 +129,7 @@ impl Game {
             arena,
             tick: 0,
             phase: Phase::Playing,
+            upgrade_focus: Default::default(),
             hp: Self::MAX_HP,
             xp: 0,
             level: 1,
@@ -207,7 +211,9 @@ impl Game {
                 return events;
             }
             Phase::Choosing => {
-                if let Some(choice) = input.upgrade {
+                let choices = [Upgrade::Rapid, Upgrade::Pierce, Upgrade::Pulse];
+                let selected = self.upgrade_focus.update(input.menu, &choices).copied();
+                if let Some(choice) = input.upgrade.or(selected) {
                     let slot = &mut self.upgrades[choice as usize];
                     *slot = slot.saturating_add(1);
                     self.level += 1;
@@ -238,6 +244,7 @@ impl Game {
             events.died = true;
         } else if self.xp >= self.xp_required() {
             self.xp -= self.xp_required();
+            self.upgrade_focus = Default::default();
             self.phase = Phase::Choosing;
         }
         events
@@ -370,6 +377,7 @@ pub fn benchmark_input(game: &Game) -> Input {
         movement,
         upgrade: Some(Upgrade::Pulse),
         restart: true,
+        menu: Default::default(),
     }
 }
 
@@ -459,6 +467,21 @@ mod tests {
                 ..initial
             }
         );
+    }
+
+    #[test]
+    fn recorded_menu_gestures_drive_upgrade_selection_on_fixed_ticks() {
+        let mut game = Game::new(Arena::default(), Scenario::Early, 5);
+        game.phase = Phase::Choosing;
+        let tape: Vec<Input> =
+            serde_json::from_str(r#"[{"menu":{"direction":1}},{"menu":{"activate":true}}]"#)
+                .unwrap();
+        game.step(tape[0]);
+        assert_eq!(game.phase, Phase::Choosing);
+        assert_eq!(game.upgrade_focus.index(), 1);
+        game.step(tape[1]);
+        assert_eq!(game.phase, Phase::Playing);
+        assert_eq!(game.upgrades, [0, 1, 0]);
     }
 
     #[test]
