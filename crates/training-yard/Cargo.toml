@@ -15,7 +15,7 @@ development-validation = ["renderer-core/development-validation", "renderer?/dev
 memory-profiling = ["renderer-core/memory-profiling", "renderer?/memory-profiling", "renderer-asset?/metrics"]
 
 [dependencies]
-sashiko = { path = "../sashiko", optional = true }
+sashiko = { version = "0.1.0", path = "../sashiko", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 renderer-asset = { version = "0.1.0", path = "../renderer-asset", optional = true }
