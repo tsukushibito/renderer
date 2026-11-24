@@ -2,6 +2,7 @@
 mod cache;
 mod development;
 mod gltf;
+mod image_update;
 mod inputs;
 mod retention;
 mod setup;
@@ -186,7 +187,10 @@ fn cook_into(
             .map_err(|e| format!("cooking {id} ({}): {e}", path.display()))?;
         assets.insert(id, asset);
     }
-    let catalog = Catalog { version: 1, assets };
+    publish_catalog(output, cache, Catalog { version: 1, assets })
+}
+
+fn publish_catalog(output: &Path, cache: Cache<'_>, catalog: Catalog) -> Result<Report, Error> {
     let bytes = serde_json::to_vec(&catalog)?;
     let generation = Digest::of(&bytes);
     let path = output.join("catalogs").join(generation.to_string());

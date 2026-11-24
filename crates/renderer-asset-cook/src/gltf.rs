@@ -4,12 +4,13 @@ use gltf::{
     Document,
     mesh::{Mode, Semantic},
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     error::Error,
     fs,
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
 
 mod geometry;
@@ -18,7 +19,7 @@ mod material;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub(crate) enum ImageRole {
     Color,
     Normal,
@@ -168,8 +169,12 @@ impl Source {
     }
 
     pub(crate) fn cook_image(&self, i: usize, role: ImageRole) -> Result<Vec<u8>> {
-        image::cook(self.image_inputs(i)?, role)
+        cook_image_bytes(self.image_inputs(i)?, role)
     }
+}
+
+pub(super) fn cook_image_bytes(bytes: &[u8], role: ImageRole) -> Result<Vec<u8>> {
+    image::cook(bytes, role)
 }
 
 fn scene_parts(document: &Document) -> Result<Vec<Part>> {
@@ -239,26 +244,44 @@ fn selected_images(parts: &[Part]) -> HashSet<usize> {
         .collect()
 }
 
-/// Determine exactly which external files the importer opens for this scene.
-pub(super) fn external_paths(bytes: &[u8]) -> Result<Vec<std::path::PathBuf>> {
-    let gltf = gltf::Gltf::from_slice(bytes)?;
-    let selected = selected_images(&scene_parts(&gltf.document)?);
-    let buffers = gltf
-        .document
-        .buffers()
-        .filter_map(|buffer| match buffer.source() {
-            gltf::buffer::Source::Uri(uri) => Some(uri),
-            gltf::buffer::Source::Bin => None,
-        });
-    let images = gltf
-        .document
-        .images()
-        .filter(|image| selected.contains(&image.index()))
-        .filter_map(|image| match image.source() {
-            gltf::image::Source::Uri { uri, .. } => Some(uri),
-            gltf::image::Source::View { .. } => None,
-        });
-    buffers.chain(images).map(decode_uri).collect()
+/// Record the source path for each catalog image slot while resolving the exact
+/// same scene/material selection used by the full importer. A .png can also
+/// be used as a glTF buffer, in which case an image-only update is insufficient.
+pub(super) enum ExternalUse {
+    Buffer,
+    Image {
+        primitive: usize,
+        slot: usize,
+        role: ImageRole,
+    },
+}
+
+pub(super) fn external_uses(bytes: &[u8]) -> Result<Vec<(PathBuf, ExternalUse)>> {
+    let document = gltf::Gltf::from_slice(bytes)?.document;
+    let mut uses = Vec::new();
+    for buffer in document.buffers() {
+        if let gltf::buffer::Source::Uri(uri) = buffer.source() {
+            uses.push((decode_uri(uri)?, ExternalUse::Buffer));
+        }
+    }
+    let images: Vec<_> = document.images().collect();
+    for (primitive, part) in scene_parts(&document)?.iter().enumerate() {
+        for (slot, selection) in part.material.images.iter().enumerate() {
+            if let Some((index, role)) = selection
+                && let gltf::image::Source::Uri { uri, .. } = images[*index].source()
+            {
+                uses.push((
+                    decode_uri(uri)?,
+                    ExternalUse::Image {
+                        primitive,
+                        slot,
+                        role: *role,
+                    },
+                ));
+            }
+        }
+    }
+    Ok(uses)
 }
 
 fn decode_uri(uri: &str) -> Result<std::path::PathBuf> {

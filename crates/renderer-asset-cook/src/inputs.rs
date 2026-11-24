@@ -1,6 +1,6 @@
 //! Capture a Git asset subtree plus a content-checked overlay for local edits.
 //! A clean cache lookup needs only the subtree ID and Git's scoped status.
-use crate::{Error, gltf};
+use crate::{Error, gltf, image_update::Manifest};
 use renderer_asset::{AssetId, Digest};
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
@@ -75,8 +75,6 @@ fn normalized(source: &Path, dependency: &Path) -> Result<PathBuf, Error> {
     Ok(path)
 }
 
-pub(super) type Manifest = BTreeMap<PathBuf, BTreeSet<PathBuf>>;
-
 #[derive(Debug)]
 pub(super) struct Snapshot {
     pub(super) key: Digest,
@@ -140,12 +138,22 @@ impl Snapshot {
                 continue;
             }
             let file = source.join(path);
+            let png = path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"));
+            let mut pointer = false;
             let digest = match fs::symlink_metadata(&file) {
                 Ok(meta) if meta.is_file() => {
                     if !file.canonicalize()?.starts_with(&source) {
                         return Err(format!("asset path escaped source: {name}").into());
                     }
-                    Some(hash_reader(File::open(&file)?)?)
+                    if png && meta.len() <= 1024 {
+                        let bytes = fs::read(&file)?;
+                        pointer = bytes.starts_with(LFS_VERSION.as_bytes());
+                        Some(Digest::of(&bytes))
+                    } else {
+                        Some(hash_reader(File::open(&file)?)?)
+                    }
                 }
                 Ok(meta) if meta.is_dir() => None,
                 Err(e)
@@ -159,12 +167,7 @@ impl Snapshot {
                 Ok(_) => return Err(format!("unsupported asset file type: {name}").into()),
                 Err(e) => return Err(e.into()),
             };
-            if digest.is_some()
-                && matches!(xy, b" M " | b"M  " | b"MM ")
-                && path
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-            {
+            if png && !pointer && digest.is_some() && matches!(xy, b" M " | b"M  " | b"MM ") {
                 if let Some(images) = &mut changed_images {
                     images.insert(path.to_owned());
                 }
@@ -198,6 +201,27 @@ impl Snapshot {
             tree,
             local,
         })
+    }
+
+    /// Return the exact edited bytes once for every consumer of this path.
+    /// LFS pointers are resolved through normal input materialization.
+    pub(super) fn edited_image(&self, path: &Path) -> Result<Vec<u8>, Error> {
+        let name = path.to_str().ok_or("expected UTF-8 image path")?;
+        let expected = self
+            .local
+            .get(name)
+            .copied()
+            .flatten()
+            .ok_or("missing edited image digest")?;
+        let file = self.source.join(relative(name)?).canonicalize()?;
+        if !file.starts_with(&self.source) {
+            return Err("edited image escaped source".into());
+        }
+        let bytes = fs::read(file)?;
+        if Digest::of(&bytes) != expected {
+            return Err(format!("asset changed during capture: {}", path.display()).into());
+        }
+        Ok(bytes)
     }
 
     /// Clean inputs come from the captured tree. Only actual scene dependencies
@@ -253,7 +277,7 @@ impl Snapshot {
                 .collect();
             &all_models
         };
-        let mut manifest = Manifest::new();
+        let mut manifest = Manifest::default();
         let mut needed = BTreeMap::new();
         for name in models {
             let sidecar = crate::sidecar(name);
@@ -261,14 +285,15 @@ impl Snapshot {
             let mut inputs = BTreeSet::from([name.clone(), sidecar]);
             let model = fs::read(destination.join(name))
                 .map_err(|e| format!("asset {id} ({}): {e}", name.display()))?;
-            for path in gltf::external_paths(&model)
+            for (path, usage) in gltf::external_uses(&model)
                 .map_err(|e| format!("asset {id} ({}): {e}", name.display()))?
             {
                 let path = normalized(name, &path)?;
                 needed.insert(path.clone(), id);
+                manifest.record(&path, id, usage);
                 inputs.insert(path);
             }
-            manifest.insert(name.clone(), inputs);
+            manifest.models.insert(name.clone(), inputs);
         }
         if roots.is_some() {
             files = self.files(Some(&needed.keys().cloned().collect()))?;
@@ -479,13 +504,14 @@ fn hash_reader(mut reader: impl Read) -> Result<Digest, Error> {
     Ok(format!("{:x}", hash.finalize()).parse()?)
 }
 
+const LFS_VERSION: &str = "version https://git-lfs.github.com/spec/v1";
+
 fn lfs_pointer(bytes: &[u8]) -> Result<Option<(Digest, u64)>, Error> {
-    const VERSION: &str = "version https://git-lfs.github.com/spec/v1";
-    if !bytes.starts_with(VERSION.as_bytes()) {
+    if !bytes.starts_with(LFS_VERSION.as_bytes()) {
         return Ok(None);
     }
     let text = std::str::from_utf8(bytes)?;
-    if text.lines().next() != Some(VERSION) {
+    if text.lines().next() != Some(LFS_VERSION) {
         return Ok(None);
     }
     let oid = text
@@ -560,8 +586,8 @@ fn conflict_error(source: &Path, conflicts: &BTreeSet<PathBuf>) -> Error {
                 .collect();
             let mut paths = vec![model.to_owned(), sidecar];
             for bytes in versions(source, model) {
-                if let Ok(deps) = gltf::external_paths(&bytes) {
-                    paths.extend(deps.iter().filter_map(|p| normalized(model, p).ok()));
+                if let Ok(deps) = gltf::external_uses(&bytes) {
+                    paths.extend(deps.iter().filter_map(|(p, _)| normalized(model, p).ok()));
                 }
             }
             for p in paths {
@@ -641,7 +667,7 @@ mod tests {
         let narrow = PathBuf::from("narrow.gltf");
         let manifest = edited.materialize_subset(&subset, &BTreeSet::from([narrow.clone()]))?;
         assert_eq!(
-            manifest[&narrow],
+            manifest.models[&narrow],
             [
                 "narrow.gltf",
                 "narrow.gltf.meta.json",

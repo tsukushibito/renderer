@@ -3,7 +3,8 @@ use crate::{
     Error, PROFILE,
     cache::{Cache, Report},
     cook_into,
-    inputs::{Manifest, Snapshot},
+    image_update::Manifest,
+    inputs::Snapshot,
     retention::StoreGuard,
     store,
 };
@@ -137,17 +138,22 @@ fn record_key(converter: Digest, inputs: Digest) -> Result<Digest, Error> {
 }
 
 fn build_snapshot(root: &Path, snapshot: &Snapshot, converter: Digest) -> Result<Report, Error> {
-    let scratch = Scratch::new(root)?;
     let base_key = record_key(converter, snapshot.clean_key)?;
     let index = root.join("dependencies").join(base_key.to_string());
     if let Some(changes) = &snapshot.changed_images
         && let Some(bytes) = store::read_if_present(&index)?
         && let Ok((checksum, manifest)) = serde_json::from_slice::<(Digest, Manifest)>(&bytes)
-        && checksum == Digest::of(&serde_json::to_vec(&(base_key, &manifest))?)
-        && let Some((_, base)) =
+        && let Some((generation, mut base)) =
             cached_generation(root, &root.join("snapshots").join(base_key.to_string()))?
+        && checksum == Digest::of(&serde_json::to_vec(&(base_key, generation, &manifest))?)
     {
+        let mut cache = Cache::with_converter(root, root, converter);
+        if manifest.patch_images(changes, snapshot, &mut base, &mut cache)? {
+            return crate::publish_catalog(root, cache, base);
+        }
+        let scratch = Scratch::new(root)?;
         let affected = manifest
+            .models
             .iter()
             .filter(|(_, deps)| !deps.is_disjoint(changes))
             .map(|(path, _)| path.clone())
@@ -155,10 +161,15 @@ fn build_snapshot(root: &Path, snapshot: &Snapshot, converter: Digest) -> Result
         snapshot.materialize_subset(&scratch.0, &affected)?;
         return cook_into(&scratch.0, root, root, base.assets);
     }
+    let scratch = Scratch::new(root)?;
     let manifest = snapshot.materialize(&scratch.0)?;
     let report = cook_into(&scratch.0, root, root, BTreeMap::new())?;
     if snapshot.key == snapshot.clean_key {
-        let checksum = Digest::of(&serde_json::to_vec(&(base_key, &manifest))?);
+        let checksum = Digest::of(&serde_json::to_vec(&(
+            base_key,
+            report.generation,
+            &manifest,
+        ))?);
         store::publish(&index, &serde_json::to_vec(&(checksum, manifest))?)?;
     }
     Ok(report)

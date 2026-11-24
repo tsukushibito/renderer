@@ -45,14 +45,18 @@ impl<'a> Cache<'a> {
     }
 
     pub fn new(directory: &'a Path, output: &'a Path) -> Result<Self, Error> {
-        Ok(Self {
-            converter: Self::converter()?,
+        Ok(Self::with_converter(directory, output, Self::converter()?))
+    }
+
+    pub fn with_converter(directory: &'a Path, output: &'a Path, converter: Digest) -> Self {
+        Self {
+            converter,
             directory,
             output,
             recipes: BTreeMap::new(),
             published_bytes: 0,
             events: Vec::new(),
-        })
+        }
     }
 
     pub fn convert(
