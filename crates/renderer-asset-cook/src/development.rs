@@ -253,6 +253,29 @@ pub(super) fn serve(source: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// Rebuild from the current worktree under the same build guard as a preview.
+/// Cached recipes verify their object digests and only convert damaged outputs.
+pub(super) fn repair(source: &Path) -> Result<(), Error> {
+    let project = Project::open(source)?;
+    let _request = store::lock(&project.git_dir.join("renderer-preview.lock"))?;
+    let guard = project.guard()?;
+    let selected = guard
+        .selected(&project.git_dir)?
+        .ok_or("no selected generation to repair")?;
+    let _build = StoreGuard::build(&project.root)?;
+    drop(guard);
+
+    let snapshot = Snapshot::capture(source)?;
+    let scratch = Scratch::new(&project.root)?;
+    snapshot.materialize(&scratch.0)?;
+    let report = cook_into(&scratch.0, &project.root, &project.root, BTreeMap::new())?;
+    if report.generation != selected {
+        return Err(format!("current sources produce {}, restore the inputs for selected generation {selected} to repair it", report.generation).into());
+    }
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
 pub(super) fn release(source: &Path, apply: bool) -> Result<(), Error> {
     let project = Project::open(source)?;
     let guard = project.guard()?;

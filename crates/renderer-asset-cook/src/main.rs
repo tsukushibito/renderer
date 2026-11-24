@@ -204,6 +204,7 @@ fn run(args: &[OsString]) -> Result<(), Error> {
     match args {
         [cmd] if cmd == "setup" => setup::install()?,
         [cmd, source] if cmd == "dev" => development::serve(Path::new(source))?,
+        [cmd, source] if cmd == "repair" => development::repair(Path::new(source))?,
         [cmd, source] if cmd == "gc" => development::gc(Path::new(source))?,
         [cmd, source] if cmd == "release" => development::release(Path::new(source), false)?,
         [cmd, source, opt] if cmd == "release" && opt == "--apply" => development::release(Path::new(source), true)?,
@@ -212,7 +213,7 @@ fn run(args: &[OsString]) -> Result<(), Error> {
             let report = cook(Path::new(source), Path::new(output), Path::new(cache))?;
             println!("{}", serde_json::to_string(&report)?);
         }
-        _ => return Err("usage: renderer-asset-cook setup | dev <source> | release <source> [--apply] | gc <source> | import <source.gltf> | cook <source> <output> --cache <cache>".into()),
+        _ => return Err("usage: renderer-asset-cook setup | dev <source> | repair <source> | release <source> [--apply] | gc <source> | import <source.gltf> | cook <source> <output> --cache <cache>".into()),
     }
     Ok(())
 }

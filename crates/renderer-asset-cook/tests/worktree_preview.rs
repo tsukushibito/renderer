@@ -97,6 +97,43 @@ fn management(repo: &Path, args: &[&str]) -> Result<Value> {
 }
 
 #[test]
+fn repair_restores_only_corrupt_bytes_while_both_generations_are_leased() -> Result {
+    let tmp = workspace()?;
+    let a = &tmp.0;
+    let b = a.join("b");
+    let first = Preview::read(Preview::start(a)?)?;
+    fs::copy(b.join("source/normal.png"), b.join("source/paint.png"))?;
+    let edited = Preview::read(Preview::start(&b)?)?;
+    let edited_pixels = edited.paint()?;
+    let root = Path::new(first.data["root"].as_str().unwrap());
+    let id = first.data["generation"].as_str().unwrap();
+    let generation = Generation::open_id(root, id.parse()?)?;
+    let image = generation.equipment(&AssetId::from_u128(1))?.primitives[0].images[3].unwrap();
+    let path = root.join("objects").join(image.hash.to_string());
+    let mut damaged = fs::read(&path)?;
+    damaged[0] ^= 1;
+    fs::write(path, damaged)?;
+    assert!(first.paint().is_err());
+    let report = management(a, &["repair", "source"])?;
+    assert_eq!(report["generation"], id);
+    assert_eq!(report["published_bytes"], image.size);
+    assert_eq!(
+        report["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["action"] == "built")
+            .count(),
+        1
+    );
+    assert_eq!(first.paint()?, [255, 255, 0, 255]);
+    assert_eq!(edited.paint()?, edited_pixels);
+    assert_eq!(management(a, &["repair", "source"])?["published_bytes"], 0);
+    assert_eq!(management(a, &["gc", "source"])?["reclaimed_bytes"], 0);
+    Ok(())
+}
+
+#[test]
 fn linked_worktrees_share_cooks_keep_independent_readers_and_resume_local_edits() -> Result {
     let tmp = workspace()?;
     let (a, b) = (tmp.0.clone(), tmp.0.join("b"));

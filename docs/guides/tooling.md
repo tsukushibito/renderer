@@ -293,6 +293,8 @@ cargo run --locked --release -p renderer-asset-cook -- release $source --apply
 cargo run --locked --release -p renderer-asset-cook -- gc $source
 ```
 
+共有ストアの読み込み時に内容ハッシュの不一致を検出したら、その世代を選択した worktree で同じ入力と同じバージョンの cooker を使い、`renderer-asset-cook repair <source>` を実行する。修復は各レシピの成果物をハッシュで検査し、破損・欠落分だけを再変換して原子的に公開する。選択と読み手のリースを維持する。出力 JSON の `generation` と `published_bytes` で修復世代と書き込み量を確認できる。入力が変わっていた場合は元の入力を復元して再実行する。
+
 訓練場の配布版では、実行ファイルの隣に `assets/equipment/dist` を生成する。配布ビルドでは必要な LFS 原本を取得して上記の `cook` を実行する。別の配布物を試すときは環境変数 `TRAINING_YARD_ASSETS` に `current` のあるディレクトリを指定する。ホストは `Generation::open` で取得した世代を `Yard::set_asset_generation` に渡し、装着先と保存済み ID を指定して `request_equipment` を呼ぶ。更新先を確認するまで、旧世代の装備を描画できる。
 
 訓練場では、装着中・準備中を合わせて異なる装備版を 4 件、装備ごとに最大 4 部位まで扱う。同じ版を装着する隊員はこの枠を共有する。新しく必要なバッファ寸法、画像形式、サンプラーは装備の変更時に `AssetPreparation::replace_asset_reservations` で準備する。画像は mip 一式で最大 4 MiB とし、1 回の更新で 1 枚を投入する。メッシュと材質の転送は更新ごとに合計 128 バイト・1 投入を上限とする。これらは小さい装備で切替を再現する訓練場の設定である。
