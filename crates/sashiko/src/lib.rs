@@ -2,4 +2,5 @@
 pub use renderer_asset as asset;
 
 pub mod space;
+pub mod ui;
 pub mod view;
