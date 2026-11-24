@@ -1,7 +1,7 @@
 [book]
-title = "Renderer — RenderGraph 設計ガイド"
+title = "Sashiko — RenderGraph 設計ガイド"
 description = "現在の RenderGraph を図と具体例で理解する。宣言、依存解析、GPU 実行、同期、寿命と容量の契約。"
-authors = ["Renderer contributors"]
+authors = ["Sashiko contributors"]
 language = "ja"
 src = "."
 
@@ -25,8 +25,8 @@ after = ["links", "repository-links"]
 default-theme = "light"
 preferred-dark-theme = "navy"
 additional-css = ["theme/renderer.css"]
-git-repository-url = "https://github.com/tsukushibito/renderer"
-edit-url-template = "https://github.com/tsukushibito/renderer/edit/main/docs/{path}"
+git-repository-url = "https://github.com/tsukushibito/sashiko"
+edit-url-template = "https://github.com/tsukushibito/sashiko/edit/main/docs/{path}"
 smart-punctuation = false
 additional-js = ["theme/vendor/mermaid.min.js", "theme/diagrams.js"]
 

@@ -1,10 +1,15 @@
 param(
     [Parameter(Mandatory = $true)][string]$Issue,
     [Parameter(Mandatory = $true)][scriptblock]$Work,
-    [string]$LockPath = 'C:/Users/tsuku/Documents/GitHub/renderer/.tools/parallel-b3/exclusive-work.lock'
+    [string]$LockPath
 )
 
 $ErrorActionPreference = 'Stop'
+if (!$LockPath) {
+    $commonDir = git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot locate the shared Git directory for the B3 lock.' }
+    $LockPath = Join-Path (Split-Path -Parent $commonDir) '.tools/parallel-b3/exclusive-work.lock'
+}
 $ownerToken = [guid]::NewGuid().ToString('N')
 $resolvedLock = [IO.Path]::GetFullPath($LockPath)
 [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($resolvedLock)) | Out-Null

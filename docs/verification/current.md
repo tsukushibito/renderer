@@ -1055,7 +1055,7 @@ Renderer発行のネイティブ資源・メモリの作成・破棄、descripto
 最適化した製品・厳格構成のfixtureと640×480の全量Bistro（street）を実行した。各APIの製品と厳格、
 および構成ごとの両APIの画像比較が受入基準内に収まり、厳格検証は警告・エラー0件だった。
 
-移行前の実行手順と構成は[検証時点のガイド](https://github.com/tsukushibito/renderer/blob/56178090ad441dd03cfac009453e772f13ea0fa9/docs/guides/tooling.md#bistro-scene-pipeline)を参照する。
+移行前の実行手順と構成は[検証時点のガイド](https://github.com/tsukushibito/sashiko/blob/56178090ad441dd03cfac009453e772f13ea0fa9/docs/guides/tooling.md#bistro-scene-pipeline)を参照する。
 ログとキャプチャは`.tools/renderer-12t/`に保存した。
 
 `renderer-d72`ではYAMLの回帰テストを小さなCPU fixtureで行い、releaseのフレーム構築テスト11件を追加のCIゲートにした。
@@ -1101,7 +1101,7 @@ Graph構築・compile、GPU投入と退役、readbackの受取と返却を含む
 VMA host callbackの確保・再確保・解放、Renderer発行のnative資源・メモリ作成／破棄とdescriptorの確保／解放は0件だった。
 既存領域のpool resetは各計測で48回観測した。厳格構成ではVulkan Core／SyncValとD3D12 Debug Layer／GBVが有効で、
 終了処理までwarningとerrorは0件だった。表示・複数同時frame・再構成時間はこの計測の対象外。
-[検証時点の利用手順と実行コマンド](https://github.com/tsukushibito/renderer/blob/56178090ad441dd03cfac009453e772f13ea0fa9/docs/guides/tooling.md#yaml-pipeline)を参照する。
+[検証時点の利用手順と実行コマンド](https://github.com/tsukushibito/sashiko/blob/56178090ad441dd03cfac009453e772f13ea0fa9/docs/guides/tooling.md#yaml-pipeline)を参照する。
 
 <a id="runtime-shader-verification"></a>
 
@@ -3312,7 +3312,7 @@ CPUの移行前基準値`117ae5b`は同じ24変動frameで2,502/24/62/2,526回�
 同構成のrequire-zeroが旧基準を拒否する負の対照も保存した。
 旧合成compileの37,953要求は別入力のalloc/realloc要求で、deallocや通常frame全体の証拠ではない。
 `.2.2`の後続owned命令・MRT/subresource等まで実装完了したとは扱わない。
-実装commitの[CI 43674843105](https://github.com/tsukushibito/renderer/actions/runs/43674843105)は全10job成功、初回、4分53秒だった。
+実装commitの[CI 43674843105](https://github.com/tsukushibito/sashiko/actions/runs/43674843105)は全10job成功、初回、4分53秒だった。
 
 ## Graph・表示・descriptorの効率整理
 
@@ -3698,7 +3698,7 @@ B0の設計確認ではRenderer本体・管理下shader・native経路を変更�
 CPU／GPU速度の優位を実測した判断ではない。基盤選定の`.1.3`でもAを維持した。
 一般owned命令は現行Graphへ接続済みで、B2の二API PBR受入も[本書冒頭](#bistro-pbr)へ記録した。
 
-[当時のRust試作](https://github.com/tsukushibito/renderer/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer-core/examples/graph_api_comparison.rs)はGPU非依存のCPU意図を比較した。
+[当時のRust試作](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer-core/examples/graph_api_comparison.rs)はGPU非依存のCPU意図を比較した。
 複数draw、depth-only／color-only、独自Compute、module内の多段Bloom、履歴初回／継続／resize、
 このCPU試作で扱ったMRT／mip Viewを同じ入力で書き、ownerだけを正規化した命令とアクセス用途を照合する。
 短命なdraw slice終了後のAの命令保持、Bのframe借用と不要callback非実行、
@@ -3739,7 +3739,7 @@ safe wgpuのnative実装負担の小ささとRenderBundleによる事前検査�
 現AGENTSの保証済み内容の反復検査を製品経路から外す規約を維持する判断とした。
 nativeの速度優位や工数実績を証明したものではない。B1〜B5に受入条件・依存を持つ17子課題を作成した。
 
-[当時の独立試作](https://github.com/tsukushibito/renderer/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/tools/foundation-probe/src/main.rs)はwgpu 30.0.2を固定し、独立したruntimeで実行した。
+[当時の独立試作](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/tools/foundation-probe/src/main.rs)はwgpu 30.0.2を固定し、独立したruntimeで実行した。
 短命draw Vecを即時closureからowned planへ移し、depth-only／color-only各2draw、
 利用側WGSL Computeでcolor/depthを読む3passを8×4で記録した。
 submit直後にplanと呼出側textureをDropし、実submissionとmap callbackの完了を待って128byteを照合した。
@@ -3958,7 +3958,7 @@ CPU fallbackの成功で実GPU受入を代替しない。
 hard-link不可というincremental cacheの環境warningをソース診断と区別した。
 
 Windows / LinuxのCPU・Vulkan、およびWindows presentationのcheck・Clippy・CPU試験を
-[GitHub Actions](https://github.com/tsukushibito/renderer/actions/workflows/ci.yml)に設定している。
+[GitHub Actions](https://github.com/tsukushibito/sashiko/actions/workflows/ci.yml)に設定している。
 このローカル確認はLinux実行や実GPU CIの合格を意味しない。
 
 ### 製品版と開発用の検証分離

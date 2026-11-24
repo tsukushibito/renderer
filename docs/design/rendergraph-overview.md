@@ -4,7 +4,7 @@ RenderGraphは、**何を読み、何を書き、何を結果として残すか*
 必要な処理とその順序を求め、GPUへ安全に実行するための計画へつなぐ仕組みです。
 利用側の描画意図、CPU上の依存解析、backend固有の同期・資源管理を分けて扱います。
 
-基本実行モデルは実装確認点[`adb51d1`](https://github.com/tsukushibito/renderer/tree/adb51d17e3c1f43b380163a444f750ee9ff9edf5)に基づき、
+基本実行モデルは実装確認点[`adb51d1`](https://github.com/tsukushibito/sashiko/tree/adb51d17e3c1f43b380163a444f750ee9ff9edf5)に基づき、
 入力接続の分離（`renderer-7ft.2.7.2`）を反映しています。
 詳細な契約は[RenderGraph設計](rendergraph.md)、実行した確認の範囲は[現在の検証状況](../verification/current.md)を参照してください。
 後続のB1計画を、実装済みの機能としては扱いません。
@@ -111,7 +111,7 @@ compileは概ね次の処理を行います。
 
 未初期化readはculling前に検出します。結果に使わないpassでも不正なreadはエラーです。
 一方、除去される部分だけの循環を追加で診断するかは開発用検証の設定によります。
-処理の根拠は[共通解析](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph/analysis.rs)にあります。
+処理の根拠は[共通解析](https://github.com/tsukushibito/sashiko/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph/analysis.rs)にあります。
 
 ## 4. 内容・GPU状態・完了は別の情報
 
@@ -313,15 +313,15 @@ CPUだけの試験はnative dispatch対応やnative allocationゼロの証拠に
 
 | 確かめたいこと | 固定した実装への入口 |
 |---|---|
-| facade・Graph identity・明示依存 | [`graph.rs`](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph.rs) |
-| 準備済みslotと再利用 | [`graph/storage.rs`](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph/storage.rs) |
-| builderの検査・途中失敗の巻き戻し | [`graph/builder.rs`](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph/builder.rs) |
-| compileと不変plan | [`graph/compile.rs`](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph/compile.rs) |
-| owned RasterとProgram契約 | [`program/raster.rs`](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/program/raster.rs) |
-| shader stageとbindingの契約 | [`program.rs`](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/program.rs) |
-| owned bindingとshader footprint | [`graph/dispatch.rs`](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph/dispatch.rs) |
-| attachmentの所有と限定lowering形 | [`graph/attachments.rs`](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph/attachments.rs) |
-| 公開APIを使うCPU回帰 | [`tests/graph_api.rs`](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/tests/graph_api.rs) |
+| facade・Graph identity・明示依存 | [`graph.rs`](https://github.com/tsukushibito/sashiko/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph.rs) |
+| 準備済みslotと再利用 | [`graph/storage.rs`](https://github.com/tsukushibito/sashiko/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph/storage.rs) |
+| builderの検査・途中失敗の巻き戻し | [`graph/builder.rs`](https://github.com/tsukushibito/sashiko/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph/builder.rs) |
+| compileと不変plan | [`graph/compile.rs`](https://github.com/tsukushibito/sashiko/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph/compile.rs) |
+| owned RasterとProgram契約 | [`program/raster.rs`](https://github.com/tsukushibito/sashiko/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/program/raster.rs) |
+| shader stageとbindingの契約 | [`program.rs`](https://github.com/tsukushibito/sashiko/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/program.rs) |
+| owned bindingとshader footprint | [`graph/dispatch.rs`](https://github.com/tsukushibito/sashiko/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph/dispatch.rs) |
+| attachmentの所有と限定lowering形 | [`graph/attachments.rs`](https://github.com/tsukushibito/sashiko/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/src/graph/attachments.rs) |
+| 公開APIを使うCPU回帰 | [`tests/graph_api.rs`](https://github.com/tsukushibito/sashiko/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer-core/tests/graph_api.rs) |
 
 利用側の独自Program、bindingとattachment由来のアクセス、Raster・Computeは[共通契約](rendergraph.md)に従って二APIへ接続します。
 標準グラフの定義を再利用してもframeごとの描画対象は変更できます。基本は入力から各frameのGraphを構築・compileし、

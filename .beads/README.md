@@ -46,12 +46,9 @@ Git が管理するのは設定ファイルと hooks です。
 課題 DB 自体（`.beads/embeddeddolt/`）は Git の通常のコミット対象外で、
 Dolt の履歴として別途同期します。JSONL の手動コピーを共有手順には使いません。
 
-同期先は `git+ssh://git@github.com/tsukushibito/renderer.git` です。
+同期先は `git+ssh://git@github.com/tsukushibito/sashiko.git` です。
 SSH 認証とリポジトリへのアクセス権が必要です。
-今回の導入ではリモートへの push は実行していません。
-
-管理者は共有開始時に、この環境から設定ファイルを通常の Git 操作で公開し、
-課題 DB を `bd dolt push` で公開してください。
+既存課題への参照を保つため、課題 ID の接頭辞には引き続き `renderer` を使います。
 課題データは Git リモートの `refs/dolt/data` に保存されます。
 
 その後、別の clone では CLI のインストール後に次を実行します。

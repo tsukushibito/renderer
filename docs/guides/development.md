@@ -847,7 +847,7 @@ Tracyを有効にした構成では全targetをClippyで検査し、ReleaseのBi
 
 ## 設計比較の再現
 
-公開APIと実装基盤の採用時に使った試作は、[実行手順を記録したコミット](https://github.com/tsukushibito/renderer/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/docs/guides/development.md#公開apiのcpu比較試作)から再現できる。
+公開APIと実装基盤の採用時に使った試作は、[実行手順を記録したコミット](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/docs/guides/development.md#公開apiのcpu比較試作)から再現できる。
 [公開APIの比較結果](../verification/current.md#public-api-comparison)と[実装基盤の比較結果](../verification/current.md#foundation-comparison)に実行条件を記録している。
 現行の公開APIを動かすには[Examplesガイド](examples.md)を参照する。
 
