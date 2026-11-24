@@ -72,6 +72,13 @@ impl Triangle {
         ];
         let mut vertices = [0; 3 * VERTEX_BYTES];
         for ((position, uv), bytes) in positions.into_iter().zip(vertices.as_chunks_mut().0) {
+            #[cfg(test)]
+            let uv = match placement {
+                // At -1/4 the two-texel strip samples opposite texel centers
+                // for repeat and mirrored repeat on U.
+                Placement::SampleMaps { .. } => [-0.25, 0.5],
+                _ => uv,
+            };
             let [x, y, z] = position.map(|value| value * object_scale);
             let position = [x * mirror, y, z];
             *bytes = PbrVertex::new(view.orient(position), normal, tangent, uv)?.encode();
@@ -104,6 +111,18 @@ impl Triangle {
             material
         };
         let mut materials = Materials::default();
+        #[cfg(test)]
+        let material = if matches!(placement, Placement::SampleMaps { .. }) {
+            MaterialFactors {
+                base_color: [0., 0., 0., 1.],
+                emissive_nits: [2.; 3],
+                alpha_mode: AlphaMode::Mask,
+                double_sided: true,
+                ..Default::default()
+            }
+        } else {
+            material
+        };
         let material = materials.create_pbr(PbrParams {
             factors: material,
             ..Default::default()
@@ -172,6 +191,11 @@ fn hdr_desc() -> ImageDesc {
 pub enum Placement {
     Single,
     #[cfg(test)]
+    SampleMaps {
+        base: renderer_core::program::SamplerDescriptor,
+        emission: renderer_core::program::SamplerDescriptor,
+    },
+    #[cfg(test)]
     Individual,
     #[cfg(test)]
     Instanced,
@@ -190,6 +214,8 @@ impl Placement {
     fn uses_transforms(self) -> bool {
         match self {
             Self::Single => false,
+            #[cfg(test)]
+            Self::SampleMaps { .. } => false,
             #[cfg(test)]
             Self::Tilted(exponent) => exponent.is_some(),
             #[cfg(test)]
@@ -454,11 +480,32 @@ pub fn build_graph(
         None => post.defaults.selection().upload(&mut graph)?,
     };
     let (indexed, materials) = triangle.upload(&mut graph, &defaults)?;
+    #[cfg(test)]
+    let materials = if let Placement::SampleMaps { base, emission } = placement {
+        let image = graph.image("masked emission strip", ImageDesc::rgba8(2, 1))?;
+        graph.upload_image("upload strip", image, &[255, 0, 0, 0, 0, 255, 0, 255])?;
+        let mut textures = materials[0].textures();
+        textures.base_color = graph.image_view(image, 0, 0)?;
+        textures.emissive = textures.base_color;
+        [
+            GraphMaterial::new(materials[0].factors(), textures).with_samplers(
+                renderer::pbr::MaterialSamplers {
+                    base_color: base,
+                    emissive: emission,
+                    ..Default::default()
+                },
+            ),
+        ]
+    } else {
+        materials
+    };
     let single = [Draw::WorldSpaceIndexed(indexed)];
     #[cfg(test)]
     let (test_draws, transforms) = placed_draws(indexed, placement)?;
     let draws = match placement {
         Placement::Single => &single[..],
+        #[cfg(test)]
+        Placement::SampleMaps { .. } => &single[..],
         #[cfg(test)]
         Placement::Individual => &test_draws[..],
         #[cfg(test)]

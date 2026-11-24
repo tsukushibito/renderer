@@ -76,6 +76,9 @@ pub fn render(
     #[cfg(test)]
     let preparation = {
         let mut prep = preparation;
+        if matches!(settings.placement, Placement::SampleMaps { .. }) {
+            prep.reserve_image(renderer_core::graph::ImageDesc::rgba8(2, 1), 1)?;
+        }
         if settings.blockers.iter().any(|b| b.cutout) {
             prep.reserve_image(renderer_core::graph::ImageDesc::rgba8(3, 1), 1)?;
             prep.reserve_buffer(renderer::pbr::MaterialUniform::DESC, 1)?;
@@ -91,6 +94,10 @@ pub fn render(
     })?;
     let mut pool = GraphPool::new(limits.graph, frames)?;
     let mut runtime = Runtime::new(api.config(), limits, preparation.working_set())?;
+    #[cfg(test)]
+    if let Placement::SampleMaps { base, emission } = settings.placement {
+        runtime.prepare_samplers(&[base, emission])?;
+    }
     #[cfg(feature = "vulkan")]
     if let Some(vulkan) = runtime.as_vulkan()
         && vulkan.device_info().device_type == "CPU"

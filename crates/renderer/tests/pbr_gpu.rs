@@ -716,6 +716,68 @@ mod gpu {
         mirrored_model_draws_match_baked_geometry(Api::Vulkan);
     }
 
+    fn material_map_sampling(api: Api) {
+        use renderer_core::program::{AddressMode, SamplerDescriptor};
+        let repeat = SamplerDescriptor::LinearRepeat;
+        let mirror = SamplerDescriptor {
+            wrap_u: AddressMode::MirroredRepeat,
+            ..repeat
+        };
+        for technique in [
+            Technique::Forward,
+            Technique::ForwardPlus,
+            Technique::Deferred,
+        ] {
+            let capture = |base, emission| {
+                render(
+                    api,
+                    Settings {
+                        technique,
+                        placement: Placement::SampleMaps { base, emission },
+                        ..Settings::new(SampleCount::X1)
+                    },
+                    false,
+                    Bloom::Off,
+                    &[],
+                )
+                .unwrap()
+                .pop()
+                .unwrap()
+                .output
+            };
+            let red = capture(repeat, mirror);
+            let green = capture(repeat, repeat);
+            let hole = capture(mirror, repeat);
+            let (r, depth) = probe(&red).unwrap();
+            let (g, _) = probe(&green).unwrap();
+            assert!(r[0] > r[1].saturating_add(30), "{technique:?}: {r:?}");
+            assert!(g[1] > g[0].saturating_add(30), "{technique:?}: {g:?}");
+            assert_ne!(depth, probe(&hole).unwrap().1, "{technique:?} alpha mask");
+            assert_eq!(
+                red.shadow_maps, green.shadow_maps,
+                "{technique:?} emission changed shadow"
+            );
+            assert_ne!(
+                red.shadow_maps, hole.shadow_maps,
+                "{technique:?} shadow ignored base sampler"
+            );
+        }
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    #[ignore = "requires a hardware Vulkan adapter"]
+    fn vulkan_material_map_sampling() {
+        material_map_sampling(Api::Vulkan);
+    }
+
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires a hardware D3D12 adapter"]
+    fn d3d12_material_map_sampling() {
+        material_map_sampling(Api::D3D12);
+    }
+
     #[cfg(all(windows, feature = "d3d12"))]
     #[test]
     #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
