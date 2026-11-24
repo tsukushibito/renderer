@@ -139,7 +139,7 @@ impl SamplerDescriptor {
         })
     }
 
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+    #[cfg(feature = "vulkan")]
     pub(crate) const fn is_linear(self) -> bool {
         matches!(self.mag_filter, FilterMode::Linear)
             || matches!(self.min_filter, FilterMode::Linear)
