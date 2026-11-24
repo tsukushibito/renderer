@@ -30,7 +30,7 @@ Sashiko は、少人数のチームと AI が同じシーンを編集し、同�
 
 ## 研究施設で敵を追加して再生する
 
-[研究施設のシーン](../../assets/survivor/arena.json)を作業用にコピーする。原型は `prefabs`、原型を使う配置は `placements` にある。新しい種類を一つ試すには、`placements` 配列に次の要素を追加する。
+[研究施設のシーン](../../assets/survivor/arena.json)を作業用にコピーする。原型は `prefabs`、原型を使う配置は `placements` にある。画面上での編集と CLI の操作は[配置・プロパティ・クリップの編集手順](../guides/examples.md#配置プロパティクリップを編集する)から確認できる。新しい種類を一つ試すには、`placements` 配列に次の要素を追加する。
 
 ```json
 {
