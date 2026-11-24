@@ -15,7 +15,7 @@ development-validation = ["renderer-core/development-validation", "renderer?/dev
 memory-profiling = ["renderer-core/memory-profiling", "renderer?/memory-profiling", "renderer-asset?/metrics"]
 
 [dependencies]
-renderer-asset = { path = "../renderer-asset", optional = true }
+renderer-asset = { version = "0.1.0", path = "../renderer-asset", optional = true }
 renderer = { version = "0.1.0", path = "../renderer", optional = true }
 renderer-core = { version = "0.1.0", path = "../renderer-core" }
 

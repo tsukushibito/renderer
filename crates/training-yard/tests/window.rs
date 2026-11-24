@@ -192,12 +192,7 @@ fn replay_streams_a_new_image_class_during_window_presentation() -> PipelineResu
     fs::write(root.join("current"), format!("{id}\n"))?;
     // Both the standard window and the externally presented security monitor run
     // the normal replay, including drawing old equipment, resizing and selection.
-    for api in [
-        #[cfg(feature = "vulkan")]
-        "vulkan",
-        #[cfg(feature = "d3d12")]
-        "d3d12",
-    ] {
+    let replay = |api: &str| -> PipelineResult<()> {
         let status = Command::new(env!("CARGO_BIN_EXE_training-yard"))
             .args(["--api", api, "--mode", "window"])
             .env("TRAINING_YARD_ASSETS", &root)
@@ -206,7 +201,12 @@ fn replay_streams_a_new_image_class_during_window_presentation() -> PipelineResu
             status.success(),
             "{api} alternate catalog replay exited with {status}"
         );
-    }
+        Ok(())
+    };
+    #[cfg(feature = "vulkan")]
+    replay("vulkan")?;
+    #[cfg(feature = "d3d12")]
+    replay("d3d12")?;
     fs::remove_dir_all(root)?;
     Ok(())
 }
