@@ -70,6 +70,9 @@ pub(crate) fn host(mut runtime: Runtime) -> PipelineResult<Runtime> {
         Ok(())
     })?;
     let encoding = SdrOutput::capture(false);
+    prep.reserve_sampler(canvas::IMAGE_SAMPLER);
+    prep.reserve_sampler(output::TONE_MAP_SAMPLER);
+    prep.reserve_sampler(encoding.sampler());
     prep.reserve_raster_pass("encode", SampleCount::X1, |p| {
         p.transient_attachment("encoded", output)?;
         p.draws(&encoding.pipeline().program, 1)

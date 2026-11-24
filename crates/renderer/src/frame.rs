@@ -13,7 +13,7 @@ use renderer_core::{
     graph::{Graph, GraphError, ImageDesc, ImageHandle, LoadOp, PassHandle, SampleCount},
     runtime::{FrameId, FrameSubmission, ManagedImage, Runtime, RuntimeConfig},
 };
-use std::time::Duration;
+use std::{num::NonZeroUsize, time::Duration};
 
 #[cfg(all(
     windows,
@@ -83,6 +83,7 @@ impl Renderer {
         scene_extent: Option<[u32; 2]>,
         assets: SceneAssets<'a>,
         destination: FrameDestination,
+        frames_in_flight: NonZeroUsize,
     ) -> PipelineResult<PreparedSetup<'a>> {
         let scene = CameraView {
             extent: scene_extent.unwrap_or(camera.extent),
@@ -92,6 +93,7 @@ impl Renderer {
             CameraGroup::standard(scene, Technique::Forward, StandardConfig::new(scene.extent));
         group.output = None;
         let mut setup = RendererSetup::new(group);
+        setup.frames_in_flight = frames_in_flight;
         // Small scenes commonly load the first models after showing their UI.
         // Reserve instance operands here; geometry sizes are known at model load.
         setup.additional_objects = 16usize.saturating_sub(assets.draws);
@@ -144,18 +146,19 @@ impl Renderer {
         camera: CameraView,
         assets: SceneAssets<'_>,
     ) -> PipelineResult<Self> {
-        Self::headless_with(backend, camera, assets, |_| Ok(()))
+        Self::headless_with(backend, camera, assets, NonZeroUsize::MIN, |_| Ok(()))
     }
 
-    /// Include host passes and resources that will be used on this frame's Graph.
+    /// Prepare host passes and capacity for overlapping frame and asset submissions.
     pub fn headless_with(
         backend: RuntimeConfig,
         camera: CameraView,
         assets: SceneAssets<'_>,
+        frames_in_flight: NonZeroUsize,
         configure: impl FnOnce(&mut Preparation) -> Result<(), GraphError>,
     ) -> PipelineResult<Self> {
         let destination = FrameDestination::Capture;
-        let mut plan = Self::prepare(camera, None, assets, destination)?;
+        let mut plan = Self::prepare(camera, None, assets, destination, frames_in_flight)?;
         let host = Self::prepare_host(&mut plan, configure)?;
         let working_set = Self::base_working_set(&plan)?;
         let drawing = plan.build(backend)?;
@@ -220,7 +223,13 @@ impl Renderer {
         if scene_extent.is_some_and(|extent| extent.contains(&0)) {
             return Err("3D render extent must be nonzero".into());
         }
-        let mut plan = Self::prepare(camera, scene_extent, assets, self.destination)?;
+        let mut plan = Self::prepare(
+            camera,
+            scene_extent,
+            assets,
+            self.destination,
+            self.host.frames_in_flight(),
+        )?;
         plan.preparation_mut()
             .add_requirements(self.host.graph_requirements(), self.host.working_set())?;
         let working_set = Self::base_working_set(&plan)?;

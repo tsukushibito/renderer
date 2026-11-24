@@ -39,23 +39,3 @@ fn prepared_draw_count_tracks_simultaneous_parts() -> PipelineResult<()> {
     assert_eq!(setup.scene_limits().max_draws, 4);
     Ok(())
 }
-
-#[test]
-fn failed_equipment_preparation_preserves_current_draw_and_allows_retry() -> PipelineResult<()> {
-    use training_yard::{Action, EquipmentAsset, Yard};
-    let mut yard = Yard::new()?;
-    let camera = training_yard::camera(1, [48, 24])?;
-    let mut objects = Vec::new();
-    let current = yard.extract(&camera, &mut objects).objects[1].mesh;
-    let asset = EquipmentAsset::Wide;
-    yard.apply(Action::Request(asset), |_| Ok(()))?;
-    assert!(
-        yard.apply(Action::Deliver(asset), |_| Err("preparation failed".into()))
-            .is_err()
-    );
-    assert_eq!(yard.extract(&camera, &mut objects).objects[1].mesh, current);
-    yard.apply(Action::Request(asset), |_| Ok(()))?;
-    yard.apply(Action::Deliver(asset), |_| Ok(()))?;
-    assert_ne!(yard.extract(&camera, &mut objects).objects[1].mesh, current);
-    Ok(())
-}

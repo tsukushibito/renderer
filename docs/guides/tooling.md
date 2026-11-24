@@ -231,6 +231,11 @@ Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受�
 `instantiate` で作った個体には変換と材質の上書きを保持する。ロード時に `assets.add_model(&actor)` で全 LOD の資産を準備し、描画時に `draws(&camera)` でそのビューの部位を抽出する。
 個体の `set_material(slot, Some(handle))` はその個体に効き、`None` は共有材質に戻す。共有材質自体の変更は `Materials::update_pbr` で行う。[隊員のモデルと更新操作](../../crates/training-yard/src/yard.rs)
 
+訓練場の装備は隊員ごとに要求を持ち、同じ装備への要求は一つの読み込みと候補にまとめる。
+複数の装備は塗装画像の所有権を共有する。描画の前に一つの候補を進め、装備が描画可能になった時点で旧装備を使う最後の隊員を確認し、採用と退役を同時に確定する。
+標準フレームの `headless_with` と `WindowRenderer::new_with` では、転送と描画を同時に提出するため `frames_in_flight` に 2 を渡す。
+マウス選択や画像読み戻しの結果をホストに残すため、装備の転送結果は提出時の `FrameId` を指定して個別に回収する。[装備の読み込みと採用](../../crates/training-yard/src/yard/equipment.rs)
+
 スキニングを使うメッシュは、ロード時に `MeshData::skinned_pbr` に頂点と各頂点の最大 4 関節分の重みを渡す。
 個体ごとに `meshes.create_pose(mesh)` でポーズを作り、`actor.set_pose(mesh, Some(pose))` で結ぶ。
 ゲーム側でアニメーションを評価したら、逆バインド変換を含むモデル空間の最終行列を `meshes.set_joint_transforms(pose, &palette)` に一度渡す。

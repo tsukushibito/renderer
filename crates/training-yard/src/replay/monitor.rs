@@ -36,6 +36,7 @@ impl SecurityMonitor {
         plan.reserve_readback("fresh monitor", desc)?;
         plan.reserve_readback("composite viewport", ImageDesc::rgba8(48, 24))?;
         let prep = plan.preparation_mut();
+        prep.reserve_sampler(canvas::IMAGE_SAMPLER);
         prep.reserve_image(desc, 1)?; // Previous export survives until its replacement is accepted.
         prep.add_graph_requirements(GraphRequirements::imports("previous monitor", 1, 1)?)?;
         prep.reserve_raster_pass("canvas", SampleCount::X1, |pass| {

@@ -10,7 +10,10 @@ use renderer_core::{
     graph::ImageDesc,
     runtime::{FrameId, ManagedImage, Runtime, RuntimeConfig, WindowPresenter, WindowReadiness},
 };
-use std::time::{Duration, Instant};
+use std::{
+    num::NonZeroUsize,
+    time::{Duration, Instant},
+};
 
 pub struct WindowRenderer {
     presenter: WindowPresenter,
@@ -32,22 +35,25 @@ impl WindowRenderer {
         camera: CameraView,
         assets: SceneAssets<'_>,
     ) -> PipelineResult<Self> {
-        Self::new_with(window, backend, camera, assets, |_| Ok(()))
+        Self::new_with(window, backend, camera, assets, NonZeroUsize::MIN, |_| {
+            Ok(())
+        })
     }
 
-    /// Prepare application passes for the same Graph as the scene and screen overlay.
+    /// Prepare application passes and capacity for overlapping frame and asset submissions.
     pub fn new_with(
         window: impl HasWindowHandle + 'static,
         mut backend: RuntimeConfig,
         camera: CameraView,
         assets: SceneAssets<'_>,
+        frames_in_flight: NonZeroUsize,
         configure: impl FnOnce(
             &mut renderer_core::capacity::Preparation,
         ) -> Result<(), renderer_core::graph::GraphError>,
     ) -> PipelineResult<Self> {
         let presentation = renderer_core::PresentationConfig::default();
         let destination = FrameDestination::Window(presentation);
-        let mut plan = Renderer::prepare(camera, None, assets, destination)?;
+        let mut plan = Renderer::prepare(camera, None, assets, destination, frames_in_flight)?;
         let host = Renderer::prepare_host(&mut plan, configure)?;
         plan.fit_backend(&mut backend)?;
         let (runtime, presenter) = Runtime::for_window(

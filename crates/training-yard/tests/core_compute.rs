@@ -43,6 +43,7 @@ fn reverse_completion(
         config,
         Default::default(),
         WorkingSet {
+            samplers: &[],
             resources: &[ResourceClass::Buffer {
                 desc: BUFFER,
                 count: 4,

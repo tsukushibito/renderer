@@ -137,8 +137,10 @@ fn compose(config: RuntimeConfig) -> Result<(), Box<dyn std::error::Error>> {
         config,
         camera,
         renderer::pipeline::SceneAssets::new(&mut meshes, &mut materials, &[]),
+        std::num::NonZeroUsize::MIN,
         |prep| {
             prep.add_working_set(WorkingSet {
+                samplers: &[renderer::canvas::IMAGE_SAMPLER],
                 resources: &[resources.as_slice(), buffers.as_slice()].concat(),
                 raster: &[
                     canvas::programs(renderer::core::ImageFormat::Rgba8Unorm)?[0]

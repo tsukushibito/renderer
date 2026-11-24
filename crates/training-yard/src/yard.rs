@@ -11,8 +11,8 @@ use renderer::{
 };
 use std::sync::Arc;
 mod equipment;
+use equipment::Equipment;
 pub use equipment::EquipmentAsset;
-use equipment::{EquipmentLoads, LoadedArmor};
 
 pub const REPLAY_FRAMES: usize = 24;
 
@@ -23,9 +23,7 @@ pub struct Yard {
     model: Arc<Model>,
     mesh: MeshHandle,
     occupant: u64,
-    loads: EquipmentLoads,
-    equipped: Option<RenderObject>,
-    pub(crate) load_error: Option<renderer::core::graph::GraphError>,
+    equipment: Equipment,
     poses: [SkinPoseId; 2],
     body: MaterialHandle,
     glow: MaterialHandle,
@@ -41,6 +39,7 @@ pub enum Action {
     Pose([f32; 2]),
     Request(EquipmentAsset),
     Deliver(EquipmentAsset),
+    RequestFor(usize, EquipmentAsset),
     Despawn,
     Respawn,
 }
@@ -92,8 +91,8 @@ pub fn camera(id: u64, extent: [u32; 2]) -> PipelineResult<CameraView> {
 impl Yard {
     pub fn new() -> PipelineResult<Self> {
         let mut meshes = Meshes::new(MeshCapacity {
-            meshes: 3,
-            retired_mesh_versions: 2,
+            meshes: 5,
+            retired_mesh_versions: 4,
         })?;
         let vertices: Vec<_> = [-0.75, 0., 0.75]
             .into_iter()
@@ -167,9 +166,7 @@ impl Yard {
             model,
             mesh,
             occupant: 1,
-            loads: EquipmentLoads::default(),
-            equipped: None,
-            load_error: None,
+            equipment: Equipment::default(),
             poses,
             body,
             glow,
@@ -179,15 +176,12 @@ impl Yard {
     }
 
     pub fn assets(&mut self) -> SceneAssets<'_> {
-        self.assets_with(self.equipped)
-    }
-
-    fn assets_with(&mut self, equipment: Option<RenderObject>) -> SceneAssets<'_> {
+        let equipment = [self.equipment.object(0), self.equipment.object(1)];
         let mut assets = SceneAssets::new(&mut self.meshes, &mut self.materials, &[]);
         for actor in self.actors.iter().flatten() {
             assets.add_model(actor);
         }
-        if let Some(object) = equipment {
+        for object in equipment.into_iter().flatten() {
             assets.add_object(object);
         }
         assets.preload_pair(self.mesh, self.glow);
@@ -223,8 +217,9 @@ impl Yard {
         if let Some(actor) = &self.actors[index] {
             for (part, object) in actor.draw_parts(camera) {
                 let replacement = self
-                    .equipped
-                    .filter(|_| index == 0 && part.material_slot == 1);
+                    .equipment
+                    .object(index)
+                    .filter(|_| part.material_slot == 1);
                 out.push(replacement.map_or(object, |armor| armor.with_transform(actor.transform)));
             }
         }
@@ -249,40 +244,38 @@ impl Yard {
         targets
     }
 
-    fn release_armor(&mut self, armor: RenderObject) -> PipelineResult<()> {
-        self.meshes.remove(armor.mesh)?;
-        self.materials.remove(armor.material)?;
-        Ok(())
+    pub fn reserve_equipment(
+        preparation: &mut renderer::core::capacity::Preparation,
+    ) -> Result<(), renderer::core::graph::GraphError> {
+        equipment::reserve(preparation)
     }
 
-    fn equip(
+    pub fn pending_equipment(&self) -> bool {
+        self.equipment.pending_delivery()
+    }
+
+    pub fn load_error(&self) -> Option<&renderer::core::graph::GraphError> {
+        self.equipment.error.as_ref()
+    }
+
+    /// Poll the latest requests, keeping each actor's current draw until publication succeeds.
+    pub fn advance_equipment(
         &mut self,
-        loaded: LoadedArmor,
-        prepare: impl FnOnce(SceneAssets<'_>) -> PipelineResult<()>,
+        renderer: &mut impl renderer::pipeline::AssetPreparation,
     ) -> PipelineResult<()> {
-        let material = self.materials.create_pbr(emission(loaded.color))?;
-        let mesh = match self.meshes.create(loaded.mesh) {
-            Ok(mesh) => mesh,
-            Err(error) => {
-                self.materials.remove(material)?;
-                return Err(error.into());
-            }
-        };
-        let armor = RenderObject::new(mesh, material);
-        if let Err(error) = prepare(self.assets_with(Some(armor))) {
-            self.release_armor(armor)?;
-            return Err(error);
-        }
-        if let Some(old) = self.equipped.replace(armor) {
-            self.release_armor(old)?;
-        }
-        Ok(())
+        self.equipment.advance(
+            renderer,
+            &mut self.meshes,
+            &mut self.materials,
+            |r, name, desc, bytes| r.asset_renderer().upload_texture(name, desc, bytes),
+        )
     }
 
-    pub fn apply(
+    pub fn apply<R: renderer::pipeline::AssetPreparation>(
         &mut self,
         action: Action,
-        prepare: impl FnOnce(SceneAssets<'_>) -> PipelineResult<()>,
+        renderer: &mut R,
+        prepare: impl FnOnce(&mut R, SceneAssets<'_>) -> PipelineResult<()>,
     ) -> PipelineResult<()> {
         match action {
             Action::Armor(enabled) => {
@@ -292,7 +285,7 @@ impl Yard {
             }
             Action::BodyColor(color) => {
                 self.materials.update_pbr(self.body, emission(color))?;
-                prepare(self.assets())?;
+                prepare(renderer, self.assets())?;
             }
             Action::Pose(heights) => {
                 for (&pose, dy) in self.poses.iter().zip(heights) {
@@ -302,24 +295,21 @@ impl Yard {
                         .set_joint_transforms(pose, &[Transform::IDENTITY, joint])?;
                 }
             }
-            Action::Request(asset) => {
+            Action::Request(asset) | Action::RequestFor(0, asset) => {
                 if self.actors[0].is_some() {
-                    self.loads.request(self.occupant, asset)?;
+                    self.equipment.request(0, asset)?;
                 }
             }
-            Action::Deliver(asset) => {
-                let occupant = self.actors[0].as_ref().map(|_| self.occupant);
-                match self.loads.deliver(occupant, asset)? {
-                    Some(Ok(payload)) => self.equip(payload, prepare)?,
-                    Some(Err(error)) => self.load_error = Some(error),
-                    None => {}
+            Action::RequestFor(slot, asset) => {
+                if self.actors.get(slot).ok_or("unknown actor")?.is_some() {
+                    self.equipment.request(slot, asset)?;
                 }
             }
+            Action::Deliver(asset) => self.equipment.deliver(asset),
             Action::Despawn => {
+                self.equipment
+                    .detach(0, renderer, &mut self.meshes, &mut self.materials)?;
                 self.actors[0] = None;
-                if let Some(armor) = self.equipped.take() {
-                    self.release_armor(armor)?;
-                }
             }
             Action::Respawn if self.actors[0].is_none() => {
                 self.occupant = self
@@ -342,8 +332,143 @@ impl Yard {
         runtime: &mut renderer::core::runtime::Runtime,
     ) -> PipelineResult<()> {
         let mut yard = self;
+        yard.equipment.finish_upload(runtime)?;
         yard.meshes.release_gpu(runtime)?;
         yard.materials.clear(runtime)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PipelineResult;
+    use crate::validation;
+    use renderer::core::runtime::RuntimeConfig;
+    fn exercise_shared_equipment(config: RuntimeConfig) -> PipelineResult<()> {
+        use super::{Action, EquipmentAsset, Yard};
+        use renderer::Renderer;
+        let mut yard = Yard::new()?;
+        let camera = super::camera(1, [48, 24])?;
+        let mut renderer = Renderer::headless_with(
+            config,
+            camera,
+            yard.assets(),
+            std::num::NonZeroUsize::new(2).unwrap(),
+            Yard::reserve_equipment,
+        )?;
+        let mut objects = Vec::new();
+        let armor = |yard: &Yard, objects: &mut Vec<_>| {
+            let scene = yard.extract(&camera, objects);
+            [scene.objects[1].mesh, scene.objects[3].mesh]
+        };
+        let baseline = armor(&yard, &mut objects);
+        let apply = |yard: &mut Yard, renderer: &mut Renderer, action| {
+            yard.apply(action, renderer, |r, assets| Ok(r.prepare_scene(assets)?))
+        };
+        let mut uploads = 0;
+        for who in [0, 1] {
+            apply(
+                &mut yard,
+                &mut renderer,
+                Action::RequestFor(who, EquipmentAsset::Wide),
+            )?;
+        }
+        apply(
+            &mut yard,
+            &mut renderer,
+            Action::Deliver(EquipmentAsset::Wide),
+        )?;
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(15);
+        let mut injected = false;
+        while yard.pending_equipment() {
+            if start.elapsed() > std::time::Duration::from_secs(60) {
+                return Err("equipment did not become ready".into());
+            }
+            let result = yard.equipment.advance(
+                &mut renderer,
+                &mut yard.meshes,
+                &mut yard.materials,
+                |r, name, desc, bytes| {
+                    if !injected {
+                        injected = true;
+                        return Err("injected texture failure".into());
+                    }
+                    uploads += 1;
+                    r.upload_texture(name, desc, bytes)
+                },
+            );
+            if let Err(error) = result {
+                assert_eq!(error.to_string(), "injected texture failure");
+            }
+            if yard.pending_equipment() {
+                assert_eq!(armor(&yard, &mut objects), baseline);
+                let mut frame = renderer.begin_frame()?;
+                frame.draw_scene(yard.extract(&camera, &mut objects), 1.)?;
+                let capture = frame.capture()?;
+                let mut pixels = [0; 48 * 24 * 4];
+                assert!(renderer.read_capture(&capture, &mut pixels, timeout)?);
+            }
+        }
+        assert!(injected);
+        assert_eq!(uploads, 1);
+        let shared = armor(&yard, &mut objects);
+        assert_ne!(baseline[0], shared[0]);
+        assert_eq!(shared[0], shared[1]);
+
+        // A different mesh and material reuse the same paint while actor 1 keeps the first kit.
+        apply(
+            &mut yard,
+            &mut renderer,
+            Action::RequestFor(0, EquipmentAsset::Narrow),
+        )?;
+        apply(
+            &mut yard,
+            &mut renderer,
+            Action::Deliver(EquipmentAsset::Narrow),
+        )?;
+        let start = std::time::Instant::now();
+        while yard.pending_equipment() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(60));
+            yard.equipment.advance(
+                &mut renderer,
+                &mut yard.meshes,
+                &mut yard.materials,
+                |_, _, _, _| Err("paint was uploaded twice".into()),
+            )?;
+            std::thread::yield_now();
+        }
+        let split = armor(&yard, &mut objects);
+        assert_ne!(split[0], shared[0]);
+        assert_eq!(split[1], shared[1]);
+        apply(&mut yard, &mut renderer, Action::Despawn)?;
+        let scene = yard.extract(&camera, &mut objects);
+        assert_eq!(scene.objects.len(), 2);
+        assert_eq!(scene.objects[1].mesh, shared[1]);
+        let mut frame = renderer.begin_frame()?;
+        frame.draw_scene(scene, 1.)?;
+        let capture = frame.capture()?;
+        let mut pixels = [0; 48 * 24 * 4];
+        assert!(renderer.read_capture(&capture, &mut pixels, timeout)?);
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p[0] > 100 && p[1] > 100 && p[2] < 100)
+        );
+        let mut runtime = renderer.into_runtime()?;
+        yard.release(&mut runtime)?;
+        validation::check_validation(runtime)
+    }
+
+    #[test]
+    #[ignore = "requires real devices for each enabled backend"]
+    fn two_actors_share_one_upload_and_one_can_leave() -> PipelineResult<()> {
+        #[cfg(feature = "vulkan")]
+        exercise_shared_equipment(RuntimeConfig::Vulkan(Default::default()))?;
+        #[cfg(all(windows, feature = "d3d12"))]
+        exercise_shared_equipment(RuntimeConfig::D3D12(Default::default()))?;
         Ok(())
     }
 }
