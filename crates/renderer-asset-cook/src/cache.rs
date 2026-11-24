@@ -1,0 +1,125 @@
+use crate::{Error, PROFILE, store};
+use renderer_asset::{AssetId, BlobRef, Digest};
+use serde::Serialize;
+use std::collections::BTreeMap;
+use std::path::Path;
+
+#[derive(Serialize)]
+pub(super) struct Event {
+    asset_id: AssetId,
+    stage: &'static str,
+    action: &'static str,
+    reason: &'static str,
+    bytes: u64,
+    hash: Digest,
+}
+
+#[derive(Serialize)]
+pub(super) struct Report {
+    pub generation: Digest,
+    pub events: Vec<Event>,
+    pub published_bytes: u64,
+}
+
+pub(super) struct Cache<'a> {
+    directory: &'a Path,
+    output: &'a Path,
+    recipes: BTreeMap<Digest, BlobRef>,
+    published_bytes: u64,
+    events: Vec<Event>,
+}
+
+impl<'a> Cache<'a> {
+    pub fn new(directory: &'a Path, output: &'a Path) -> Self {
+        Self {
+            directory,
+            output,
+            recipes: BTreeMap::new(),
+            published_bytes: 0,
+            events: Vec::new(),
+        }
+    }
+
+    pub fn convert(
+        &mut self,
+        asset: AssetId,
+        stage: &'static str,
+        variant: &str,
+        inputs: &[u8],
+        convert: impl FnOnce() -> Result<Vec<u8>, Error>,
+    ) -> Result<BlobRef, Error> {
+        // The recipe digest locates a candidate. Its output digest separately verifies bytes.
+        let key = Digest::of(&serde_json::to_vec(&(
+            env!("ASSET_COOK_REVISION"),
+            PROFILE,
+            stage,
+            variant,
+            Digest::of(inputs),
+        ))?);
+        let (object, action, reason) = if let Some(existing) = self.recipes.get(&key) {
+            (*existing, "reused", "shared recipe")
+        } else {
+            let recipe_path = self.directory.join("recipes").join(key.to_string());
+            let record = store::read_if_present(&recipe_path)?;
+            let mut bytes = None;
+            if let Some(reference) = record
+                .as_deref()
+                .and_then(|v| serde_json::from_slice::<BlobRef>(v).ok())
+            {
+                let path = self
+                    .directory
+                    .join("objects")
+                    .join(reference.hash.to_string());
+                if let Some(cached) = store::read_if_present(&path)?
+                    && BlobRef::of(&cached) == reference
+                {
+                    bytes = Some((reference, cached));
+                }
+            }
+            let (reference, data, action, reason) = if let Some((reference, data)) = bytes {
+                (reference, data, "reused", "verified cache hit")
+            } else {
+                let data = convert()?;
+                let reference = BlobRef::of(&data);
+                store::publish(
+                    &self
+                        .directory
+                        .join("objects")
+                        .join(reference.hash.to_string()),
+                    &data,
+                )?;
+                store::publish(&recipe_path, &serde_json::to_vec(&reference)?)?;
+                let reason = if record.is_some() {
+                    "invalid cache entry"
+                } else {
+                    "new recipe inputs or converter"
+                };
+                (reference, data, "built", reason)
+            };
+            let path = self.output.join("objects").join(reference.hash.to_string());
+            if store::read_if_present(&path)?.is_none_or(|old| BlobRef::of(&old) != reference) {
+                store::publish(&path, &data)?;
+                self.published_bytes += reference.size;
+            }
+            self.recipes.insert(key, reference);
+            (reference, action, reason)
+        };
+        self.events.push(Event {
+            asset_id: asset,
+            stage,
+            action,
+            reason,
+            bytes: object.size,
+            hash: object.hash,
+        });
+        Ok(object)
+    }
+
+    pub fn report(self, generation: Digest) -> Report {
+        Report {
+            generation,
+            published_bytes: self.published_bytes,
+            events: self.events,
+        }
+    }
+}
