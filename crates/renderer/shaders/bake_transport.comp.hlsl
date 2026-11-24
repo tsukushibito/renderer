@@ -54,25 +54,47 @@ Table table() {
     t.tris = t.node_base + 3 * t.nodes;
 #endif
     t.mats = t.tris + 4 * number(counts.y);
-    t.tex = t.mats + 3 * number(counts.z);
+    t.tex = t.mats + 4 * number(counts.z);
     t.texels = t.tex + number(counts.w);
     return t;
 }
-float4 pixel(Table t, uint base, int2 size, int2 p) {
-    int2 q = ((p % size) + size) % size;
-    return fetch(t, base + q.y * size.x + q.x);
+// Modes and bit layout are shared with the offline scene packer in gpu.rs.
+float coordinate(float uv, uint mode) {
+    if (mode == 0) return frac(uv);
+    if (mode == 1) return saturate(uv);
+    return frac(uv * 0.5) * 2;
 }
-float4 texture_color(Table t, float index, float2 uv) {
+int address_axis(int p, int size, uint mode) {
+    // coordinate() bounds input taps to [-1, size] for repeat and
+    // [-1, 2*size] for mirror. Avoid integer division in the inner ray loop.
+    if (mode == 0) return p < 0 ? p + size : (p >= size ? p - size : p);
+    if (mode == 2) p = min(p, 2 * size - 1 - p);
+    return clamp(p, 0, size - 1);
+}
+int2 address_pixel(int2 p, int2 size, uint2 mode) {
+    return int2(address_axis(p.x, size.x, mode.x), address_axis(p.y, size.y, mode.y));
+}
+float4 pixel(Table t, uint base, int width, int x, int y) {
+    return fetch(t, base + y * width + x);
+}
+float4 texture_color(Table t, float index, float2 uv, uint sampler_word) {
     if (index < 0)
         return 1;
     float4 rec = fetch(t, t.tex + number(index));
     int2 size = clamp(int2(number(rec.x), number(rec.y)), 1, 16384);
     uint base = t.texels + number(rec.z) + 65536 * number(rec.w);
-    float2 p = frac(uv) * size - 0.5;
+    uint2 mode = uint2(sampler_word & 3, (sampler_word >> 2) & 3);
+    float2 p = float2(coordinate(uv.x, mode.x), coordinate(uv.y, mode.y)) * size;
+    if (sampler_word & 16) {
+        int2 q = address_pixel((int2)floor(p), size, mode);
+        return pixel(t, base, size.x, q.x, q.y);
+    }
+    p -= 0.5;
     int2 lo = (int2)floor(p);
+    int2 a = address_pixel(lo, size, mode), b = address_pixel(lo + 1, size, mode);
     float2 f = frac(p);
-    return lerp(lerp(pixel(t, base, size, lo), pixel(t, base, size, lo + int2(1, 0)), f.x),
-                lerp(pixel(t, base, size, lo + int2(0, 1)), pixel(t, base, size, lo + 1), f.x),
+    return lerp(lerp(pixel(t, base, size.x, a.x, a.y), pixel(t, base, size.x, b.x, a.y), f.x),
+                lerp(pixel(t, base, size.x, a.x, b.y), pixel(t, base, size.x, b.x, b.y), f.x),
                 f.y);
 }
 struct Hit {
@@ -102,9 +124,9 @@ bool trace_ray(Table t, float3 origin, float3 direction, float limit, bool occlu
         if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
             uint at = rt_triangle(t, query.CandidateGeometryIndex(), query.CandidatePrimitiveIndex());
             float4 m = fetch(t, at + 3);
-            uint mat = t.mats + 3 * number(m.w);
+            uint mat = t.mats + 4 * number(m.w);
             float2 uv = rt_uv(fetch(t, at), fetch(t, at + 1), fetch(t, at + 2), m, query.CandidateTriangleBarycentrics());
-            if (fetch(t, mat + 2).x * texture_color(t, fetch(t, mat).w, uv).a >= fetch(t, mat + 1).w)
+            if (fetch(t, mat + 2).x * texture_color(t, fetch(t, mat).w, uv, number(fetch(t, mat + 3).x)).a >= fetch(t, mat + 1).w)
                 query.CommitNonOpaqueTriangleHit();
         }
     }
@@ -115,14 +137,14 @@ bool trace_ray(Table t, float3 origin, float3 direction, float limit, bool occlu
     uint at = rt_triangle(t, query.CommittedGeometryIndex(), query.CommittedPrimitiveIndex());
     float4 a = fetch(t, at), b = fetch(t, at + 1), c = fetch(t, at + 2), m = fetch(t, at + 3);
     float2 uv = rt_uv(a, b, c, m, query.CommittedTriangleBarycentrics());
-    uint mat = t.mats + 3 * number(m.w);
+    uint mat = t.mats + 4 * number(m.w);
     float4 albedo = fetch(t, mat), props = fetch(t, mat + 2), emission = fetch(t, mat + 1);
     float3 normal = cross(b.xyz - a.xyz, c.xyz - a.xyz);
     hit.n = normalize(normal) * sign(-dot(normal, direction));
     hit.dist = query.CommittedRayT();
-    hit.diffuse = albedo.rgb * saturate(texture_color(t, albedo.w, uv).rgb) *
-                  (1 - props.y * saturate(texture_color(t, props.z, uv).b));
-    hit.emission = emission.rgb * texture_color(t, props.w, uv).rgb;
+    hit.diffuse = albedo.rgb * saturate(texture_color(t, albedo.w, uv, number(fetch(t, mat + 3).x)).rgb) *
+                  (1 - props.y * saturate(texture_color(t, props.z, uv, number(fetch(t, mat + 3).y)).b));
+    hit.emission = emission.rgb * texture_color(t, props.w, uv, number(fetch(t, mat + 3).z)).rgb;
     return true;
 }
 #else
@@ -159,7 +181,7 @@ bool trace_ray(Table t, float3 o, float3 d, float limit, bool occlusion, out Hit
             if (!(u >= 0.0 && v >= 0.0 && u + v <= 1.0 && dist > 0.0 && dist < limit))
                 continue;
             float4 uvmat = fetch(t, tri + 3);
-            uint mat = t.mats + 3 * number(uvmat.w);
+            uint mat = t.mats + 4 * number(uvmat.w);
             float4 emission = fetch(t, mat + 1);
             if (occlusion && emission.w < 0)
                 return true;
@@ -167,7 +189,7 @@ bool trace_ray(Table t, float3 o, float3 d, float limit, bool occlusion, out Hit
             float3 bary = float3(1.0 - u - v, u, v);
             float2 uv = float2(dot(bary, float3(v0.w, v1.w, v2.w)), dot(bary, uvmat.xyz));
             float4 properties = fetch(t, mat + 2);
-            float4 color = texture_color(t, albedo.w, uv);
+            float4 color = texture_color(t, albedo.w, uv, number(fetch(t, mat + 3).x));
             if (properties.x * color.a < emission.w)
                 continue;
             if (occlusion)
@@ -177,8 +199,8 @@ bool trace_ray(Table t, float3 o, float3 d, float limit, bool occlusion, out Hit
             hit.dist = dist;
             hit.n = normalize(cross(e, f)) * sign(det);
             hit.diffuse = albedo.rgb * saturate(color.rgb) *
-                          (1 - properties.y * saturate(texture_color(t, properties.z, uv).b));
-            hit.emission = emission.rgb * texture_color(t, properties.w, uv).rgb;
+                          (1 - properties.y * saturate(texture_color(t, properties.z, uv, number(fetch(t, mat + 3).y)).b));
+            hit.emission = emission.rgb * texture_color(t, properties.w, uv, number(fetch(t, mat + 3).z)).rgb;
         }
     }
     return found;
@@ -205,7 +227,7 @@ float3 sky_radiance(Table t, float3 d, float4 sky, float yaw) {
     float longitude = dot(d.xz,d.xz) > 0.0 ? atan2(d.z,d.x) : 0.0;
     float u = 0.5 + (longitude+yaw)/(2.0*PI);
     float v = clamp(acos(clamp(d.y,-1.0,1.0))/PI,0.5/height,1.0-0.5/height);
-    return sky.rgb * texture_color(t,sky.w,float2(u,v)).rgb;
+    return sky.rgb * texture_color(t,sky.w,float2(u,v),0).rgb;
 }
 float3 local_illuminance(Table t, float3 o, float3 n, uint seed) {
     float3 sum = 0;

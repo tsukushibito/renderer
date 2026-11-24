@@ -84,7 +84,11 @@ impl fmt::Display for BakeError {
 }
 impl std::error::Error for BakeError {}
 
-/// Linear RGBA, top-left origin, repeating UVs and bilinear sampling.
+use renderer::core::program::{AddressMode, FilterMode, SamplerDescriptor};
+use renderer::pbr::MaterialTextures;
+
+/// Linear RGBA base level for offline transport, with a top-left origin.
+/// All material lookups evaluate mip zero at the specified magnification filter.
 pub struct Texture {
     width: usize,
     height: usize,
@@ -105,14 +109,38 @@ impl Texture {
             pixels,
         })
     }
-    fn sample(&self, uv: [f32; 2]) -> [f32; 4] {
-        let x = uv[0].rem_euclid(1.) * self.width as f32 - 0.5;
-        let y = uv[1].rem_euclid(1.) * self.height as f32 - 0.5;
-        let (ix, iy) = (x.floor() as isize, y.floor() as isize);
-        let at = |dx, dy| {
-            self.pixels[(iy + dy as isize).rem_euclid(self.height as isize) as usize * self.width
-                + (ix + dx as isize).rem_euclid(self.width as isize) as usize]
+    fn sample(&self, uv: [f32; 2], sampler: SamplerDescriptor) -> [f32; 4] {
+        // Reduce before multiplying by the extent, including for very large finite UVs.
+        let coord = |uv: f32, size: usize, mode| {
+            let normalized = match mode {
+                AddressMode::Repeat => uv.rem_euclid(1.),
+                AddressMode::MirroredRepeat => uv.rem_euclid(2.),
+                AddressMode::ClampToEdge => uv.clamp(0., 1.),
+            };
+            normalized * size as f32
         };
+        let address = |i: isize, size: usize, mode| {
+            let n = size as isize;
+            (match mode {
+                AddressMode::ClampToEdge => i.clamp(0, n - 1),
+                AddressMode::Repeat => i.rem_euclid(n),
+                AddressMode::MirroredRepeat => {
+                    let k = i.rem_euclid(2 * n);
+                    k.min(2 * n - 1 - k)
+                }
+            }) as usize
+        };
+        let x = coord(uv[0], self.width, sampler.wrap_u);
+        let y = coord(uv[1], self.height, sampler.wrap_v);
+        let pixel = |x, y| {
+            self.pixels[address(y, self.height, sampler.wrap_v) * self.width
+                + address(x, self.width, sampler.wrap_u)]
+        };
+        if sampler.mag_filter == FilterMode::Nearest {
+            return pixel(x.floor() as isize, y.floor() as isize);
+        }
+        let (x, y) = (x - 0.5, y - 0.5);
+        let at = |dx, dy| pixel(x.floor() as isize + dx, y.floor() as isize + dy);
         let [a, b, c, d] = [at(0, 0), at(1, 0), at(0, 1), at(1, 1)];
         let (u, v) = (x - x.floor(), y - y.floor());
         std::array::from_fn(|i| {
@@ -126,6 +154,8 @@ pub struct Material {
     pub diffuse: Vec3,
     /// Linear Rec.709 emission for a white emissive texel, with luminance Y in cd/m².
     pub emissive_nits: Vec3,
+    /// The image may be shared across slots and materials with different sampling.
+    pub samplers: MaterialTextures<SamplerDescriptor>,
     pub base_texture: Option<usize>,
     pub alpha_cutoff: Option<f32>,
     pub opacity: f32,
@@ -139,6 +169,7 @@ impl Default for Material {
         Self {
             diffuse: [1.; 3],
             emissive_nits: [0.; 3],
+            samplers: MaterialTextures::default(),
             base_texture: None,
             alpha_cutoff: None,
             opacity: 1.,
@@ -236,5 +267,52 @@ impl Triangle {
             sub(self.positions[1], self.positions[0]),
             sub(self.positions[2], self.positions[0]),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bake_texture_addresses_each_axis_at_mip_zero() {
+        // Rows encode column + 10 * row. At this UV, all three address modes
+        // select different texels along both axes.
+        let pixels = (0..16)
+            .map(|i| [(i % 4 + 10 * (i / 4)) as f32; 4])
+            .collect();
+        let texture = Texture::new(4, 4, pixels).unwrap();
+        let modes = [
+            AddressMode::Repeat,
+            AddressMode::ClampToEdge,
+            AddressMode::MirroredRepeat,
+        ];
+        for (u, x) in modes.into_iter().zip([2, 0, 1]) {
+            for (v, y) in modes.into_iter().zip([1, 3, 2]) {
+                let sampler = SamplerDescriptor {
+                    wrap_u: u,
+                    wrap_v: v,
+                    mag_filter: FilterMode::Nearest,
+                    ..Default::default()
+                };
+                assert_eq!(
+                    texture.sample([-0.375, 1.375], sampler),
+                    [(x + 10 * y) as f32; 4]
+                );
+            }
+        }
+        for (wrap, expected) in [
+            (AddressMode::Repeat, 1.5),
+            (AddressMode::ClampToEdge, 0.),
+            (AddressMode::MirroredRepeat, 0.),
+        ] {
+            let s = SamplerDescriptor {
+                wrap_u: wrap,
+                wrap_v: AddressMode::ClampToEdge,
+                min_filter: FilterMode::Nearest,
+                ..Default::default()
+            };
+            assert_eq!(texture.sample([0., 0.], s), [expected; 4]);
+        }
     }
 }

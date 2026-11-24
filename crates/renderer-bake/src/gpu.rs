@@ -119,7 +119,7 @@ pub(super) fn pack<const N: usize>(
         + 3 * N
         + counts[0] * 3
         + counts[1] * 4
-        + counts[2] * 3
+        + counts[2] * 4
         + counts[3]
         + scene.textures.iter().map(|t| t.pixels.len()).sum::<usize>();
     let width = count.min(4096);
@@ -190,6 +190,24 @@ pub(super) fn pack<const N: usize>(
             m.metallic,
             m.orm_texture.map_or(-1., |i| i as f32),
             m.emission_texture.map_or(-1., |i| i as f32),
+        ]);
+        // One exact integer per map. The bake shader evaluates mip zero, so only
+        // the wraps and magnification filter are needed by the transport ABI.
+        let sampler_word = |s: crate::SamplerDescriptor| {
+            let axis = |mode| match mode {
+                crate::AddressMode::Repeat => 0u32,
+                crate::AddressMode::ClampToEdge => 1,
+                crate::AddressMode::MirroredRepeat => 2,
+            };
+            (axis(s.wrap_u)
+                | (axis(s.wrap_v) << 2)
+                | (u32::from(s.mag_filter == crate::FilterMode::Nearest) << 4)) as f32
+        };
+        push([
+            sampler_word(m.samplers.base_color),
+            sampler_word(m.samplers.orm),
+            sampler_word(m.samplers.emissive),
+            0.,
         ]);
     }
     let mut start = 0usize;

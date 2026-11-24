@@ -59,6 +59,7 @@ fn import(scene: &Scene) -> Result<BakeScene, Error> {
     for m in &scene.materials {
         let factors = renderer::pbr::MaterialFactors::decode(&m.uniform)?;
         materials.push(Material {
+            samplers: m.samplers,
             diffuse: [
                 factors.base_color[0],
                 factors.base_color[1],

@@ -546,9 +546,9 @@ fn rasterize(
                 if material.alpha_cutoff.is_some_and(|cutoff| {
                     let uv = std::array::from_fn(|k| interp(v.map(|v| v.material_uv[k])));
                     material.opacity
-                        * material
-                            .base_texture
-                            .map_or(1., |i| scene.textures[i].sample(uv)[3])
+                        * material.base_texture.map_or(1., |i| {
+                            scene.textures[i].sample(uv, material.samplers.base_color)[3]
+                        })
                         < cutoff
                 }) {
                     continue;

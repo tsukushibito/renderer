@@ -276,6 +276,55 @@ fn check_visibility(backend: BakeBackend) {
             );
         }
     }
+    // The mask and emitter use the same texels with different wraps and filters.
+    // Only nearest, U clamp + V mirror reaches the opaque texel. Linear repeat
+    // samples red = 0.35 at (-0.125, 1.125) in the same 2x2 texture.
+    use renderer::core::program::{AddressMode, FilterMode, SamplerDescriptor};
+    let mut front = tri(-0.5, 0.5, 0.25, 0);
+    front.uv = [[-0.125, 1.125]; 3];
+    let mut m = Material {
+        diffuse: [0.; 3],
+        emissive_nits: [1.; 3],
+        alpha_cutoff: Some(0.9),
+        base_texture: Some(0),
+        emission_texture: Some(0),
+        ..Default::default()
+    };
+    m.samplers.base_color = SamplerDescriptor {
+        wrap_u: AddressMode::ClampToEdge,
+        wrap_v: AddressMode::MirroredRepeat,
+        mag_filter: FilterMode::Nearest,
+        ..Default::default()
+    };
+    let scene = BakeScene::new(
+        vec![front],
+        vec![m],
+        vec![
+            Texture::new(
+                2,
+                2,
+                vec![
+                    [0.; 4],
+                    [0.4, 0., 0., 0.],
+                    [0.2, 0., 0., 1.],
+                    [0.6, 0., 0., 0.],
+                ],
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    for actual in [
+        scene.bake_irradiance(&[receiver], lighting, 1).unwrap()[0],
+        scene
+            .sample_surface_irradiance(&[receiver], lighting, settings)
+            .unwrap()[0],
+    ] {
+        assert!(
+            (actual[0] - 0.35 * std::f32::consts::PI).abs() < 0.0005,
+            "{actual:?}"
+        );
+    }
 }
 
 #[cfg(feature = "vulkan")]
