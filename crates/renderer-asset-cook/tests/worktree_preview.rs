@@ -215,3 +215,85 @@ fn merging_assets_keeps_the_last_selection_until_git_records_the_resolution() ->
     assert_ne!(resolved.paint()?, ours.paint()?);
     Ok(())
 }
+
+#[test]
+fn png_only_updates_match_full_cook_for_lfs_twins_and_buffer_inputs() -> Result {
+    let project = workspace()?;
+    let root = &project.0;
+    let source = root.join("source");
+    git(
+        root,
+        &["lfs", "install", "--local", "--skip-repo", "--skip-smudge"],
+    )?;
+    fs::write(
+        root.join(".gitattributes"),
+        "source/paint.png filter=lfs diff=lfs merge=lfs -text\nsource/geometry.png filter=lfs diff=lfs merge=lfs -text\n",
+    )?;
+    let lfs = root.join("test-lfs");
+    git(root, &["config", "lfs.storage", lfs.to_str().unwrap()])?;
+    fs::copy(source.join("paint.png"), source.join("twin.png"))?;
+    let spare = source.join("spare.gltf");
+    fs::write(
+        &spare,
+        fs::read_to_string(&spare)?.replace("paint.png", "twin.png"),
+    )?;
+    let wide = source.join("wide.gltf");
+    fs::write(
+        &wide,
+        fs::read_to_string(&wide)?.replace("wide.bin", "geometry.png"),
+    )?;
+    fs::rename(source.join("wide.bin"), source.join("geometry.png"))?;
+    git(root, &["add", ".gitattributes", "source"])?;
+    git(root, &["add", "--renormalize", "source"])?;
+    git(
+        root,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "aliased image fixture",
+        ],
+    )?;
+    let pointer = Command::new("git")
+        .current_dir(root)
+        .args(["show", "HEAD:source/paint.png"])
+        .output()?;
+    assert!(
+        pointer
+            .stdout
+            .starts_with(b"version https://git-lfs.github.com/spec/v1")
+    );
+
+    let open = || -> Result<Value> {
+        let view = Preview::read(Preview::start(root)?)?;
+        assert!(view.data["diagnostic"].is_null(), "{}", view.data);
+        assert_eq!(view.data["generation"], project.report()?["generation"]);
+        Ok(view.data.clone())
+    };
+    let clean = open()?;
+    // An off-line image edit must work even if the mesh input used by the
+    // same equipment can no longer be obtained from LFS.
+    let oid = renderer_asset::Digest::of(&fs::read(source.join("geometry.png"))?).to_string();
+    let local_blob = lfs
+        .join("objects")
+        .join(&oid[..2])
+        .join(&oid[2..4])
+        .join(&oid);
+    fs::rename(local_blob, root.join("withheld-mesh"))?;
+    // The two paths initially refer to identical bytes. Changing just one
+    // must leave the other's material binding as in an independent full cook.
+    fs::copy(source.join("normal.png"), source.join("paint.png"))?;
+    let edited = open()?;
+    assert_ne!(edited["generation"], clean["generation"]);
+    assert_eq!(edited["conversions"], 1);
+    fs::copy(source.join("cutout.png"), source.join("twin.png"))?;
+    assert_ne!(open()?["generation"], edited["generation"]);
+    // A buffer may use a .png suffix. Its new positions require a mesh cook.
+    let geometry = source.join("geometry.png");
+    let mut bytes = fs::read(&geometry)?;
+    bytes[..4].copy_from_slice(&0.375f32.to_le_bytes());
+    fs::write(&geometry, bytes)?;
+    assert_eq!(open()?["conversions"], 1);
+    Ok(())
+}
