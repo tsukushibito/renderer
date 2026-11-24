@@ -199,6 +199,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut max_probes = None;
     let mut reference = None;
     let mut diffuse_reference = None;
+    let mut probe_sh_reference = None;
     let mut ibl_manifest = None;
     let mut look = Look::LumberyardDay;
     let mut day_only = false;
@@ -211,6 +212,11 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut estimate = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--probe-sh-reference" => {
+                probe_sh_reference = Some(PathBuf::from(
+                    args.next().ok_or("missing probe positions file")?,
+                ));
+            }
             "--diffuse-reference" => {
                 diffuse_reference = Some(PathBuf::from(
                     args.next().ok_or("missing diffuse receiver file")?,
@@ -273,7 +279,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json | --probe-sh-reference POSITIONS.json]"
                 );
                 println!(
                     "Placement options: --placement-method floor|remedy --max-probes N (1..32)"
@@ -289,9 +295,14 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     if day_only && endpoints_only {
         return Err("choose either day-only or endpoints-only".into());
     }
-    if (reference.is_some() || diffuse_reference.is_some())
+    let reference_count = [&reference, &diffuse_reference, &probe_sh_reference]
+        .into_iter()
+        .filter(|path| path.is_some())
+        .count();
+    if reference_count > 0
         && (layout.is_some()
-            || (reference.is_some() && diffuse_reference.is_some())
+            || reference_count > 1
+            || estimate
             || endpoints_only
             || ibl_manifest.is_none()
             || !matches!(
@@ -308,7 +319,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         _ => return Err("select --manifest or --fixture".into()),
     };
     if let Some(spacing) = placement_spacing {
-        if layout.is_some() || reference.is_some() || diffuse_reference.is_some() || estimate {
+        if layout.is_some() || reference_count > 0 || estimate {
             return Err(
                 "choose one reflection layout, reference, estimate or bake operation".into(),
             );
@@ -338,13 +349,13 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         eprintln!("Generated {} reflection probe placements", placements.len());
         return Ok(());
     }
-    let receivers = if reference.is_none() && diffuse_reference.is_none() && layout.is_none() {
+    let receivers = if reference_count == 0 && layout.is_none() {
         receivers(&scene)?
     } else {
         Vec::new()
     };
     let surfaces = renderer_bake::SurfaceLayout::new(&receivers, 2048, texel_budget)?;
-    if reference.is_none() && diffuse_reference.is_none() && layout.is_none() {
+    if reference_count == 0 && layout.is_none() {
         eprintln!(
             "{} static placements, {} receiver triangles, {} sides in {} pages, {} allocated texels/scenario",
             receivers.len(),
@@ -426,6 +437,28 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             })
         };
     let lights = [lighting(scenarios[0])?, lighting(scenarios[1])?];
+    if let Some(path) = probe_sh_reference {
+        let positions: Vec<[f32; 3]> = serde_json::from_slice(&std::fs::read(path)?)?;
+        let coefficients =
+            bake.probe_sh_reference(&positions, lights[0], settings.rays_per_probe)?;
+        #[derive(serde::Serialize)]
+        struct Projection {
+            identity: String,
+            samples: u32,
+            coefficients: Vec<[[f32; 3]; 9]>,
+        }
+        let mut file = std::io::BufWriter::new(std::fs::File::create_new(output)?);
+        serde_json::to_writer(
+            &mut file,
+            &Projection {
+                identity,
+                samples: settings.rays_per_probe,
+                coefficients,
+            },
+        )?;
+        file.flush()?;
+        return Ok(());
+    }
     if let Some(path) = diffuse_reference {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]

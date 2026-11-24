@@ -36,7 +36,71 @@ fn coords(base: [u32; 3], span: u32, i: usize) -> [u32; 3] {
     std::array::from_fn(|a| base[a] + span * c[a])
 }
 
+fn probe_ray(index: u32, count: u32) -> Vec3 {
+    let z = 1. - 2. * (index as f32 + 0.5) / count as f32;
+    let r = (1. - z * z).max(0.).sqrt();
+    let (s, c) = (TAU * (index.reverse_bits() as f64 / 4294967296.) as f32).sin_cos();
+    [r * c, z, r * s]
+}
+
+fn linear_sh([x, y, z]: Vec3) -> [f32; 4] {
+    [1., 2. * x, 2. * y, 2. * z]
+}
+
+// In this Cartesian basis the common sample weight is pi / ray count.
+// The L2 contribution to the clamped cosine kernel is (5/8)(3 dot(w,n)^2 - 1).
+fn quadratic_sh([x, y, z]: Vec3) -> [f32; 5] {
+    [
+        3.75 * x * y,
+        3.75 * y * z,
+        3.75 * x * z,
+        0.9375 * (x * x - y * y),
+        0.3125 * (3. * z * z - 1.),
+    ]
+}
+
 impl BakeScene {
+    /// Offline comparison at supplied world-space probe positions. The first four
+    /// coefficients use the production CPU bake's rays, weights and summation order.
+    /// Evaluate RGB irradiance with [1, x, y, z, xy, yz, xz, x²-y², 3z²-1] for
+    /// a unit surface normal (x,y,z). The result already includes the cosine integral.
+    pub fn probe_sh_reference(
+        &self,
+        positions: &[Vec3],
+        light: crate::Lighting,
+        samples: u32,
+    ) -> Result<Vec<[Vec3; 9]>, BakeError> {
+        light.validate(self)?;
+        if samples == 0 || positions.iter().any(|&p| !crate::finite(p)) {
+            return Err(BakeError(
+                "invalid probe reference position or sample count",
+            ));
+        }
+        let workers = std::thread::available_parallelism().map_or(1, usize::from);
+        let chunk = positions.len().div_ceil(workers).max(1);
+        let mut result = vec![[[0.; 3]; 9]; positions.len()];
+        std::thread::scope(|scope| {
+            for (positions, coefficients) in positions.chunks(chunk).zip(result.chunks_mut(chunk)) {
+                scope.spawn(move || {
+                    for (&position, sh) in positions.iter().zip(coefficients) {
+                        for j in 0..samples {
+                            let dir = probe_ray(j, samples);
+                            let mut seed = j;
+                            let radiance = self.incoming(position, dir, light, &mut seed);
+                            let basis = linear_sh(dir).into_iter().chain(quadratic_sh(dir));
+                            for (coefficient, weight) in sh.iter_mut().zip(basis) {
+                                for (channel, l) in radiance.into_iter().enumerate() {
+                                    coefficient[channel] += l * (PI / samples as f32) * weight;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        Ok(result)
+    }
+
     fn intersects_geometry(&self, p: Vec3, size: f32) -> bool {
         let mut i = 0;
         while let Some(node) = self.bvh.0.get(i) {
@@ -224,19 +288,12 @@ impl BakeScene {
                                 }
                             }
                             for j in 0..settings.rays_per_probe {
-                                let z = 1. - 2. * (j as f32 + 0.5) / settings.rays_per_probe as f32;
-                                let r = (1. - z * z).max(0.).sqrt();
-                                let (s, c) = (TAU * (j.reverse_bits() as f64 / 4294967296.) as f32)
-                                    .sin_cos();
-                                let dir = [r * c, z, r * s];
+                                let dir = probe_ray(j, settings.rays_per_probe);
                                 for (scenario, light) in lights.iter().enumerate() {
                                     let mut seed = j;
                                     let radiance = self.incoming(p, dir, *light, &mut seed);
                                     // Cosine-convolved real SH in Cartesian form.
-                                    for (k, basis) in [1., 2. * dir[0], 2. * dir[1], 2. * dir[2]]
-                                        .into_iter()
-                                        .enumerate()
-                                    {
+                                    for (k, basis) in linear_sh(dir).into_iter().enumerate() {
                                         for (channel, l) in radiance.into_iter().enumerate() {
                                             data[2 + 4 * scenario + k][channel] +=
                                                 l * (PI / settings.rays_per_probe as f32) * basis;
@@ -271,6 +328,23 @@ impl BakeScene {
 mod tests {
     use super::*;
     use crate::Lighting;
+    #[test]
+    fn quadratic_projection_recovers_rotated_legendre_kernel() {
+        for ray in 0..17 {
+            let dir = probe_ray(ray, 17);
+            for receiver in 0..19 {
+                let n @ [x, y, z] = probe_ray(receiver, 19);
+                let basis = [x * y, y * z, x * z, x * x - y * y, 3. * z * z - 1.];
+                let fitted: f32 = quadratic_sh(dir)
+                    .into_iter()
+                    .zip(basis)
+                    .map(|(a, b)| a * b)
+                    .sum();
+                let dot = crate::dot(dir, n);
+                assert!((fitted - 0.625 * (3. * dot * dot - 1.)).abs() < 1e-6);
+            }
+        }
+    }
     #[test]
     fn sky_scenarios_share_a_leaf_and_survive_serialization() {
         let scene = BakeScene::new(vec![], vec![], vec![]).unwrap();
