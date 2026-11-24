@@ -43,13 +43,13 @@ pub fn main() -> Result<()> {
         let root = scratch.join(format!("scale-{entries}-{owners}"));
         expand_catalog(Path::new(fixture), &root, id, entries)?;
         let (case, counts) = scale(config, &root, id, owners)?;
-        if let Some(expected) = reference {
-            if counts != expected {
-                return Err(format!(
-                    "changed work for the same dependency set: {counts:?} vs {expected:?}"
-                )
-                .into());
-            }
+        if let Some(expected) = reference
+            && counts != expected
+        {
+            return Err(format!(
+                "changed work for the same dependency set: {counts:?} vs {expected:?}"
+            )
+            .into());
         }
         reference = Some(counts);
         cases.push(json!({"entries":entries, "owners":owners, "measurement":case}));
@@ -133,7 +133,17 @@ fn scale(
         gpu.mesh_registrations,
         gpu.material_registrations,
     ];
-    let value = json!({"index_open_us":index_us, "ready_us":ready_us, "catalog_lookups":yard.equipment_lookups(), "reads":io.reads,"bytes_read":io.bytes,"image_uploads":gpu.image_uploads,"image_upload_bytes":gpu.image_bytes,"meshes":gpu.mesh_registrations,"materials":gpu.material_registrations});
+    if counts.contains(&0) || yard.equipment_lookups() != 1 {
+        return Err("expected one indexed lookup and nonempty shared resources".into());
+    }
+    let value = json!({
+        "index_open_us":index_us,
+        "ready_us":ready_us,
+        "catalog_lookups":yard.equipment_lookups(),
+        "reads":io.reads, "bytes_read":io.bytes,
+        "image_uploads":gpu.image_uploads, "image_upload_bytes":gpu.image_bytes,
+        "meshes":gpu.mesh_registrations, "materials":gpu.material_registrations
+    });
     finish(device, yard)?;
     Ok((value, counts))
 }

@@ -155,8 +155,10 @@ pub(super) fn run(
     } else {
         Some(thread::spawn(move || -> io::Result<()> {
             for object in refs {
-                let loaded = worker_store.load(&object)?;
-                loaded.image()?;
+                let loaded = worker_store.load(&object).and_then(|bytes| {
+                    bytes.image()?;
+                    Ok(bytes)
+                });
                 tx.send(loaded)
                     .map_err(|_| io::Error::other("frame loop stopped"))?;
             }
@@ -164,9 +166,11 @@ pub(super) fn run(
         }))
     };
     let mut pending: [Option<Pending>; COUNT] = std::array::from_fn(|_| None);
+    let mut staged = std::collections::VecDeque::<Arc<ObjectBytes>>::with_capacity(COUNT);
     let mut submissions = 0;
     let mut minimum = None;
     let mut target = None;
+    let mut loading_frames = 0;
     let mut peak_pending = 0;
     let mut post_quality_registered = None;
     let mut max_issued = 0;
@@ -189,7 +193,17 @@ pub(super) fn run(
             }
         }
         let mut issued = 0;
-        while worker.is_some()
+        while staged.len() < COUNT {
+            let Ok(object) = rx.try_recv() else {
+                break;
+            };
+            staged.push_back(object?);
+        }
+        // Synchronize arrivals for the burst cases; the paced case admits each
+        // finished read independently. Neither path waits on the frame thread.
+        let batch_available = mode == "throttled" || staged.len() == COUNT;
+        while batch_available
+            && worker.is_some()
             && submissions < 2 * COUNT
             && (submissions < COUNT || minimum.is_some())
         {
@@ -197,7 +211,7 @@ pub(super) fn run(
             if pending[lane].is_some() {
                 break;
             }
-            let Ok(blob): std::result::Result<Arc<ObjectBytes>, _> = rx.try_recv() else {
+            let Some(blob) = staged.pop_front() else {
                 break;
             };
             let image = blob.image()?;
@@ -240,6 +254,7 @@ pub(super) fn run(
         }
         if target.is_none() && tiles.iter().all(|t| t.channel == 2) {
             target = Some(timed.elapsed().as_micros());
+            loading_frames = samples.len();
         }
         if changed {
             let mut current = Memory::default();
@@ -268,18 +283,46 @@ pub(super) fn run(
         return Err(format!("ordinary frame allocation: {events:?}").into());
     }
     let peak_heap = crate::ALLOCATOR.peak();
+    if matches!(mode, "concurrent" | "retained") && max_issued != UPLOAD_LIMIT {
+        return Err("four simultaneous promotions were not exercised".into());
+    }
     let stats = store.stats();
     if mode != "baseline" && (submissions != 2 * COUNT || stats.reads != 2 * COUNT as u64) {
         return Err("missing or duplicate upload/read".into());
     }
-    samples.sort_unstable();
-    let percentile = |p: usize| samples[(samples.len() * p).div_ceil(100) - 1] as f64 / 1000.;
-    let report = json!({"case":mode,"frames":samples.len(),"frame_us":{"p50":percentile(50),"p95":percentile(95),"p99":percentile(99),"max":percentile(100)},"minimum_us":minimum,"target_us":target,"max_update_us":update_max_us,
-      "reads":stats.reads,"io_bytes":stats.bytes,"io_rate_bytes_s":if mode=="throttled"{Some(IO_RATE)}else{None},
-      "heap_start":initial_heap,"heap_peak":peak_heap,"store_peak_live_bytes":stats.peak_live_bytes,"registered_peak":memory.registered,"registered_at_target":post_quality_registered,
-      "native_allocation_peak":memory.native,"upload_arena_capacity":memory.staging,"upload_arena_peak_reserved":memory.reserved,"peak_outstanding_upload_payload":peak_pending,
-      "max_texture_submitted_per_tick":max_issued,"baseline_events":{"rust":events.rust.map(|e|e.calls),"vma_host":events.vma_host.map(|e|e.calls),"native":events.native}, "old_versions_held":old.len()});
+    if mode == "retained" {
+        if old.len() != COUNT {
+            return Err("missing retained image".into());
+        }
+        frame(&mut renderer, &yard, &mut objects, &old)?;
+    }
+    let loading = distribution(&mut samples[..loading_frames]);
+    let report = json!({
+        "case":mode, "frames":samples.len(), "frame_us":distribution(&mut samples),
+        "loading_frames":loading_frames, "loading_frame_us":loading,
+        "minimum_us":minimum, "target_us":target, "max_update_us":update_max_us,
+        "reads":stats.reads, "io_bytes":stats.bytes,
+        "io_rate_bytes_s":(mode=="throttled").then_some(IO_RATE),
+        "heap_start":initial_heap, "heap_peak":peak_heap, "store_peak_live_bytes":stats.peak_live_bytes,
+        "registered_peak":memory.registered, "registered_at_target":post_quality_registered,
+        "native_allocation_peak":memory.native, "upload_arena_capacity":memory.staging,
+        "upload_arena_peak_reserved":memory.reserved, "peak_outstanding_upload_payload":peak_pending,
+        "max_texture_submitted_per_tick":max_issued,
+        "baseline_events":(mode=="baseline").then(||json!({
+            "rust":events.rust.map(|e|e.calls), "vma_host":events.vma_host.map(|e|e.calls), "native":events.native
+        })),
+        "old_versions_held":old.len()
+    });
     drop((old, tiles));
     finish(renderer, yard)?;
     Ok(report)
+}
+
+fn distribution(samples: &mut [u64]) -> Option<Value> {
+    if samples.is_empty() {
+        return None;
+    }
+    samples.sort_unstable();
+    let us = |p: usize| samples[(samples.len() * p).div_ceil(100) - 1] as f64 / 1000.;
+    Some(json!({"p50":us(50), "p95":us(95), "p99":us(99), "max":us(100)}))
 }
