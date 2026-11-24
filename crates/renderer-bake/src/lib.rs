@@ -21,29 +21,9 @@ pub enum BakeBackend {
     D3D12,
 }
 
-impl BakeBackend {
-    fn integrate<const N: usize>(
-        self,
-        scene: &BakeScene,
-        jobs: &[SurfaceSample],
-        lights: [Lighting; N],
-        samples: u32,
-        limit: f32,
-        sh_order: ProbeShOrder,
-    ) -> Result<Option<Vec<[f32; 4]>>, Box<dyn std::error::Error>> {
-        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-        if self != Self::Cpu {
-            return gpu::integrate(self, scene, jobs, lights, samples, limit, sh_order);
-        }
-        #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
-        let _ = (scene, jobs, lights, samples, limit, sh_order);
-        if matches!(self, Self::Auto | Self::Cpu) {
-            Ok(None)
-        } else {
-            Err("requested GPU backend is not compiled".into())
-        }
-    }
-}
+mod execution;
+pub use execution::{BakeExecution, BakeMethod, SurfaceBake};
+pub use probes::ProbeBake;
 
 mod bvh;
 mod lightmaps;

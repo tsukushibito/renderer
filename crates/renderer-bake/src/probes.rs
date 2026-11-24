@@ -16,6 +16,25 @@ pub struct ProbeSettings {
     pub max_depth: u8,
     pub rays_per_probe: u32,
 }
+
+/// An adaptive probe volume with its transport already selected and prepared.
+/// Execution uses the same device that supplied the provenance.
+pub struct ProbeBake<'a, const N: usize> {
+    scene: &'a BakeScene,
+    lights: [Lighting; N],
+    settings: ProbeSettings,
+    execution: crate::BakeExecution,
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    gpu: Option<crate::gpu::Transport<N>>,
+}
+impl<const N: usize> ProbeBake<'_, N> {
+    pub fn execution(&self) -> &crate::BakeExecution {
+        &self.execution
+    }
+    pub fn bake(self) -> Result<BakedLighting, Box<dyn std::error::Error>> {
+        self.scene.integrate_probe_volume(self)
+    }
+}
 impl Default for ProbeSettings {
     fn default() -> Self {
         Self {
@@ -154,6 +173,14 @@ impl BakeScene {
         scenarios: impl crate::LightingScenarios<N>,
         settings: ProbeSettings,
     ) -> Result<BakedLighting, Box<dyn std::error::Error>> {
+        self.prepare_probe_bake(scenarios, settings)?.bake()
+    }
+
+    pub fn prepare_probe_bake<const N: usize>(
+        &self,
+        scenarios: impl crate::LightingScenarios<N>,
+        settings: ProbeSettings,
+    ) -> Result<ProbeBake<'_, N>, Box<dyn std::error::Error>> {
         let lights = self.lighting(scenarios)?;
         if !settings.spacing.is_normal()
             || settings.spacing <= 0.
@@ -162,6 +189,43 @@ impl BakeScene {
         {
             return Err(BakeError("invalid probe bake settings").into());
         }
+        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        let gpu = crate::gpu::Transport::prepare(
+            settings.backend,
+            self,
+            lights,
+            settings.rays_per_probe,
+            Some(settings.sh_order),
+        )?;
+        #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
+        if !matches!(
+            settings.backend,
+            crate::BakeBackend::Auto | crate::BakeBackend::Cpu
+        ) {
+            return Err("requested GPU backend is not compiled".into());
+        }
+        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        let execution = gpu
+            .as_ref()
+            .map(|transport| transport.execution.clone())
+            .unwrap_or_else(crate::BakeExecution::cpu);
+        #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
+        let execution = crate::BakeExecution::cpu();
+        Ok(ProbeBake {
+            scene: self,
+            lights,
+            settings,
+            execution,
+            #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+            gpu,
+        })
+    }
+    fn integrate_probe_volume<const N: usize>(
+        &self,
+        prepared: ProbeBake<'_, N>,
+    ) -> Result<BakedLighting, Box<dyn std::error::Error>> {
+        let lights = prepared.lights;
+        let settings = prepared.settings;
         let bounds = self.bvh.0.first();
         let lo = bounds.map_or([0.; 3], |n| n.lo);
         let hi = bounds.map_or([0.; 3], |n| n.hi);
@@ -242,21 +306,24 @@ impl BakeScene {
             })
             .collect::<Vec<_>>();
         let probe_start = texels.len();
-        let jobs = positions
-            .iter()
-            .map(|&position| crate::SurfaceSample {
-                position,
-                normal: [0.; 3],
-            })
-            .collect::<Vec<_>>();
-        if let Some(result) = settings.backend.integrate(
-            self,
-            &jobs,
-            lights,
-            settings.rays_per_probe,
-            length,
-            settings.sh_order,
-        )? {
+        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        let gpu_result = if let Some(mut gpu) = prepared.gpu {
+            let jobs = positions
+                .iter()
+                .map(|&position| crate::SurfaceSample {
+                    position,
+                    normal: [0.; 3],
+                })
+                .collect::<Vec<_>>();
+            let result = gpu.trace(&jobs, length)?;
+            gpu.finish()?;
+            Some(result)
+        } else {
+            None
+        };
+        #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
+        let gpu_result: Option<Vec<[f32; 4]>> = None;
+        if let Some(result) = gpu_result {
             texels.extend(result);
         } else {
             // Independent receiver work, with fixed per-probe summation order.
