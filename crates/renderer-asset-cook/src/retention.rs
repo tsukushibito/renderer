@@ -1,7 +1,7 @@
 //! A repository-local store uses OS locks for transactions, in-flight builds and
 //! reader lifetimes. A crashed process releases its locks without a timeout.
-use crate::store;
-use renderer_asset::{Catalog, Digest};
+use crate::{inputs::Manifest, store};
+use renderer_asset::{BlobRef, Catalog, Digest};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
@@ -386,8 +386,51 @@ impl StoreGuard {
             fs::remove_file(path)?;
             bytes += size;
         }
+        self.prune_weak_indexes(&catalogs, &objects)?;
         self.prune_metadata(usize::MAX)?;
         Ok(bytes)
+    }
+
+    // The caller has completed the payload sweep and exclusively owns the build
+    // gate. A weak record surviving interruption is reconsidered on the next GC.
+    fn prune_weak_indexes(
+        &self,
+        catalogs: &BTreeSet<Digest>,
+        objects: &BTreeSet<Digest>,
+    ) -> io::Result<()> {
+        let snapshots = self.root.join("snapshots");
+        for (_, path) in weak_entries(&snapshots)? {
+            let bytes = fs::read(&path)?;
+            if let Some(id) = std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                && !catalogs.contains(&id)
+            {
+                fs::remove_file(path)?;
+            }
+        }
+        for (key, path) in weak_entries(&self.root.join("dependencies"))? {
+            if snapshots.join(key.to_string()).try_exists()? {
+                continue;
+            }
+            let bytes = fs::read(&path)?;
+            if let Ok((hash, manifest)) = serde_json::from_slice::<(Digest, Manifest)>(&bytes)
+                && hash == Digest::of(&serde_json::to_vec(&(key, manifest))?)
+            {
+                fs::remove_file(path)?;
+            }
+        }
+        for (_, path) in weak_entries(&self.root.join("recipes"))? {
+            let bytes = fs::read(&path)?;
+            if let Ok(reference) = serde_json::from_slice::<BlobRef>(&bytes)
+                && !objects.contains(&reference.hash)
+                // v1 stores the canonical BlobRef bytes. Keep any unknown fields.
+                && bytes == serde_json::to_vec(&reference)?
+            {
+                fs::remove_file(path)?;
+            }
+        }
+        Ok(())
     }
 
     /// A missing pin and an unlocked lease represent no holder. Validate both
@@ -452,6 +495,7 @@ impl StoreGuard {
             "catalogs",
             "recipes",
             "snapshots",
+            "dependencies",
             "registrations",
         ] {
             for entry in read_directory(&self.root.join(dir))? {
@@ -480,6 +524,20 @@ fn read_directory(directory: &Path) -> io::Result<impl Iterator<Item = io::Resul
         Err(e) => return Err(e),
     };
     Ok(contents.into_iter().flatten())
+}
+
+// Unrecognized weak hints do not own data. Preserve them for their writer.
+fn weak_entries(directory: &Path) -> io::Result<Vec<(Digest, PathBuf)>> {
+    let mut files = Vec::new();
+    for entry in read_directory(directory)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && let Some(id) = entry.file_name().to_str().and_then(|s| s.parse().ok())
+        {
+            files.push((id, entry.path()));
+        }
+    }
+    Ok(files)
 }
 
 /// Reject unfamiliar retention records before deletion. The publisher's private
@@ -515,7 +573,7 @@ fn entries(directory: &Path) -> io::Result<Vec<(Digest, PathBuf)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use renderer_asset::{AssetId, BlobRef, Equipment, Primitive};
+    use renderer_asset::{AssetId, Equipment, Primitive};
     use std::collections::BTreeMap;
 
     struct Sandbox(PathBuf);
@@ -681,6 +739,50 @@ mod tests {
         assert!(StoreGuard::lock(&root, namespace).is_err());
         assert_eq!(fs::read_dir(root.join("registrations"))?.count(), 1);
         assert!(root.join("leases").join(id.to_string()).is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn gc_sweeps_only_known_unreachable_weak_indexes_and_can_rebuild() -> io::Result<()> {
+        let tmp = Sandbox::new()?;
+        let root = tmp.0.join("store");
+        let store = StoreGuard::lock(&root, Digest::of(b"equipment"))?;
+        let a = tmp.git_dir("a")?;
+        let b = tmp.git_dir("b")?;
+        let (red, red_bytes) = publish(&root, b"red")?;
+        let (blue, _) = publish(&root, b"blue")?;
+        store.select(&a, red)?;
+        store.select(&b, blue)?;
+        let write_indexes = |color: &[u8], id: Digest| -> io::Result<_> {
+            let key = Digest::of(color);
+            let paths = ["snapshots", "dependencies", "recipes"]
+                .map(|dir| root.join(dir).join(key.to_string()));
+            let manifest = Manifest::new();
+            let hash = Digest::of(&serde_json::to_vec(&(key, &manifest))?);
+            store::publish(&paths[0], id.to_string().as_bytes())?;
+            store::publish(&paths[1], &serde_json::to_vec(&(hash, manifest))?)?;
+            store::publish(&paths[2], &serde_json::to_vec(&BlobRef::of(color))?)?;
+            Ok(paths)
+        };
+        let retired = write_indexes(b"red", red)?;
+        let retained = write_indexes(b"blue", blue)?;
+        let unknown = ["snapshots", "dependencies", "recipes"]
+            .map(|dir| root.join(dir).join(Digest::of(dir.as_bytes()).to_string()));
+        for path in &unknown {
+            store::publish(path, b"future format")?;
+        }
+        let staged = root.join("dependencies").join(".asset-99-1.partial");
+        fs::write(&staged, b"partial map")?;
+        assert_eq!(store.release(&a)?, red_bytes);
+        assert_eq!(store.gc()?, red_bytes);
+        assert!(!staged.exists());
+        assert!(retired.iter().all(|p| !p.exists()));
+        assert!(retained.iter().chain(&unknown).all(|p| p.exists()));
+        assert_eq!(publish(&root, b"red")?.0, red);
+        write_indexes(b"red", red)?;
+        store.select(&a, red)?;
+        assert_eq!(store.gc()?, 0);
+        assert!(retired.iter().all(|p| p.exists()));
         Ok(())
     }
 
