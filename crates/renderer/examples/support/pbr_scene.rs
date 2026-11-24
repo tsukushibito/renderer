@@ -557,8 +557,11 @@ pub fn build_graph(
                 maps.base_color = graph.image_view(texture, 0, 0)?;
                 cutout_materials = [
                     materials[0],
-                    GraphMaterial::new(factors, maps)
-                        .with_sampler(renderer_core::program::SamplerDescriptor::NearestClamp),
+                    GraphMaterial::new(factors, maps).with_samplers(
+                        renderer::pbr::MaterialSamplers::uniform(
+                            renderer_core::program::SamplerDescriptor::NearestClamp,
+                        ),
+                    ),
                 ];
                 geometry.material = 1;
                 &cutout_materials[..]

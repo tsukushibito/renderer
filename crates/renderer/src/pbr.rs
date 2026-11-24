@@ -28,7 +28,9 @@ pub use crate::pipeline::Technique;
 pub use culling::{CascadeClip, Frustum, ViewCulling};
 pub use defaults::DefaultResourceError;
 pub use defaults::{DefaultResources, DefaultViews, Defaults, PreparedDefaults};
-pub use draw::{Draw, DrawLightmap, GraphMaterial, IndexedDraw, MaterialTextures};
+pub use draw::{
+    Draw, DrawLightmap, GraphMaterial, IndexedDraw, MaterialSamplers, MaterialTextures,
+};
 pub(crate) use history::MapHistory;
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};

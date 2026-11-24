@@ -118,6 +118,9 @@ pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         image(1, 2),
         image(1, 3),
         sampler(1, 4),
+        sampler(1, 5),
+        sampler(1, 6),
+        sampler(1, 7),
         image(2, 0),
         image(2, 1),
         image(2, 2),
@@ -148,13 +151,16 @@ pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         0,
         0,
         0,
+        0,
+        0,
+        0,
         crate::pbr::ReflectionProbes::METADATA_BYTES as u64,
     ],
     sampling_pairs: &[
         pair(1, 0, 4),
-        pair(1, 1, 4),
-        pair(1, 2, 4),
-        pair(1, 3, 4),
+        pair(1, 1, 5),
+        pair(1, 2, 6),
+        pair(1, 3, 7),
         pair(2, 0, 3),
         pair(2, 1, 3),
         pair(2, 2, 3),
@@ -246,7 +252,7 @@ pub(super) static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
 /// HDR PBR Program for opaque and alpha-mask geometry.
 pub const fn opaque_program() -> ManagedRasterProgram {
     // SAFETY: Pinned modules/reflection exactly match the declared 48-byte stream,
-    // camera, material and bounded probe UBO prefixes, 18 bindings and every image/sampler pairing.
+    // camera, material and bounded probe UBO prefixes, 21 bindings and every image/sampler pairing.
     // All dynamic shadow indices are clamped to four matrices/vectors. Sampling
     // uses normalized coordinates/explicit LOD and native-bounded selected Views.
     // Gradients precede any discard. Arithmetic has guarded normalization and
@@ -597,6 +603,9 @@ mod tests {
                     "t2,space1",
                     "t3,space1",
                     "s4,space1",
+                    "s5,space1",
+                    "s6,space1",
+                    "s7,space1",
                     "t0,space2",
                     "t1,space2",
                     "t2,space2",
