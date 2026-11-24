@@ -224,6 +224,12 @@ jobs:
       - name: Run workspace tests on Linux CPU
         if: runner.os == 'Linux' && matrix.backend == 'cpu'
         run: cargo test --locked --workspace --tests --no-default-features
+      - name: Verify packaged game and saved profile from a clean working directory
+        if: runner.os == 'Linux' && matrix.backend == 'cpu'
+        run: |
+          cargo build --locked -p survivor --no-default-features
+          python -B tools/package_game.py --project assets/survivor/package.json --exe target/debug/survivor --output build/survivor-package
+          python -B tools/survivor/verify_package.py build/survivor-package
       - name: Run workspace tests on Linux Vulkan with development validation
         if: runner.os == 'Linux' && matrix.backend == 'vulkan'
         run: cargo test --locked --workspace --tests --no-default-features --features vulkan,development-validation,graph-diagnostics
