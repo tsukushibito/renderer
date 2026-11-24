@@ -212,6 +212,7 @@ pub(super) fn pack<const N: usize>(
 }
 /// A single transport scene upload serves all surface pages for these scenarios.
 pub(super) struct Transport<const N: usize> {
+    pub(super) execution: crate::BakeExecution,
     timing: Option<crate::lightmaps::DispatchTiming>,
     runtime: Runtime,
     pool: GraphPool,
@@ -331,12 +332,14 @@ impl<const N: usize> Transport<N> {
                 Err("requested GPU backend unavailable".into())
             };
         };
+        let execution = compute_execution(&rt, sh_order)?;
         let mut pool = GraphPool::new(graph_cap, 1)?;
         let (uploaded, image) = rt.upload_texture(&mut pool, "bake world", desc, &pixels)?;
         drop(pixels);
         rt.wait_for_frame(uploaded, WAIT)?
             .ok_or("bake upload timed out")?;
         Ok(Some(Self {
+            execution,
             timing: None,
             runtime: rt,
             pool,
@@ -367,6 +370,7 @@ impl<const N: usize> Transport<N> {
             output,
             batch,
             sh_order,
+            ..
         } = self;
         let (input, output, batch) = (*input, *output, *batch);
         let coefficients = sh_order.map_or(1, ProbeShOrder::coefficient_count);
@@ -493,22 +497,48 @@ impl<const N: usize> Transport<N> {
     }
 }
 
-pub(super) fn integrate<const N: usize>(
-    choice: BakeBackend,
-    scene: &BakeScene,
-    jobs: &[SurfaceSample],
-    lights: [Lighting; N],
-    samples: u32,
-    limit: f32,
-    sh_order: ProbeShOrder,
-) -> Result<Option<Vec<[f32; 4]>>> {
-    if jobs.is_empty() {
-        return Ok(Some(Vec::new()));
+fn compute_execution(
+    runtime: &Runtime,
+    order: Option<ProbeShOrder>,
+) -> Result<crate::BakeExecution> {
+    #[cfg(feature = "vulkan")]
+    if let Some(vulkan) = runtime.as_vulkan() {
+        let shader: &[u8] = match order {
+            None => include_bytes!("../../renderer/shaders/bake_surface.comp.spv"),
+            Some(ProbeShOrder::L1) => {
+                include_bytes!("../../renderer/shaders/bake_transport.comp.spv")
+            }
+            Some(ProbeShOrder::L2) => {
+                include_bytes!("../../renderer/shaders/bake_transport_l2.comp.spv")
+            }
+        };
+        return Ok(crate::BakeExecution::vulkan(
+            vulkan,
+            crate::BakeMethod::VulkanCompute,
+            shader,
+        ));
     }
-    let Some(mut gpu) = Transport::prepare(choice, scene, lights, samples, Some(sh_order))? else {
-        return Ok(None);
-    };
-    let result = gpu.trace(jobs, limit)?;
-    gpu.finish()?;
-    Ok(Some(result))
+    #[cfg(all(windows, feature = "d3d12"))]
+    if let Some(dx) = runtime.as_d3d12() {
+        let info = dx.device_info();
+        let shader: &[u8] = match order {
+            None => include_bytes!("../../renderer/shaders/dxil/bake_surface.comp.dxil"),
+            Some(ProbeShOrder::L1) => {
+                include_bytes!("../../renderer/shaders/dxil/bake_transport.comp.dxil")
+            }
+            Some(ProbeShOrder::L2) => {
+                include_bytes!("../../renderer/shaders/dxil/bake_transport_l2.comp.dxil")
+            }
+        };
+        return Ok(crate::BakeExecution {
+            method: crate::BakeMethod::D3D12Compute,
+            device: format!(
+                "{:04x}:{:04x} {}",
+                info.vendor_id, info.device_id, info.name
+            ),
+            driver: format!("{}:sm{}", info.driver_version, info.shader_model),
+            shader: Some(shader),
+        });
+    }
+    Err("missing native compute execution device".into())
 }
