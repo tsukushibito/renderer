@@ -106,7 +106,7 @@ impl Marker {
     }
     fn update(&mut self, _id: EntityId, ctx: &mut RuleContext) {
         let occupied =
-            crate::arena::distance_squared(ctx.player, ctx.marker) < self.radius * self.radius;
+            sashiko::space::distance_squared(ctx.player, ctx.marker) < self.radius * self.radius;
         ctx.entered_marker |= occupied && !self.occupied;
         self.occupied = occupied;
     }
@@ -135,8 +135,7 @@ pub fn registry() -> Registry<RuleContext> {
     types
 }
 
-pub(crate) fn decode_arena(source: &str) -> Result<Arena, String> {
-    let data: Value = serde_json::from_str(source).map_err(|e| e.to_string())?;
+pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
     if data.get("schema_version").is_none() {
         return serde_json::from_value(data).map_err(|e| e.to_string());
     }
