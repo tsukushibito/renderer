@@ -108,15 +108,13 @@ pub(super) struct RasterStorage {
     _rtv_heap: Option<DescriptorHeap>,
     _dsv_heap: Option<DescriptorHeap>,
     srv: DescriptorHeap,
-    sampler: DescriptorHeap,
+    sampler: std::sync::Arc<super::sampler::SamplerHeap>,
     pub(super) images: Vec<GraphImage>,
     image_slots: ImageSlots,
     target_views: TargetViews,
     texture_cpu_start: D3D12_CPU_DESCRIPTOR_HANDLE,
     texture_gpu_start: D3D12_GPU_DESCRIPTOR_HANDLE,
-    sampler_gpu_start: D3D12_GPU_DESCRIPTOR_HANDLE,
     texture_step: u32,
-    sampler_step: u32,
     descriptor_capacity: usize,
     pub(super) raster_descriptor_capacity: usize,
     pub(super) compute_descriptor_start: usize,
@@ -617,7 +615,7 @@ fn require_image_format(owner: &DeviceOwner, desc: ImageDesc) -> Result<(), D3D1
     }
 }
 
-fn checked_handle_capacity(
+pub(super) fn checked_handle_capacity(
     cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     gpu: Option<D3D12_GPU_DESCRIPTOR_HANDLE>,
     step: u32,
@@ -866,7 +864,7 @@ impl RasterStorage {
             })?
             .max(1);
         // One million is the portable shader-visible CBV/SRV/UAV heap bound
-        // at the supported baseline; samplers need only their single fixed slot.
+        // at the supported baseline. The sampler heap is shared by the Device.
         if !(1..=1_000_000).contains(&descriptor_capacity) {
             return Err(D3D12RuntimeError::invalid(
                 "prepared Graph descriptor capacity must be within 1..=1000000",
@@ -917,7 +915,7 @@ impl RasterStorage {
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
             true,
         )?;
-        let sampler = DescriptorHeap::new(owner, 4, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, true)?;
+        let sampler = owner.sampler_heap()?;
         let rtv_heap = (color_count != 0)
             .then(|| DescriptorHeap::new(owner, color_count, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, false))
             .transpose()?;
@@ -926,19 +924,10 @@ impl RasterStorage {
             .transpose()?;
         // SAFETY: Every heap is live and owned, each handle's CPU/GPU visibility
         // matches the getter, and increments are immutable Device properties.
-        let (
-            texture_cpu_start,
-            texture_gpu_start,
-            sampler_gpu_start,
-            rtv_start,
-            dsv_start,
-            rtv_step,
-            dsv_step,
-        ) = unsafe {
+        let (texture_cpu_start, texture_gpu_start, rtv_start, dsv_start, rtv_step, dsv_step) = unsafe {
             (
                 srv.raw.GetCPUDescriptorHandleForHeapStart(),
                 srv.raw.GetGPUDescriptorHandleForHeapStart(),
-                sampler.raw.GetGPUDescriptorHandleForHeapStart(),
                 rtv_heap
                     .as_ref()
                     .map(|heap| heap.raw.GetCPUDescriptorHandleForHeapStart()),
@@ -1032,36 +1021,6 @@ impl RasterStorage {
                 });
             }
         }
-        // Prepare all immutable policies once. A Graph binding selects its
-        // actual policy without editing a live descriptor or allocating.
-        // SAFETY: Live shader-visible heap holds all four in-bounds descriptors.
-        let sampler_cpu = unsafe { sampler.raw.GetCPUDescriptorHandleForHeapStart() };
-        checked_handle_capacity(
-            sampler_cpu,
-            Some(sampler_gpu_start),
-            owner.descriptor_steps[1],
-            4,
-        )?;
-        for (index, policy) in [
-            crate::program::SamplerDescriptor::NearestClamp,
-            crate::program::SamplerDescriptor::LinearRepeat,
-            crate::program::SamplerDescriptor::LinearClamp,
-            crate::program::SamplerDescriptor::LinearRepeatUClampV,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let desc = super::sampler::sampler_desc(policy);
-            // SAFETY: Each prepared descriptor has its own bounded heap slot.
-            unsafe {
-                owner.raw.CreateSampler(
-                    &desc,
-                    D3D12_CPU_DESCRIPTOR_HANDLE {
-                        ptr: sampler_cpu.ptr + index * owner.descriptor_steps[1] as usize,
-                    },
-                );
-            }
-        }
         let image_slots = ImageSlots::new(images.iter().map(|image| image.desc))?;
         Ok(Self {
             _rtv_heap: rtv_heap,
@@ -1073,9 +1032,7 @@ impl RasterStorage {
             target_views: TargetViews::new(total)?,
             texture_cpu_start,
             texture_gpu_start,
-            sampler_gpu_start,
             texture_step: owner.descriptor_steps[0],
-            sampler_step: owner.descriptor_steps[1],
             descriptor_capacity,
             raster_descriptor_capacity,
             compute_descriptor_start: raster_descriptor_capacity,
@@ -1132,16 +1089,8 @@ impl RasterStorage {
     pub(super) fn sampler_gpu(
         &self,
         policy: crate::program::SamplerDescriptor,
-    ) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        let index = match policy {
-            crate::program::SamplerDescriptor::NearestClamp => 0u64,
-            crate::program::SamplerDescriptor::LinearRepeat => 1u64,
-            crate::program::SamplerDescriptor::LinearClamp => 2u64,
-            crate::program::SamplerDescriptor::LinearRepeatUClampV => 3u64,
-        };
-        D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: self.sampler_gpu_start.ptr + index * u64::from(self.sampler_step),
-        }
+    ) -> Result<D3D12_GPU_DESCRIPTOR_HANDLE, D3D12RuntimeError> {
+        self.sampler.get(policy)
     }
 
     pub(super) fn srv_heap(&self) -> &ID3D12DescriptorHeap {
@@ -1149,7 +1098,7 @@ impl RasterStorage {
     }
 
     pub(super) fn sampler_heap(&self) -> &ID3D12DescriptorHeap {
-        &self.sampler.raw
+        self.sampler.raw()
     }
 }
 

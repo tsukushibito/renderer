@@ -20,6 +20,7 @@ pub const PLANES: [&str; 3] = [
     "G-buffer emissive and AO",
 ];
 
+const GBUFFER_SAMPLER: SamplerDescriptor = SamplerDescriptor::NearestClamp;
 const GEOMETRY_PASS: &str = "G-buffer opaque and mask";
 const INVERSE_VIEW_PROJECTION: &str = "deferred inverse view projection";
 const UPDATE_PASS: &str = "deferred reconstruction update";
@@ -37,6 +38,7 @@ pub struct Inputs {
     pub clear: [f32; 4],
     pub camera: BufferHandle,
     pub view_projection: [[f32; 4]; 4],
+    /// Caller-provided lighting bindings. Reserve the samplers supplied here.
     pub lighting: [Binding; 11],
     /// Optional [light table](crate::pbr_forward_plus::LocalLightLayout) and rectangle shadow atlas.
     /// When no light casts rectangle shadows, the light table can fill both slots.
@@ -121,6 +123,7 @@ pub(super) fn reserve_passes(
                 },
             ],
             raster: &programs[..2 + usize::from(point_lights)],
+            samplers: &[GBUFFER_SAMPLER],
             ..WorkingSet::default()
         },
     )
@@ -189,7 +192,7 @@ pub fn append(
         Binding {
             group: 1,
             binding: 4,
-            resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+            resource: BindingResource::Sampler(GBUFFER_SAMPLER),
         },
     ];
     let mut bindings = [inverse; 20];

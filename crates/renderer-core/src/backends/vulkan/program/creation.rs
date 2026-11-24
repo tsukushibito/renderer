@@ -114,10 +114,6 @@ pub(in crate::backends::vulkan) struct Program {
     pub(super) layout: vk::PipelineLayout,
     pub(super) pipeline: vk::Pipeline,
     multisample_pipeline: vk::Pipeline,
-    pub(in crate::backends::vulkan) sampler: vk::Sampler,
-    linear_sampler: vk::Sampler,
-    linear_clamp_sampler: vk::Sampler,
-    linear_u_repeat_sampler: vk::Sampler,
     pub(super) raster_layouts: [vk::DescriptorSetLayout; RASTER_GROUP_COUNT],
     pub(super) raster_groups: usize,
     pub(in crate::backends::vulkan) raster_asset: ManagedRasterProgram,
@@ -134,18 +130,6 @@ impl Program {
             crate::graph::SampleCount::X4 => self.multisample_pipeline,
         };
         (pipeline != vk::Pipeline::null()).then_some(pipeline)
-    }
-
-    pub(in crate::backends::vulkan) fn sampler_for(
-        &self,
-        desc: crate::program::SamplerDescriptor,
-    ) -> vk::Sampler {
-        match desc {
-            crate::program::SamplerDescriptor::NearestClamp => self.sampler,
-            crate::program::SamplerDescriptor::LinearRepeat => self.linear_sampler,
-            crate::program::SamplerDescriptor::LinearClamp => self.linear_clamp_sampler,
-            crate::program::SamplerDescriptor::LinearRepeatUClampV => self.linear_u_repeat_sampler,
-        }
     }
 
     /// Explicit preparation for a reviewed Raster variant. Native handles are
@@ -310,10 +294,6 @@ impl Program {
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
             multisample_pipeline: vk::Pipeline::null(),
-            sampler: vk::Sampler::null(),
-            linear_sampler: vk::Sampler::null(),
-            linear_clamp_sampler: vk::Sampler::null(),
-            linear_u_repeat_sampler: vk::Sampler::null(),
             raster_layouts: [vk::DescriptorSetLayout::null(); RASTER_GROUP_COUNT],
             raster_groups: groups,
             raster_asset: managed.clone(),
@@ -343,53 +323,6 @@ impl Program {
                 )
             }
             .map_err(|r| native(&result.owner, "vkCreateDescriptorSetLayout(Raster)", r))?;
-        }
-        if managed
-            .bindings()
-            .iter()
-            .any(|slot| slot.kind == BindingType::Sampler)
-        {
-            // SAFETY: Fixed nearest/clamp sampler requires no optional feature; result owns it.
-            result.sampler = unsafe {
-                result.owner.device.create_sampler(
-                    &vk::SamplerCreateInfo::default()
-                        .mag_filter(vk::Filter::NEAREST)
-                        .min_filter(vk::Filter::NEAREST)
-                        .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .max_lod(0.0),
-                )?
-            };
-            // SAFETY: Linear repeat requires no optional features. Images paired
-            // with it are checked for linear-filter format support at preparation.
-            result.linear_sampler = unsafe {
-                result
-                    .owner
-                    .device
-                    .create_sampler(&super::super::managed::sampler_info(
-                        crate::program::SamplerDescriptor::LinearRepeat,
-                    ))?
-            };
-            // SAFETY: Feature-free policies; the result immediately owns each handle.
-            result.linear_clamp_sampler = unsafe {
-                result
-                    .owner
-                    .device
-                    .create_sampler(&super::super::managed::sampler_info(
-                        crate::program::SamplerDescriptor::LinearClamp,
-                    ))?
-            };
-            // SAFETY: Same ownership and feature contract as the other prepared samplers.
-            result.linear_u_repeat_sampler = unsafe {
-                result
-                    .owner
-                    .device
-                    .create_sampler(&super::super::managed::sampler_info(
-                        crate::program::SamplerDescriptor::LinearRepeatUClampV,
-                    ))?
-            };
         }
         let pushes = [vk::PushConstantRange {
             stage_flags: shader_stages(managed.parameter_layout().stages),
@@ -641,12 +574,6 @@ impl Drop for Program {
                     device.destroy_descriptor_set_layout(layout, None);
                 }
             }
-            self.owner.device.destroy_sampler(self.sampler);
-            self.owner.device.destroy_sampler(self.linear_sampler);
-            self.owner.device.destroy_sampler(self.linear_clamp_sampler);
-            self.owner
-                .device
-                .destroy_sampler(self.linear_u_repeat_sampler);
         }
     }
 }

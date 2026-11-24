@@ -34,7 +34,6 @@ pub(super) use storage::{ResultData, WorkData};
 fn native_raster_binding(
     operand: &crate::graph::BindingOperands,
     physical: &[Option<super::PhysicalLease>],
-    sampler_for: impl FnOnce(crate::program::SamplerDescriptor) -> vk::Sampler,
 ) -> super::super::program::RasterBinding {
     use super::super::program::RasterBinding;
     use crate::graph::BindingOperands;
@@ -52,7 +51,7 @@ fn native_raster_binding(
                 .view_for_mips(view.mip_level(), view.mip_level_count())
                 .expect("validated prepared sampled view range"),
         ),
-        BindingOperands::Sampler(desc) => RasterBinding::Sampler(sampler_for(*desc)),
+        BindingOperands::Sampler(desc) => RasterBinding::Sampler(*desc),
     }
 }
 
@@ -976,14 +975,7 @@ impl GraphWork {
                                                 .copied()
                                                 .zip(graph.raster_bindings(&draw.bindings))
                                                 .map(|(slot, operand)| {
-                                                    (
-                                                        slot,
-                                                        native_raster_binding(
-                                                            operand,
-                                                            physical,
-                                                            |desc| native_program.sampler_for(desc),
-                                                        ),
-                                                    )
+                                                    (slot, native_raster_binding(operand, physical))
                                                 });
                                             bindings.as_mut().unwrap().raster(key, operands)
                                         },
@@ -1925,6 +1917,9 @@ mod tests {
                         },
                     ],
                 )
+                .unwrap();
+            runtime
+                .prepare_samplers(&[crate::program::SamplerDescriptor::NearestClamp])
                 .unwrap();
             runtime
                 .prepare_compute_programs(&[crate::program::ManagedProgram::sampled_readback()])

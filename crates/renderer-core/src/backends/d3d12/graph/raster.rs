@@ -818,12 +818,12 @@ fn record_draws(
                         }
                     }
                     BindingOperands::Sampler(sampler) => {
-                        // SAFETY: The supported immutable nearest/clamp sampler and
+                        // SAFETY: The prepared immutable sampler and
                         // its descriptor table match the trusted Program's layout.
                         unsafe {
                             slot.list.SetGraphicsRootDescriptorTable(
                                 root,
-                                storage.sampler_gpu(*sampler),
+                                storage.sampler_gpu(*sampler)?,
                             );
                         }
                     }
@@ -1329,6 +1329,9 @@ mod tests {
             },
         })
         .unwrap();
+        runtime
+            .prepare_samplers(&[crate::program::SamplerDescriptor::NearestClamp])
+            .unwrap();
         let monitor = runtime.validation_monitor();
         let mut mipped = ImageDesc::rgba8(2, 2);
         mipped.mip_levels = 2;
@@ -1501,6 +1504,9 @@ mod tests {
             },
         })
         .unwrap();
+        runtime
+            .prepare_samplers(&[crate::program::SamplerDescriptor::NearestClamp])
+            .unwrap();
         let monitor = runtime.validation_monitor();
         runtime
             .prepare_graph_working_set(

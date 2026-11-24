@@ -70,17 +70,10 @@ impl Program {
                     None,
                 )
                 .map_err(|r| native(&program.owner, "vkCreatePipelineLayout(present)", r))?;
-            program.sampler = program.owner.device.create_sampler(
-                &vk::SamplerCreateInfo::default()
-                    .mag_filter(vk::Filter::NEAREST)
-                    .min_filter(vk::Filter::NEAREST)
-                    .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                    .max_lod(0.0),
-            )?;
         }
+        let sampler = crate::program::SamplerDescriptor::NearestClamp;
+        program.owner.device.prepare_samplers(&[sampler])?;
+        program.sampler = program.owner.device.sampler(sampler)?;
         let vertex = Module::new(
             Arc::clone(&program.owner),
             include_bytes!("../../../../shaders/composite.vert.spv"),
@@ -170,7 +163,6 @@ impl Drop for Program {
                 record_native(NativeEvent::ObjectDestroy, 1);
                 device.destroy_pipeline(self.pipeline, None);
             }
-            self.owner.device.destroy_sampler(self.sampler);
             if self.layout != vk::PipelineLayout::null() {
                 #[cfg(feature = "memory-profiling")]
                 record_native(NativeEvent::ObjectDestroy, 1);

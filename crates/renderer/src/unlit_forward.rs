@@ -88,7 +88,7 @@ impl PreparedForward {
             WorkingSet {
                 resources: &resources[..attachments],
                 raster: &[program.clone().into()],
-                compute: &[],
+                ..WorkingSet::default()
             },
         )?;
         Ok(Self {

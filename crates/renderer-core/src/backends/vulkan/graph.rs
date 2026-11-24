@@ -654,6 +654,7 @@ impl VulkanRuntime {
             let depth_samples = Self::depth_sample_counts(descriptors);
             let raster = self.stage_raster_programs(working_set.raster, depth_samples)?;
             let compute = self.stage_compute_programs(working_set.compute)?;
+            self.prepare_samplers(working_set.samplers)?;
             (Some(raster), Some(compute))
         } else {
             (self.stage_implicit_raster(descriptors)?, None)
@@ -1059,6 +1060,15 @@ impl VulkanRuntime {
             resources_created: 0,
             resources_reused: 0,
         })
+    }
+
+    /// Prepare immutable samplers once on this Device, outside frame recording.
+    /// Previously prepared configurations remain available after failure.
+    pub fn prepare_samplers(
+        &mut self,
+        descriptors: &[crate::program::SamplerDescriptor],
+    ) -> Result<(), RuntimeError> {
+        self.owner.device.prepare_samplers(descriptors)
     }
 
     pub fn device_name(&self) -> &str {
