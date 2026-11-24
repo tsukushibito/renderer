@@ -1,22 +1,29 @@
 {
   "schema_version": 1,
   "prefabs": {
-    "hall": {"kind": "Room", "fields": {"half_extent": [18.0, 14.0]}},
+    "hall": {"kind": "Room", "fields": {"half_extent": [1, 1]}},
     "table": {"kind": "Bench", "fields": {"half_extent": [2.3, 1.1]}},
     "spawn": {"kind": "PlayerSpawn", "fields": {}},
     "goal": {"kind": "Marker", "fields": {"radius": 0.65}},
     "lunger": {"kind": "Subject", "fields": {"copies": 1, "hp": 3, "walk_speed": 1.25, "model": null, "clip": "walk", "lunge": {"range": 3.5, "speed": 8.0, "windup_ticks": 30, "dash_ticks": 16, "recovery_ticks": 120}}},
-    "walker": {"kind": "Subject", "fields": {"copies": 3, "hp": 1, "walk_speed": 1.7, "model": null, "clip": "walk", "lunge": null}}
+    "walker": {"kind": "Subject", "fields": {"copies": 3, "hp": 1, "walk_speed": 1.7, "model": null, "clip": "walk", "lunge": null}},
+    "lamp": {"kind": "PointLight", "fields": {"range": 14, "tint": [0.69, 0.84, 1.0], "candela": 72}},
+    "tracking": {"kind": "GroundCamera", "fields": {"height": 22, "distance": 34, "pitch_degrees": 54, "depth_range": [0.5, 65], "follow": 0.7, "screen_margin": 0.85}}
   },
   "placements": [
-    {"id": "room", "prefab": "hall"},
+    {"id": "room", "prefab": "hall", "scale": [18, 1, 14]},
     {"id": "player", "prefab": "spawn", "translation": [0, 0, 6]},
     {"id": "marker", "prefab": "goal", "translation": [0, 0, 3]},
-    {"id": "bench-west", "prefab": "table", "parent": "room", "translation": [-3.2, 0, 0.0]},
-    {"id": "bench-east", "prefab": "table", "parent": "room", "translation": [3.2, 0, 0.0]},
-    {"id": "bench-north", "prefab": "table", "parent": "room", "translation": [-10.0, 0, -6.0], "overrides": {"half_extent": [1.4, 2.0]}},
-    {"id": "bench-south", "prefab": "table", "parent": "room", "translation": [10.0, 0, 6.0], "overrides": {"half_extent": [1.4, 2.0]}},
+    {"id": "bench-west", "prefab": "table", "translation": [-3.2, 0, 0.0]},
+    {"id": "bench-east", "prefab": "table", "translation": [3.2, 0, 0.0]},
+    {"id": "bench-north", "prefab": "table", "translation": [-10.0, 0, -6.0], "overrides": {"half_extent": [1.4, 2.0]}},
+    {"id": "bench-south", "prefab": "table", "translation": [10.0, 0, 6.0], "overrides": {"half_extent": [1.4, 2.0]}},
     {"id": "lunger", "prefab": "lunger"},
-    {"id": "walker", "prefab": "walker"}
+    {"id": "walker", "prefab": "walker"},
+    {"id": "lamp-nw", "prefab": "lamp", "parent": "room", "translation": [-0.55, 4.5, -0.52]},
+    {"id": "lamp-ne", "prefab": "lamp", "parent": "room", "translation": [0.52, 4.5, -0.45], "overrides": {"tint": [1, 0.72, 0.48], "candela": 67}},
+    {"id": "lamp-center", "prefab": "lamp", "parent": "room", "translation": [0, 4.5, 0.18], "overrides": {"tint": [0.67, 0.9, 1], "candela": 80}},
+    {"id": "lamp-sw", "prefab": "lamp", "parent": "room", "translation": [-0.53, 4.5, 0.65], "overrides": {"tint": [0.52, 0.79, 1], "candela": 52}},
+    {"id": "camera", "prefab": "tracking"}
   ]
 }
