@@ -121,9 +121,11 @@ pub fn registry() -> Registry<RuleContext> {
             .register(name, &["half_extent"], Extent::validate)
             .expect("unique registered type");
     }
-    types
-        .register::<Empty>("PlayerSpawn", &[], |_| Ok(()))
-        .expect("unique registered type");
+    for kind in ["PlayerSpawn", "Group"] {
+        types
+            .register::<Empty>(kind, &[], |_| Ok(()))
+            .expect("unique registered type");
+    }
     types
         .register_behavior("Marker", &["radius"], Marker::validate, Marker::update)
         .expect("unique registered type");
@@ -169,12 +171,12 @@ impl LabView {
         let mut scene: Scene =
             serde_json::from_str(include_str!("../../../assets/survivor/arena.json"))
                 .map_err(|e| e.to_string())?;
-        let room = scene
+        let lights = scene
             .placements
             .iter_mut()
-            .find(|p| p.id == "room")
-            .ok_or("bundled scene has no room placement")?;
-        room.scale = [extent[0], 1., extent[1]];
+            .find(|p| p.id == "lighting-frame")
+            .ok_or("bundled scene has no lighting frame")?;
+        lights.scale = [extent[0], 1., extent[1]];
         Self::read(&scene.instantiate(&registry())?)
     }
 }
@@ -197,7 +199,7 @@ pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
     let mut subjects = Vec::new();
     for e in world.entities() {
         let [x, y, z] = e.world_translation;
-        if e.kind == "PointLight" {
+        if matches!(e.kind.as_str(), "PointLight" | "Group") {
             continue;
         }
         if y != 0. {
@@ -301,6 +303,28 @@ mod tests {
     use super::*;
     use crate::{Game, Input, Scenario};
     use serde_json::json;
+
+    #[test]
+    fn lights_preserve_room_child_and_root_bench_equipment_order() {
+        // Equipment variants in lab::build follow footprint order. The four
+        // room children follow any root bench, in authored sibling order.
+        let mut scene: Scene =
+            serde_json::from_str(include_str!("../../../assets/survivor/arena.json")).unwrap();
+        let bench_centers = |s: &Scene| {
+            Arena::from_json(&serde_json::to_string(s).unwrap())
+                .unwrap()
+                .obstacles
+                .into_iter()
+                .map(|b| b.center)
+                .collect::<Vec<_>>()
+        };
+        let original = vec![[-3.2, 0.], [3.2, 0.], [-10., -6.], [10., 6.]];
+        assert_eq!(bench_centers(&scene), original);
+        scene.placements.push(serde_json::from_value(json!({"id":"root-bench","prefab":"table","translation":[0.,0.,4.5],"overrides":{"half_extent":[0.8,0.3]}})).unwrap());
+        let mut edited = vec![[0., 4.5]];
+        edited.extend(original);
+        assert_eq!(bench_centers(&scene), edited);
+    }
 
     #[test]
     fn inspector_light_override_reaches_prepared_render_inputs() {
