@@ -71,6 +71,18 @@ fn is_gltf(path: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("gltf"))
 }
 
+fn sidecar_source(path: &Path) -> Option<PathBuf> {
+    if path.extension()? != "json" {
+        return None;
+    }
+    let meta = path.with_extension("");
+    if meta.extension()? != "meta" {
+        return None;
+    }
+    let source = meta.with_extension("");
+    is_gltf(&source).then_some(source)
+}
+
 fn discover(directory: &Path, sources: &mut BTreeMap<AssetId, PathBuf>) -> Result<(), Error> {
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
@@ -78,6 +90,16 @@ fn discover(directory: &Path, sources: &mut BTreeMap<AssetId, PathBuf>) -> Resul
         let path = entry.path();
         if ty.is_dir() {
             discover(&path, sources)?;
+        } else if ty.is_file()
+            && let Some(original) = sidecar_source(&path)
+            && !original.is_file()
+        {
+            return Err(format!(
+                "missing source {} for {}",
+                original.display(),
+                path.display()
+            )
+            .into());
         } else if ty.is_file() && is_gltf(&path) {
             let meta = read_sidecar(&sidecar(&path))?;
             if let Some(other) = sources.insert(meta.asset_id, path.clone()) {
@@ -215,6 +237,24 @@ mod tests {
             assert!(ids.iter().all(|id| *id == ids[0]));
         });
         assert_eq!(read_sidecar(&sidecar(&path))?.asset_id, import(&path)?);
+        Ok(())
+    }
+
+    #[test]
+    fn lost_source_does_not_publish_a_catalog_that_drops_its_id() -> Result<(), Error> {
+        let tmp = Sandbox::new()?;
+        let sources = tmp.0.join("sources");
+        let output = tmp.0.join("dist");
+        fs::create_dir(&sources)?;
+        fs::create_dir(&output)?;
+        fs::write(output.join("current"), b"previous-generation")?;
+        let path = sources.join("armor.gltf");
+        fs::write(&path, b"{}")?;
+        import(&path)?;
+        fs::remove_file(&path)?;
+        let error = cook(&sources, &output, &tmp.0.join("cache")).err().unwrap();
+        assert!(error.to_string().contains("missing source"));
+        assert_eq!(fs::read(output.join("current"))?, b"previous-generation");
         Ok(())
     }
 

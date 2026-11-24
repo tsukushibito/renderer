@@ -11,6 +11,8 @@ pub(super) struct Event {
     stage: &'static str,
     action: &'static str,
     reason: &'static str,
+    input_sha256: Digest,
+    recipe_sha256: Digest,
     bytes: u64,
     hash: Digest,
 }
@@ -21,6 +23,7 @@ pub(super) struct Report {
     pub converter_sha256: Digest,
     pub events: Vec<Event>,
     pub published_bytes: u64,
+    pub generated_bytes: u64,
 }
 
 pub(super) struct Cache<'a> {
@@ -57,12 +60,13 @@ impl<'a> Cache<'a> {
         convert: impl FnOnce() -> Result<Vec<u8>, Error>,
     ) -> Result<BlobRef, Error> {
         // The recipe digest locates a candidate. Its output digest separately verifies bytes.
+        let input_sha256 = Digest::of(inputs);
         let key = Digest::of(&serde_json::to_vec(&(
             self.converter,
             PROFILE,
             stage,
             variant,
-            Digest::of(inputs),
+            input_sha256,
         ))?);
         let (object, action, reason) = if let Some(existing) = self.recipes.get(&key) {
             (*existing, "reused", "shared recipe")
@@ -117,6 +121,8 @@ impl<'a> Cache<'a> {
             stage,
             action,
             reason,
+            input_sha256,
+            recipe_sha256: key,
             bytes: object.size,
             hash: object.hash,
         });
@@ -124,10 +130,17 @@ impl<'a> Cache<'a> {
     }
 
     pub fn report(self, generation: Digest) -> Report {
+        let generated_bytes = self
+            .events
+            .iter()
+            .filter(|e| e.action == "built")
+            .map(|e| e.bytes)
+            .sum();
         Report {
             generation,
             converter_sha256: self.converter,
             published_bytes: self.published_bytes,
+            generated_bytes,
             events: self.events,
         }
     }
