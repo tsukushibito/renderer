@@ -224,7 +224,8 @@ def cook_materials(data):
                 require(not value.get("extensions"), f"{origin}: unsupported extensions {value.get('extensions')!r}")
                 require(value.get("texCoord", 0) == 0, f"{origin}: unsupported texCoord={value.get('texCoord')!r}")
                 texture_id = value["index"]
-                require(isinstance(texture_id, int) and 0 <= texture_id < len(textures), "Invalid material texture")
+                require(type(texture_id) is int and 0 <= texture_id < len(textures),
+                        f"{origin}: invalid texture index {texture_id!r}")
                 texture = textures[texture_id]
                 require(not texture.get("extensions"), f"{origin}: unsupported texture extensions {texture.get('extensions')!r}")
                 if "sampler" in texture:
@@ -235,16 +236,24 @@ def cook_materials(data):
                         check_sampler(samplers[sampler], f"{origin} sampler {sampler}")
                         checked_samplers.add(sampler)
                 image_id = texture.get("source")
-                require(isinstance(image_id, int) and 0 <= image_id < len(images), "Invalid texture image")
-                require(image_id not in roles or roles[image_id] == role, "Image has conflicting semantic roles")
-                roles[image_id] = role
+                require(type(image_id) is int and 0 <= image_id < len(images), f"{origin}: invalid image {image_id!r}")
+                previous = roles.get(image_id, role)
+                if {previous, role} == {"base_color", "emissive"}:
+                    # Both use sRGB RGB; preserve the base-color alpha for both bindings.
+                    roles[image_id] = "base_color"
+                else:
+                    require(previous == role, f"{origin}: image {image_id} already has incompatible role {previous}")
+                    roles[image_id] = role
             material[target] = texture_id
+        ao, orm = material["occlusion_texture"], material["orm_texture"]
+        require(ao is None or ao == orm, f"Material {material['name']} slot occlusionTexture={ao}: "
+                f"packed ORM requires the same texture as metallicRoughnessTexture={orm}")
         materials.append(material)
     require(set(roles) == set(range(len(images))), "Unreferenced images need an explicit preservation role")
     for texture in textures:
         require(not texture.get("extensions") and texture.get("source") in roles, "Unsupported texture source")
         sampler = texture.get("sampler")
-        require(sampler is None or isinstance(sampler, int) and 0 <= sampler < len(data.get("samplers", [])),
+        require(sampler is None or type(sampler) is int and 0 <= sampler < len(samplers),
                 "Invalid sampler reference")
     for index, sampler in enumerate(samplers):
         if index not in checked_samplers:

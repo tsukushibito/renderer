@@ -129,6 +129,8 @@ impl VulkanDevice {
             queue_lock: host.queue_lock,
             state: AtomicU8::new(DeviceState::Active as u8),
             samplers: SamplerCount::default(),
+            sampler_cache: std::array::from_fn(|_| OnceLock::new()),
+            sampler_prepare: Mutex::new(()),
         })
     }
 }

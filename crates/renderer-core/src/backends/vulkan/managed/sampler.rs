@@ -7,50 +7,58 @@ use ash::vk;
 pub(in crate::backends::vulkan) fn sampler_info(
     desc: SamplerDescriptor,
 ) -> vk::SamplerCreateInfo<'static> {
-    let linear = desc.is_linear();
-    let repeat_u = matches!(
-        desc,
-        SamplerDescriptor::LinearRepeat | SamplerDescriptor::LinearRepeatUClampV
-    );
-    let repeat_vw = desc == SamplerDescriptor::LinearRepeat;
+    use crate::program::{AddressMode, FilterMode, MipFilter};
+    let filter = |value| match value {
+        FilterMode::Nearest => vk::Filter::NEAREST,
+        FilterMode::Linear => vk::Filter::LINEAR,
+    };
+    let address = |value| match value {
+        AddressMode::Repeat => vk::SamplerAddressMode::REPEAT,
+        AddressMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
+        AddressMode::MirroredRepeat => vk::SamplerAddressMode::MIRRORED_REPEAT,
+    };
+    // VkSamplerCreateInfo's OpenGL filter mapping preserves minFilter by
+    // allowing positive lambda, but rounds to level zero in nearest mip mode.
+    let max_lod = match desc.mip_filter {
+        MipFilter::None if desc.min_filter == desc.mag_filter => 0.0,
+        MipFilter::None => 0.25,
+        MipFilter::Nearest | MipFilter::Linear => vk::LOD_CLAMP_NONE,
+    };
     vk::SamplerCreateInfo::default()
-        .min_filter(if linear {
-            vk::Filter::LINEAR
-        } else {
-            vk::Filter::NEAREST
+        .min_filter(filter(desc.min_filter))
+        .mag_filter(filter(desc.mag_filter))
+        .mipmap_mode(match desc.mip_filter {
+            MipFilter::None | MipFilter::Nearest => vk::SamplerMipmapMode::NEAREST,
+            MipFilter::Linear => vk::SamplerMipmapMode::LINEAR,
         })
-        .mag_filter(if linear {
-            vk::Filter::LINEAR
-        } else {
-            vk::Filter::NEAREST
-        })
-        .mipmap_mode(if linear {
-            vk::SamplerMipmapMode::LINEAR
-        } else {
-            vk::SamplerMipmapMode::NEAREST
-        })
-        .address_mode_u(if repeat_u {
-            vk::SamplerAddressMode::REPEAT
-        } else {
-            vk::SamplerAddressMode::CLAMP_TO_EDGE
-        })
-        .address_mode_v(if repeat_vw {
-            vk::SamplerAddressMode::REPEAT
-        } else {
-            vk::SamplerAddressMode::CLAMP_TO_EDGE
-        })
-        .address_mode_w(if repeat_vw {
-            vk::SamplerAddressMode::REPEAT
-        } else {
-            vk::SamplerAddressMode::CLAMP_TO_EDGE
-        })
+        .address_mode_u(address(desc.wrap_u))
+        .address_mode_v(address(desc.wrap_v))
+        .address_mode_w(address(desc.wrap_v))
         .min_lod(0.0)
-        .max_lod(if linear { vk::LOD_CLAMP_NONE } else { 0.0 })
+        .max_lod(max_lod)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gltf_non_mipmap_filters_keep_base_level_and_independent_minification() {
+        use crate::program::{AddressMode, FilterMode, MipFilter};
+        let desc = SamplerDescriptor {
+            wrap_u: AddressMode::MirroredRepeat,
+            wrap_v: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Nearest,
+            min_filter: FilterMode::Linear,
+            mip_filter: MipFilter::None,
+        };
+        let info = sampler_info(desc);
+        assert_eq!(info.address_mode_u, vk::SamplerAddressMode::MIRRORED_REPEAT);
+        assert_eq!(info.address_mode_v, vk::SamplerAddressMode::CLAMP_TO_EDGE);
+        assert_eq!(info.mag_filter, vk::Filter::NEAREST);
+        assert_eq!(info.min_filter, vk::Filter::LINEAR);
+        assert_eq!(info.mipmap_mode, vk::SamplerMipmapMode::NEAREST);
+        assert_eq!(info.max_lod, 0.25);
+    }
     #[test]
     fn linear_policies_preserve_the_selected_view_mips_and_axis_addressing() {
         for (policy, u, v) in [

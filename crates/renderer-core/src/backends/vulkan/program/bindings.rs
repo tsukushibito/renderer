@@ -23,7 +23,7 @@ pub(in crate::backends::vulkan) enum RasterBinding {
         size: u64,
     },
     Image(vk::ImageView),
-    Sampler(vk::Sampler),
+    Sampler(crate::program::SamplerDescriptor),
 }
 
 struct DescriptorArena {
@@ -402,7 +402,8 @@ impl ShaderBindings {
                         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
                 }
                 RasterBinding::Sampler(sampler) => {
-                    images[index] = vk::DescriptorImageInfo::default().sampler(sampler);
+                    images[index] = vk::DescriptorImageInfo::default()
+                        .sampler(self.programs.owner.device.sampler(sampler)?);
                 }
             }
         }
