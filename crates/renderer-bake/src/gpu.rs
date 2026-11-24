@@ -3,14 +3,18 @@ use renderer::core::{
     graph::{Binding, BindingResource, BufferDesc, GraphCapacity, GraphPool, ImageDesc},
     program::{
         BindingLayout, BindingType, ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups,
-        ManagedProgram, ShaderStages,
+        ManagedProgram, ShaderBinaries, ShaderStages,
     },
     runtime::{ResourceClass, Runtime, RuntimeConfig, RuntimeLimits, WorkingSet},
 };
+use renderer::pbr::ProbeShOrder;
 use std::{error::Error, time::Duration};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const RECEIVER_BYTES: u64 = 32;
-const RESPONSE_BYTES: u64 = 160;
+// Each dispatch processes up to two scenarios and six visibility distances.
+const fn response_bytes(order: ProbeShOrder) -> u64 {
+    (2 + 2 * order.coefficient_count()) as u64 * 16
+}
 const WAIT: Duration = Duration::from_secs(120);
 const fn slot(binding: u32, kind: BindingType, min_size: u64) -> BindingLayout {
     BindingLayout {
@@ -21,34 +25,55 @@ const fn slot(binding: u32, kind: BindingType, min_size: u64) -> BindingLayout {
         stages: ShaderStages::COMPUTE,
     }
 }
-const PROGRAM: ComputeProgramDescriptor = ComputeProgramDescriptor {
-    entry: "main",
-    workgroup_size: [32, 1, 1],
-    bindings: &[
-        slot(0, BindingType::SampledImage, 0),
-        slot(1, BindingType::StorageRead, RECEIVER_BYTES),
-        slot(2, BindingType::StorageWrite, RESPONSE_BYTES),
-    ],
-    dispatch: DispatchContract {
-        bytes: &[0, RECEIVER_BYTES, RESPONSE_BYTES],
-        workgroups: DispatchWorkgroups::BufferGrid2d {
-            group: 0,
-            binding: 2,
-            max_workgroups: [65535, 1],
-            read_bindings: &[(0, 1)],
+const fn descriptor<const RESPONSE_BYTES: u64>(
+    shaders: ShaderBinaries<&'static [u8]>,
+) -> ComputeProgramDescriptor<'static> {
+    ComputeProgramDescriptor {
+        entry: "main",
+        workgroup_size: [32, 1, 1],
+        bindings: const {
+            &[
+                slot(0, BindingType::SampledImage, 0),
+                slot(1, BindingType::StorageRead, RECEIVER_BYTES),
+                slot(2, BindingType::StorageWrite, RESPONSE_BYTES),
+            ]
         },
-    },
-    shaders: renderer::core::program::embedded_shader_binaries!(
+        dispatch: DispatchContract {
+            bytes: const { &[0, RECEIVER_BYTES, RESPONSE_BYTES] },
+            workgroups: DispatchWorkgroups::BufferGrid2d {
+                group: 0,
+                binding: 2,
+                max_workgroups: [65535, 1],
+                read_bindings: &[(0, 1)],
+            },
+        },
+        shaders,
+    }
+}
+const L1_PROGRAM: ComputeProgramDescriptor = descriptor::<{ response_bytes(ProbeShOrder::L1) }>(
+    renderer::core::program::embedded_shader_binaries!(
         include_bytes!("../../renderer/shaders/bake_transport.comp.spv"),
         include_bytes!("../../renderer/shaders/dxil/bake_transport.comp.dxil")
     ),
-};
+);
+const L2_PROGRAM: ComputeProgramDescriptor = descriptor::<{ response_bytes(ProbeShOrder::L2) }>(
+    renderer::core::program::embedded_shader_binaries!(
+        include_bytes!("../../renderer/shaders/bake_transport_l2.comp.spv"),
+        include_bytes!("../../renderer/shaders/dxil/bake_transport_l2.comp.dxil")
+    ),
+);
 #[allow(unsafe_code)]
-fn program() -> ManagedProgram {
+fn program(order: ProbeShOrder) -> ManagedProgram {
     // SAFETY: one 32-thread group reads its own 32-byte receiver and writes
-    // ten distinct vec4s. All image reads are clamped to the complete view.
+    // ten (L1) or twenty (L2) vec4s within its fixed-stride response.
+    // All image reads are clamped to the complete view.
     // Miss traversal advances monotonically and leaf and sample loops are bounded.
-    unsafe { ManagedProgram::from_trusted_descriptor(&PROGRAM) }
+    unsafe {
+        ManagedProgram::from_trusted_descriptor(match order {
+            ProbeShOrder::L1 => &L1_PROGRAM,
+            ProbeShOrder::L2 => &L2_PROGRAM,
+        })
+    }
 }
 fn texel(rgb: [f32; 3], w: f32) -> [f32; 4] {
     [rgb[0], rgb[1], rgb[2], w]
@@ -171,6 +196,7 @@ pub(super) struct Transport<const N: usize> {
     input: BufferDesc,
     output: BufferDesc,
     batch: usize,
+    sh_order: ProbeShOrder,
 }
 
 impl<const N: usize> Transport<N> {
@@ -179,6 +205,7 @@ impl<const N: usize> Transport<N> {
         scene: &BakeScene,
         lights: [Lighting; N],
         samples: u32,
+        sh_order: ProbeShOrder,
     ) -> Result<Option<Self>> {
         if choice == BakeBackend::Cpu {
             return Ok(None);
@@ -201,7 +228,7 @@ impl<const N: usize> Transport<N> {
             size: batch as u64 * RECEIVER_BYTES,
         };
         let output = BufferDesc {
-            size: batch as u64 * RESPONSE_BYTES,
+            size: batch as u64 * response_bytes(sh_order),
         };
         let graph_cap = GraphCapacity {
             upload_bytes: pixels.len().max(input.size as usize),
@@ -213,7 +240,7 @@ impl<const N: usize> Transport<N> {
             results: 1,
             ..Default::default()
         };
-        let programs = [program()];
+        let programs = [program(sh_order)];
         let resources = [
             ResourceClass::Image { desc, count: 1 },
             ResourceClass::Buffer {
@@ -289,6 +316,7 @@ impl<const N: usize> Transport<N> {
             input,
             output,
             batch,
+            sh_order,
         }))
     }
     pub(super) fn trace(&mut self, jobs: &[SurfaceSample], limit: f32) -> Result<Vec<[f32; 4]>> {
@@ -300,9 +328,12 @@ impl<const N: usize> Transport<N> {
             input,
             output,
             batch,
+            sh_order,
         } = self;
         let (input, output, batch) = (*input, *output, *batch);
-        let stride = 2 + N * 4;
+        let coefficients = sh_order.coefficient_count();
+        let response_bytes = response_bytes(*sh_order);
+        let stride = 2 + N * coefficients;
         let mut result = vec![[0.; 4]; jobs.len() * stride];
         for (chunk, dst) in jobs.chunks(batch).zip(result.chunks_mut(batch * stride)) {
             for first in (0..N).step_by(2) {
@@ -321,7 +352,7 @@ impl<const N: usize> Transport<N> {
                     .flat_map(f32::to_le_bytes)
                     .collect::<Vec<_>>();
                 g.upload_buffer("upload bake receivers", receivers, 0, &bytes)?;
-                let result_size = chunk.len() as u64 * RESPONSE_BYTES;
+                let result_size = chunk.len() as u64 * response_bytes;
                 let buffer = |binding, buffer, size| Binding {
                     group: 0,
                     binding,
@@ -353,9 +384,7 @@ impl<const N: usize> Transport<N> {
                 let mut bytes = vec![0; result_size as usize];
                 completed.readback_into(readback, &mut bytes)?;
                 for (raw, record) in bytes
-                    .as_chunks::<{ RESPONSE_BYTES as usize }>()
-                    .0
-                    .iter()
+                    .chunks_exact(response_bytes as usize)
                     .zip(dst.chunks_exact_mut(stride))
                 {
                     let source = raw.as_chunks::<16>().0;
@@ -368,8 +397,8 @@ impl<const N: usize> Transport<N> {
                         record[0] = decode(&source[0]);
                         record[1] = decode(&source[1]);
                     }
-                    let count = 4 * (N - first).min(2);
-                    for (target, word) in record[2 + first * 4..]
+                    let count = coefficients * (N - first).min(2);
+                    for (target, word) in record[2 + first * coefficients..]
                         .iter_mut()
                         .zip(&source[2..2 + count])
                     {
@@ -413,11 +442,12 @@ pub(super) fn integrate<const N: usize>(
     lights: [Lighting; N],
     samples: u32,
     limit: f32,
+    sh_order: ProbeShOrder,
 ) -> Result<Option<Vec<[f32; 4]>>> {
     if jobs.is_empty() {
         return Ok(Some(Vec::new()));
     }
-    let Some(mut gpu) = Transport::prepare(choice, scene, lights, samples)? else {
+    let Some(mut gpu) = Transport::prepare(choice, scene, lights, samples, sh_order)? else {
         return Ok(None);
     };
     let result = gpu.trace(jobs, limit)?;

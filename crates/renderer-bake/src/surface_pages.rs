@@ -302,7 +302,13 @@ impl<'a> SurfaceLayout<'a> {
         let mut gpu = if self.pages.is_empty() {
             None
         } else {
-            crate::gpu::Transport::prepare(backend, scene, lights, rays)?
+            crate::gpu::Transport::prepare(
+                backend,
+                scene,
+                lights,
+                rays,
+                renderer::pbr::ProbeShOrder::L1,
+            )?
         };
         #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
         if !matches!(backend, BakeBackend::Auto | BakeBackend::Cpu) {

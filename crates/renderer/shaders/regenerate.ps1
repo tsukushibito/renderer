@@ -103,7 +103,7 @@ try {
         'pbr.vert', 'pbr.frag', 'toon.frag', 'canvas.frag', 'canvas_fill.frag', 'shadow.vert', 'shadow.frag', 'bloom_extract_downsample.comp',
         'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp',
         'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag',
-        'bake_transport.comp', 'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag',
+        'bake_transport.comp', 'bake_transport_l2.comp', 'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag',
         'frustum_visibility.comp', 'pbr_instancing.vert',
         'pbr_transformed.vert', 'pbr_transformed_small.vert',
         'gbuffer_transformed.vert', 'gbuffer_transformed_small.vert',
@@ -117,6 +117,7 @@ try {
         $shaderSource = $name
         $defines = @()
         switch -CaseSensitive ($name) {
+            'bake_transport_l2.comp' { $shaderSource = 'bake_transport.comp'; $defines = @('BAKE_L2=1') }
             'bloom_extract_downsample.comp' { $shaderSource = 'bloom_downsample.comp'; $defines = @('BLOOM_EXTRACT=1') }
             'pbr_all_lights.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=1') }
             'pbr_forward_plus.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=2') }
