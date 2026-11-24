@@ -225,6 +225,8 @@ pub fn run(
     if o.gpu_profile && o.metrics.is_none() || o.metrics.is_some() && o.frames.is_none() {
         return Err("profiling requires --metrics; metrics require --frames".into());
     }
+    let mut memory = memory::Snapshots::new(o.memory.as_deref());
+    memory.before_preparation("before_window", &game)?;
     let mut host = WindowHost::open(PLAY_TITLE, o.extent, input::controls(), TIMEOUT)?;
     let window = host.window();
     let physical = window.inner_size();
@@ -246,8 +248,10 @@ pub fn run(
         );
     }
     initial.visual.clone_from(&content);
+    memory.before_preparation("visual_assets", &game)?;
     let camera = visual.camera(&game, extent)?;
     let mut renderer = WindowRenderer::new(window.clone(), o.config, camera, visual.assets())?;
+    memory.observe("window_renderer", &mut renderer, &game)?;
     visual.prepare_window(&mut renderer)?;
     if o.metrics.is_some() {
         renderer.set_vsync(false)?;
@@ -255,7 +259,7 @@ pub fn run(
     if o.gpu_profile {
         renderer.set_profiling(true)?;
     }
-    let mut memory = memory::Snapshots::start(o.memory.as_deref(), &mut renderer, &game)?;
+    memory.observe("prepared", &mut renderer, &game)?;
     let mut measured = o
         .metrics
         .as_ref()

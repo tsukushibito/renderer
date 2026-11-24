@@ -1,8 +1,5 @@
-use renderer::{
-    WindowRenderer,
-    core::profiling::{GpuTiming, SubmissionMetrics},
-    pipeline::PipelineResult,
-};
+use renderer::{WindowRenderer, core::profiling::GpuTiming, pipeline::PipelineResult};
+use sashiko::profiling::WindowTimings;
 use std::{
     fs::File,
     io::{BufWriter, Write},
@@ -26,29 +23,20 @@ pub(super) struct Sample {
 
 pub(super) struct Measurements {
     samples: Vec<Sample>,
-    graph: Vec<SubmissionMetrics>,
-    present_gpu: Vec<GpuTiming>,
-    profile: bool,
+    timings: Option<WindowTimings>,
 }
 
 impl Measurements {
     pub fn new(capacity: usize, profile: bool) -> Self {
         Self {
             samples: Vec::with_capacity(capacity),
-            graph: Vec::with_capacity(if profile { capacity } else { 0 }),
-            present_gpu: Vec::with_capacity(if profile { capacity } else { 0 }),
-            profile,
+            timings: profile.then(|| WindowTimings::new(capacity)),
         }
     }
 
     pub fn poll(&mut self, renderer: &mut WindowRenderer) {
-        if self.profile {
-            if let Some(graph) = renderer.take_graph_profile() {
-                self.graph.push(graph);
-            }
-            while let Some(present) = renderer.take_presentation_profile() {
-                self.present_gpu.push(present.gpu);
-            }
+        if let Some(timings) = &mut self.timings {
+            timings.poll(renderer);
         }
     }
 
@@ -57,18 +45,11 @@ impl Measurements {
     }
 
     pub fn save(self, path: &Path, warmup: usize) -> PipelineResult<()> {
-        if self.profile
-            && (self.graph.len() != self.samples.len()
-                || self.present_gpu.len() != self.samples.len())
-        {
-            return Err(format!(
-                "incomplete timestamp sequence: {} graphs, {} presentations, {} accepted frames",
-                self.graph.len(),
-                self.present_gpu.len(),
-                self.samples.len()
-            )
-            .into());
-        }
+        let mut timings = self
+            .timings
+            .map(|v| v.finish(self.samples.len()))
+            .transpose()?
+            .map(|v| v.skip(warmup));
         let mut csv = BufWriter::new(File::create(path)?);
         writeln!(
             csv,
@@ -88,13 +69,13 @@ impl Measurements {
                 sample.shots,
                 sample.drops
             )?;
-            if self.profile {
-                let graph = self.graph[index];
+            if let Some(timings) = &mut timings {
+                let (graph, present) = timings.next().expect("matching presented frame");
                 write!(
                     csv,
                     "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
                     elapsed(graph.gpu)?,
-                    elapsed(self.present_gpu[index])?,
+                    elapsed(present)?,
                     millis(graph.cpu_prepare),
                     millis(graph.cpu_record),
                     millis(graph.cpu_submit),
