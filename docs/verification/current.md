@@ -7,6 +7,10 @@
 
 ## 装備の cook と配布物の再現性
 
+**worktree での開発。** Windows のプロセス間テストでは、二つの worktree が同じ未生成の装備を要求したとき一方が変換結果を再利用した。共有 PNG の編集で変換した画像は 1 件で、別の worktree のゲームは元の色を維持した。読込中の世代がある間の回収見込みは 0 バイトだった。読み手を閉じると見込みと実回収量が一致し、未コミットの画像から再開できた。マージで画像と取込設定が競合した場合は旧世代を表示し、解決を Git に記録すると採用した側の世代と一致した。[worktree の統合テスト](../../crates/renderer-asset-cook/tests/worktree_preview.rs)
+
+訓練場の実画面では、ビルド済みの release 実行ファイル、Windows 11、Core i5-14600KF、RTX 3060、Vulkan を使用した。A のゲームを開いたまま B を作成し、B の最初の提示フレームまでと、PNG 保存から変更世代を装着して提示したフレームまでを測る。初回の各 20 回で、装備 4 件の p95 は起動 2.666 秒・編集 0.445 秒、40 件では 3.731 秒・0.752 秒だった。起動は事前に設定した絶対上限 3.666 秒、編集は増加率から求めた上限 0.667 秒を超えた。全 40 回で Bistro の大型原本はポインタのまま、LFS 取得・成果物本体の追加書き込みは 0 バイト、起動時の変換は 0 件だった。[測定手順](../../tools/training_yard/worktree_preview.py)
+
 訓練場の静的 glTF 装備 4 件を空のキャッシュから Rust で cook し、カタログと 9 個の成果物（計 1,745 バイト）を同梱版とバイト単位で照合した。原本とキャッシュを取り除いた状態でも、保存済み ID からメッシュと画像を復元できた。原本と ID ファイルをサブディレクトリに移し、共通画像への相対 URI を更新しても、カタログのハッシュは一致した。
 
 共有 PNG の変更で再実行された変換は画像 1 件だった。不正な PNG、制作ディレクトリ外の参照、接線の accessor を同じバイト数の別の型に変えた入力を検出した。cook に失敗した後も直前の配布世代を開けた。比較用装備の全 6 コーナーで、既存の Bistro cook との位置・法線・接線・UV の成分差は最大 `5.96 × 10⁻⁸` だった。[配布の回帰テスト](../../crates/renderer-asset-cook/tests/equipment_distribution.rs)・[Bistro の接線との比較](../../crates/renderer-asset-cook/src/gltf.rs)・[材質の比較](../../crates/renderer-asset-cook/tests/bistro_parity.rs)
@@ -37,7 +41,8 @@ Windows、RTX 3060、Rust 1.99.0。統合コミット `b03c6e42` で、訓練場
 再現には新規出力ディレクトリを指定する。API 引数は `vulkan` または `d3d12`。開発時検証も有効にした最適化構成では、両 API で同じ読み戻しを検査し、teardown 後の警告・エラー 0 を確認した。
 
 ```powershell
-cargo run --locked --release -p training-yard --example asset_pipeline_perf --features vulkan,d3d12,memory-profiling -- vulkan crates/training-yard/assets/equipment/dist 00000000000000000000000000000001 .tools/asset-perf-vulkan
+cargo run --locked --release -p renderer-asset-cook -- cook crates/training-yard/assets/equipment/source .tools/asset-perf-dist --cache .tools/asset-perf-cache
+cargo run --locked --release -p training-yard --example asset_pipeline_perf --features vulkan,d3d12,memory-profiling -- vulkan .tools/asset-perf-dist 00000000000000000000000000000001 .tools/asset-perf-vulkan
 ```
 
 <a id="asset-preparation"></a>

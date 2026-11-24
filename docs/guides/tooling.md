@@ -280,9 +280,20 @@ cargo run --locked --release -p renderer-asset-cook -- setup
 
 以降は任意の worktree で通常どおり訓練場を起動する。ゲームは起動した作業ディレクトリからプロジェクトを見つけ、cooker が選んだ世代を共有ストアから開く。Windows の `--mode interactive` は左の隊員に Narrow を装着し、その worktree の原本と Git インデックスの変更を監視する。`source/paint.png` を保存すると、背景で cook と装備の準備を行い、準備が終わったフレームで新しい色に切り替わる。競合や cook エラーの理由は端末に表示する。
 
+LFS 管理の原本を制作ツールで編集するときは、その worktree で対象のパスを限定して `git lfs pull --include="編集する原本のパス" --exclude=""` を実行する。複数の原本が必要ならパスをカンマで区切る。展開したファイルはその worktree の編集用コピーになる。
+
 変換器を更新する場合は [プロジェクトの指定版](../../crates/renderer-asset-cook/tool-version) を更新して同じセットアップを実行する。一度インストールした版は、その版を指定する別の worktree でも使用できる。変換器を開発中の worktree だけでローカルビルドを試す場合は、`TRAINING_YARD_COOKER` に実行ファイルの絶対パスを指定する。
 
-訓練場の配布版では、実行ファイルの隣に `assets/equipment/dist` を配置する。別の配布物を試すときは環境変数 `TRAINING_YARD_ASSETS` に `current` のあるディレクトリを指定する。ホストは `Generation::open` で取得した世代を `Yard::set_asset_generation` に渡し、装着先と保存済み ID を指定して `request_equipment` を呼ぶ。更新先を確認するまで、旧世代の装備を描画できる。
+休眠させる worktree のルートで、次の順に容量を確認・回収できる。最初のコマンドは、現在の選択世代と復旧用の一世代の保持を解いたとき、追加で回収できるカタログと成果物のファイル長をバイトで返す。実行中の読み手と別の worktree が必要とする分を差し引いている。`--apply` は保持を解き、`gc` はその時点で全体から回収した量を返す。変換が実行中なら終了後に再試行する。未コミットの原本は作業場所に残り、次回起動は残っている成果物、または Git・LFS の原本とその編集から復元する。
+
+```powershell
+$source = 'crates/training-yard/assets/equipment/source'
+cargo run --locked --release -p renderer-asset-cook -- release $source
+cargo run --locked --release -p renderer-asset-cook -- release $source --apply
+cargo run --locked --release -p renderer-asset-cook -- gc $source
+```
+
+訓練場の配布版では、実行ファイルの隣に `assets/equipment/dist` を生成する。配布ビルドでは必要な LFS 原本を取得して上記の `cook` を実行する。別の配布物を試すときは環境変数 `TRAINING_YARD_ASSETS` に `current` のあるディレクトリを指定する。ホストは `Generation::open` で取得した世代を `Yard::set_asset_generation` に渡し、装着先と保存済み ID を指定して `request_equipment` を呼ぶ。更新先を確認するまで、旧世代の装備を描画できる。
 
 訓練場では、装着中・準備中を合わせて異なる装備版を 4 件、装備ごとに最大 4 部位まで扱う。同じ版を装着する隊員はこの枠を共有する。新しく必要なバッファ寸法、画像形式、サンプラーは装備の変更時に `AssetPreparation::replace_asset_reservations` で準備する。画像は mip 一式で最大 4 MiB とし、1 回の更新で 1 枚を投入する。メッシュと材質の転送は更新ごとに合計 128 バイト・1 投入を上限とする。これらは小さい装備で切替を再現する訓練場の設定である。
 

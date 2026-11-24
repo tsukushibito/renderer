@@ -26,7 +26,8 @@ fn git(repo: &Path, args: &[&str]) -> Result {
 fn workspace() -> Result<Project> {
     let tmp = Project::new()?;
     let a = &tmp.0;
-    git(a, &["init", "-q"])?;
+    git(a, &["init", "-q", "-b", "main"])?;
+    git(a, &["config", "core.hooksPath", ".unused-hooks"])?;
     git(a, &["config", "user.email", "test@example.invalid"])?;
     git(a, &["config", "user.name", "Test"])?;
     git(a, &["config", "core.autocrlf", "false"])?;
@@ -153,5 +154,64 @@ fn linked_worktrees_share_cooks_keep_independent_readers_and_resume_local_edits(
             > 0
     );
     assert_eq!(first.paint()?, [255, 255, 0, 255]);
+    Ok(())
+}
+
+#[test]
+fn merging_assets_keeps_the_last_selection_until_git_records_the_resolution() -> Result {
+    let tmp = workspace()?;
+    let a = &tmp.0;
+    let b = a.join("b");
+    for (worktree, image, new_id) in [(a, "cutout.png", 101), (&b, "normal.png", 102)] {
+        let source = worktree.join("source");
+        fs::copy(source.join(image), source.join("paint.png"))?;
+        let sidecar = source.join("wide.gltf.meta.json");
+        let mut settings: Value = serde_json::from_slice(&fs::read(&sidecar)?)?;
+        settings["asset_id"] = Value::String(format!("{new_id:032x}"));
+        fs::write(sidecar, serde_json::to_vec(&settings)?)?;
+        git(worktree, &["add", "source"])?;
+        git(
+            worktree,
+            &[
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "edit equipment",
+            ],
+        )?;
+    }
+    let ours = Preview::read(Preview::start(a)?)?;
+    let theirs = Preview::read(Preview::start(&b)?)?;
+    let merge = Command::new("git")
+        .current_dir(a)
+        .args(["merge", "--no-edit", "edit"])
+        .output()?;
+    assert_eq!(merge.status.code(), Some(1));
+    let conflict = Preview::read(Preview::start(a)?)?;
+    assert_eq!(conflict.data["generation"], ours.data["generation"]);
+    let diagnostic = conflict.data["diagnostic"].as_str().unwrap();
+    for name in [
+        "paint.png",
+        "wide.gltf.meta.json",
+        &AssetId::from_u128(1).to_string(),
+    ] {
+        assert!(diagnostic.contains(name), "{diagnostic}");
+    }
+    git(
+        a,
+        &[
+            "checkout",
+            "--theirs",
+            "--",
+            "source/paint.png",
+            "source/wide.gltf.meta.json",
+        ],
+    )?;
+    git(a, &["add", "source"])?;
+    let resolved = Preview::read(Preview::start(a)?)?;
+    assert!(resolved.data.get("diagnostic").is_none());
+    assert_eq!(resolved.data["generation"], theirs.data["generation"]);
+    assert_ne!(resolved.paint()?, ours.paint()?);
     Ok(())
 }
