@@ -6,6 +6,8 @@ Sashiko（刺し子）は、AI エージェントと人がゲームを共同開�
 
 ## 描画サブシステム
 
+ゲームの実行、編集データと描画の境界は[ゲーム制作 API の設計](docs/design/game-engine.md)にまとめています。
+
 Bistroの原本・検証済み素材と比較画像はGit LFSで共有します。
 取得・ライセンス・容量は[素材ガイド](assets/bistro/README.md)を参照してください。
 

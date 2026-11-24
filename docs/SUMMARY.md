@@ -6,6 +6,8 @@
 
 # 現在の設計
 
+- [ゲーム制作 API と編集データの責務](design/game-engine.md)
+
 - [3D 見下ろし型ローグライトサバイバーの制作計画](design/survivor-game.md)
 - [RenderGraph の詳細な契約](design/rendergraph.md)
 - [Vulkan の実行基盤](design/vulkan.md)
