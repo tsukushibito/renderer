@@ -301,7 +301,7 @@ pub(super) fn record(
     }
     let storage = slot.raster.as_ref().unwrap();
     // SAFETY: One retained shader-visible heap per supported type, with immutable
-    // nearest/clamp sampler contents and distinct per-dispatch image descriptors.
+    // published sampler slots and distinct per-dispatch image descriptors.
     unsafe {
         slot.list.SetDescriptorHeaps(&[
             Some(storage.srv_heap().clone()),
@@ -378,11 +378,11 @@ pub(super) fn record(
                 slot.compute_descriptors_used += 1;
             }
             BindingOperands::Sampler(sampler) => {
-                // SAFETY: This immutable nearest/clamp sampler and table layout
+                // SAFETY: The prepared immutable sampler and table layout
                 // were fixed at working-set preparation and Program creation.
                 unsafe {
                     slot.list
-                        .SetComputeRootDescriptorTable(root as u32, storage.sampler_gpu(*sampler))
+                        .SetComputeRootDescriptorTable(root as u32, storage.sampler_gpu(*sampler)?)
                 };
             }
         }
@@ -537,11 +537,20 @@ mod texture_tests {
         let output = graph
             .buffer("sampled float output", BufferDesc { size: 64 })
             .unwrap();
+        let mirrored =
+            SamplerDescriptor::from_gltf(Some(33648), Some(33071), Some(9728), Some(9729)).unwrap();
+        runtime
+            .prepare_samplers(&[
+                SamplerDescriptor::LinearRepeat,
+                SamplerDescriptor::NearestClamp,
+            ])
+            .unwrap();
         let mut readbacks = Vec::new();
         for (base, count, sampler) in [
             (1, 1, SamplerDescriptor::LinearRepeat),
             (2, 1, SamplerDescriptor::NearestClamp),
             (0, 3, SamplerDescriptor::NearestClamp),
+            (1, 1, mirrored),
         ] {
             let view = graph.sampled_image_view(image, base, count).unwrap();
             graph
@@ -578,7 +587,14 @@ mod texture_tests {
             );
         }
         let plan = graph.compile().unwrap();
+        // The failed recording must release its only slot. Preparing the
+        // missing policy then retrying the same graph must succeed.
+        assert!(runtime.submit(&plan).is_err());
+        runtime.prepare_samplers(&[mirrored, mirrored]).unwrap();
         let mut submission = runtime.submit(&plan).unwrap();
+        // Extend the Device heap without rewriting tables seen by already submitted work.
+        let another = SamplerDescriptor::from_gltf(Some(33071), Some(33648), None, None).unwrap();
+        runtime.prepare_samplers(&[another, mirrored]).unwrap();
         let mut result = submission
             .wait(std::time::Duration::from_secs(30))
             .unwrap()
@@ -596,7 +612,11 @@ mod texture_tests {
                         [gray, gray, gray, 1.0]
                     }
                     1 => [0.0, 0.0, 1.0, 1.0],
-                    _ => [1.0, 0.0, 0.0, 1.0],
+                    2 => [1.0, 0.0, 0.0, 1.0],
+                    _ => {
+                        let gray = [0.0, 1.0, 0.0, 1.0][sample];
+                        [gray, gray, gray, 1.0]
+                    }
                 };
                 for component in 0..4 {
                     assert!(

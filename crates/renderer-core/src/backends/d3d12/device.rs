@@ -46,6 +46,7 @@ pub(super) struct DeviceOwner {
     pub(super) committed_memory: Arc<Mutex<super::memory::D3D12CommittedMemoryStats>>,
     pub(super) queue: ManuallyDrop<ID3D12CommandQueue>,
     pub(super) raw: ManuallyDrop<ID3D12Device>,
+    pub(super) samplers: Mutex<Option<Arc<super::sampler::SamplerHeap>>>,
     pub(super) queue_gate: Arc<Mutex<()>>,
     managed_process_slot: bool,
     pub(super) info: D3D12DeviceInfo,
@@ -319,6 +320,7 @@ impl DeviceOwner {
             committed_memory: Arc::new(Mutex::new(Default::default())),
             queue: ManuallyDrop::new(queue),
             raw: ManuallyDrop::new(raw),
+            samplers: Mutex::new(None),
             queue_gate,
             managed_process_slot,
             info: D3D12DeviceInfo {
@@ -413,6 +415,11 @@ fn feature<T>(
 impl Drop for DeviceOwner {
     fn drop(&mut self) {
         let mut process = PROCESS.lock().unwrap_or_else(|error| error.into_inner());
+        // Release the shared descriptor heap while the primary Device and diagnostics are live.
+        self.samplers
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
         // SAFETY: This is the sole final Arc owner. All GPU work retains this
         // owner until actual completion (or conservatively leaks it). Each COM
         // reference is released exactly once, queue before primary Device, while
