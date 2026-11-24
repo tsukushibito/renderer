@@ -1,7 +1,9 @@
 //! Versioned editable scenes. Prefab values and placement overrides are kept separately.
+use glam::{Affine3A, Quat, Vec3};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 use std::{
+    any::Any,
     collections::{BTreeMap, HashMap, VecDeque},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -25,6 +27,11 @@ pub struct Placement {
     pub parent: Option<String>,
     #[serde(default)]
     pub translation: [f32; 3],
+    /// Local unit quaternion, in XYZW order.
+    #[serde(default = "identity_rotation")]
+    pub rotation: [f32; 4],
+    #[serde(default = "unit_scale")]
+    pub scale: [f32; 3],
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub overrides: Fields,
 }
@@ -37,7 +44,8 @@ pub struct Scene {
     pub placements: Vec<Placement>,
 }
 
-type FieldCheck = dyn Fn(&Fields) -> Result<(), String> + Send + Sync;
+type Component = Box<dyn Any + Send + Sync>;
+type FieldCheck = dyn Fn(&Fields) -> Result<Component, String> + Send + Sync;
 struct RegisteredType {
     fields: &'static [&'static str],
     validate: Box<FieldCheck>,
@@ -49,7 +57,7 @@ pub struct Registry {
     types: BTreeMap<&'static str, RegisteredType>,
 }
 impl Registry {
-    pub fn register<T: DeserializeOwned + 'static>(
+    pub fn register<T: DeserializeOwned + Send + Sync + 'static>(
         &mut self,
         name: &'static str,
         fields: &'static [&'static str],
@@ -68,7 +76,8 @@ impl Registry {
                     }
                     let component = serde_json::from_value(Value::Object(data.clone()))
                         .map_err(|error| error.to_string())?;
-                    check(&component)
+                    check(&component)?;
+                    Ok(Box::new(component))
                 }),
             },
         );
@@ -79,7 +88,7 @@ impl Registry {
         self.types.get(kind).map(|ty| ty.fields)
     }
 
-    fn validate(&self, kind: &str, data: &Fields) -> Result<(), String> {
+    fn decode(&self, kind: &str, data: &Fields) -> Result<Component, String> {
         let ty = self
             .types
             .get(kind)
@@ -99,23 +108,65 @@ pub struct Entity {
     pub prefab: String,
     pub kind: String,
     pub parent: Option<EntityId>,
-    pub translation: [f32; 3],
+    local: Affine3A,
+    world: Affine3A,
+    component: Component,
     pub world_translation: [f32; 3],
     pub fields: Fields,
+}
+
+impl Entity {
+    /// The registered Rust value after prefab override resolution.
+    pub fn component<T: Any>(&self) -> Option<&T> {
+        self.component.downcast_ref()
+    }
+    pub fn transform_vector(&self, local: [f32; 3]) -> [f32; 3] {
+        self.world
+            .transform_vector3(Vec3::from_array(local))
+            .to_array()
+    }
+    pub fn transform_point(&self, local: [f32; 3]) -> [f32; 3] {
+        self.world
+            .transform_point3(Vec3::from_array(local))
+            .to_array()
+    }
 }
 
 #[derive(Default)]
 pub struct World {
     entities: BTreeMap<EntityId, Entity>,
     by_placement: HashMap<String, EntityId>,
+    pose_changes: Vec<(EntityId, Affine3A)>,
 }
 
-fn compose(parent: [f32; 3], local: [f32; 3]) -> Result<[f32; 3], String> {
-    let world = std::array::from_fn(|axis| parent[axis] + local[axis]);
-    if world.into_iter().all(f32::is_finite) {
+fn identity_rotation() -> [f32; 4] {
+    [0., 0., 0., 1.]
+}
+fn unit_scale() -> [f32; 3] {
+    [1.; 3]
+}
+
+fn local_pose(
+    translation: [f32; 3],
+    rotation: [f32; 4],
+    scale: [f32; 3],
+) -> Result<Affine3A, String> {
+    let rotation = Quat::from_array(rotation);
+    if !rotation.is_normalized() || !translation.into_iter().chain(scale).all(f32::is_finite) {
+        return Err("expected a finite translation, unit quaternion and finite scale".into());
+    }
+    Ok(Affine3A::from_scale_rotation_translation(
+        Vec3::from_array(scale),
+        rotation,
+        Vec3::from_array(translation),
+    ))
+}
+fn compose(parent: Affine3A, local: Affine3A) -> Result<Affine3A, String> {
+    let world = parent * local;
+    if world.is_finite() {
         Ok(world)
     } else {
-        Err("world translation must be finite".into())
+        Err("world transform overflow".into())
     }
 }
 
@@ -152,14 +203,14 @@ impl World {
                     .ok_or_else(|| format!("{}: missing parent {name}", placement.id))
             })
             .transpose()?;
-        let translation = compose(
-            parent.map_or([0.; 3], |p| p.world_translation),
-            placement.translation,
-        )?;
+        let local = local_pose(placement.translation, placement.rotation, placement.scale)
+            .map_err(|e| format!("{}: {e}", placement.id))?;
+        let world = compose(parent.map_or(Affine3A::IDENTITY, |p| p.world), local)
+            .map_err(|e| format!("{}: {e}", placement.id))?;
         let parent = parent.map(|p| p.id);
         let mut fields = prefab.fields.clone();
         fields.extend(placement.overrides.clone());
-        registry.validate(&prefab.kind, &fields).map_err(|e| {
+        let component = registry.decode(&prefab.kind, &fields).map_err(|e| {
             format!(
                 "placement {}, prefab {}: {e}",
                 placement.id, placement.prefab
@@ -179,12 +230,54 @@ impl World {
                 prefab: placement.prefab.clone(),
                 kind: prefab.kind.clone(),
                 parent,
-                translation: placement.translation,
-                world_translation: translation,
+                local,
+                world,
+                component,
+                world_translation: world.translation.into(),
                 fields,
             },
         );
+        self.pose_changes.clear();
+        self.pose_changes.reserve(self.entities.len());
         Ok(id)
+    }
+
+    /// Atomically move one local transform and its descendants. Reuse scratch
+    /// reserved when entities spawn, including on an overflowing composition.
+    pub fn set_transform(
+        &mut self,
+        root: EntityId,
+        translation: [f32; 3],
+        rotation: [f32; 4],
+        scale: [f32; 3],
+    ) -> Result<(), String> {
+        let local = local_pose(translation, rotation, scale)?;
+        let node = self.entity(root).ok_or("unknown entity")?;
+        let parent = node
+            .parent
+            .map_or(Affine3A::IDENTITY, |p| self.entities[&p].world);
+        self.pose_changes.clear();
+        self.pose_changes.push((root, compose(parent, local)?));
+        for (&id, child) in self
+            .entities
+            .range((std::ops::Bound::Excluded(root), std::ops::Bound::Unbounded))
+        {
+            if let Some(parent) = child.parent
+                && let Ok(index) = self
+                    .pose_changes
+                    .binary_search_by_key(&parent, |(id, _)| *id)
+            {
+                let world = compose(self.pose_changes[index].1, child.local)?;
+                self.pose_changes.push((id, world));
+            }
+        }
+        self.entities.get_mut(&root).expect("live root").local = local;
+        for &(id, world) in &self.pose_changes {
+            let child = self.entities.get_mut(&id).expect("live descendant");
+            child.world = world;
+            child.world_translation = world.translation.into();
+        }
+        Ok(())
     }
 
     /// Remove this entity and all descendants, invalidating their runtime IDs.
@@ -217,7 +310,7 @@ impl Scene {
                 return Err("empty prefab ID".into());
             }
             registry
-                .validate(&prefab.kind, &prefab.fields)
+                .decode(&prefab.kind, &prefab.fields)
                 .map_err(|e| format!("prefab {name}: {e}"))?;
         }
         let mut ids = HashMap::new();
@@ -247,5 +340,98 @@ impl Scene {
             return Err(format!("parent cycle in ancestry of {}", node.id));
         }
         Ok(world)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[derive(Deserialize)]
+    struct Weight {
+        value: u32,
+    }
+
+    fn fixture() -> (Registry, Scene) {
+        let mut registry = Registry::default();
+        registry
+            .register::<Weight>("Weight", &["value"], |w| {
+                if w.value > 0 {
+                    Ok(())
+                } else {
+                    Err("value must be positive".into())
+                }
+            })
+            .unwrap();
+        let scene=serde_json::from_value(json!({
+            "schema_version":1, "prefabs":{"weight":{"kind":"Weight","fields":{"value":1}}},
+            "placements":[{"id":"child","parent":"root","prefab":"weight","translation":[1,0,0],"overrides":{"value":2}},
+            {"id":"root","prefab":"weight","translation":[10,0,0],"scale":[2,1,1]}]
+        })).unwrap();
+        (registry, scene)
+    }
+    #[test]
+    fn hierarchy_resolves_forward_parent_and_override_and_retires_handles() {
+        let (registry, scene) = fixture();
+        let mut world = scene.instantiate(&registry).unwrap();
+        let root = world.find("root").unwrap().id;
+        let child = world.find("child").unwrap();
+        assert_eq!(child.world_translation, [12., 0., 0.]);
+        assert_eq!(child.component::<Weight>().unwrap().value, 2);
+        let child = child.id;
+        world
+            .set_transform(root, [3., 0., 0.], [0., 0., 1., 0.], [4., 1., 1.])
+            .unwrap();
+        assert_eq!(
+            world.entity(child).unwrap().world_translation,
+            [-1., 0., 0.]
+        );
+        let other = scene.instantiate(&registry).unwrap();
+        assert!(other.entity(root).is_none());
+        assert!(world.despawn(root));
+        assert!(world.entity(child).is_none());
+        assert!(world.find("child").is_none());
+        assert!(
+            world
+                .spawn(&scene.placements[1], &scene.prefabs, &registry)
+                .unwrap()
+                != root
+        );
+    }
+    #[test]
+    fn invalid_graph_and_field_errors_identify_the_authored_location() {
+        let (registry, mut scene) = fixture();
+        scene.placements[1].parent = Some("child".into());
+        assert!(
+            scene
+                .instantiate(&registry)
+                .err()
+                .unwrap()
+                .contains("cycle")
+        );
+        scene.placements[1].parent = None;
+        scene.placements[0]
+            .overrides
+            .insert("value".into(), json!(0));
+        let error = scene.instantiate(&registry).err().unwrap();
+        assert!(error.contains("placement child") && error.contains("value"));
+    }
+    #[test]
+    fn overflowing_descendant_move_keeps_the_previous_world() {
+        let (registry, mut scene) = fixture();
+        scene.placements[0].scale = [2.; 3];
+        let mut world = scene.instantiate(&registry).unwrap();
+        let root = world.find("root").unwrap().id;
+        assert!(
+            world
+                .set_transform(root, [99.; 3], identity_rotation(), [f32::MAX; 3])
+                .is_err()
+        );
+        assert_eq!(world.find("root").unwrap().world_translation, [10., 0., 0.]);
+        assert_eq!(
+            world.find("child").unwrap().world_translation,
+            [12., 0., 0.]
+        );
     }
 }

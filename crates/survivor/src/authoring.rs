@@ -55,19 +55,7 @@ impl SubjectType {
 }
 
 pub(crate) fn default_subjects() -> Vec<SubjectType> {
-    #[derive(Deserialize)]
-    struct Defaults {
-        prefabs: std::collections::BTreeMap<String, sashiko::scene::Prefab>,
-    }
-    let defaults: Defaults =
-        serde_json::from_str(include_str!("../../../assets/survivor/arena.json"))
-            .expect("bundled scene prefabs");
-    ["lunger", "walker"]
-        .map(|id| {
-            serde_json::from_value(Value::Object(defaults.prefabs[id].fields.clone()))
-                .expect("bundled subject")
-        })
-        .into()
+    Arena::default().subjects
 }
 
 #[derive(Deserialize)]
@@ -134,11 +122,23 @@ pub(crate) fn decode_arena(source: &str) -> Result<Arena, String> {
             ));
         }
         let pos = [x, z];
-        let fields = || Value::Object(e.fields.clone());
         let half_extent = || {
-            serde_json::from_value::<Extent>(fields())
-                .map(|c| c.half_extent)
-                .map_err(|e| e.to_string())
+            let extent = e.component::<Extent>().ok_or("missing extent")?;
+            // This game's navigation and visible benches share axis-aligned footprints.
+            // Reject rotations and shears they cannot both represent.
+            let edge_x = e.transform_vector([extent.half_extent[0], 0., 0.]);
+            let edge_z = e.transform_vector([0., 0., extent.half_extent[1]]);
+            if edge_x[1] != 0.
+                || edge_z[1] != 0.
+                || edge_x[2].abs() > 1e-4
+                || edge_z[0].abs() > 1e-4
+            {
+                return Err(format!(
+                    "{}: room and bench footprints must remain aligned with X/Z",
+                    e.placement_id
+                ));
+            }
+            Ok([edge_x[0].abs(), edge_z[2].abs()])
         };
         match e.kind.as_str() {
             "Room" => {
@@ -156,9 +156,11 @@ pub(crate) fn decode_arena(source: &str) -> Result<Arena, String> {
             }),
             "PlayerSpawn" => single(&mut spawn, pos, "PlayerSpawn")?,
             "Marker" => single(&mut marker, pos, "Marker")?,
-            "Subject" => {
-                subjects.push(serde_json::from_value(fields()).map_err(|e| e.to_string())?)
-            }
+            "Subject" => subjects.push(
+                e.component::<SubjectType>()
+                    .ok_or("missing subject")?
+                    .clone(),
+            ),
             other => return Err(format!("unsupported research hall component {other}")),
         }
     }
@@ -187,4 +189,53 @@ pub(crate) fn validate_subjects(subjects: &[SubjectType]) -> Result<(), String> 
         subject.validate()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Game, Input, Scenario};
+    use serde_json::json;
+
+    #[test]
+    fn another_subject_uses_authored_movement_without_new_game_code() {
+        let mut scene: Scene =
+            serde_json::from_str(include_str!("../../../assets/survivor/arena.json")).unwrap();
+        // A stationary variant of the ordinary subject uses its own presentation.
+        let mut sentry = scene.prefabs["walker"].clone();
+        sentry.fields.insert("copies".into(), json!(1));
+        sentry.fields.insert("walk_speed".into(), json!(0));
+        sentry.fields.insert("model".into(), json!("alternate"));
+        scene.prefabs.insert("sentry".into(), sentry);
+        scene
+            .placements
+            .push(serde_json::from_value(json!({"id":"sentry","prefab":"sentry"})).unwrap());
+        let arena = Arena::from_json(&serde_json::to_string(&scene).unwrap()).unwrap();
+        let mut game = Game::new(arena, Scenario::Early, 506);
+        let id = game
+            .enemies
+            .iter()
+            .find(|e| game.arena.subjects[e.archetype].model.as_deref() == Some("alternate"))
+            .unwrap()
+            .id;
+        let pos = game.enemies.iter().find(|e| e.id == id).unwrap().pos;
+        game.step(Input::default());
+        assert_eq!(game.enemies.iter().find(|e| e.id == id).unwrap().pos, pos);
+    }
+
+    #[test]
+    fn moving_a_parent_updates_the_bench_used_by_gameplay() {
+        let mut scene: Scene =
+            serde_json::from_str(include_str!("../../../assets/survivor/arena.json")).unwrap();
+        let bench = scene
+            .placements
+            .iter_mut()
+            .find(|p| p.id == "bench-west")
+            .unwrap();
+        bench.parent = Some("marker".into());
+        bench.translation = [0., 0., 1.5];
+        let arena = Arena::from_json(&serde_json::to_string(&scene).unwrap()).unwrap();
+        assert!(arena.obstacles.iter().any(|b| b.center == [0., 4.5]));
+        assert!(!arena.open([0., 4.5], 0.1));
+    }
 }
