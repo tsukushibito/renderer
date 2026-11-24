@@ -230,6 +230,14 @@ jobs:
           cargo build --locked -p survivor --no-default-features
           python -B tools/package_game.py --project assets/survivor/package.json --exe target/debug/survivor --output build/survivor-package
           python -B tools/survivor/verify_package.py build/survivor-package
+      - name: Verify scene editing, writer recovery, game replay and cooked clip sampling
+        if: matrix.backend == 'cpu'
+        shell: pwsh
+        run: |
+          cargo build --locked -p survivor --no-default-features --bins
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $suffix = if ($IsWindows) { '.exe' } else { '' }
+          python -B tools/editor/verify.py --inspector "target/debug/survivor-inspector$suffix" --game "target/debug/survivor$suffix"
       - name: Run workspace tests on Linux Vulkan with development validation
         if: runner.os == 'Linux' && matrix.backend == 'vulkan'
         run: cargo test --locked --workspace --tests --no-default-features --features vulkan,development-validation,graph-diagnostics

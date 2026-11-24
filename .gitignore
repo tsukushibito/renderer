@@ -5,6 +5,7 @@
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+*.sashiko-edit.lock
 
 # Local downloaded tools
 .tools/

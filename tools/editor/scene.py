@@ -1,11 +1,34 @@
 """Inspect and edit a registered Sashiko scene using its game's inspector."""
 import argparse
+from contextlib import contextmanager
+import errno
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+
+@contextmanager
+def edit_lock(path):
+    # Keep a stable lock inode across atomic scene replacements. The OS releases
+    # its lock on close or process death; the sidecar itself can remain empty.
+    lock = path.with_name(path.name + ".sashiko-edit.lock")
+    with lock.open("a+b") as handle:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as err:
+            if err.errno not in (errno.EAGAIN, errno.EACCES, errno.EDEADLK):
+                raise
+            raise ValueError(f"Edit in progress for {path}; reload after the writer finishes") from err
+        yield
 
 
 def execute(inspector, document, edit):
@@ -37,7 +60,7 @@ def apply_changes(source, previous, updated):
 
 class Document:
     def __init__(self, path, inspector):
-        self.path = path
+        self.path = path.resolve()
         self.inspector = inspector
         self.reload()
 
@@ -50,28 +73,22 @@ class Document:
         candidate = execute(self.inspector, self.view["document"], operation)
         updated = apply_changes(json.loads(self.original), self.view["document"], candidate["document"])
         content = (json.dumps(updated, indent=2, ensure_ascii=False) + "\n").encode()
-        # A short exclusive edit lock serializes compare-and-replace among editors.
-        lock = self.path.with_name(self.path.name + ".edit-lock")
-        try:
-            lock.mkdir()
-        except FileExistsError as err:
-            raise ValueError(f"Edit in progress ({lock}); reload after the writer finishes") from err
-        temporary = None
-        try:
+        with edit_lock(self.path):
             if self.path.read_bytes() != self.original:
                 raise ValueError("Scene changed on disk. Reload before editing.")
-            with tempfile.NamedTemporaryFile(dir=self.path.parent, delete=False) as output:
-                temporary = Path(output.name)
-                output.write(content)
-                output.flush()
-                os.fsync(output.fileno())
-            temporary.chmod(self.path.stat().st_mode)
-            os.replace(temporary, self.path)
-            self.original, self.view = content, candidate
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-            lock.rmdir()
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=self.path.parent, delete=False) as output:
+                    temporary = Path(output.name)
+                    output.write(content)
+                    output.flush()
+                    os.fsync(output.fileno())
+                temporary.chmod(self.path.stat().st_mode)
+                os.replace(temporary, self.path)
+                self.original, self.view = content, candidate
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
 
 
 def main():

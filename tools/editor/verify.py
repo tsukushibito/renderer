@@ -2,9 +2,37 @@
 import argparse
 from pathlib import Path
 import json
+import multiprocessing
 import subprocess
 import tempfile
-from scene import Document
+import threading
+from scene import Document, edit_lock
+
+
+def hold_lock(path, ready):
+    with edit_lock(path):
+        ready.set()
+        threading.Event().wait()
+
+
+def interrupt_writer(doc):
+    ctx = multiprocessing.get_context("spawn")
+    ready = ctx.Event()
+    writer = ctx.Process(target=hold_lock, args=(doc.path, ready))
+    writer.start()
+    try:
+        assert ready.wait(15), "failed to acquire the editor lock"
+        try:
+            doc.edit({"op":"move", "id":"bench-west","translation":[-4,0,0]})
+        except ValueError as err:
+            assert "Edit in progress" in str(err), err
+        else:
+            raise AssertionError("two writers held the editor lock")
+        assert doc.path.read_bytes() == doc.original
+    finally:
+        writer.kill()
+        writer.join()
+        writer.close()
 
 
 def check(inspector, game, arena, catalog, gui):
@@ -13,6 +41,7 @@ def check(inspector, game, arena, catalog, gui):
         working.write_bytes(arena.read_bytes())
         doc = Document(working, inspector)
         stale = Document(working, inspector)
+        interrupt_writer(doc)
         doc.edit({"op":"set","id":"bench-west","field":"half_extent","value":[2, 1]})
         before = working.read_bytes()
         for editor, op in [(stale, {"op":"move","id":"bench-west","translation":[-4,0,0]}),
