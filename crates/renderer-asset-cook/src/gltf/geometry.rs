@@ -77,8 +77,44 @@ pub(super) fn hash_inputs(
     Ok(())
 }
 
-unsafe extern "C" {
-    fn bistro_mikktspace(vertices: *const f32, corners: i32, output: *mut f32) -> i32;
+struct TangentGeometry<'a> {
+    triangles: &'a [[u32; 3]],
+    positions: &'a [[f32; 3]],
+    normals: &'a [Vec3],
+    uvs: &'a [[f32; 2]],
+    tangents: Vec<[f32; 4]>,
+}
+
+impl bevy_mikktspace::Geometry for TangentGeometry<'_> {
+    fn num_faces(&self) -> usize {
+        self.triangles.len()
+    }
+
+    fn num_vertices_of_face(&self, _: usize) -> usize {
+        3
+    }
+
+    fn position(&self, face: usize, corner: usize) -> [f32; 3] {
+        self.positions[self.triangles[face][corner] as usize]
+    }
+
+    fn normal(&self, face: usize, corner: usize) -> [f32; 3] {
+        self.normals[self.triangles[face][corner] as usize].to_array()
+    }
+
+    fn tex_coord(&self, face: usize, corner: usize) -> [f32; 2] {
+        self.uvs[self.triangles[face][corner] as usize]
+    }
+
+    fn set_tangent(
+        &mut self,
+        tangent: Option<bevy_mikktspace::TangentSpace>,
+        face: usize,
+        corner: usize,
+    ) {
+        // A degenerate corner with no neighbor uses the reference MikkTSpace default.
+        self.tangents[3 * face + corner] = tangent.unwrap_or_default().tangent_encoded();
+    }
 }
 
 fn generate_tangents(
@@ -87,27 +123,15 @@ fn generate_tangents(
     normals: &[Vec3],
     uvs: &[[f32; 2]],
 ) -> Result<Vec<[f32; 4]>> {
-    let count = i32::try_from(indices.len())?;
-    if count > i32::MAX / 8 {
-        return Err("too many corners for MikkTSpace".into());
-    }
-    let input: Vec<[f32; 8]> = indices
-        .iter()
-        .map(|&id| {
-            let i = id as usize;
-            let [x, y, z] = positions[i];
-            let [nx, ny, nz] = normals[i].to_array();
-            let [u, v] = uvs[i];
-            [x, y, z, nx, ny, nz, u, v]
-        })
-        .collect();
-    let mut output = vec![[0.; 4]; indices.len()];
-    // SAFETY: the pinned C bridge reads eight floats per input corner and writes four
-    // per output corner. Both arrays are contiguous, disjoint and live for the call.
-    if unsafe { bistro_mikktspace(input.as_ptr().cast(), count, output.as_mut_ptr().cast()) } != 1 {
-        return Err("MikkTSpace failed to generate tangent basis".into());
-    }
-    Ok(output)
+    let mut geometry = TangentGeometry {
+        triangles: indices.as_chunks::<3>().0,
+        positions,
+        normals,
+        uvs,
+        tangents: vec![[0.; 4]; indices.len()],
+    };
+    bevy_mikktspace::generate_tangents(&mut geometry)?;
+    Ok(geometry.tangents)
 }
 
 fn unit(v: Vec3, name: &str) -> Result<Vec3> {
@@ -259,4 +283,26 @@ pub(super) fn cook(
         indices: result,
     }
     .encode()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mirrored_uv_faces_keep_separate_corner_tangents() -> Result<()> {
+        let positions = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [1., 1., 0.]];
+        let uvs = [[0., 0.], [1., 0.], [0., 1.], [0., 0.]];
+        let tangents = generate_tangents(&[0, 1, 2, 1, 3, 2], &positions, &[Vec3::Z; 4], &uvs)?;
+        assert_eq!(tangents[..3], [[1., 0., 0., 1.]; 3]);
+        assert_eq!(tangents[3..], [[0., -1., 0., -1.]; 3]);
+        Ok(())
+    }
+
+    #[test]
+    fn isolated_degenerate_triangle_uses_reference_default() -> Result<()> {
+        let tangents = generate_tangents(&[0, 0, 0], &[[0.; 3]], &[Vec3::Z], &[[0.; 2]])?;
+        assert_eq!(tangents, [[1., 0., 0., -1.]; 3]);
+        Ok(())
+    }
 }

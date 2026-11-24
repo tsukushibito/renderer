@@ -19,6 +19,12 @@ allow = ["Apache-2.0", "ISC", "MIT", "Unicode-3.0"]
 # This does not exempt any third-party dependency or assign the project a license.
 ignore = true
 
+# The offline tangent generator retains the original MikkTSpace Zlib license.
+[[licenses.exceptions]]
+name = "bevy_mikktspace"
+version = "=1.0.0"
+allow = ["Zlib"]
+
 # The optional pinned Tracy client bundles the upstream BSD-3-Clause native
 # client/libbacktrace. Keep this allowance scoped to that reviewed package.
 [[licenses.exceptions]]

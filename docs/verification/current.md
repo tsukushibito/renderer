@@ -9,7 +9,9 @@
 
 訓練場の静的 glTF 装備 4 件を空のキャッシュから Rust で cook し、カタログと 9 個の成果物（計 1,745 バイト）を同梱版とバイト単位で照合した。原本とキャッシュを取り除いた状態でも、保存済み ID からメッシュと画像を復元できた。原本と ID ファイルをサブディレクトリに移し、共通画像への相対 URI を更新しても、カタログのハッシュは一致した。
 
-共有 PNG の変更で再実行された変換は画像 1 件だった。不正な PNG、制作ディレクトリ外の参照、接線の accessor を同じバイト数の別の型に変えた入力を検出した。cook に失敗した後も直前の配布世代を開けた。比較用装備の全 6 コーナーで、既存の Bistro cook との位置・法線・接線・UV の成分差は最大 `5.96 × 10⁻⁸` だった。[配布の回帰テスト](../../crates/renderer-asset-cook/tests/equipment_distribution.rs)・[Bistro との比較](../../crates/renderer-asset-cook/tests/bistro_parity.rs)
+共有 PNG の変更で再実行された変換は画像 1 件だった。不正な PNG、制作ディレクトリ外の参照、接線の accessor を同じバイト数の別の型に変えた入力を検出した。cook に失敗した後も直前の配布世代を開けた。比較用装備の全 6 コーナーで、既存の Bistro cook との位置・法線・接線・UV の成分差は最大 `5.96 × 10⁻⁸` だった。[配布の回帰テスト](../../crates/renderer-asset-cook/tests/equipment_distribution.rs)・[Bistro の接線との比較](../../crates/renderer-asset-cook/src/gltf.rs)・[材質の比較](../../crates/renderer-asset-cook/tests/bistro_parity.rs)
+
+接線生成を C 参照実装から `bevy_mikktspace` 1.0.0 に移行した。移行判定では、描画順に展開した各コーナーの位置・法線・UV・接線の符号を一致させ、単位接線の XYZ に限り各成分の絶対誤差 `2 × 10⁻⁶` までを許容する。鏡映した UV の境界で同じ頂点が正負の符号を持つケースと、孤立した退化三角形の既定接線もテストした。Windows x86-64 の release で装備 4 件をクリーン cook した結果、異なるメッシュ 3 個すべてが旧配布物とバイト単位で一致した。同一ツールチェーンでの再現性と、配布物の読み込み時の SHA-256 検証には完全一致を使う。
 
 ## 装備の配布カタログとプレイ中の読込負荷
 

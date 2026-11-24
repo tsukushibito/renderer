@@ -280,25 +280,31 @@ mod tests {
             .join("../training-yard/assets/equipment/source/comparison.gltf");
         let mut source = Source::open(&path, &path.parent().unwrap().canonicalize()?)?;
         let mesh = MeshBlob::decode(&source.cook_mesh(0)?)?;
-        let first = mesh.vertices[mesh.indices[0] as usize];
-        // Independently read back from the Bistro cook of this fixture, in corner order.
+        // Indexed triangle corners from tools/bistro/cook.py cook_primitive with
+        // the pinned MikkTSpace generator and an identity model transform. Compare
+        // attributes in draw order so equivalent vertex table layouts are accepted.
         let expected = [
-            -0.35,
-            0.,
-            0.5,
-            0.,
-            0.,
-            -1.,
-            0.9916721,
-            -0.12878859,
-            0.,
-            1.,
-            -0.25,
-            0.1,
+            [-0.35, 0., 0.9916721, -0.12878859, -0.25, 0.1],
+            [0.35, 0., 0.99825555, 0.05904074, 0.75, 0.2],
+            [-0.175, 0.75, 0.97282594, 0.23153758, -0.1, 0.95],
+            [0.35, 0., 0.99825555, 0.05904074, 0.75, 0.2],
+            [0.175, 0.75, 0.85285133, 0.5221538, 0.9, 0.8],
+            [-0.175, 0.75, 0.97282594, 0.23153758, -0.1, 0.95],
         ];
-        for (actual, reference) in first.into_iter().zip(expected) {
-            assert!((actual - reference).abs() < 2e-6);
+        assert_eq!(mesh.indices.len(), expected.len());
+        for (&index, [x, y, tx, ty, u, v]) in mesh.indices.iter().zip(expected) {
+            let vertex = mesh.vertices[index as usize];
+            assert_eq!(vertex[..6], [x, y, 0.5, 0., 0., -1.]);
+            assert_eq!(vertex[9], 1., "tangent handedness");
+            assert_eq!(vertex[10..], [u, v]);
+            for (actual, reference) in vertex[6..9].iter().zip([tx, ty, 0.]) {
+                assert!(
+                    (actual - reference).abs() <= 2e-6,
+                    "{actual} vs {reference}"
+                );
+            }
         }
+
         let material = MaterialBlob::decode(&source.cook_material(0)?)?;
         assert_eq!(source.images(0)[0], source.images(0)[3]);
         assert_ne!(material.samplers[0], material.samplers[3]);
