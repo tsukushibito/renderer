@@ -13,13 +13,14 @@ class ReportTests(unittest.TestCase):
         self.path = Path(self.temp.name) / "frames.csv"
 
     def write(self, active=500, graph="1.25", frames=(121, 122, 123)):
-        fields = ("frame", *benchmark.CPU, *benchmark.COUNTS, *benchmark.GPU)
+        fields = ("frame", *benchmark.CPU, *benchmark.COUNTS, *benchmark.GPU,
+                  *benchmark.NATIVE_CPU, "tick")
         with self.path.open("w", newline="", encoding="utf-8") as stream:
             writer = csv.writer(stream)
             writer.writerow(fields)
             for index, frame in enumerate(frames):
                 writer.writerow([frame, 8 + index, .2, .4, active, 120, 120, 32, 128,
-                                 graph, ".5" if graph else ""])
+                                 graph, ".5" if graph else "", *([graph] * 4), 121 + index])
 
     def test_measured_segment_and_gpu_intervals(self):
         self.write()
