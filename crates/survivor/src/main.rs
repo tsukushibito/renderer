@@ -12,10 +12,20 @@ fn rate() -> NonZeroU32 {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct RunStart {
-    arena: Arena,
+    arena: serde_json::Value,
     scenario: Scenario,
     seed: u64,
     rules_version: u32,
+}
+
+impl RunStart {
+    fn game(&self) -> Result<Game, String> {
+        Ok(Game::new(
+            Arena::from_value(self.arena.clone())?,
+            self.scenario,
+            self.seed,
+        ))
+    }
 }
 
 #[cfg(all(
@@ -130,17 +140,20 @@ fn arguments() -> Command {
         )
 }
 
-fn packaged_arena() -> Result<Arena, Box<dyn Error>> {
+fn packaged_arena() -> std::io::Result<serde_json::Value> {
     let executable = std::env::current_exe()?;
     let root = executable
         .parent()
-        .ok_or("executable has no parent directory")?;
+        .ok_or_else(|| std::io::Error::other("executable has no parent directory"))?;
     if root.join("sashiko-package.json").try_exists()? {
         let path = root.join("assets/survivor/arena.json");
-        let data = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        return Ok(Arena::from_json(&data)?);
+        let data = fs::read_to_string(&path)
+            .map_err(|e| std::io::Error::new(e.kind(), format!("{}: {e}", path.display())))?;
+        return Ok(serde_json::from_str(&data)?);
     }
-    Ok(Arena::default())
+    Ok(serde_json::from_str(include_str!(
+        "../../../assets/survivor/arena.json"
+    ))?)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -150,48 +163,53 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("{}", serde_json::to_string(&profile.prefs)?);
         return Ok(());
     }
-    let arena = match args.get_one::<PathBuf>("arena") {
-        Some(path) => Arena::from_json(&fs::read_to_string(path)?)?,
-        None => packaged_arena()?,
-    };
+    let explicit_arena = args
+        .get_one::<PathBuf>("arena")
+        .map(|p| -> std::io::Result<serde_json::Value> {
+            Ok(serde_json::from_slice(&fs::read(p)?)?)
+        })
+        .transpose()?;
     let scenario = match args.get_one::<String>("scenario").map(String::as_str) {
         Some("endgame") => Scenario::Endgame,
         _ => Scenario::Early,
     };
     let seed = *args.get_one::<u64>("seed").unwrap();
-    let requested = RunStart {
-        arena,
-        scenario,
-        seed,
-        rules_version: 1,
+    let requested = || -> std::io::Result<RunStart> {
+        Ok(RunStart {
+            arena: match &explicit_arena {
+                Some(scene) => scene.clone(),
+                None => packaged_arena()?,
+            },
+            scenario,
+            seed,
+            rules_version: 1,
+        })
     };
     let (initial, replay) = if let Some(path) = args.get_one::<PathBuf>("replay") {
-        let replay =
-            Replay::<RunStart, Input>::read(fs::File::open(path)?, requested.clone(), rate())?;
+        let replay = Replay::<RunStart, Input>::read(fs::File::open(path)?, requested, rate())?;
         let init = replay.initial;
         if init.rules_version != 1 {
             return Err("replay uses an incompatible game rules version".into());
         }
-        if args.get_one::<PathBuf>("arena").is_some()
-            && serde_json::to_value(&requested.arena)? != serde_json::to_value(&init.arena)?
+        if explicit_arena
+            .as_ref()
+            .is_some_and(|scene| scene != &init.arena)
         {
             return Err("explicit arena conflicts with recorded replay".into());
         }
         for (arg, differs) in [
-            ("seed", requested.seed != init.seed),
-            ("scenario", requested.scenario != init.scenario),
+            ("seed", seed != init.seed),
+            ("scenario", scenario != init.scenario),
         ] {
             if differs && args.value_source(arg) == Some(clap::parser::ValueSource::CommandLine) {
                 return Err(format!("explicit {arg} conflicts with recorded replay").into());
             }
         }
-        // Apply the same game-owned scene validation to stored replay metadata.
-        Arena::from_json(&serde_json::to_string(&init.arena)?)?;
         (init, Some(replay.inputs))
     } else {
-        (requested, None)
+        (requested()?, None)
     };
-    let game = Game::new(initial.arena.clone(), initial.scenario, initial.seed);
+    let game = initial.game()?;
     let game = if args.get_flag("headless") {
         let mut app = App::new(game, rate());
         let ticks = args
@@ -299,4 +317,31 @@ fn play(
     _: &mut profile::Player,
 ) -> Result<Game, Box<dyn Error>> {
     Err("use --headless or enable presentation and a graphics backend on Windows".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn recording_retains_the_authored_rule_parameters() {
+        let mut arena: serde_json::Value =
+            serde_json::from_str(include_str!("../../../assets/survivor/arena.json")).unwrap();
+        arena["prefabs"]["goal"]["fields"]["radius"] = serde_json::json!(4.);
+        let start = RunStart {
+            arena,
+            seed: 506,
+            scenario: Scenario::Early,
+            rules_version: 1,
+        };
+        let tape = Replay::new(start, rate(), vec![Input::default()]);
+        let wire = serde_json::to_vec(&tape).unwrap();
+        let loaded = Replay::<RunStart, Input>::read(
+            &wire[..],
+            || panic!("recorded scene should be sufficient"),
+            rate(),
+        )
+        .unwrap();
+        let mut game = loaded.initial.game().unwrap();
+        assert!(game.step(loaded.inputs[0]).reached_marker);
+    }
 }

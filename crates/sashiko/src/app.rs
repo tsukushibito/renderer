@@ -90,14 +90,18 @@ impl<S, I> Replay<S, I> {
 }
 
 impl<S: serde::de::DeserializeOwned, I: serde::de::DeserializeOwned> Replay<S, I> {
-    pub fn read(reader: impl std::io::Read, initial: S, rate: NonZeroU32) -> std::io::Result<Self> {
+    pub fn read(
+        reader: impl std::io::Read,
+        legacy_start: impl FnOnce() -> std::io::Result<S>,
+        rate: NonZeroU32,
+    ) -> std::io::Result<Self> {
         match serde_json::from_reader(reader)? {
             Stored::Replay(tape) if tape.version == 1 && tape.tick_hz == rate.get() => Ok(tape),
             Stored::Replay(_) => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "unsupported replay format or update rate",
             )),
-            Stored::Inputs(inputs) => Ok(Self::new(initial, rate, inputs)),
+            Stored::Inputs(inputs) => Ok(Self::new(legacy_start()?, rate, inputs)),
         }
     }
 }
@@ -115,13 +119,17 @@ mod tests {
             app.advance(ticks, |i, _| i, |state, input| state.push(input));
         }
         assert_eq!(app.game, (0..60).collect::<Vec<_>>());
-        let legacy = Replay::<(), usize>::read("[3,4]".as_bytes(), (), rate).unwrap();
+        let legacy = Replay::<(), usize>::read("[3,4]".as_bytes(), || Ok(()), rate).unwrap();
         assert_eq!(legacy.inputs, [3, 4]);
         let mut invalid = legacy;
         invalid.tick_hz = 50;
         assert!(
-            Replay::<(), usize>::read(serde_json::to_vec(&invalid).unwrap().as_slice(), (), rate)
-                .is_err()
+            Replay::<(), usize>::read(
+                serde_json::to_vec(&invalid).unwrap().as_slice(),
+                || panic!("versioned replay looked up legacy defaults"),
+                rate
+            )
+            .is_err()
         );
     }
 }

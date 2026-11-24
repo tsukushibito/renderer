@@ -24,6 +24,10 @@ impl Default for Arena {
 
 impl Arena {
     pub fn from_json(source: &str) -> Result<Self, String> {
+        Self::from_value(serde_json::from_str(source).map_err(|e| e.to_string())?)
+    }
+
+    pub fn from_value(source: serde_json::Value) -> Result<Self, String> {
         let a = crate::authoring::decode_arena(source)?;
         crate::authoring::validate_subjects(&a.subjects)?;
         if !a
