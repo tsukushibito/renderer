@@ -80,8 +80,8 @@ const fn pbr_bytes<const N: usize>() -> [u64; N] {
 
 pub(in crate::passes::pbr) static REFERENCE_OPAQUE: RasterProgramDescriptor =
     RasterProgramDescriptor {
-        bindings: &pbr_bindings::<20>(),
-        binding_bytes: &pbr_bytes::<20>(),
+        bindings: &pbr_bindings::<23>(),
+        binding_bytes: &pbr_bytes::<23>(),
         shaders: packaged_shaders!(
             vulkan: (
                 include_bytes!("../../../../shaders/pbr.vert.spv"),
@@ -101,8 +101,8 @@ static REFERENCE_BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
     ..REFERENCE_OPAQUE
 };
 pub(in crate::passes::pbr) static TILED_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
-    bindings: &pbr_bindings::<21>(),
-    binding_bytes: &pbr_bytes::<21>(),
+    bindings: &pbr_bindings::<24>(),
+    binding_bytes: &pbr_bytes::<24>(),
     shaders: packaged_shaders!(
         vulkan: (
             include_bytes!("../../../../shaders/pbr.vert.spv"),

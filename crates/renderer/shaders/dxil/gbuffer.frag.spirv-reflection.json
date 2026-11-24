@@ -31,7 +31,7 @@
                 }
             ]
         },
-        "_21" : {
+        "_24" : {
             "name" : "type.ConstantBuffer.CameraData",
             "members" : [
                 {
@@ -183,6 +183,24 @@
             "name" : "material_sampler",
             "set" : 1,
             "binding" : 4
+        },
+        {
+            "type" : "sampler",
+            "name" : "normal_sampler",
+            "set" : 1,
+            "binding" : 5
+        },
+        {
+            "type" : "sampler",
+            "name" : "orm_sampler",
+            "set" : 1,
+            "binding" : 6
+        },
+        {
+            "type" : "sampler",
+            "name" : "emissive_sampler",
+            "set" : 1,
+            "binding" : 7
         }
     ],
     "ubos" : [
@@ -194,7 +212,7 @@
             "binding" : 1
         },
         {
-            "type" : "_21",
+            "type" : "_24",
             "name" : "type.ConstantBuffer.CameraData",
             "block_size" : 464,
             "set" : 0,

@@ -31,7 +31,7 @@ impl MaterialCheckpoint {
                     .into_iter()
                     .flatten()
                     {
-                        runtime.refresh_image(image.key())?;
+                        runtime.refresh_image(image.image.key())?;
                     }
                 }
                 MaterialInstance::Custom(m) => {

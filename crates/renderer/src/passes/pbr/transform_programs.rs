@@ -78,7 +78,7 @@ macro_rules! tier_programs {
             use super::*;
 
             pub(in crate::passes::pbr) static FORWARD: RasterProgramDescriptor =
-                descriptor!(OPAQUE, 19, $tier, $vertex, "pbr_transformed", 4);
+                descriptor!(OPAQUE, 22, $tier, $vertex, "pbr_transformed", 4);
             pub(in crate::passes::pbr) static FORWARD_BLEND: RasterProgramDescriptor =
                 RasterProgramDescriptor {
                     blend: BLEND.blend,
@@ -87,7 +87,7 @@ macro_rules! tier_programs {
                 };
             pub(in crate::passes::pbr) static ALL_LIGHTS: RasterProgramDescriptor = descriptor!(
                 REFERENCE_OPAQUE,
-                21,
+                24,
                 $tier,
                 $vertex,
                 "pbr_all_lights_transformed",
@@ -101,7 +101,7 @@ macro_rules! tier_programs {
                 };
             pub(in crate::passes::pbr) static FORWARD_PLUS: RasterProgramDescriptor = descriptor!(
                 TILED_OPAQUE,
-                22,
+                25,
                 $tier,
                 $vertex,
                 "pbr_forward_plus_transformed",
@@ -114,7 +114,7 @@ macro_rules! tier_programs {
                     ..FORWARD_PLUS
                 };
             pub(in crate::passes::pbr) static DEFERRED: RasterProgramDescriptor =
-                descriptor!(GBUFFER, 9, $tier, $gbuffer, "gbuffer_transformed", 4);
+                descriptor!(GBUFFER, 12, $tier, $gbuffer, "gbuffer_transformed", 4);
             pub(in crate::passes::pbr) static CASCADE: RasterProgramDescriptor =
                 descriptor!(SHADOW, 5, $tier, $shadow, "shadow_transformed", 8);
         }

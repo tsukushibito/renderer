@@ -31,7 +31,7 @@
                 }
             ]
         },
-        "_21" : {
+        "_24" : {
             "name" : "type.ConstantBuffer.CameraData",
             "members" : [
                 {
@@ -100,7 +100,7 @@
                 }
             ]
         },
-        "_33" : {
+        "_36" : {
             "name" : "type.ReflectionMetadata",
             "members" : [
                 {
@@ -289,6 +289,24 @@
         },
         {
             "type" : "sampler",
+            "name" : "normal_sampler",
+            "set" : 1,
+            "binding" : 5
+        },
+        {
+            "type" : "sampler",
+            "name" : "orm_sampler",
+            "set" : 1,
+            "binding" : 6
+        },
+        {
+            "type" : "sampler",
+            "name" : "emissive_sampler",
+            "set" : 1,
+            "binding" : 7
+        },
+        {
+            "type" : "sampler",
             "name" : "environment_sampler",
             "set" : 2,
             "binding" : 3
@@ -309,14 +327,14 @@
             "binding" : 1
         },
         {
-            "type" : "_21",
+            "type" : "_24",
             "name" : "type.ConstantBuffer.CameraData",
             "block_size" : 464,
             "set" : 0,
             "binding" : 0
         },
         {
-            "type" : "_33",
+            "type" : "_36",
             "name" : "type.ReflectionMetadata",
             "block_size" : 1824,
             "set" : 2,
