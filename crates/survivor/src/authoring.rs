@@ -1,6 +1,6 @@
 //! Research hall components registered with the shared scene authoring API.
 use crate::{Arena, Obstacle};
-use sashiko::scene::{Registry, Scene};
+use sashiko::scene::{EntityId, Registry, Scene, World};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -79,18 +79,52 @@ impl Extent {
 #[derive(Deserialize)]
 struct Empty {}
 
-pub fn registry() -> Registry {
+/// Values exchanged between scene behaviors and one gameplay update.
+pub struct RuleContext {
+    pub player: [f32; 2],
+    pub marker: [f32; 2],
+    pub entered_marker: bool,
+}
+
+#[derive(Deserialize)]
+struct Marker {
+    #[serde(default = "marker_radius")]
+    radius: f32,
+    #[serde(skip)]
+    occupied: bool,
+}
+fn marker_radius() -> f32 {
+    0.65
+}
+impl Marker {
+    fn validate(&self) -> Result<(), String> {
+        if self.radius.is_finite() && self.radius > 0. {
+            Ok(())
+        } else {
+            Err("radius must be finite and positive".into())
+        }
+    }
+    fn update(&mut self, _id: EntityId, ctx: &mut RuleContext) {
+        let occupied =
+            crate::arena::distance_squared(ctx.player, ctx.marker) < self.radius * self.radius;
+        ctx.entered_marker |= occupied && !self.occupied;
+        self.occupied = occupied;
+    }
+}
+
+pub fn registry() -> Registry<RuleContext> {
     let mut types = Registry::default();
     for name in ["Room", "Bench"] {
         types
             .register(name, &["half_extent"], Extent::validate)
             .expect("unique registered type");
     }
-    for name in ["PlayerSpawn", "Marker"] {
-        types
-            .register::<Empty>(name, &[], |_| Ok(()))
-            .expect("unique registered type");
-    }
+    types
+        .register::<Empty>("PlayerSpawn", &[], |_| Ok(()))
+        .expect("unique registered type");
+    types
+        .register_behavior("Marker", &["radius"], Marker::validate, Marker::update)
+        .expect("unique registered type");
     types
         .register(
             "Subject",
@@ -107,7 +141,8 @@ pub(crate) fn decode_arena(source: &str) -> Result<Arena, String> {
         return serde_json::from_value(data).map_err(|e| e.to_string());
     }
     let scene: Scene = serde_json::from_value(data).map_err(|e| e.to_string())?;
-    let world = scene.instantiate(&registry())?;
+    let types = registry();
+    let world = scene.instantiate(&types)?;
     let mut extent = None;
     let mut spawn = None;
     let mut marker = None;
@@ -161,6 +196,7 @@ pub(crate) fn decode_arena(source: &str) -> Result<Arena, String> {
                     .ok_or("missing subject")?
                     .clone(),
             ),
+            other if types.has_behavior(other) => {}
             other => return Err(format!("unsupported research hall component {other}")),
         }
     }
@@ -170,7 +206,24 @@ pub(crate) fn decode_arena(source: &str) -> Result<Arena, String> {
         marker: marker.ok_or("missing Marker")?,
         obstacles,
         subjects,
+        authored_scene: Some(std::sync::Arc::new(scene)),
     })
+}
+
+pub(crate) fn game_world(arena: &Arena) -> World<RuleContext> {
+    let registry = registry();
+    if let Some(scene) = &arena.authored_scene {
+        return scene
+            .instantiate(&registry)
+            .expect("validated immutable scene");
+    }
+    let marker = serde_json::from_value::<Scene>(serde_json::json!({
+        "schema_version":1,
+        "prefabs":{"marker":{"kind":"Marker"}},
+        "placements":[{"id":"marker","prefab":"marker"}]
+    }))
+    .expect("marker placement");
+    marker.instantiate(&registry).expect("marker type")
 }
 
 fn single<T>(slot: &mut Option<T>, value: T, kind: &str) -> Result<(), String> {
@@ -221,6 +274,23 @@ mod tests {
         let pos = game.enemies.iter().find(|e| e.id == id).unwrap().pos;
         game.step(Input::default());
         assert_eq!(game.enemies.iter().find(|e| e.id == id).unwrap().pos, pos);
+    }
+
+    #[test]
+    fn registered_marker_behavior_runs_the_edited_rule_once_per_entry() {
+        let mut scene: Scene =
+            serde_json::from_str(include_str!("../../../assets/survivor/arena.json")).unwrap();
+        scene
+            .prefabs
+            .get_mut("goal")
+            .unwrap()
+            .fields
+            .insert("radius".into(), json!(4.0));
+        let arena = Arena::from_json(&serde_json::to_string(&scene).unwrap()).unwrap();
+        let mut game = Game::new(arena, Scenario::Early, 506);
+        assert!(game.step(Input::default()).reached_marker);
+        assert!(!game.step(Input::default()).reached_marker);
+        assert_eq!(game.marker_entries, 1);
     }
 
     #[test]
