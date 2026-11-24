@@ -4,7 +4,7 @@ use renderer::{
     core::runtime::RuntimeConfig,
     material::{Materials, PbrParams},
     mesh::{MeshCapacity, MeshData, Meshes},
-    pbr::{PbrVertex, Projection, ViewInput},
+    pbr::{BakedLighting, PbrVertex, Projection, ViewInput},
     pipeline::*,
     unlit_forward::IDENTITY,
 };
@@ -14,6 +14,39 @@ use std::time::Duration;
 mod validation {
     use renderer::core as renderer_core;
     include!("../../renderer/examples/support/validation.rs");
+}
+
+fn center_pixel(renderer: &mut Renderer, scene: SceneInput<'_>) -> PipelineResult<[u8; 3]> {
+    let mut frame = renderer.begin_frame()?;
+    frame.draw_scene(scene, 1.)?;
+    let capture = frame.capture()?;
+    let mut pixels = [0; 32 * 32 * 4];
+    assert!(renderer.read_capture(&capture, &mut pixels, Duration::from_secs(15))?);
+    let at = (16 * 32 + 16) * 4;
+    Ok(pixels[at..at + 3].try_into().unwrap())
+}
+
+// One leaf points to probe 1 at all corners. Probe 0 and the outside-volume
+// fallback are black so a stride error or a missed lookup is observable.
+fn quadratic_volume(keys: [[f32; 3]; 3]) -> PipelineResult<BakedLighting> {
+    let mut texels = vec![[-1., -1., -1., 2.], [1., 2., 0., -3.]];
+    texels.extend([[0.; 4]; 3]);
+    texels.extend([[0.; 4], [1.; 4], [1.; 4]]);
+    texels.extend([[0.; 4]; 2 + 9 * 3]);
+    texels.extend([[2., 2., 2., 1.], [2., 2., 2., 0.]]);
+    for [r, g, b] in keys {
+        texels.extend([[0.; 4]; 4]);
+        // For n = (2,3,-6)/7 the five basis values are (6,-18,-12,-5,59)/49.
+        // These coefficients therefore reproduce the key color exactly.
+        texels.extend([1., -1., -1., -1., 8. / 59.].map(|v| [v * r, v * g, v * b, 0.]));
+    }
+    Ok(BakedLighting::from_texels(
+        texels
+            .into_iter()
+            .flatten()
+            .flat_map(f32::to_le_bytes)
+            .collect(),
+    )?)
 }
 
 fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
@@ -59,8 +92,9 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
         meshes: 1,
         retired_mesh_versions: 1,
     })?;
-    let vertices = [[-0.8, -0.8, 0.5], [0.8, -0.8, 0.5], [0., 0.8, 0.5]]
-        .map(|p| PbrVertex::new(p, [0., 0., -1.], [1., 0., 0., 1.], [0.; 2]).unwrap());
+    let vertices = [[-0.8, -0.8, 0.5], [0.8, -0.8, 0.5], [0., 0.8, 0.5]].map(|p| {
+        PbrVertex::new(p, [2. / 7., 3. / 7., -6. / 7.], [1., 0., 0., 1.], [0.; 2]).unwrap()
+    });
     let mesh = meshes.create(MeshData::pbr(&vertices, &[0, 2, 1])?.with_lightmap_uvs(&[
         [0., 0.],
         [1., 0.],
@@ -72,6 +106,7 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
     metal.factors.metallic = 1.;
     let mut matte = PbrParams::color([1.; 4]);
     matte.factors.double_sided = true;
+    matte.factors.normal_scale = 0.;
     let matte = materials.create_pbr(matte)?;
     let translated =
         renderer::pbr::Transform::new([[1., 0., 0., 0.03], [0., 1., 0., 0.], [0., 0., 1., 0.]])?;
@@ -93,8 +128,8 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
             diffuse: include_diffuse.then_some(&diffuse),
             reflections: include_reflections.then_some(&reflections),
         })?;
-        let mut frame = renderer.begin_frame()?;
-        frame.draw_scene(
+        let pixel = center_pixel(
+            &mut renderer,
             SceneInput::new(
                 &meshes,
                 &materials,
@@ -105,12 +140,7 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
                 },
             )
             .with_baked_lighting(&lighting, 1.),
-            1.,
         )?;
-        let capture = frame.capture()?;
-        let mut pixels = [0; 32 * 32 * 4];
-        assert!(renderer.read_capture(&capture, &mut pixels, Duration::from_secs(15))?);
-        let pixel = &pixels[(16 * 32 + 16) * 4..][..3];
         assert!(
             pixel[0] > 50 && pixel[0] > pixel[2].saturating_add(20),
             "{pixel:?}"
@@ -140,27 +170,43 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
             }
         }
     }
-    renderer::pbr::BakedLighting::uniform([blue, red, green])?.write(&mut file)?;
+    let probe_keys = [blue, red, green];
+    let phases = [0., 0.25, 0.5, 0.75, 1.];
+    let reference = renderer.load_probe_lighting(ProbeLighting {
+        diffuse: Some(&BakedLighting::uniform(probe_keys)?),
+        reflections: None,
+    })?;
+    let mut reference_rgb = Vec::new();
+    for phase in phases {
+        reference_rgb.push(center_pixel(
+            &mut renderer,
+            SceneInput::new(&meshes, &materials, &objects[1..2])
+                .with_baked_lighting(&reference, phase),
+        )?);
+    }
+    drop(reference);
+    quadratic_volume(probe_keys)?.write(&mut file)?;
     let sequence = renderer::pbr::SurfaceLightmaps::from_bytes(&file)?;
     let resident = renderer.load_surface_lighting(&sequence, None)?;
     for (object, channels) in [(1, [2, 0, 1]), (2, [0, 1, 2]), (3, [1, 2, 0])] {
-        for (phase, expected) in [
-            (0., [true, false, false]),
-            (0.25, [true, true, false]),
-            (0.5, [false, true, false]),
-            (0.75, [false, true, true]),
-            (1., [false, false, true]),
-        ] {
-            let mut frame = renderer.begin_frame()?;
-            frame.draw_scene(
+        for ((phase, reference), expected) in phases.into_iter().zip(&reference_rgb).zip([
+            [true, false, false],
+            [true, true, false],
+            [false, true, false],
+            [false, true, true],
+            [false, false, true],
+        ]) {
+            let rgb = center_pixel(
+                &mut renderer,
                 SceneInput::new(&meshes, &materials, &objects[object..=object])
                     .with_baked_lighting(&resident, phase),
-                1.,
             )?;
-            let capture = frame.capture()?;
-            let mut pixels = [0; 32 * 32 * 4];
-            assert!(renderer.read_capture(&capture, &mut pixels, Duration::from_secs(15))?);
-            let rgb = &pixels[(16 * 32 + 16) * 4..][..3];
+            if object == 1 {
+                assert!(
+                    rgb.iter().zip(reference).all(|(a, b)| a.abs_diff(*b) <= 1),
+                    "quadratic probe at {phase}: {rgb:?} expected {reference:?}"
+                );
+            }
             assert_eq!(
                 channels.map(|c| rgb[c] > 32),
                 expected,

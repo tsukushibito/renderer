@@ -1,9 +1,9 @@
-//! Real device comparison covering both receiver types and both lighting scenarios.
+//! Real device comparison of surface irradiance and both probe orders at 1–3 keys.
 #![cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 
 use renderer_bake::{
-    BakeBackend, BakeScene, Lighting, LightmapVertex, Material, ProbeSettings, StaticReceiver,
-    SurfaceLayout, Triangle,
+    BakeBackend, BakeScene, Lighting, LightmapVertex, Material, ProbeSettings, ProbeShOrder,
+    StaticReceiver, SurfaceLayout, Triangle,
 };
 
 fn compare(backend: BakeBackend) {
@@ -68,12 +68,27 @@ fn compare(backend: BakeBackend) {
             })
             .collect(),
     }];
-    fn bake<const N: usize>(
-        scene: &BakeScene,
-        receivers: &[StaticReceiver],
-        backend: BakeBackend,
-        lights: impl renderer_bake::LightingScenarios<N>,
-    ) -> renderer::pbr::SurfaceLightmaps {
+    compare_keys(&scene, &receivers, backend, [lights[1]]);
+    compare_keys(&scene, &receivers, backend, lights);
+    compare_keys(
+        &scene,
+        &receivers,
+        backend,
+        [
+            lights[0],
+            Lighting::uniform_sky([0.07, 0.9, 0.04]),
+            lights[1],
+        ],
+    );
+}
+
+fn compare_keys<const N: usize>(
+    scene: &BakeScene,
+    receivers: &[StaticReceiver],
+    backend: BakeBackend,
+    lights: [Lighting; N],
+) {
+    let bake = |backend, sh_order| {
         let mut file = Vec::new();
         SurfaceLayout::new(receivers, 16, None)
             .unwrap()
@@ -82,6 +97,7 @@ fn compare(backend: BakeBackend) {
                 lights,
                 ProbeSettings {
                     backend,
+                    sh_order,
                     rays_per_probe: 64,
                     max_depth: 1,
                     ..Default::default()
@@ -91,9 +107,10 @@ fn compare(backend: BakeBackend) {
             )
             .unwrap();
         renderer::pbr::SurfaceLightmaps::from_bytes(&file).unwrap()
-    }
-    let verify = |reference: renderer::pbr::SurfaceLightmaps,
-                  native: renderer::pbr::SurfaceLightmaps| {
+    };
+    let [l1, l2] = [ProbeShOrder::L1, ProbeShOrder::L2].map(|order| {
+        let reference = bake(BakeBackend::Cpu, order);
+        let native = bake(backend, order);
         assert_eq!(reference.placements(), native.placements());
         assert_eq!(reference.pages().len(), native.pages().len());
         for (a, b) in reference.pages().iter().zip(native.pages()) {
@@ -108,40 +125,51 @@ fn compare(backend: BakeBackend) {
                 assert!((f32::from_le_bytes(*a) - f32::from_le_bytes(*b)).abs() < 0.0005);
             }
         }
-        let (reference, native) = (reference.probes(), native.probes());
-        assert_eq!(reference.extent(), native.extent());
-        for (i, (a, b)) in reference
+        let (cpu_probes, gpu_probes) = (reference.probes(), native.probes());
+        assert_eq!(gpu_probes.sh_order(), order);
+        assert_eq!(gpu_probes.scenario_count(), N);
+        assert_eq!(cpu_probes.extent(), gpu_probes.extent());
+        for (i, (a, b)) in cpu_probes
             .rgba32f()
             .as_chunks::<4>()
             .0
             .iter()
-            .zip(native.rgba32f().as_chunks::<4>().0)
+            .zip(gpu_probes.rgba32f().as_chunks::<4>().0)
             .enumerate()
         {
             let (a, b) = (f32::from_le_bytes(*a), f32::from_le_bytes(*b));
             assert!(
                 (a - b).abs() < 0.0005,
-                "{backend:?} atlas word {i}: CPU {a}, GPU {b}"
+                "{backend:?} {order:?} {N} keys, atlas word {i}: CPU {a}, GPU {b}"
             );
         }
-    };
-    verify(
-        bake(&scene, &receivers, BakeBackend::Cpu, lights),
-        bake(&scene, &receivers, backend, lights),
-    );
-    verify(
-        bake(&scene, &receivers, BakeBackend::Cpu, lights[1]),
-        bake(&scene, &receivers, backend, lights[1]),
-    );
-    let keys = [
-        lights[0],
-        Lighting::uniform_sky([0.07, 0.9, 0.04]),
-        lights[1],
-    ];
-    verify(
-        bake(&scene, &receivers, BakeBackend::Cpu, keys),
-        bake(&scene, &receivers, backend, keys),
-    );
+        native
+    });
+    // The probe order has no effect on irradiance stored for static receivers.
+    for (a, b) in l1.pages().iter().zip(l2.pages()) {
+        assert_eq!(a.rgba32f(), b.rgba32f());
+    }
+    // This environment is directional. Inspect the high bands in every key,
+    // including the unpaired last key written by a second GPU dispatch.
+    let (words, _) = l2.probes().rgba32f().as_chunks::<4>();
+    let nodes = f32::from_le_bytes(words[4]) as usize;
+    let probes = f32::from_le_bytes(words[5]) as usize;
+    let header = 2 + N.max(2) + 3 * nodes;
+    for key in 0..N {
+        assert!(
+            (0..probes).any(|probe| {
+                let quadratic = header + probe * (2 + 9 * N) + 2 + key * 9 + 4;
+                words[4 * quadratic..4 * (quadratic + 5)]
+                    .chunks_exact(4)
+                    .any(|texel| {
+                        texel[..3]
+                            .iter()
+                            .any(|word| f32::from_le_bytes(*word).abs() > 0.0005)
+                    })
+            }),
+            "no directional quadratic signal in key {key} of {N}"
+        );
+    }
 }
 
 #[cfg(feature = "vulkan")]
