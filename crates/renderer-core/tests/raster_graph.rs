@@ -814,6 +814,12 @@ fn run(strict: bool) {
     assert_eq!(vk_info.device_id, dx_info.device_id);
     let vk_monitor = vulkan.validation_monitor();
     let dx_monitor = d3d12.validation_monitor();
+    vulkan
+        .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+        .unwrap();
+    d3d12
+        .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+        .unwrap();
     let mut resources: Vec<_> = [112, 24, 768]
         .into_iter()
         .map(|size| ResourceClass::Buffer {

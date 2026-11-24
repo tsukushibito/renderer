@@ -137,7 +137,7 @@ pub fn prepare_resources(runtime: &mut Runtime, extent: (u32, u32)) -> Result<()
             },
         ],
         raster: &[ManagedRasterProgram::mesh().into()],
-        compute: &[],
+        ..Default::default()
     })?;
     Ok(())
 }

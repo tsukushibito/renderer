@@ -145,6 +145,7 @@ mod native {
             WorkingSet {
                 resources: &resources,
                 compute: std::slice::from_ref(&program),
+                samplers: &[SamplerDescriptor::NearestClamp],
                 ..Default::default()
             },
         )

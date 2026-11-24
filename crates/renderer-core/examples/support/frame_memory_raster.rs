@@ -606,6 +606,9 @@ pub fn vulkan(baseline: bool) {
             &classes,
         )
         .unwrap();
+    runtime
+        .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+        .unwrap();
     runtime.prepare_raster_programs(&programs()).unwrap();
     let mut pool = GraphPool::new(capacity(), GRAPH_SLOTS).unwrap();
     frames(&mut runtime, &mut pool, WARMUP);
@@ -705,6 +708,9 @@ pub fn d3d12(baseline: bool) {
     let mut runtime = renderer_core::d3d12::D3D12Runtime::new(config).unwrap();
     let info = runtime.device_info();
     let monitor = runtime.validation_monitor();
+    runtime
+        .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+        .unwrap();
     runtime
         .prepare_graph_working_set(
             None,
