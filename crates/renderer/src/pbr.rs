@@ -148,6 +148,8 @@ pub struct Environment {
     pub irradiance: ImageView,
     pub diffuse_lighting: DiffuseLighting,
     pub reflection: ImageView,
+    /// Immutable probe records, or an initialized empty table when local reflections are disabled.
+    pub reflection_metadata: renderer_core::graph::BufferHandle,
     pub local_reflections: Option<LocalReflections>,
     pub brdf_lut: ImageView,
     /// Luminance in cd/m² of a unit white environment texel, before convolution.

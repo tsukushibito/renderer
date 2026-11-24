@@ -96,7 +96,11 @@ const IDENTITY: [[f32; 4]; 4] = [
     [0.0, 0.0, 0.0, 1.0],
 ];
 
-fn deferred_lighting(environment: ImageView, shadow: ImageView) -> [Binding; 10] {
+fn deferred_lighting(
+    environment: ImageView,
+    shadow: ImageView,
+    metadata: renderer_core::graph::BufferHandle,
+) -> [Binding; 11] {
     let image = |group, binding, view| Binding {
         group,
         binding,
@@ -118,6 +122,7 @@ fn deferred_lighting(environment: ImageView, shadow: ImageView) -> [Binding; 10]
         image(3, 2, shadow),
         image(3, 3, shadow),
         sampler(3, 4),
+        renderer::pbr::ReflectionProbes::bind_metadata(metadata),
     ]
 }
 
@@ -128,17 +133,18 @@ fn deferred_pass_fits_its_advertised_reservations() {
     assert_eq!(preparation.working_set().raster.len(), 3);
     preparation
         .add_graph_requirements(GraphRequirements {
-            resources: 4,
-            passes: 2,
-            accesses: 2,
+            resources: 5,
+            passes: 3,
+            accesses: 3,
             attachments: 1,
             name_bytes: "hdr".len()
                 + "depth".len()
                 + "camera".len()
                 + "upload camera".len()
                 + "environment".len()
-                + "clear environment".len(),
-            upload_bytes: VIEW_BYTES,
+                + "clear environment".len()
+                + 2 * "reflection metadata".len(),
+            upload_bytes: VIEW_BYTES + renderer::pbr::ReflectionProbes::METADATA_BYTES,
             ..GraphRequirements::default()
         })
         .unwrap();
@@ -190,6 +196,11 @@ fn deferred_pass_fits_its_advertised_reservations() {
             },
         )
         .unwrap();
+    let metadata = renderer::pbr::ReflectionProbes::upload_metadata(
+        &mut graph,
+        &[0; renderer::pbr::ReflectionProbes::METADATA_BYTES],
+    )
+    .unwrap();
     let planes = deferred::append(
         &mut graph,
         deferred::Inputs {
@@ -199,7 +210,7 @@ fn deferred_pass_fits_its_advertised_reservations() {
             clear: [0.0; 4],
             camera,
             view_projection: IDENTITY,
-            lighting: deferred_lighting(environment, depth_view),
+            lighting: deferred_lighting(environment, depth_view, metadata),
         },
         |_, _| Ok(()),
     )
@@ -212,7 +223,7 @@ fn deferred_pass_fits_its_advertised_reservations() {
         assert_eq!(graph.image_desc(plane).unwrap(), hdr_desc);
     }
     graph.export_image(hdr).unwrap();
-    assert_eq!(graph.compile().unwrap().pass_count(), 5);
+    assert_eq!(graph.compile().unwrap().pass_count(), 6);
 }
 
 #[test]
@@ -259,7 +270,7 @@ fn deferred_pass_rejects_invalid_targets_before_consuming_graph_capacity() {
                 clear: [0.0; 4],
                 camera,
                 view_projection: IDENTITY,
-                lighting: deferred_lighting(hdr, depth),
+                lighting: deferred_lighting(hdr, depth, camera),
             },
             |_, _| panic!("invalid targets must be rejected before recording geometry"),
         )

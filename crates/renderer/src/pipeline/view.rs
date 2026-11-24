@@ -161,9 +161,9 @@ impl StandardPipeline {
         let mut aggregate = Preparation::new(preparation.frames_in_flight());
         aggregate.add_alternatives(&[self.preparation()])?;
         let imports = renderer_core::capacity::GraphRequirements {
-            resources: 2,
-            initial_ranges: 2,
-            name_bytes: 2 * "material texture".len(),
+            resources: 3,
+            initial_ranges: 3,
+            name_bytes: 2 * "material texture".len() + "reflection metadata".len(),
             ..Default::default()
         };
         aggregate.add_graph_requirements(imports)?;
@@ -201,8 +201,12 @@ impl StandardPipeline {
             })?
             .import(graph)?;
         let mut environment = match (input.environment, input.baked_lighting) {
-            (Some(env), Some(baked)) => env.import_diffuse(graph, baked.atlas)?,
-            (Some(env), None) => env.import(graph)?,
+            (Some(env), Some(baked)) => env.import_diffuse(
+                graph,
+                baked.atlas,
+                defaults.environment()?.reflection_metadata,
+            )?,
+            (Some(env), None) => env.import(graph, defaults.environment()?.reflection_metadata)?,
             (None, Some(baked)) => Environment {
                 irradiance: crate::material::texture_view(graph, baked.atlas)?,
                 ..defaults.environment()?
@@ -210,6 +214,8 @@ impl StandardPipeline {
             (None, None) => defaults.environment()?,
         };
         if let Some(local) = input.reflection_probes {
+            environment.reflection_metadata =
+                graph.import_buffer("reflection metadata", local.metadata)?;
             environment.local_reflections = Some(pbr::LocalReflections {
                 atlas: crate::material::texture_view(graph, local.atlas)?,
                 blend: local.blend,

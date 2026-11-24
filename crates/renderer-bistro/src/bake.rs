@@ -185,6 +185,46 @@ fn publish<const N: usize>(
     result
 }
 
+fn encode_reflections(
+    atlas: renderer::pbr::ReflectionProbes,
+    compressed: bool,
+) -> Result<renderer::pbr::ReflectionProbes, Error> {
+    use std::process::{Command, Stdio};
+    if !compressed {
+        return Ok(atlas);
+    }
+    let [width, height] = atlas.extent();
+    let mut process = Command::new("python")
+        .args([
+            "-c",
+            include_str!("../../../tools/bistro/reflection_codec.py"),
+            &width.to_string(),
+            &height.to_string(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let input = process
+        .stdin
+        .take()
+        .expect("piped encoder input")
+        .write_all(atlas.pixels());
+    let output = process.wait_with_output()?;
+    if !output.status.success() {
+        return Err(
+            "BC6H encoding failed; use the Python environment from tools/bistro/requirements.txt"
+                .into(),
+        );
+    }
+    input?;
+    Ok(renderer::pbr::ReflectionProbes::new(
+        atlas.probes().to_vec(),
+        atlas.scenario_count(),
+        renderer_core::ImageFormat::Bc6hRgbUfloat,
+        output.stdout,
+    )?)
+}
+
 pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     #[derive(serde::Deserialize, serde::Serialize)]
     #[serde(deny_unknown_fields)]
@@ -196,6 +236,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         blend_distance: f32,
     }
     let mut layout = None;
+    let mut reflection_format = None;
     let mut placement_spacing = None;
     let mut placement_method = None;
     let mut max_probes = None;
@@ -228,6 +269,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             "--endpoints-only" => endpoints_only = true,
             "--ibl-manifest" => {
                 ibl_manifest = Some(PathBuf::from(args.next().ok_or("missing IBL manifest")?))
+            }
+            "--reflection-format" => {
+                reflection_format = Some(args.next().ok_or("missing reflection format")?)
             }
             "--reflection-probes" => {
                 layout = Some(PathBuf::from(
@@ -282,7 +326,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--probe-sh l1|l2] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--probe-sh l1|l2] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json [--reflection-format bc6h|rgba32f] | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
                 );
                 println!(
                     "Placement options: --placement-method floor|remedy --max-probes N (1..32)"
@@ -311,6 +355,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         return Err("lighting references require the CPU daylight path, an IBL manifest and no probe layout".into());
     }
 
+    if reflection_format.is_some() && layout.is_none() {
+        return Err("--reflection-format requires --reflection-probes".into());
+    }
     let scene = match (manifest, fixture) {
         (None, true) => Scene::fixture(false),
         (Some(path), false) => Scene::load(&path, false)?,
@@ -521,12 +568,27 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
                 Ok(desc)
             })
             .collect::<Result<Vec<_>, Error>>()?;
+        let format = reflection_format
+            .as_deref()
+            .or_else(|| {
+                scene
+                    .source
+                    .get("reflection_probe_format")
+                    .and_then(|f| f.as_str())
+            })
+            .unwrap_or("bc6h");
+        let compressed = match format {
+            "bc6h" => true,
+            "rgba32f" => false,
+            _ => return Err("unknown reflection probe format".into()),
+        };
         drop(scene);
         let atlas = if day_only {
             bake.bake_reflection_probes(&probes, lights[0])?
         } else {
             bake.bake_reflection_probes(&probes, lights)?
         };
+        let atlas = encode_reflections(atlas, compressed)?;
         let mut file = std::io::BufWriter::new(std::fs::File::create_new(output)?);
         file.write_all(identity.as_bytes())?;
         atlas.write(&mut file)?;

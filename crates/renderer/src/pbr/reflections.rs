@@ -30,137 +30,244 @@ impl ReflectionProbeDesc {
     }
 }
 
-/// Each probe occupies a metadata row and one or two equal stacks of GGX-filtered
-/// lat-long maps. All levels span the texture width so longitude wraps with
-/// ordinary hardware filtering. Latitude resolution halves at each level.
+/// A radiance atlas with block-aligned roughness levels and exact probe records.
 pub struct ReflectionProbes {
     pixels: Vec<u8>,
+    probes: Vec<ReflectionProbeDesc>,
+    scenarios: usize,
+    format: renderer_core::ImageFormat,
 }
 
 impl ReflectionProbes {
     pub const WIDTH: usize = 128;
     pub const HEIGHT: usize = 64;
     pub const LEVELS: usize = 7;
-    pub const ROWS: usize = 1 + 2 * (2 * Self::HEIGHT - 1);
     pub const MAX_COUNT: usize = 32;
-    const SINGLE_MAGIC: &[u8; 8] = b"RSPRST01";
-    const MAGIC: &[u8; 8] = b"RSPROB01";
+    /// One scenario occupies heights 64, 32, 16, 8, 4, 4, 4.
+    pub const SCENARIO_ROWS: usize = 132;
+    /// Two grid vectors, 64 masks and 32 triples of float4 box records.
+    pub const METADATA_BYTES: usize = 32 + 64 * 4 + Self::MAX_COUNT * 48;
 
-    /// Validate the native atlas at the import or offline creation boundary.
-    pub fn from_rgba32f(mut pixels: Vec<u8>) -> Result<Self, GraphError> {
-        let single = pixels.len().is_multiple_of(Self::WIDTH * 128 * 16);
-        let rows = if single { 128 } else { Self::ROWS };
-        let stride = Self::WIDTH * rows * 16;
-        let mut boxes = Vec::new();
-        if !pixels.len().is_multiple_of(stride)
-            || !(1..=Self::MAX_COUNT).contains(&(pixels.len() / stride))
+    pub fn new(
+        probes: Vec<ReflectionProbeDesc>,
+        scenarios: usize,
+        format: renderer_core::ImageFormat,
+        pixels: Vec<u8>,
+    ) -> Result<Self, GraphError> {
+        use renderer_core::ImageFormat::*;
+        if !(1..=Self::MAX_COUNT).contains(&probes.len())
+            || !(1..=2).contains(&scenarios)
+            || !matches!(format, Rgba32Float | Bc6hRgbUfloat)
         {
-            return Err(GraphError::invalid_input("invalid reflection atlas extent"));
+            return Err(GraphError::invalid_input(
+                "invalid reflection atlas descriptor",
+            ));
         }
-        for probe in pixels.chunks_exact(stride) {
-            let f = |i: usize| f32::from_le_bytes(probe[i * 4..i * 4 + 4].try_into().unwrap());
-            let xyz = |start: usize| std::array::from_fn(|i| f(start + i));
-            let desc = ReflectionProbeDesc {
-                position: xyz(0),
-                blend_distance: f(3),
-                min: xyz(4),
-                max: xyz(8),
+        for p in &probes {
+            p.validate()?;
+        }
+        let height = Self::SCENARIO_ROWS * scenarios * probes.len();
+        if format.packed_byte_len(Self::WIDTH as u32, height as u32) != Some(pixels.len() as u64) {
+            return Err(GraphError::invalid_input("invalid reflection atlas length"));
+        }
+        if format == Rgba32Float
+            && !pixels.as_chunks::<4>().0.iter().all(|v| {
+                let v = f32::from_le_bytes(*v);
+                v.is_finite() && v >= 0.
+            })
+        {
+            return Err(GraphError::invalid_input("invalid reflection radiance"));
+        }
+        Ok(Self {
+            probes,
+            scenarios,
+            format,
+            pixels,
+        })
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, GraphError> {
+        let invalid = || GraphError::invalid_input("invalid reflection asset");
+        let (magic, data) = bytes.split_at_checked(8).ok_or_else(invalid)?;
+        if magic == b"RSPROB02" {
+            let (header, data) = data.split_at_checked(4).ok_or_else(invalid)?;
+            let format = match header[0] {
+                0 => renderer_core::ImageFormat::Rgba32Float,
+                1 => renderer_core::ImageFormat::Bc6hRgbUfloat,
+                _ => return Err(invalid()),
             };
-            desc.validate()?;
-            boxes.push(desc);
-            if !probe[Self::WIDTH * 16..]
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .all(|b| {
-                    let x = f32::from_le_bytes(*b);
-                    x.is_finite() && x >= 0.
-                })
+            let count = header[2] as usize;
+            if header[3] != 0
+                || !(1..=Self::MAX_COUNT).contains(&count)
+                || !(1..=2).contains(&header[1])
             {
-                return Err(GraphError::invalid_input("invalid reflection radiance"));
+                return Err(invalid());
+            }
+            let (records, pixels) = data.split_at_checked(count * 48).ok_or_else(invalid)?;
+            let expected = format.packed_byte_len(
+                Self::WIDTH as u32,
+                (count * header[1] as usize * Self::SCENARIO_ROWS) as u32,
+            );
+            if expected != Some(pixels.len() as u64) {
+                return Err(invalid());
+            }
+            return Self::new(
+                records
+                    .as_chunks::<48>()
+                    .0
+                    .iter()
+                    .map(decode_record)
+                    .collect(),
+                header[1] as usize,
+                format,
+                pixels.to_vec(),
+            );
+        }
+        let scenarios = match magic {
+            b"RSPRST01" => 1,
+            b"RSPROB01" => 2,
+            _ => return Err(invalid()),
+        };
+        let row = Self::WIDTH * 16;
+        let stride = row * (1 + 127 * scenarios);
+        if !data.len().is_multiple_of(stride)
+            || !(1..=Self::MAX_COUNT).contains(&(data.len() / stride))
+        {
+            return Err(invalid());
+        }
+        let mut probes = Vec::new();
+        let mut pixels = Vec::new();
+        for old in data.chunks_exact(stride) {
+            probes.push(decode_record(
+                old.first_chunk().expect("validated record stride"),
+            ));
+            let mut rows = &old[row..];
+            for _ in 0..scenarios {
+                for level in 0..Self::LEVELS {
+                    let height = Self::HEIGHT >> level;
+                    let (plane, rest) = rows.split_at(row * height);
+                    rows = rest;
+                    pixels.extend_from_slice(plane);
+                    for _ in height..height.next_multiple_of(4) {
+                        pixels.extend_from_slice(&plane[plane.len() - row..]);
+                    }
+                }
             }
         }
-        // Populate reserved header texels even for earlier archives.
-        if boxes.len() > 4 {
-            build_candidate_grid(&boxes, &mut pixels[..Self::WIDTH * 16]);
-        }
-        Ok(Self { pixels })
-    }
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, GraphError> {
-        let (header, payload) = bytes
-            .split_at_checked(8)
-            .ok_or_else(|| GraphError::invalid_input("truncated reflection atlas"))?;
-        let rows = if header == Self::SINGLE_MAGIC {
-            128
-        } else if header == Self::MAGIC {
-            Self::ROWS
-        } else {
-            return Err(GraphError::invalid_input(
-                "unknown reflection probe asset version",
-            ));
-        };
-        let stride = rows * Self::WIDTH * 16;
-        if !payload.len().is_multiple_of(stride)
-            || !(1..=Self::MAX_COUNT).contains(&(payload.len() / stride))
-        {
-            return Err(GraphError::invalid_input("invalid reflection atlas extent"));
-        }
-        Self::from_rgba32f(payload.to_vec())
+        Self::new(
+            probes,
+            scenarios,
+            renderer_core::ImageFormat::Rgba32Float,
+            pixels,
+        )
     }
     pub fn write(&self, mut writer: impl std::io::Write) -> std::io::Result<()> {
-        writer.write_all(if self.scenario_count() == 1 {
-            Self::SINGLE_MAGIC
-        } else {
-            Self::MAGIC
-        })?;
+        writer.write_all(b"RSPROB02")?;
+        writer.write_all(&[
+            u8::from(self.format == renderer_core::ImageFormat::Bc6hRgbUfloat),
+            self.scenarios as u8,
+            self.probes.len() as u8,
+            0,
+        ])?;
+        for p in &self.probes {
+            writer.write_all(&encode_record(p))?;
+        }
         writer.write_all(&self.pixels)
     }
+    pub fn probes(&self) -> &[ReflectionProbeDesc] {
+        &self.probes
+    }
     pub fn scenario_count(&self) -> usize {
-        if self.extent()[1].is_multiple_of(128) {
-            1
-        } else {
-            2
-        }
+        self.scenarios
     }
     pub fn extent(&self) -> [u32; 2] {
         [
             Self::WIDTH as u32,
-            (self.pixels.len() / (Self::WIDTH * 16)) as u32,
+            (self.probes.len() * self.scenarios * Self::SCENARIO_ROWS) as u32,
         ]
     }
     pub fn image_desc(&self) -> renderer_core::graph::ImageDesc {
-        let [width, height] = self.extent();
-        renderer_core::graph::ImageDesc::rgba32_float(width, height)
+        let [w, h] = self.extent();
+        renderer_core::graph::ImageDesc::texture_2d(w, h, self.format)
     }
-    /// Upload once at scene preparation and retain the managed image across frames.
-    pub fn upload(
-        &self,
-        runtime: &mut renderer_core::runtime::Runtime,
-        pool: &mut renderer_core::graph::GraphPool,
-    ) -> Result<
-        (
-            renderer_core::runtime::FrameId,
-            renderer_core::runtime::ManagedImage,
-        ),
-        renderer_core::runtime::TextureUploadError,
-    > {
-        runtime.upload_texture(
-            pool,
-            "local reflection probes",
-            self.image_desc(),
-            self.rgba32f(),
-        )
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
     }
-    pub fn into_rgba32f(self) -> Vec<u8> {
+    pub fn into_pixels(self) -> Vec<u8> {
         self.pixels
     }
-    pub fn rgba32f(&self) -> &[u8] {
-        &self.pixels
+    pub const fn metadata_desc() -> renderer_core::graph::BufferDesc {
+        renderer_core::graph::BufferDesc {
+            size: Self::METADATA_BYTES as u64,
+        }
+    }
+    pub fn bind_metadata(
+        buffer: renderer_core::graph::BufferHandle,
+    ) -> renderer_core::graph::Binding {
+        renderer_core::graph::Binding {
+            group: 2,
+            binding: 5,
+            resource: renderer_core::graph::BindingResource::Buffer {
+                buffer,
+                offset: 0,
+                size: Self::METADATA_BYTES as u64,
+            },
+        }
+    }
+    pub fn upload_metadata(
+        graph: &mut renderer_core::graph::Graph,
+        bytes: &[u8; Self::METADATA_BYTES],
+    ) -> Result<renderer_core::graph::BufferHandle, GraphError> {
+        let buffer = graph.buffer("reflection metadata", Self::metadata_desc())?;
+        graph.upload_buffer("reflection metadata", buffer, 0, bytes)?;
+        Ok(buffer)
+    }
+    pub fn metadata(&self) -> [u8; Self::METADATA_BYTES] {
+        let mut bytes = [0; Self::METADATA_BYTES];
+        bytes[12..16].copy_from_slice(&(self.probes.len() as u32).to_le_bytes());
+        bytes[28..32].copy_from_slice(&(self.scenarios as u32).to_le_bytes());
+        if self.probes.len() > 4 {
+            build_candidate_grid(&self.probes, &mut bytes);
+        }
+        for (dest, p) in bytes[288..]
+            .as_chunks_mut::<48>()
+            .0
+            .iter_mut()
+            .zip(&self.probes)
+        {
+            dest.copy_from_slice(&encode_record(p));
+        }
+        bytes
     }
 }
 
-/// A 4x4x4 grid of conservative 32-bit candidate masks. Each half mask is
-/// exactly representable in FP32. Original bit order preserves overlap sums.
+fn decode_record(bytes: &[u8; 48]) -> ReflectionProbeDesc {
+    let f = |i: usize| f32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap());
+    let xyz = |start: usize| std::array::from_fn(|i| f(start + i));
+    ReflectionProbeDesc {
+        position: xyz(0),
+        blend_distance: f(3),
+        min: xyz(4),
+        max: xyz(8),
+    }
+}
+fn encode_record(p: &ReflectionProbeDesc) -> [u8; 48] {
+    let mut bytes = [0; 48];
+    for (i, v) in p
+        .position
+        .into_iter()
+        .chain([p.blend_distance])
+        .chain(p.min)
+        .chain([0.])
+        .chain(p.max)
+        .chain([0.])
+        .enumerate()
+    {
+        bytes[4 * i..4 * i + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    bytes
+}
+
 fn build_candidate_grid(boxes: &[ReflectionProbeDesc], header: &mut [u8]) {
     let mut lo = [f32::INFINITY; 3];
     let mut hi = [f32::NEG_INFINITY; 3];
@@ -171,20 +278,13 @@ fn build_candidate_grid(boxes: &[ReflectionProbeDesc], header: &mut [u8]) {
         }
     }
     let scale: [f32; 3] = std::array::from_fn(|a| 4. / (hi[a] - lo[a]));
-    let mut store = |index: usize, rgba: [f32; 4]| {
-        for (offset, value) in rgba.into_iter().enumerate() {
-            let byte = index * 16 + offset * 4;
-            header[byte..byte + 4].copy_from_slice(&value.to_le_bytes());
-        }
-    };
-    // Extreme finite coordinates can produce an unrepresentable grid. The
-    // unindexed shader path remains valid for these boxes.
     if !scale.iter().all(|s| s.is_normal()) {
-        store(3, [0.; 4]);
         return;
     }
-    store(3, [lo[0], lo[1], lo[2], 1.]);
-    store(4, [scale[0], scale[1], scale[2], 0.]);
+    for axis in 0..3 {
+        header[4 * axis..4 * axis + 4].copy_from_slice(&lo[axis].to_le_bytes());
+        header[16 + 4 * axis..20 + 4 * axis].copy_from_slice(&scale[axis].to_le_bytes());
+    }
     let mut masks = [0u32; 64];
     for (index, b) in boxes.iter().enumerate() {
         let cell = |p: [f32; 3], pad: f32| -> [usize; 3] {
@@ -201,7 +301,7 @@ fn build_candidate_grid(boxes: &[ReflectionProbeDesc], header: &mut [u8]) {
         }
     }
     for (i, m) in masks.into_iter().enumerate() {
-        store(5 + i, [(m & 65535) as f32, (m >> 16) as f32, 0., 0.]);
+        header[32 + 4 * i..36 + 4 * i].copy_from_slice(&m.to_le_bytes());
     }
 }
 
@@ -244,6 +344,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_levels_are_repacked_without_crossing_block_boundaries() {
+        let desc = ReflectionProbeDesc {
+            position: [-2.; 3],
+            min: [-4.; 3],
+            max: [1.; 3],
+            blend_distance: 0.5,
+        };
+        let row = ReflectionProbes::WIDTH * 16;
+        for (magic, scenarios) in [(b"RSPRST01", 1), (b"RSPROB01", 2)] {
+            let mut file = magic.to_vec();
+            file.extend(encode_record(&desc));
+            file.resize(8 + row, 0);
+            for scenario in 0..scenarios {
+                for level in 0..7 {
+                    let value = ((scenario * 7 + level + 1) as f32).to_le_bytes();
+                    file.extend(value.repeat(row * (64 >> level) / 4));
+                }
+            }
+            let probes = ReflectionProbes::from_bytes(&file).unwrap();
+            assert_eq!(probes.probes(), &[desc]);
+            for (index, plane) in probes.pixels().chunks_exact(row * 132).enumerate() {
+                assert_eq!(
+                    plane[124 * row..128 * row],
+                    ((index * 7 + 6) as f32).to_le_bytes().repeat(row)
+                );
+                assert_eq!(
+                    plane[128 * row..],
+                    ((index * 7 + 7) as f32).to_le_bytes().repeat(row)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn candidates_keep_high_indices_and_shared_cell_faces() {
         let mut probes = [ReflectionProbeDesc {
             position: [0.; 3],
@@ -258,11 +392,9 @@ mod tests {
         }
         let mut header = [0u8; ReflectionProbes::WIDTH * 16];
         build_candidate_grid(&probes, &mut header);
-        let word = |texel: usize, lane: usize| {
-            let at = texel * 16 + lane * 4;
-            f32::from_le_bytes(header[at..at + 4].try_into().unwrap()) as u32
+        let mask = |cell: usize| {
+            u32::from_le_bytes(header[32 + 4 * cell..36 + 4 * cell].try_into().unwrap())
         };
-        let mask = |cell: usize| word(5 + cell, 0) | word(5 + cell, 1) << 16;
         assert_eq!(mask(0) & 1, 1);
         assert_eq!(mask(0) & (1 << 31), 0);
         assert_ne!(mask(3) & (1 << 31), 0);

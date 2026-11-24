@@ -48,6 +48,17 @@ impl ManagedImage {
     }
 }
 
+/// Owns a buffer registration until its last scheduled consumer has been submitted.
+pub struct ManagedBuffer {
+    buffer: crate::graph::ImportBuffer,
+    _ticket: Option<ReleaseTicket>,
+}
+impl ManagedBuffer {
+    pub fn snapshot(&self) -> &crate::graph::ImportBuffer {
+        &self.buffer
+    }
+}
+
 /// Reserve the release record *before* GPU acceptance. A dropped receipt can
 /// always return its key without allocating, waiting on a fence or borrowing
 /// the Runtime. This also bounds owners retained after explicit key deletion.
@@ -114,7 +125,7 @@ impl ImageReleases {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.active == state.limit {
             return Err(ExecutionError::with_capacity(
-                "release retained managed images before submitting another image",
+                "release retained managed resources before publishing another resource",
                 RuntimeCapacityError::new(
                     RuntimeCapacityKind::Resources,
                     CapacityRecovery::ReleaseOwners,
@@ -182,6 +193,44 @@ impl Runtime {
     ) -> Result<(FrameSubmission, ManagedImage), ExecutionError> {
         let (submission, [image]) = self.submit_with_images(graph, [output])?;
         Ok((submission, image))
+    }
+
+    /// Publish one image and its associated immutable buffer in the same submission.
+    pub fn submit_with_image_and_buffer(
+        &mut self,
+        graph: &CompiledGraph,
+        image: ImageHandle,
+        buffer: crate::graph::BufferHandle,
+    ) -> Result<(FrameSubmission, ManagedImage, ManagedBuffer), ExecutionError> {
+        if buffer.graph != graph.graph_id()
+            || !graph.has_export(buffer.index)
+            || !matches!(graph.resources[buffer.index].desc, ResourceDesc::Buffer(_))
+        {
+            return Err(ExecutionError::invalid(
+                "expected an exported buffer from this graph",
+            ));
+        }
+        self.collect_released_images()?;
+        let mut ticket = graph.resources[buffer.index]
+            .import
+            .is_none()
+            .then(|| self.image_releases.reserve())
+            .transpose()?;
+        let (receipt, image) = self.submit_with_image(graph, image)?;
+        let buffer = receipt
+            .export_buffer(buffer)
+            .expect("prevalidated accepted buffer export");
+        if let Some(ticket) = &mut ticket {
+            ticket.key = Some(buffer.key());
+        }
+        Ok((
+            receipt,
+            image,
+            ManagedBuffer {
+                buffer,
+                _ticket: ticket,
+            },
+        ))
     }
 
     /// Submit once and acquire owners for distinct exported images in the given

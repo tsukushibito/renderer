@@ -5,6 +5,14 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 反射プローブの BC6H 配布形式
+
+Sponza gallery の昼、11 個のプローブを同じ配置・照明で RGBA32F と BC6H unsigned にベイクした。配置レコードと識別子を含むファイルは 2,974,300 byte と 186,460 byte。GPU へ転送する画像はそれぞれ 2,973,696 byte と 185,856 byte で、別途共通の 1,824 byte の定数バッファを使う。RTX 3060 の Vulkan でウォームアップ後の device-local heap の VMA allocation 合計は 202,712,128 byte と 199,763,008 byte だった。
+
+480×270 の同一 Forward 画像（比較用の金属球を含む）で、深度と候補の重み表示は全画素一致した。最終 SDR の RGB 成分の絶対差は平均 0.038/255、99 パーセンタイル 1/255、最大 34/255。線形 HDR の平均絶対差は 0.000023。Vulkan の Forward・Forward+、D3D12 の Forward・Deferred で BC6H をロードし、各描画の native validation は警告・エラーともゼロ。公開 SceneRenderer を使う両 API の照明テストでも、同じアセットを保持して描画できることを確認した。
+
+開発用検証を無効にした Vulkan Forward で各形式を 2 回ずつ交互順（BC6H、RGBA32F、RGBA32F、BC6H）に起動し、毎回ウォームアップ 24 フレーム後の 100 フレームを計測した。同時進行は 1。GPU フレーム時間の中央値は BC6H 1.080 ms、RGBA32F 1.085 ms、95 パーセンタイルはそれぞれ 1.099 ms、1.111 ms。この場面での採用理由は画像転送量と GPU メモリの削減である。ほかの GPU・シーンにおける画質と GPU 時間は未測定。
+
 <a id="probe-sh-order"></a>
 
 ## 拡散照度プローブの L1・L2 比較

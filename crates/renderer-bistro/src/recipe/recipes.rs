@@ -453,7 +453,7 @@ pub(super) struct SceneFrame {
     pub clear: Option<[f32; 4]>,
     pub camera: BufferHandle,
     pub view_projection: [[f32; 4]; 4],
-    pub lighting: [Binding; 10],
+    pub lighting: [Binding; 11],
     pub has_transparency: bool,
 }
 

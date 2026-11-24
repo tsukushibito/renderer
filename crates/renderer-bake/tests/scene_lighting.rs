@@ -75,7 +75,7 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
     file.clear();
     reflections.write(&mut file)?;
     let reflections = renderer::pbr::ReflectionProbes::from_bytes(&file)?;
-    assert_eq!(reflections.extent(), [128, 128]);
+    assert_eq!(reflections.extent(), [128, 132]);
     assert_eq!(reflections.scenario_count(), 1);
     let view = CameraView {
         id: ViewId(0),
@@ -145,6 +145,40 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
             pixel[0] > 50 && pixel[0] > pixel[2].saturating_add(20),
             "{pixel:?}"
         );
+    }
+    // A constant red block from ispc-texcomp's BC6H encoder. Exercise the
+    // same public archive loader, owner lifetime and shading path as a cooked scene.
+    let red_block = [
+        194, 123, 0, 0, 8, 0, 0, 0, 128, 0, 188, 109, 219, 182, 109, 219,
+    ];
+    let blocks = red_block.repeat(128 * 132 / 16);
+    let asset = renderer::pbr::ReflectionProbes::new(
+        reflections.probes().to_vec(),
+        1,
+        renderer::core::ImageFormat::Bc6hRgbUfloat,
+        blocks,
+    )?;
+    let mut file = Vec::new();
+    asset.write(&mut file)?;
+    let asset = renderer::pbr::ReflectionProbes::from_bytes(&file)?;
+    let mut reference_pixel: Option<[u8; 3]> = None;
+    for probe in [&reflections, &asset] {
+        let lighting = renderer.load_probe_lighting(ProbeLighting {
+            diffuse: None,
+            reflections: Some(probe),
+        })?;
+        let rgb = center_pixel(
+            &mut renderer,
+            SceneInput::new(&meshes, &materials, &objects[..1]).with_baked_lighting(&lighting, 0.),
+        )?;
+        assert!(rgb[0] > 50 && rgb[0] > rgb[2].saturating_add(20), "{rgb:?}");
+        if let Some(reference) = reference_pixel {
+            assert!(
+                rgb.iter().zip(reference).all(|(a, b)| a.abs_diff(b) <= 1),
+                "{rgb:?} vs {reference:?}"
+            );
+        }
+        reference_pixel = Some(rgb);
     }
     // Different surface and volume keys detect both a chart lookup fallback and
     // an accidental interpolation of the two endpoints at the middle key.

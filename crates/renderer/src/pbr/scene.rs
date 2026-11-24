@@ -851,7 +851,7 @@ impl PreparedScene {
 
 pub(crate) struct RasterScene<'a> {
     pub(crate) camera: BufferHandle,
-    pub(crate) lighting: [Binding; 10],
+    pub(crate) lighting: [Binding; 11],
     pub(crate) local_lights: Option<(ImageView, ImageView)>,
     pub(crate) has_transparency: bool,
     forward_draws: Option<&'a crate::pipeline::ForwardDraws>,
@@ -909,7 +909,7 @@ impl RasterScene<'_> {
 fn lighting_bindings(
     environment: Environment,
     shadows: [ImageView; CASCADE_COUNT],
-) -> [Binding; 10] {
+) -> [Binding; 11] {
     [
         image_binding(2, 0, environment.irradiance),
         image_binding(2, 1, environment.reflection),
@@ -927,6 +927,7 @@ fn lighting_bindings(
         image_binding(3, 2, shadows[2]),
         image_binding(3, 3, shadows[3]),
         sampler_binding(3, 4, SamplerDescriptor::NearestClamp),
+        super::ReflectionProbes::bind_metadata(environment.reflection_metadata),
     ]
 }
 

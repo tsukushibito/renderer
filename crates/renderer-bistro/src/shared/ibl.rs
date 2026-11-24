@@ -17,6 +17,7 @@ const MAPPING: &str = "u=fract(.5+atan2(z,x)/(2*pi));v=acos(y)/pi;top-origin;U-r
 
 pub(crate) struct Environment {
     pub lightmaps: Vec<Image>,
+    pub reflection_metadata: Option<Box<[u8; renderer::pbr::ReflectionProbes::METADATA_BYTES]>>,
     pub reflection_probes: Option<Image>,
     pub diffuse: Image,
     pub specular: Image,
@@ -272,6 +273,7 @@ impl Environment {
         Ok(Self {
             lightmaps: Vec::new(),
             reflection_probes: None,
+            reflection_metadata: None,
             diffuse,
             specular,
             brdf,
@@ -297,6 +299,7 @@ impl Environment {
         Self {
             lightmaps: Vec::new(),
             reflection_probes: None,
+            reflection_metadata: None,
             diffuse,
             specular,
             brdf,
@@ -315,6 +318,7 @@ impl Environment {
 
     /// Explicit preparation boundary; no CPU image bytes survive into the ROI.
     pub fn release_pixels(&mut self) {
+        self.reflection_metadata = None;
         if let Some(image) = &mut self.reflection_probes {
             image.bytes = Vec::new();
         }

@@ -427,6 +427,7 @@ pub(super) fn image_format(format: crate::ImageFormat) -> DXGI_FORMAT {
         crate::ImageFormat::Bc3RgbaUnorm => DXGI_FORMAT_BC3_UNORM,
         crate::ImageFormat::Bc3RgbaSrgb => DXGI_FORMAT_BC3_UNORM_SRGB,
         crate::ImageFormat::Bc5RgUnorm => DXGI_FORMAT_BC5_UNORM,
+        crate::ImageFormat::Bc6hRgbUfloat => DXGI_FORMAT_BC6H_UF16,
         crate::ImageFormat::Bc7RgbaUnorm => DXGI_FORMAT_BC7_UNORM,
         crate::ImageFormat::Bc7RgbaSrgb => DXGI_FORMAT_BC7_UNORM_SRGB,
     }

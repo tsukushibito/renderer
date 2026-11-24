@@ -102,6 +102,7 @@ fn environment(diffuse: ibl::Image, specular: ibl::Image) -> ibl::Environment {
     ibl::Environment {
         lightmaps: Vec::new(),
         reflection_probes: None,
+        reflection_metadata: None,
         diffuse,
         specular,
         brdf: constant_levels(2, 2, &[[0.5, 0.125, 0.]]),

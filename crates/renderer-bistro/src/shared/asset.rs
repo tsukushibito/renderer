@@ -958,6 +958,12 @@ impl Scene {
         }
         source["cooked_manifest_sha256"] =
             Value::String(format!("{:x}", Sha256::digest(&manifest_bytes)));
+        if let Some(format) = doc.pointer("/recipe/texture_policy/reflection_probes") {
+            if !matches!(format.as_str(), Some("bc6h" | "rgba32f")) {
+                return Err(invalid("unknown reflection probe cook format"));
+            }
+            source["reflection_probe_format"] = format.clone();
+        }
         source["image_count"] = Value::from(image_records.len());
         source["texture_count"] = Value::from(textures.len());
         let source_images = &images[..image_records.len()];

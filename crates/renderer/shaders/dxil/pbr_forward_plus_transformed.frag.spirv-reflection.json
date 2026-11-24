@@ -99,6 +99,55 @@
                     "offset" : 448
                 }
             ]
+        },
+        "_34" : {
+            "name" : "type.ReflectionMetadata",
+            "members" : [
+                {
+                    "name" : "grid_origin",
+                    "type" : "vec3",
+                    "offset" : 0
+                },
+                {
+                    "name" : "probe_count",
+                    "type" : "uint",
+                    "offset" : 12
+                },
+                {
+                    "name" : "grid_scale",
+                    "type" : "vec3",
+                    "offset" : 16
+                },
+                {
+                    "name" : "scenario_count",
+                    "type" : "uint",
+                    "offset" : 28
+                },
+                {
+                    "name" : "candidate_masks",
+                    "type" : "uvec4",
+                    "array" : [
+                        16
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 32,
+                    "array_stride" : 16
+                },
+                {
+                    "name" : "probe_records",
+                    "type" : "vec4",
+                    "array" : [
+                        96
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 288,
+                    "array_stride" : 16
+                }
+            ]
         }
     },
     "inputs" : [
@@ -271,6 +320,13 @@
             "block_size" : 464,
             "set" : 0,
             "binding" : 0
+        },
+        {
+            "type" : "_34",
+            "name" : "type.ReflectionMetadata",
+            "block_size" : 1824,
+            "set" : 2,
+            "binding" : 5
         }
     ]
 }

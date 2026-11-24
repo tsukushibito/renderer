@@ -26,6 +26,13 @@ pub const CAMERA_BYTES: usize = 464;
 /// Size of the material factors and flags uniform block.
 pub const MATERIAL_BYTES: usize = 64;
 
+pub(super) const REFLECTION_METADATA: BindingLayout = BindingLayout {
+    group: 2,
+    binding: 5,
+    kind: BindingType::Uniform,
+    stages: ShaderStages::FRAGMENT,
+    min_size: crate::pbr::ReflectionProbes::METADATA_BYTES as u64,
+};
 pub(super) const CAMERA: BindingLayout = BindingLayout {
     group: 0,
     binding: 0,
@@ -121,6 +128,7 @@ pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         image(3, 2),
         image(3, 3),
         sampler(3, 4),
+        REFLECTION_METADATA,
     ],
     binding_bytes: &[
         CAMERA_BYTES as u64,
@@ -140,6 +148,7 @@ pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         0,
         0,
         0,
+        crate::pbr::ReflectionProbes::METADATA_BYTES as u64,
     ],
     sampling_pairs: &[
         pair(1, 0, 4),
@@ -237,7 +246,7 @@ pub(super) static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
 /// HDR PBR Program for opaque and alpha-mask geometry.
 pub const fn opaque_program() -> ManagedRasterProgram {
     // SAFETY: Pinned modules/reflection exactly match the declared 48-byte stream,
-    // 464/64-byte UBO prefixes, 17 bindings and every image/sampler pairing.
+    // camera, material and bounded probe UBO prefixes, 18 bindings and every image/sampler pairing.
     // All dynamic shadow indices are clamped to four matrices/vectors. Sampling
     // uses normalized coordinates/explicit LOD and native-bounded selected Views.
     // Gradients precede any discard. Arithmetic has guarded normalization and
@@ -556,6 +565,8 @@ mod tests {
                             offsets,
                             if size == CAMERA_BYTES as u64 {
                                 vec![0, 64, 80, 96, 112, 128, 384, 400, 416, 432, 448]
+                            } else if size == crate::pbr::ReflectionProbes::METADATA_BYTES as u64 {
+                                vec![0, 12, 16, 28, 32, 288]
                             } else {
                                 vec![0, 16, 32, 48]
                             }
@@ -591,6 +602,7 @@ mod tests {
                     "t2,space2",
                     "s3,space2",
                     "t4,space2",
+                    "cb5,space2",
                     "t0,space3",
                     "t1,space3",
                     "t2,space3",

@@ -177,6 +177,8 @@ pub(super) fn build(
         )?,
         scene_bounds,
         pbr::Environment {
+            reflection_metadata: graph
+                .import_buffer("reflection metadata", &resident.reflection_metadata)?,
             local_reflections: super::import_reflections(&mut graph, resident)?.map(|atlas| {
                 pbr::LocalReflections {
                     atlas,

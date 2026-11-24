@@ -193,7 +193,7 @@ impl Budget {
             .primitives
             .len()
             .checked_mul(2)
-            .and_then(|v| v.checked_add(scene.materials.len() + 1 + packed_buffers))
+            .and_then(|v| v.checked_add(scene.materials.len() + 2 + packed_buffers))
             .ok_or("buffer count overflow")?;
         let mut buffers = Vec::<(u64, usize)>::new();
         let mut add = |size: u64| {
@@ -211,6 +211,7 @@ impl Budget {
             add(program::MATERIAL_BYTES as u64);
         }
         add(program::CAMERA_BYTES as u64);
+        add(renderer::pbr::ReflectionProbes::METADATA_BYTES as u64);
         if let Some(layout) = &packed {
             add(layout.vertex_bytes as u64);
             add(layout.index_bytes() as u64);
@@ -498,6 +499,7 @@ pub(super) struct Resident {
     primitive_bounds: Vec<shadow::Bounds>,
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
+    pub reflection_metadata: ImportBuffer,
     local_lights: Option<lighting::LightTable>,
     packed: Option<indirect::Resident>,
     // Only small general Uniform uploads retain byte provenance. Geometry uses
@@ -722,6 +724,11 @@ impl Resident {
         let mut initial_uniform = [0; program::CAMERA_BYTES];
         initial_uniform[..128].copy_from_slice(&camera.uniform_bytes());
         let camera = upload_buffer(backend, &mut upload_owners, &initial_uniform)?;
+        let reflection_metadata = upload_buffer(
+            backend,
+            &mut upload_owners,
+            &[0; renderer::pbr::ReflectionProbes::METADATA_BYTES],
+        )?;
         let local_lights = budget
             .pipeline
             .uses_local_lights()
@@ -790,6 +797,7 @@ impl Resident {
             primitive_bounds,
             shadow_parameters: shadow::Parameters::default(),
             camera,
+            reflection_metadata,
             local_lights,
             packed,
             upload_owners,
@@ -1249,6 +1257,9 @@ pub(super) fn build(
             binding: 4,
             resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
         },
+        renderer::pbr::ReflectionProbes::bind_metadata(
+            graph.import_buffer("reflection metadata", &resident.reflection_metadata)?,
+        ),
     ];
     let deferred = options.pipeline == PipelineMode::Deferred;
     let mut instance_bindings = None;

@@ -8,8 +8,10 @@ DDS_FORMAT = {"DXT1": "bc1", "DXT5": "bc3", "ATI2": "bc5"}
 
 
 def validate_policy(policy, uris):
-    if not isinstance(policy, dict) or policy.keys() - {"default", "roles", "images"}:
+    if not isinstance(policy, dict) or policy.keys() - {"default", "roles", "images", "reflection_probes"}:
         raise ValueError("Expected texture policy with default, roles and/or images")
+    if policy.get("reflection_probes", "bc6h") not in ("bc6h", "rgba32f"):
+        raise ValueError("Reflection probes require bc6h or rgba32f")
     for key, allowed in (("roles", ROLES), ("images", set(uris))):
         entries = policy.get(key, {})
         if not isinstance(entries, dict) or entries.keys() - allowed:

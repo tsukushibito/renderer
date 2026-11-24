@@ -30,7 +30,7 @@ from mikk import Generator, UPSTREAM_COMMIT, source_hashes
 VERTEX_STRIDE = 48
 TOOL_HASHES = {
     name: hashlib.sha256((Path(__file__).parent / name).read_text(encoding="utf-8").encode("utf-8")).hexdigest()
-    for name in ("cook.py", "lightmap_uv.py", "mikk.py", "compare_geometry.py", "texture_codec.py")
+    for name in ("cook.py", "lightmap_uv.py", "mikk.py", "compare_geometry.py", "texture_codec.py", "reflection_codec.py")
 }
 MATERIAL_TEXTURES = (
     ("base_color_texture", "base_color", "pbrMetallicRoughness", "baseColorTexture"),

@@ -60,11 +60,12 @@ fn graph_pool(recipe: &Prepared) -> GraphPool {
     all.add_requirements(recipe.graph_requirements(), recipe.working_set())
         .unwrap();
     all.add_graph_requirements(GraphRequirements {
-        resources: 10,
-        passes: 13,
-        accesses: 16,
+        resources: 11,
+        passes: 14,
+        accesses: 17,
+        upload_bytes: renderer::pbr::ReflectionProbes::METADATA_BYTES,
         attachments: 1,
-        name_bytes: 256,
+        name_bytes: 256 + 2 * "reflection metadata".len(),
         ..GraphRequirements::default()
     })
     .unwrap();
@@ -152,6 +153,11 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, GraphMaterial,
             Bounds::new([-1.0; 3], [1.0; 3]).unwrap(),
             Environment {
                 irradiance: environment,
+                reflection_metadata: renderer::pbr::ReflectionProbes::upload_metadata(
+                    graph,
+                    &[0; renderer::pbr::ReflectionProbes::METADATA_BYTES],
+                )
+                .unwrap(),
                 local_reflections: None,
                 diffuse_lighting: Default::default(),
                 reflection: environment,

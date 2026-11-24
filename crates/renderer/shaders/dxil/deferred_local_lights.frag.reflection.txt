@@ -12,7 +12,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: 51c87f78a5fe1216b9d52df5ec44f0ca
+; shader hash: 6b3eeb99964fc6be278f61ca6c440e59
 ;
 ; Pipeline Runtime Information:
 ;
@@ -76,6 +76,23 @@
 ;
 ; }
 ;
+; cbuffer ReflectionMetadata
+; {
+;
+;   struct ReflectionMetadata
+;   {
+;
+;       float3 grid_origin;                           ; Offset:    0
+;       uint probe_count;                             ; Offset:   12
+;       float3 grid_scale;                            ; Offset:   16
+;       uint scenario_count;                          ; Offset:   28
+;       uint4 candidate_masks[16];                    ; Offset:   32
+;       float4 probe_records[96];                     ; Offset:  288
+;
+;   } ReflectionMetadata;                             ; Offset:    0 Size:  1824
+;
+; }
+;
 ; cbuffer Reconstruction
 ; {
 ;
@@ -94,7 +111,8 @@
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
 ; camera                            cbuffer      NA          NA     CB0            cb0     1
-; Reconstruction                    cbuffer      NA          NA     CB1            cb1     1
+; ReflectionMetadata                cbuffer      NA          NA     CB1     cb5,space2     1
+; Reconstruction                    cbuffer      NA          NA     CB2            cb1     1
 ; environment_sampler               sampler      NA          NA      S0      s3,space2     1
 ; shadow_sampler                    sampler      NA          NA      S1      s4,space3     1
 ; gbuffer_sampler                   sampler      NA          NA      S2      s4,space1     1

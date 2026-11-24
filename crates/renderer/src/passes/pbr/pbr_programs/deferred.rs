@@ -65,6 +65,7 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         image(3, 2),
         image(3, 3),
         sampler(3, 4),
+        super::REFLECTION_METADATA,
     ],
     binding_bytes: &[
         CAMERA_BYTES as u64,
@@ -84,6 +85,7 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         0,
         0,
         0,
+        crate::pbr::ReflectionProbes::METADATA_BYTES as u64,
     ],
     sampling_pairs: &[
         pair(1, 0, 4),
@@ -117,17 +119,18 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
 
 static LOCAL_LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
     bindings: &{
-        let mut slots = [image(0, 2); 19];
+        let mut slots = [image(0, 2); 20];
         let mut i = 0;
         while i < LIGHTING.bindings.len() {
             slots[i] = LIGHTING.bindings[i];
             i += 1;
         }
-        slots[18] = image(3, 5);
+        slots[19] = image(3, 5);
         slots
     },
     binding_bytes: &{
-        let mut bytes = [0; 19];
+        let mut bytes = [0; 20];
+        bytes[17] = super::REFLECTION_METADATA.min_size;
         bytes[0] = CAMERA_BYTES as u64;
         bytes[1] = DEFERRED_RECONSTRUCTION_BYTES as u64;
         bytes

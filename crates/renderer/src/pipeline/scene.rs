@@ -135,19 +135,25 @@ pub struct EnvironmentMaps {
     pub max_prefilter_lod: u32,
 }
 impl EnvironmentMaps {
-    pub fn import(&self, graph: &mut Graph) -> Result<Environment, GraphError> {
-        self.import_diffuse(graph, &self.irradiance)
+    pub fn import(
+        &self,
+        graph: &mut Graph,
+        metadata: renderer_core::graph::BufferHandle,
+    ) -> Result<Environment, GraphError> {
+        self.import_diffuse(graph, &self.irradiance, metadata)
     }
     pub(super) fn import_diffuse(
         &self,
         graph: &mut Graph,
         irradiance: &renderer_core::graph::ImportImage,
+        metadata: renderer_core::graph::BufferHandle,
     ) -> Result<Environment, GraphError> {
         let mut import = |texture: &renderer_core::graph::ImportImage| {
             crate::material::texture_view(graph, texture)
         };
         Ok(Environment {
             irradiance: import(irradiance)?,
+            reflection_metadata: metadata,
             local_reflections: None,
             diffuse_lighting: crate::pbr::DiffuseLighting::EnvironmentMap,
             reflection: import(&self.reflection)?,
@@ -171,7 +177,10 @@ pub struct ResidentBakedLighting {
     pub(super) pages: Vec<renderer_core::runtime::ManagedImage>,
     pub(super) placements: std::collections::BTreeMap<u32, crate::pbr::LightmapAddress>,
     pub(super) diffuse: Option<renderer_core::runtime::ManagedImage>,
-    pub(super) reflections: Option<renderer_core::runtime::ManagedImage>,
+    pub(super) reflections: Option<(
+        renderer_core::runtime::ManagedImage,
+        renderer_core::runtime::ManagedBuffer,
+    )>,
 }
 
 /// A resident diffuse atlas and normalized position across its lighting scenarios for this view.
@@ -195,13 +204,19 @@ impl<'a> BakedLightingInput<'a> {
 #[derive(Clone, Copy)]
 pub struct ReflectionProbeInput<'a> {
     pub atlas: &'a renderer_core::graph::ImportImage,
+    pub metadata: &'a renderer_core::graph::ImportBuffer,
     pub blend: f32,
     pub view: crate::pbr::ReflectionProbeView,
 }
 impl<'a> ReflectionProbeInput<'a> {
-    pub fn new(atlas: &'a renderer_core::graph::ImportImage, blend: f32) -> Self {
+    pub fn new(
+        atlas: &'a renderer_core::graph::ImportImage,
+        metadata: &'a renderer_core::graph::ImportBuffer,
+        blend: f32,
+    ) -> Self {
         Self {
             atlas,
+            metadata,
             blend,
             view: Default::default(),
         }
@@ -251,10 +266,9 @@ impl<'a> SceneInput<'a> {
             .diffuse
             .as_ref()
             .map(|asset| BakedLightingInput::new(asset.snapshot(), blend));
-        self.reflection_probes = lighting
-            .reflections
-            .as_ref()
-            .map(|asset| ReflectionProbeInput::new(asset.snapshot(), blend));
+        self.reflection_probes = lighting.reflections.as_ref().map(|(atlas, metadata)| {
+            ReflectionProbeInput::new(atlas.snapshot(), metadata.snapshot(), blend)
+        });
         self
     }
     /// Resolve this frame's posed vertices and the object's selected index range.

@@ -589,6 +589,7 @@ pub(super) fn image_format(format: crate::ImageFormat) -> vk::Format {
         crate::ImageFormat::Bc3RgbaUnorm => vk::Format::BC3_UNORM_BLOCK,
         crate::ImageFormat::Bc3RgbaSrgb => vk::Format::BC3_SRGB_BLOCK,
         crate::ImageFormat::Bc5RgUnorm => vk::Format::BC5_UNORM_BLOCK,
+        crate::ImageFormat::Bc6hRgbUfloat => vk::Format::BC6H_UFLOAT_BLOCK,
         crate::ImageFormat::Bc7RgbaUnorm => vk::Format::BC7_UNORM_BLOCK,
         crate::ImageFormat::Bc7RgbaSrgb => vk::Format::BC7_SRGB_BLOCK,
     }

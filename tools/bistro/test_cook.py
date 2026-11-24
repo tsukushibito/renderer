@@ -28,6 +28,21 @@ class TextureCodecTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             codec.validate_policy(policy, [])
 
+    def test_reflection_policy_and_hdr_encoding(self):
+        from reflection_codec import encode
+        for fmt in ("bc6h", "rgba32f"):
+            codec.validate_policy({"reflection_probes": fmt}, [])
+        with self.assertRaises(ValueError):
+            codec.validate_policy({"reflection_probes": "bc7"}, [])
+        pixels = np.full((8, 4, 4), 8.0, dtype="<f4")
+        pixels[:4, :, 0] = 0.125
+        data = encode(pixels.tobytes(), 4, 8)
+        self.assertEqual(len(data), 32)
+        self.assertNotEqual(data[:16], data[16:])
+        pixels[0, 0, 0] = 70000
+        with self.assertRaises(ValueError):
+            encode(pixels.tobytes(), 4, 8)
+
     def test_partial_edge_blocks_and_channel_order(self):
         pixels = np.full((5, 9, 4), 255, dtype=np.uint8)
         y, x = np.indices(pixels.shape[:2])

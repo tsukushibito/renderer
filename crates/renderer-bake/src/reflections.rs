@@ -92,17 +92,11 @@ impl BakeScene {
             return Err("reflection probes support at most two scenarios".into());
         }
         let lights = self.lighting(scenarios)?;
-        let mut bytes = Vec::with_capacity(W * (1 + 127 * N) * 16 * probes.len());
+        let mut bytes =
+            Vec::with_capacity(W * ReflectionProbes::SCENARIO_ROWS * N * 16 * probes.len());
         let mut capture = vec![[0.; 3]; W * H];
         let mut filtered = vec![[0.; 3]; W * (H / 2)];
         for p in probes {
-            let start = bytes.len();
-            for (values, w) in [(p.position, p.blend_distance), (p.min, 0.), (p.max, 0.)] {
-                for v in values.into_iter().chain([w]) {
-                    bytes.extend(v.to_le_bytes());
-                }
-            }
-            bytes.resize(start + W * 16, 0);
             for light in lights {
                 parallel_pixels(&mut capture, |i| {
                     let ray = direction(i % W, i / W, H);
@@ -136,10 +130,19 @@ impl BakeScene {
                             bytes.extend(v.to_le_bytes());
                         }
                     }
+                    let last_row = bytes.len() - W * 16..bytes.len();
+                    for _ in height..height.next_multiple_of(4) {
+                        bytes.extend_from_within(last_row.clone());
+                    }
                 }
             }
         }
-        Ok(ReflectionProbes::from_rgba32f(bytes)?)
+        Ok(ReflectionProbes::new(
+            probes.to_vec(),
+            N,
+            renderer::core::ImageFormat::Rgba32Float,
+            bytes,
+        )?)
     }
 }
 
@@ -185,11 +188,8 @@ mod tests {
         let mut bytes = vec![];
         asset.write(&mut bytes).unwrap();
         let asset = ReflectionProbes::from_bytes(&bytes).unwrap();
-        let scenario = W * (2 * H - 1) * 16;
-        for (data, expected) in asset.rgba32f()[W * 16..]
-            .chunks_exact(scenario)
-            .zip([0.25, 2.])
-        {
+        let scenario = W * ReflectionProbes::SCENARIO_ROWS * 16;
+        for (data, expected) in asset.pixels().chunks_exact(scenario).zip([0.25, 2.]) {
             for texel in data.as_chunks::<16>().0 {
                 assert!(
                     (f32::from_le_bytes(texel[..4].try_into().unwrap()) - expected).abs() < 1e-5

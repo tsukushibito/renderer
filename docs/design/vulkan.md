@@ -231,7 +231,7 @@ GraphのRGBA8_UNORM画像はtransfer source／destination、storage、sampled、
 固定usage組を持つ。RGBA16Fはtransfer source／destination、storage、sampled、color attachment、
 D32_SFLOATはdepth attachment、sampled、transfer source／destinationを持つ。
 public GraphのD32 uploadは受け付けず、ここでのusageは実装した同期・転送と再利用の能力条件を表す。
-RGBA8 sRGB、RGBA32FとBC1/BC3/BC5/BC7画像はsampledとtransfer source／destinationのusageを使う。
+RGBA8 sRGB、RGBA32FとBC1/BC3/BC5/BC6H/BC7画像はsampledとtransfer source／destinationのusageを使う。
 Deviceが対応する場合にコアfeatureの [textureCompressionBC](https://docs.vulkan.org/spec/latest/chapters/features.html#features-textureCompressionBC)
 を有効化し、BC画像を準備する際にこのfeatureと実format/usageの能力を確認する。
 sRGB形式のRGBはfilterの前にnativeでデコードし、alphaはそのまま扱う。

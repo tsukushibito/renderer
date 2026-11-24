@@ -266,7 +266,7 @@ impl Budget {
             .and_then(|v| {
                 v.checked_add(
                     scene.materials.len()
-                        + 1
+                        + 2
                         + packed_buffers
                         + surface_count
                         + usize::from(surface_count > 0 && packed.is_some()),
@@ -292,6 +292,7 @@ impl Budget {
             add(program::MATERIAL_BYTES as u64);
         }
         add(program::CAMERA_BYTES as u64);
+        add(renderer::pbr::ReflectionProbes::METADATA_BYTES as u64);
         if let Some(layout) = &packed {
             add(layout.vertex_bytes as u64);
             if surface_count > 0 {
@@ -452,16 +453,7 @@ impl Budget {
                     .into_iter()
                     .chain(&environment.reflection_probes)
                     .chain(&environment.lightmaps)
-                    .map(|image| {
-                        let mut end = 0usize;
-                        for mip in 0..image.mips.len() {
-                            let width = (image.width as usize >> mip).max(1);
-                            let height = (image.height as usize >> mip).max(1);
-                            end = end.next_multiple_of(512)
-                                + (width * 8).next_multiple_of(256) * height;
-                        }
-                        end.max(image.byte_length())
-                    })
+                    .map(|image| crate::shared::asset::staging_bytes(environment_desc(image)))
                     .max()
                     .unwrap_or(0),
             )
@@ -561,6 +553,7 @@ pub(super) struct Resident {
     standard_primitive_bounds: Vec<pbr::Bounds>,
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
+    pub reflection_metadata: ImportBuffer,
     local_lights: Option<Box<[pbr::LocalLight]>>,
     defaults: Option<pbr::DefaultResources>,
     packed: Option<indirect::Resident>,
@@ -849,6 +842,14 @@ impl Resident {
         let mut initial_uniform = [0; program::CAMERA_BYTES];
         initial_uniform[..128].copy_from_slice(&camera.uniform_bytes());
         let camera = upload_buffer(backend, &mut upload_owners, &initial_uniform)?;
+        let reflection_metadata = upload_buffer(
+            backend,
+            &mut upload_owners,
+            environment
+                .reflection_metadata
+                .as_deref()
+                .unwrap_or(&[0; renderer::pbr::ReflectionProbes::METADATA_BYTES]),
+        )?;
         let local_lights: Option<Box<[pbr::LocalLight]>> = match budget.rectangles {
             Some(super::RectLights::Shadowed) => Some(Box::new(
                 lighting::sponza_rectangles().map(pbr::LocalLight::shadowed_rect),
@@ -944,6 +945,7 @@ impl Resident {
             standard_primitive_bounds,
             shadow_parameters: shadow::Parameters::default(),
             camera,
+            reflection_metadata,
             local_lights,
             defaults,
             packed,
@@ -1394,7 +1396,7 @@ fn lighting_bindings(
     graph: &mut Graph,
     resident: &Resident,
     shadows: [ImageView; shadow::CASCADE_COUNT],
-) -> Result<[Binding; 10], GraphError> {
+) -> Result<[Binding; 11], GraphError> {
     let [irradiance, reflection, brdf] = import_environment(graph, resident)?;
     Ok([
         image_binding(2, 0, irradiance),
@@ -1411,6 +1413,9 @@ fn lighting_bindings(
         image_binding(3, 2, shadows[2]),
         image_binding(3, 3, shadows[3]),
         sampler_binding(3, 4, SamplerDescriptor::NearestClamp),
+        pbr::ReflectionProbes::bind_metadata(
+            graph.import_buffer("reflection metadata", &resident.reflection_metadata)?,
+        ),
     ])
 }
 
@@ -1423,7 +1428,7 @@ fn scene_bindings(
     scene: &Scene,
     prepared: &recipes::Reference,
     materials: MaterialBindings<'_>,
-    lighting: &[Binding; 10],
+    lighting: &[Binding; 11],
     local: Option<FrameLights>,
     instance_material: Option<usize>,
     bindings: &mut Vec<RasterBindings>,

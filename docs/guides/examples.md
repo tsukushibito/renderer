@@ -105,6 +105,8 @@ cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api v
 
 ベイク時の `--day-only` は昼だけを保存します。`--ibl-manifest FILE` は `lumberyard-day` の大域反射と同じ経緯度画像の先頭 mip と強度を使います。昼夕をベイクする場合、夕方の空は昼からの RGB 比で着色します。実行時は同じ IBL と look を指定してください。画像・向き・強度はロード時に照合されます。
 
+反射の配布形式は `cook.py --texture-policy` の JSON で `{"reflection_probes":"bc6h"}`（既定）または `"rgba32f"` を指定します。`bistro-bake` は cook 済み manifest から設定を読み、比較時は `--reflection-format rgba32f` で上書きできます。BC6H でベイクする端末では `python -m pip install -r tools/bistro/requirements.txt` を実行した環境を使ってください。実行時は両形式とも同じ `--reflection-probes FILE` で読み込みます。
+
 `--reflection-debug weights` は第 1 箱を赤、第 2 箱を緑、グローバル寄与を青で表示します。`--reflection-debug radiance --time-sweep` は材質 BRDF を掛ける前の HDR を昼・中間・夕方で保存します。`--reflection-spheres -10 0.85 0 --reflection-spheres-to 7 0.85 7` を標準の direct 描画に追加すると、粗さ 0.08 と 0.55 の金属球が路上からひさし下を通って客席へ移動します。通常表示、プローブ無効、重み表示、radiance の各出力を使う[数値比較と実機画像](../verification/current.md#bistro-local-reflections)も参照してください。
 
 ## メッシュと材質からビューを描く

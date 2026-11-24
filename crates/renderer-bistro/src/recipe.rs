@@ -281,9 +281,11 @@ impl Options {
             }
             let atlas = renderer::pbr::ReflectionProbes::from_bytes(file)?;
             let [width, height] = atlas.extent();
-            let bytes = atlas.into_rgba32f();
+            let format = atlas.image_desc().format;
+            env.reflection_metadata = Some(Box::new(atlas.metadata()));
+            let bytes = atlas.into_pixels();
             env.reflection_probes = Some(ibl::Image {
-                format: renderer_core::ImageFormat::Rgba32Float,
+                format,
                 width,
                 height,
                 mips: std::iter::once(0..bytes.len()).collect(),

@@ -336,10 +336,10 @@ VulkanはDynamic Renderingのカラーresolve、D3D12は描画後の `ResolveSub
 4×画像はアタッチメントで使い、sampling・storage・upload・readback・exportには1×画像を使う。
 通常フレームの前に、各画像クラスと `RasterPipelineRequest` のProgram／sample数を準備する。
 
-whole-image uploadはRGBA8（UNORM/sRGB）、RGBA16F、RGBA32F、BC1/BC3/BC7（UNORM/sRGB）、BC5（RG UNORM）を扱う。
+whole-image uploadはRGBA8（UNORM/sRGB）、RGBA16F、RGBA32F、BC1/BC3/BC7（UNORM/sRGB）、BC5（RG UNORM）、BC6H（RGB UFLOAT）を扱う。
 `ImageDesc::texture_2d(width, height, format).with_mip_levels(count)` で形式とlevel数を選び、mip 0から順に各levelのデータを連結する。
 RGBA画像は隙間のないtexel行、BC画像は4×4ブロックの行を使う。各mipの幅・高さを個別にブロック数へ切り上げ、
-BC1は1ブロック8 byte、BC3/BC5/BC7は16 byteとする。1×1の末端mipにも1ブロックを渡す。
+BC1は1ブロック8 byte、BC3/BC5/BC6H/BC7は16 byteとする。1×1の末端mipにも1ブロックを渡す。
 `ImageFormat::packed_row_bytes`、`packed_rows`、`packed_byte_len` でそれぞれの寸法の転送量を得られる。
 Graphは全chainの長さを照合して全levelを初期化し、backendがnativeのpitchとoffsetへ変換する。
 `Graph::upload_image_region` と `copy_image_region` は、単一layerのcolor画像を `ImageRegion` のmip・左上座標・寸法で指定する。

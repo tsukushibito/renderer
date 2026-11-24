@@ -25,6 +25,8 @@ pub enum ImageFormat {
     Bc3RgbaSrgb,
     /// Two independent unsigned normalized channels, commonly used for normals.
     Bc5RgUnorm,
+    /// Unsigned linear HDR RGB, sixteen bytes per 4x4 block.
+    Bc6hRgbUfloat,
     Bc7RgbaUnorm,
     Bc7RgbaSrgb,
 }
@@ -38,6 +40,7 @@ impl ImageFormat {
                 | Self::Bc3RgbaUnorm
                 | Self::Bc3RgbaSrgb
                 | Self::Bc5RgUnorm
+                | Self::Bc6hRgbUfloat
                 | Self::Bc7RgbaUnorm
                 | Self::Bc7RgbaSrgb
         )
@@ -60,6 +63,7 @@ impl ImageFormat {
             | Self::Bc3RgbaUnorm
             | Self::Bc3RgbaSrgb
             | Self::Bc5RgUnorm
+            | Self::Bc6hRgbUfloat
             | Self::Bc7RgbaUnorm
             | Self::Bc7RgbaSrgb => 16,
         }

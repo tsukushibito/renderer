@@ -239,7 +239,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
             });
         }
         let diffuse = assets.diffuse.map(|a| (a.image_desc(), a.rgba32f()));
-        let reflections = assets.reflections.map(|a| (a.image_desc(), a.rgba32f()));
+        let reflections = assets.reflections.map(|a| (a.image_desc(), a.pixels()));
         let mut startup = Preparation::new(self.configured.frames_in_flight());
         startup.add_working_set(self.configured.working_set())?;
         let mut bytes = 0;
@@ -256,12 +256,32 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
             bytes = bytes.max(data.len());
             footprint = footprint.max(super::transfer_footprint(desc)?);
         }
+        let has_metadata = usize::from(reflections.is_some());
+        if has_metadata != 0 {
+            startup.add_working_set(WorkingSet {
+                resources: &[ResourceClass::Buffer {
+                    desc: crate::pbr::ReflectionProbes::metadata_desc(),
+                    count: 1,
+                }],
+                ..Default::default()
+            })?;
+            bytes = bytes
+                .checked_add(crate::pbr::ReflectionProbes::METADATA_BYTES)
+                .ok_or("reflection upload size overflow")?;
+            footprint = footprint
+                .checked_add(
+                    crate::pbr::ReflectionProbes::metadata_desc()
+                        .size
+                        .next_multiple_of(512),
+                )
+                .ok_or("reflection footprint overflow")?;
+        }
         startup.add_graph_requirements(GraphRequirements {
-            resources: 1,
-            passes: 1,
-            accesses: 1,
+            resources: 1 + has_metadata,
+            passes: 1 + has_metadata,
+            accesses: 1 + has_metadata,
             upload_bytes: bytes,
-            name_bytes: 64,
+            name_bytes: 96,
             ..Default::default()
         })?;
         let mut pool = GraphPool::new(startup.graph_capacity(Default::default())?, 1)?;
@@ -286,8 +306,28 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
             diffuse: diffuse
                 .map(|image| upload("baked diffuse lighting", image))
                 .transpose()?,
-            reflections: reflections
-                .map(|image| upload("reflection probes", image))
+            reflections: assets
+                .reflections
+                .map(|asset| -> PipelineResult<_> {
+                    let mut graph = pool.begin()?;
+                    let image = graph.upload_texture_for_export(
+                        "reflection probes",
+                        asset.image_desc(),
+                        asset.pixels(),
+                    )?;
+                    let buffer = crate::pbr::ReflectionProbes::upload_metadata(
+                        &mut graph,
+                        &asset.metadata(),
+                    )?;
+                    graph.export_buffer(buffer)?;
+                    let (submission, image, metadata) =
+                        runtime.submit_with_image_and_buffer(&graph.compile()?, image, buffer)?;
+                    while runtime
+                        .wait_for_frame(submission.id(), Duration::from_secs(1))?
+                        .is_none()
+                    {}
+                    Ok((image, metadata))
+                })
                 .transpose()?,
         })
     }

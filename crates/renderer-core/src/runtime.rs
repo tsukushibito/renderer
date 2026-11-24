@@ -24,7 +24,7 @@ pub use crate::capacity::{ResourceClass, WorkingSet};
 pub use error::{ExecutionError, ExecutionErrorKind};
 pub use frames::{FrameCompletion, FrameSubmission};
 pub use id::FrameId;
-pub use managed_image::ManagedImage;
+pub use managed_image::{ManagedBuffer, ManagedImage};
 #[cfg(all(feature = "d3d12", windows))]
 pub use preparation::D3D12Config;
 #[cfg(feature = "vulkan")]

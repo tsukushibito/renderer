@@ -37,7 +37,7 @@ pub struct Inputs {
     pub clear: [f32; 4],
     pub camera: BufferHandle,
     pub view_projection: [[f32; 4]; 4],
-    pub lighting: [Binding; 10],
+    pub lighting: [Binding; 11],
     /// Optional [light table](crate::pbr_forward_plus::LocalLightLayout) and rectangle shadow atlas.
     /// When no light casts rectangle shadows, the light table can fill both slots.
     pub local_lights: Option<(ImageView, ImageView)>,
@@ -192,12 +192,12 @@ pub fn append(
             resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
         },
     ];
-    let mut bindings = [inverse; 19];
+    let mut bindings = [inverse; 20];
     bindings[..gbuffer.len()].copy_from_slice(&gbuffer);
-    bindings[gbuffer.len()..17].copy_from_slice(&scene.lighting);
+    bindings[gbuffer.len()..18].copy_from_slice(&scene.lighting);
     let program = if let Some((lights, atlas)) = scene.local_lights {
-        bindings[18] = crate::passes::pbr::forward_plus::atlas_binding(atlas);
-        bindings[17] = crate::passes::pbr::forward_plus::light_binding(lights);
+        bindings[19] = crate::passes::pbr::forward_plus::atlas_binding(atlas);
+        bindings[18] = crate::passes::pbr::forward_plus::light_binding(lights);
         crate::passes::pbr::deferred::deferred_local_lighting_program()
     } else {
         deferred_lighting_program()

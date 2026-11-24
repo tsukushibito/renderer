@@ -13,6 +13,9 @@ use super::{
     unshadowed::{NAME as SHADOW_NAME, desc as shadow_desc},
 };
 
+use super::ReflectionProbes;
+use renderer_core::graph::{BufferHandle, ImportBuffer};
+
 const MATERIAL_NAMES: [&str; 5] = [
     "PBR default sRGB white",
     "PBR default normal",
@@ -88,6 +91,23 @@ impl Defaults {
         };
         let name_bytes = usize::from(self.materials()) * MATERIAL_NAME_BYTES
             + usize::from(self.unshadowed()) * SHADOW_NAME.len();
+        if self.materials() {
+            preparation.add_requirements(
+                GraphRequirements {
+                    resources: 1,
+                    initial_ranges: 1,
+                    name_bytes: "reflection metadata".len(),
+                    ..Default::default()
+                },
+                WorkingSet {
+                    resources: &[ResourceClass::Buffer {
+                        desc: ReflectionProbes::metadata_desc(),
+                        count: 1,
+                    }],
+                    ..Default::default()
+                },
+            )?;
+        }
         preparation.add_requirements(
             GraphRequirements {
                 resources: resources.len(),
@@ -113,11 +133,13 @@ impl Defaults {
             return shadows;
         }
         GraphRequirements {
-            resources: shadows.resources + MATERIAL_NAMES.len(),
-            passes: shadows.passes + MATERIAL_NAMES.len(),
-            accesses: shadows.accesses + MATERIAL_NAMES.len(),
-            name_bytes: shadows.name_bytes + 2 * MATERIAL_NAME_BYTES,
-            upload_bytes: PIXELS.iter().map(|pixel| pixel.len()).sum(),
+            resources: shadows.resources + MATERIAL_NAMES.len() + 1,
+            passes: shadows.passes + MATERIAL_NAMES.len() + 1,
+            accesses: shadows.accesses + MATERIAL_NAMES.len() + 1,
+            name_bytes: shadows.name_bytes
+                + 2 * (MATERIAL_NAME_BYTES + "reflection metadata".len()),
+            upload_bytes: PIXELS.iter().map(|pixel| pixel.len()).sum::<usize>()
+                + ReflectionProbes::METADATA_BYTES,
             ..shadows
         }
     }
@@ -140,7 +162,14 @@ impl Defaults {
             .unshadowed()
             .then(|| UnshadowedView::append(graph))
             .transpose()?;
+        let metadata = self
+            .materials()
+            .then(|| {
+                ReflectionProbes::upload_metadata(graph, &[0; ReflectionProbes::METADATA_BYTES])
+            })
+            .transpose()?;
         Ok(DefaultViews {
+            metadata,
             materials,
             unshadowed,
         })
@@ -150,6 +179,7 @@ impl Defaults {
 /// Views of the defaults selected for the current Graph.
 #[derive(Clone, Copy, Debug)]
 pub struct DefaultViews {
+    metadata: Option<BufferHandle>,
     materials: Option<[ImageView; 5]>,
     unshadowed: Option<UnshadowedView>,
 }
@@ -174,6 +204,9 @@ impl DefaultViews {
         let [_, _, _, black, brdf] = self.material_maps()?;
         Ok(Environment {
             irradiance: black,
+            reflection_metadata: self
+                .metadata
+                .expect("material defaults include probe metadata"),
             local_reflections: None,
             diffuse_lighting: Default::default(),
             reflection: black,
@@ -229,7 +262,11 @@ impl PreparedDefaults {
     ) -> Result<(DefaultResources, FrameId), DefaultResourceError> {
         let mut pool = GraphPool::new(upload_graph_capacity(self.0), 1)?;
         let mut graph = pool.begin()?;
-        let images = self.0.upload(&mut graph)?.images();
+        let views = self.0.upload(&mut graph)?;
+        if let Some(buffer) = views.metadata {
+            graph.export_buffer(buffer)?;
+        }
+        let images = views.images();
         for image in images.into_iter().flatten() {
             graph.export_image(image)?;
         }
@@ -237,6 +274,11 @@ impl PreparedDefaults {
         let submitted = runtime.submit(&compiled)?;
         let resources = DefaultResources {
             selection: self.0,
+            metadata: views.metadata.map(|b| {
+                submitted
+                    .export_buffer(b)
+                    .expect("accepted PBR metadata export")
+            }),
             images: images.map(|image| {
                 image.map(|image| {
                     submitted
@@ -252,6 +294,7 @@ impl PreparedDefaults {
 /// Registered defaults shared by frame Graphs. Call `clear` when the
 /// application no longer needs the Runtime registrations.
 pub struct DefaultResources {
+    metadata: Option<ImportBuffer>,
     selection: Defaults,
     images: [Option<ImportImage>; 6],
 }
@@ -262,6 +305,7 @@ impl DefaultResources {
         let [white, normal, orm, ibl, brdf, shadow] = &self.images;
         let missing = || GraphError::invalid_input("PBR default resources have been released");
         let materials = if self.selection.materials() {
+            self.metadata.as_ref().ok_or_else(missing)?;
             let [Some(white), Some(normal), Some(orm), Some(ibl), Some(brdf)] =
                 [white, normal, orm, ibl, brdf]
             else {
@@ -284,6 +328,11 @@ impl DefaultResources {
             None
         };
         Ok(DefaultViews {
+            metadata: self
+                .metadata
+                .as_ref()
+                .map(|b| graph.import_buffer("reflection metadata", b))
+                .transpose()?,
             materials,
             unshadowed,
         })
@@ -293,6 +342,10 @@ impl DefaultResources {
     /// its leases until retirement. If a deletion fails, retry this method
     /// to release the remaining registrations.
     pub fn clear(&mut self, runtime: &mut Runtime) -> Result<(), ExecutionError> {
+        if let Some(b) = &self.metadata {
+            runtime.delete(b.key())?;
+            self.metadata = None;
+        }
         for image in &mut self.images {
             if let Some(current) = image {
                 runtime.delete(current.key())?;
