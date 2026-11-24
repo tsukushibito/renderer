@@ -19,6 +19,7 @@ graph-diagnostics = ["renderer-core/graph-diagnostics"]
 memory-profiling = ["renderer-core/memory-profiling"]
 
 [dependencies]
+sha2 = "0.10.9"
 renderer-core = { version = "0.1.0", path = "../renderer-core", default-features = false }
 tracy-client = { workspace = true, optional = true }
 
@@ -27,7 +28,6 @@ raw-window-handle = { version = "0.6", optional = true }
 
 [dev-dependencies]
 serde_json = "1.0"
-sha2 = "0.10.9"
 
 [lints]
 workspace = true

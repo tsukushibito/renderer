@@ -1,18 +1,24 @@
-//! Immutable, independently uploadable surface lighting. One address identifies
-//! the baked lighting of a placement, including both sides of a thin surface.
+//! Portable layout index and independently addressable, GPU-ready lightmap pages.
 use super::BakedLighting;
 use renderer_core::graph::{GraphError, ImageDesc};
-use std::collections::BTreeMap;
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LightmapAddress {
+    /// Dense index in the loaded selection.
     pub page: usize,
     pub slot: u32,
 }
+
 pub struct LightmapPage {
     extent: [u32; 2],
     texels: Vec<u8>,
 }
+
 impl LightmapPage {
     pub fn extent(&self) -> [u32; 2] {
         self.extent
@@ -27,15 +33,36 @@ impl LightmapPage {
         self.texels
     }
 }
+
 pub struct SurfaceLightmaps {
+    pub(crate) complete: bool,
     pub(crate) pages: Vec<LightmapPage>,
     pub(crate) placements: BTreeMap<u32, LightmapAddress>,
-    pub(crate) probes: BakedLighting,
+    pub(crate) probes: Option<BakedLighting>,
 }
+impl SurfaceLightmaps {
+    pub fn pages(&self) -> &[LightmapPage] {
+        &self.pages
+    }
+    pub fn placements(&self) -> &BTreeMap<u32, LightmapAddress> {
+        &self.placements
+    }
+    pub fn probes(&self) -> Option<&BakedLighting> {
+        self.probes.as_ref()
+    }
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<LightmapPage>,
+        BTreeMap<u32, LightmapAddress>,
+        Option<BakedLighting>,
+    ) {
+        (self.pages, self.placements, self.probes)
+    }
+}
+
 fn invalid() -> GraphError {
-    GraphError::invalid_input(
-        "invalid static lightmap file; recook the geometry and baked lighting",
-    )
+    GraphError::invalid_input("invalid surface lighting index or page; recook the surface lighting")
 }
 fn take<'a>(data: &mut &'a [u8], n: usize) -> Result<&'a [u8], GraphError> {
     let (a, b) = data.split_at_checked(n).ok_or_else(invalid)?;
@@ -46,180 +73,253 @@ fn word(data: &mut &[u8]) -> Result<u32, GraphError> {
     Ok(u32::from_le_bytes(take(data, 4)?.try_into().unwrap()))
 }
 
-impl SurfaceLightmaps {
-    pub fn pages(&self) -> &[LightmapPage] {
-        &self.pages
+/// Describes one complete GPU image, including the placement lookup table in its first texels.
+#[derive(Clone)]
+pub struct SurfacePageRecord {
+    extent: [u32; 2],
+    scenarios: usize,
+    placements: Vec<u32>,
+    sha256: [u8; 32],
+}
+impl SurfacePageRecord {
+    /// Cook boundary. IDs are in shader slot order (the first ID uses slot 1).
+    pub fn from_texels(
+        scenarios: usize,
+        extent: [u32; 2],
+        placements: Vec<u32>,
+        rgba32f: &[u8],
+    ) -> Result<Self, GraphError> {
+        let record = Self {
+            extent,
+            scenarios,
+            placements,
+            sha256: Sha256::digest(rgba32f).into(),
+        };
+        record.check_payload(rgba32f)?;
+        Ok(record)
     }
-    pub fn placements(&self) -> &BTreeMap<u32, LightmapAddress> {
+    pub fn sha256(&self) -> &[u8; 32] {
+        &self.sha256
+    }
+    pub fn extent(&self) -> [u32; 2] {
+        self.extent
+    }
+    pub fn placements(&self) -> &[u32] {
         &self.placements
     }
-    pub fn probes(&self) -> &BakedLighting {
-        &self.probes
+    fn pixel_count(&self) -> Result<usize, GraphError> {
+        let [w, h] = self.extent;
+        if !(1..=16384).contains(&w)
+            || !(1..=16384).contains(&h)
+            || !(1..=BakedLighting::MAX_SCENARIOS).contains(&self.scenarios)
+            || self.placements.is_empty()
+            || self.placements.len() > ((1 << 24) - 1) / 2
+        {
+            return Err(invalid());
+        }
+        let count = (w * h) as usize;
+        if self.placements.len() * 2 + 1 >= count {
+            return Err(invalid());
+        }
+        Ok(count)
     }
-    pub fn into_parts(
-        self,
-    ) -> (
-        Vec<LightmapPage>,
-        BTreeMap<u32, LightmapAddress>,
-        BakedLighting,
-    ) {
-        (self.pages, self.placements, self.probes)
+    fn check_payload(&self, bytes: &[u8]) -> Result<(), GraphError> {
+        let count = self.pixel_count()?;
+        if count.checked_mul(16) != Some(bytes.len()) {
+            return Err(invalid());
+        }
+        let integer = |index: usize| -> Result<usize, GraphError> {
+            let f = f32::from_le_bytes(bytes[index * 4..][..4].try_into().unwrap());
+            if !(0.0..=16777216.).contains(&f) || f.fract() != 0. {
+                return Err(invalid());
+            }
+            Ok(f as usize)
+        };
+        let start = self.placements.len() * 2 + 1;
+        if integer(0)? != self.placements.len()
+            || integer(1)? != self.scenarios
+            || integer(2)? != start
+            || integer(3)? != 0
+        {
+            return Err(invalid());
+        }
+        let pixels = (count - start) / self.scenarios;
+        for i in 0..self.placements.len() {
+            let base = 4 + i * 8;
+            let w = integer(base + 4)?;
+            let h = integer(base + 5)?;
+            if !(1..=2048).contains(&w) || !(1..=2048).contains(&h) {
+                return Err(invalid());
+            }
+            for side in [base, base + 2] {
+                let origin = integer(side)?;
+                let pitch = integer(side + 1)?;
+                // Bilinear filtering reads a one-texel border at UV 0 and 1.
+                if pitch < w + 2
+                    || pitch > 2048
+                    || origin < pitch + 1
+                    || origin + w + h * pitch >= pixels
+                {
+                    return Err(invalid());
+                }
+            }
+        }
+        if bytes[start * 16..].as_chunks::<4>().0.iter().any(|v| {
+            let value = f32::from_le_bytes(*v);
+            !value.is_finite() || value < 0.
+        }) {
+            return Err(invalid());
+        }
+        Ok(())
     }
+}
 
-    pub const MAGIC: &[u8; 8] = b"RSURF002";
-    /// Import at the asset boundary. Each GPU image includes the lookup table
-    /// of the placements sharing the same front/back page pair.
+/// A frozen generation. Content hashes pin each independently loaded object, including probes.
+pub struct SurfaceLightmapIndex {
+    scenarios: usize,
+    pages: Vec<SurfacePageRecord>,
+    probe_sha256: [u8; 32],
+}
+impl SurfaceLightmapIndex {
+    pub const MAGIC: &[u8; 8] = b"RSURF003";
+    pub fn new(
+        scenarios: usize,
+        pages: Vec<SurfacePageRecord>,
+        probe_sha256: [u8; 32],
+    ) -> Result<Self, GraphError> {
+        if !(1..=BakedLighting::MAX_SCENARIOS).contains(&scenarios)
+            || pages.len() > u32::MAX as usize
+        {
+            return Err(invalid());
+        }
+        let mut ids = BTreeSet::new();
+        for record in &pages {
+            record.pixel_count()?;
+            if record.scenarios != scenarios || record.placements.iter().any(|id| !ids.insert(*id))
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(Self {
+            scenarios,
+            pages,
+            probe_sha256,
+        })
+    }
+    pub fn page_count(&self) -> usize {
+        self.pages.len()
+    }
+    pub fn pages(&self) -> &[SurfacePageRecord] {
+        &self.pages
+    }
+    pub fn scenario_count(&self) -> usize {
+        self.scenarios
+    }
+    pub fn probe_sha256(&self) -> &[u8; 32] {
+        &self.probe_sha256
+    }
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Self::MAGIC.to_vec();
+        bytes.extend((self.scenarios as u32).to_le_bytes());
+        bytes.extend((self.pages.len() as u32).to_le_bytes());
+        bytes.extend(self.probe_sha256);
+        for record in &self.pages {
+            for v in [
+                record.extent[0],
+                record.extent[1],
+                record.placements.len() as u32,
+            ] {
+                bytes.extend(v.to_le_bytes());
+            }
+            bytes.extend(record.sha256);
+            for id in &record.placements {
+                bytes.extend(id.to_le_bytes());
+            }
+        }
+        bytes
+    }
     pub fn from_bytes(mut data: &[u8]) -> Result<Self, GraphError> {
         if take(&mut data, 8)? != Self::MAGIC {
             return Err(invalid());
         }
-        let keys = word(&mut data)? as usize;
+        let scenarios = word(&mut data)? as usize;
         let count = word(&mut data)? as usize;
-        let n = word(&mut data)? as usize;
-        if !(1..=BakedLighting::MAX_SCENARIOS).contains(&keys) || count > data.len() / 8 {
+        let probe_sha256 = take(&mut data, 32)?.try_into().unwrap();
+        if count > data.len() / 44 {
             return Err(invalid());
         }
-        let mut extents = Vec::with_capacity(count);
+        let mut pages = Vec::with_capacity(count);
         for _ in 0..count {
-            let e = [word(&mut data)?, word(&mut data)?];
-            if e.iter().any(|v| !(1..=2048).contains(v)) {
-                return Err(invalid());
-            }
-            extents.push(e);
-        }
-        if n > data.len() / 28 {
-            return Err(invalid());
-        }
-        #[derive(Clone, Copy)]
-        struct Rect {
-            page: usize,
-            start: u32,
-            extent: [u32; 2],
-        }
-        let mut entries = BTreeMap::<u32, [Option<Rect>; 2]>::new();
-        for _ in 0..n {
-            let id = word(&mut data)?;
-            let page = word(&mut data)? as usize;
-            let side = word(&mut data)? as usize;
-            let origin = [word(&mut data)?, word(&mut data)?];
             let extent = [word(&mut data)?, word(&mut data)?];
-            let dims = *extents.get(page).ok_or_else(invalid)?;
-            if side > 1
-                || (0..2).any(|i| {
-                    extent[i] == 0
-                        || origin[i] == 0
-                        || origin[i]
-                            .checked_add(extent[i])
-                            .is_none_or(|v| v >= dims[i])
-                })
-            {
+            let members = word(&mut data)? as usize;
+            let sha256 = take(&mut data, 32)?.try_into().unwrap();
+            if members > data.len() / 4 {
                 return Err(invalid());
             }
-            let start = origin[1] * dims[0] + origin[0];
-            if entries.entry(id).or_default()[side]
-                .replace(Rect {
-                    page,
-                    start,
-                    extent,
-                })
-                .is_some()
-            {
-                return Err(invalid());
-            }
+            let placements = (0..members)
+                .map(|_| word(&mut data))
+                .collect::<Result<_, _>>()?;
+            pages.push(SurfacePageRecord {
+                extent,
+                scenarios,
+                placements,
+                sha256,
+            });
         }
-        let mut raw = Vec::new();
-        for &[w, h] in &extents {
-            let rgb = take(&mut data, (w * h) as usize * keys * 12)?;
-            if rgb.as_chunks::<4>().0.iter().any(|v| {
-                let v = f32::from_le_bytes(*v);
-                !v.is_finite() || v < 0.
-            }) {
-                return Err(invalid());
-            }
-            raw.push(rgb);
-        }
-        let probes = BakedLighting::from_bytes(data)?;
-        if probes.scenario_count() != keys {
+        if !data.is_empty() {
             return Err(invalid());
         }
-        let mut groups = BTreeMap::<(usize, usize), Vec<_>>::new();
-        for (id, [front, back]) in entries {
-            let f = front.ok_or_else(invalid)?;
-            let b = back.unwrap_or(f);
-            if f.extent != b.extent {
-                return Err(invalid());
-            }
-            groups.entry((f.page, b.page)).or_default().push((id, f, b));
-        }
-        // Every physical page is uploaded exactly once, even for a two-page placement.
-        let mut assigned = vec![false; count];
-        for &(front, back) in groups.keys() {
-            if assigned[front] || assigned[back] {
-                return Err(invalid());
-            }
-            assigned[front] = true;
-            assigned[back] = true;
-        }
-        if assigned.contains(&false) {
-            return Err(invalid());
-        }
+        Self::new(scenarios, pages, probe_sha256)
+    }
+    /// Load and validate only the requested pages. Their original payload allocations
+    /// become the upload inputs. Pass probe bytes only when this selection needs diffuse probes.
+    pub fn load(
+        &self,
+        selected: impl IntoIterator<Item = usize>,
+        probe_bytes: Option<&[u8]>,
+        mut read: impl FnMut(&[u8; 32]) -> Result<Vec<u8>, Box<dyn Error>>,
+    ) -> Result<SurfaceLightmaps, Box<dyn Error>> {
+        let probes = probe_bytes
+            .map(|bytes| -> Result<_, GraphError> {
+                if <[u8; 32]>::from(Sha256::digest(bytes)) != self.probe_sha256 {
+                    return Err(invalid());
+                }
+                let probes = BakedLighting::from_bytes(bytes)?;
+                if probes.scenario_count() != self.scenarios {
+                    return Err(invalid());
+                }
+                Ok(probes)
+            })
+            .transpose()?;
         let mut pages = Vec::new();
         let mut placements = BTreeMap::new();
-        for ((front, back), members) in groups {
-            let header = 1 + members.len() * 2;
-            let front_len = raw[front].len() / 12;
-            let back_offset = if back == front { 0 } else { front_len };
-            let size = header
-                + front_len
-                + if back == front {
-                    0
-                } else {
-                    raw[back].len() / 12
-                };
-            if header > 1 << 24 {
-                return Err(invalid());
+        let mut seen = BTreeSet::new();
+        for id in selected {
+            let record = self.pages.get(id).ok_or_else(invalid)?;
+            if !seen.insert(id) {
+                return Err(invalid().into());
             }
-            let width = size.min((size.isqrt() + 1).next_power_of_two().clamp(1, 16384)) as u32;
-            let height = size.div_ceil(width as usize) as u32;
-            if height > 16384 {
-                return Err(invalid());
+            let texels = read(&record.sha256)?;
+            if <[u8; 32]>::from(Sha256::digest(&texels)) != record.sha256 {
+                return Err(invalid().into());
             }
-            let mut texels = Vec::with_capacity(width as usize * height as usize * 16);
-            // Metadata is encoded as finite numeric words. Split the page base
-            // from the scenario stride so offsets remain exact in float32.
-            let mut push = |v: [u32; 4]| {
-                texels.extend(v.into_iter().map(|v| v as f32).flat_map(f32::to_le_bytes))
-            };
-            push([members.len() as u32, keys as u32, header as u32, 0]);
-            for (index, (id, f, b)) in members.into_iter().enumerate() {
+            record.check_payload(&texels)?;
+            for (i, placement) in record.placements.iter().enumerate() {
                 placements.insert(
-                    id,
+                    *placement,
                     LightmapAddress {
                         page: pages.len(),
-                        slot: index as u32 + 1,
+                        slot: i as u32 + 1,
                     },
                 );
-                push([
-                    f.start,
-                    extents[front][0],
-                    b.start + (back_offset / keys) as u32,
-                    extents[back][0],
-                ]);
-                push([f.extent[0], f.extent[1], 0, 0]);
             }
-            for bytes in std::iter::once(raw[front]).chain((front != back).then_some(raw[back])) {
-                for rgb in bytes.as_chunks::<12>().0 {
-                    texels.extend_from_slice(rgb);
-                    texels.extend_from_slice(&[0; 4]);
-                }
-            }
-            texels.resize(width as usize * height as usize * 16, 0);
             pages.push(LightmapPage {
-                extent: [width, height],
+                extent: record.extent,
                 texels,
             });
         }
-        Ok(Self {
+        Ok(SurfaceLightmaps {
+            complete: pages.len() == self.pages.len(),
             pages,
             placements,
             probes,
