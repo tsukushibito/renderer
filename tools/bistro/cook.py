@@ -185,11 +185,23 @@ def factors(values, count, label, low=None, high=None):
     return [scalar(value, label, low, high) for value in values]
 
 
+def check_sampler(sampler, origin):
+    require(isinstance(sampler, dict), f"{origin}: invalid sampler {sampler!r}")
+    require(not sampler.get("extensions"), f"{origin}: unsupported sampler extensions {sampler.get('extensions')!r}")
+    for key, allowed in (("wrapS", (10497, 33071, 33648)), ("wrapT", (10497, 33071, 33648)),
+                         ("minFilter", (9728, 9729, 9984, 9985, 9986, 9987)), ("magFilter", (9728, 9729))):
+        if key in sampler:
+            value = sampler[key]
+            require(type(value) is int and value in allowed, f"{origin}: invalid {key}={value!r}")
+
+
 def cook_materials(data):
     roles = {}
     materials = []
     textures = data.get("textures", [])
     images = data.get("images", [])
+    samplers = data.get("samplers", [])
+    checked_samplers = set()
     for index, source in enumerate(data.get("materials", [])):
         require(not source.get("extensions"), "Material extensions need an explicit cook contract")
         pbr = source.get("pbrMetallicRoughness", {})
@@ -208,11 +220,21 @@ def cook_materials(data):
             value = (source.get(parent, {}) if parent else source).get(field)
             texture_id = None
             if value is not None:
-                require(not value.get("extensions") and value.get("texCoord", 0) == 0,
-                        "Only untransformed material TEXCOORD_0 is supported")
+                origin = f"Material {material['name']} slot {field}"
+                require(not value.get("extensions"), f"{origin}: unsupported extensions {value.get('extensions')!r}")
+                require(value.get("texCoord", 0) == 0, f"{origin}: unsupported texCoord={value.get('texCoord')!r}")
                 texture_id = value["index"]
                 require(isinstance(texture_id, int) and 0 <= texture_id < len(textures), "Invalid material texture")
-                image_id = textures[texture_id].get("source")
+                texture = textures[texture_id]
+                require(not texture.get("extensions"), f"{origin}: unsupported texture extensions {texture.get('extensions')!r}")
+                if "sampler" in texture:
+                    sampler = texture["sampler"]
+                    require(type(sampler) is int and 0 <= sampler < len(samplers),
+                            f"{origin}: invalid sampler index {sampler!r}")
+                    if sampler not in checked_samplers:
+                        check_sampler(samplers[sampler], f"{origin} sampler {sampler}")
+                        checked_samplers.add(sampler)
+                image_id = texture.get("source")
                 require(isinstance(image_id, int) and 0 <= image_id < len(images), "Invalid texture image")
                 require(image_id not in roles or roles[image_id] == role, "Image has conflicting semantic roles")
                 roles[image_id] = role
@@ -224,6 +246,9 @@ def cook_materials(data):
         sampler = texture.get("sampler")
         require(sampler is None or isinstance(sampler, int) and 0 <= sampler < len(data.get("samplers", [])),
                 "Invalid sampler reference")
+    for index, sampler in enumerate(samplers):
+        if index not in checked_samplers:
+            check_sampler(sampler, f"Sampler {index}")
     return materials, roles
 
 
