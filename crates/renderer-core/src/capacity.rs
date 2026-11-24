@@ -52,6 +52,7 @@ pub enum RuntimeCapacityKind {
     TimingSamples,
     PresentationSlots,
     RetiredSwapchains,
+    RetiredMeshVersions,
     HostMemory,
     Identity,
     DiagnosticStorage,

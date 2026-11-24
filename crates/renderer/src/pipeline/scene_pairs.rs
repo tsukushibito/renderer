@@ -59,6 +59,16 @@ impl ScenePairs {
         pipeline: &P,
         changed: SceneInput<'_>,
     ) -> Result<(), GraphError> {
+        self.stage(pipeline, changed)?;
+        self.publish();
+        Ok(())
+    }
+
+    pub(super) fn stage<P: ViewPipeline + ?Sized>(
+        &mut self,
+        pipeline: &P,
+        changed: SceneInput<'_>,
+    ) -> Result<(), GraphError> {
         self.staged.clear();
         for obj in changed.objects {
             let pair = (obj.mesh, obj.material);
@@ -71,8 +81,14 @@ impl ScenePairs {
                 self.staged.insert(pair, current);
             }
         }
-        self.registered.extend(self.staged.drain());
+        self.registered
+            .try_reserve(self.staged.len())
+            .map_err(|_| GraphError::invalid_input("unable to reserve scene pair registrations"))?;
         Ok(())
+    }
+
+    pub(super) fn publish(&mut self) {
+        self.registered.extend(self.staged.drain());
     }
 
     pub(super) fn remove(&mut self, mesh: MeshHandle, material: MaterialHandle) -> bool {

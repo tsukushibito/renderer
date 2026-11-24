@@ -30,6 +30,7 @@ pub struct SceneRenderer<R: BorrowMut<Runtime> = Runtime> {
     pub(super) mesh_budget: u64,
     pub(super) configured: Preparation,
     pub(super) retired: Option<ViewRenderer>,
+    pub(super) transfers: super::candidate::Transfers,
 }
 impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     pub(crate) fn mesh_upload_budget(&self) -> u64 {
@@ -128,48 +129,30 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         self.prepare_assets_inner(assets).map_err(Into::into)
     }
     pub(crate) fn prepare_assets_inner(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
-        let mut meshes = Vec::new();
-        let mut seen = HashSet::new();
-        let mut materials = BTreeSet::new();
-        for object in assets.objects.iter() {
-            assets.meshes.geometry(object.mesh)?;
-            assets.materials.get(object.material)?;
-            if seen.insert(object.mesh) {
-                meshes.push(object.mesh);
-            }
-            materials.insert(object.material);
-        }
-        for &mesh in assets.extra_meshes.iter() {
-            assets.meshes.geometry(mesh)?;
-            if seen.insert(mesh) {
-                meshes.push(mesh);
-            }
-        }
-        materials.extend(assets.extra_materials.iter().copied());
-        let budget = self.mesh_budget;
-        let (driver, pool, runtime) = self.parts_mut();
-        assets.meshes.check_runtime(&meshes, runtime)?;
-        let changed = MaterialCheckpoint::begin(assets.materials, &materials, runtime)?;
-        let wait = |runtime: &mut Runtime, frame| -> PipelineResult<()> {
-            while runtime
-                .wait_for_frame(frame, Duration::from_secs(1))?
-                .is_none()
-            {}
-            Ok(())
+        let mut candidate = AssetCandidate::from_scene(&assets)?;
+        let budget = UploadBudget {
+            bytes: self
+                .mesh_budget
+                .max(crate::passes::pbr::MATERIAL_BYTES as u64),
+            submissions: 1,
         };
-        loop {
-            let batch = assets.meshes.stream_gpu(runtime, pool, &meshes, budget)?;
-            if let Some(id) = batch.submission {
-                wait(runtime, id)?;
-            }
-            if batch.remaining_bytes == 0 {
-                break;
-            }
-        }
-        if let Some(id) = changed.upload(assets.materials, runtime)? {
-            wait(runtime, id)?;
-        }
-        driver.prepare_all(assets.input())
+        while self
+            .advance_candidate(
+                &mut candidate,
+                assets.meshes,
+                assets.materials,
+                budget,
+                Duration::from_secs(1),
+            )?
+            .is_pending()
+        {}
+        self.end_candidate(
+            &mut candidate,
+            assets.meshes,
+            assets.materials,
+            RetireAssets::default(),
+            true,
+        )
     }
     pub fn begin_frame(&mut self) -> PipelineResult<SceneFrame<'_>> {
         Ok(SceneFrame {
@@ -425,6 +408,8 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         )
     }
     pub fn clear(&mut self) -> PipelineResult<()> {
+        self.transfers
+            .drain(self.runtime.as_mut().expect("live renderer").borrow_mut())?;
         self.collect_retired_views()?;
         self.driver
             .clear(self.runtime.as_mut().expect("live renderer").borrow_mut())
@@ -439,6 +424,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
 impl<R: BorrowMut<Runtime>> Drop for SceneRenderer<R> {
     fn drop(&mut self) {
         if let Some(runtime) = self.runtime.as_mut() {
+            let _ = self.transfers.drain(runtime.borrow_mut());
             if let Some(retired) = &mut self.retired {
                 let _ = retired.clear(runtime.borrow_mut());
             }

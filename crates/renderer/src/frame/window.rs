@@ -18,6 +18,13 @@ pub struct WindowRenderer {
     accepted: Option<FrameId>,
 }
 
+impl crate::pipeline::AssetTarget for WindowRenderer {
+    type Device = Runtime;
+    fn asset_renderer(&mut self) -> &mut crate::pipeline::SceneRenderer {
+        &mut self.renderer.drawing
+    }
+}
+
 impl WindowRenderer {
     pub fn new(
         window: impl HasWindowHandle + 'static,

@@ -170,10 +170,23 @@ impl ViewRenderer {
     pub(super) fn prepare_all(&mut self, changed: SceneInput<'_>) -> PipelineResult<()> {
         self.check_idle()?;
         for pipeline in self.pipelines.values_mut() {
-            pipeline.group.prepare_scene(changed)?;
+            pipeline.group.stage_scene(changed)?;
+        }
+        for pipeline in self.pipelines.values_mut() {
+            pipeline.group.publish_scene();
         }
         self.poses.reserve(changed.meshes.pose_count());
         Ok(())
+    }
+    pub(super) fn remove_pairs(
+        &mut self,
+        pairs: &[(crate::mesh::MeshHandle, crate::material::MaterialHandle)],
+    ) {
+        for pipeline in self.pipelines.values_mut() {
+            for &(mesh, material) in pairs {
+                pipeline.group.remove_pair(mesh, material);
+            }
+        }
     }
     pub fn remove_scene_pair(
         &mut self,

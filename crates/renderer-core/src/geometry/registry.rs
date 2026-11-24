@@ -183,6 +183,11 @@ impl MeshRegistry {
         Ok(())
     }
 
+    /// Current retained versions and configured limit for atomic batch retirement.
+    pub fn retirement_usage(&self) -> (usize, usize) {
+        (self.retired_meshes.len(), self.retired_mesh_capacity)
+    }
+
     /// Reclaim changed mesh versions at an explicit maintenance boundary.
     ///
     /// Snapshots and graph uploads retain different `Arc`s. An unreferenced

@@ -161,3 +161,157 @@ fn empty_scene_and_invalid_cold_inputs_need_no_device() -> PipelineResult<()> {
     );
     Ok(())
 }
+
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+mod candidate_gpu {
+    use super::*;
+    use renderer::pipeline::{
+        AssetCandidate, AssetPreparation, RetireAssets, SceneInput, UploadBudget,
+    };
+    use renderer_core::runtime::RuntimeConfig;
+    use std::{
+        num::NonZeroUsize,
+        time::{Duration, Instant},
+    };
+
+    mod validation {
+        include!("../examples/support/validation.rs");
+    }
+
+    fn exercise(backend: RuntimeConfig) -> PipelineResult<()> {
+        let mut meshes = Meshes::new(MeshCapacity {
+            meshes: 3,
+            retired_mesh_versions: 1,
+        })?;
+        let mut materials = Materials::default();
+        let v = PbrVertex::new([0.; 3], [0., 0., 1.], [1., 0., 0., 1.], [0.; 2])?;
+        let mesh = || MeshData::pbr(&[v; 3], &[0, 1, 2]);
+        let old = RenderObject::new(
+            meshes.create(mesh()?)?,
+            materials.create_pbr(PbrParams::color([1.; 4]))?,
+        );
+        let mut setup = RendererSetup::standard(camera(9)?);
+        setup.frames_in_flight = NonZeroUsize::new(2).unwrap();
+        let objects = [old];
+        let mut plan = setup.prepare(SceneAssets::new(&mut meshes, &mut materials, &objects))?;
+        plan.reserve_mesh_replacement(old.mesh)?;
+        plan.preparation_mut()
+            .reserve_buffer(renderer::pbr::MaterialUniform::DESC, 1)?;
+        let mut renderer = plan.build(backend)?;
+        let group = renderer.parts_mut().0.pipeline_for_view(ViewId(9))?;
+        let new = RenderObject::new(
+            meshes.create(mesh()?)?,
+            materials.create_pbr(PbrParams::color([0.5; 4]))?,
+        );
+        let mut change = AssetCandidate::new(&meshes, &materials, &[new])?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let budget = UploadBudget {
+            bytes: 64,
+            submissions: 1,
+        };
+        loop {
+            let state =
+                renderer.poll_candidate(&mut change, &mut meshes, &mut materials, budget)?;
+            let frame = renderer.begin_frame()?;
+            assert!(
+                frame
+                    .bind_scene(group, SceneInput::new(&meshes, &materials, &[old]))
+                    .is_ok()
+            );
+            assert!(
+                frame
+                    .bind_scene(group, SceneInput::new(&meshes, &materials, &[new]))
+                    .is_err()
+            );
+            if state.is_ready() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "equipment preparation timed out");
+            std::thread::yield_now();
+        }
+        // A full retire queue must fail atomically even though the candidate is ready.
+        let spare = meshes.create(mesh()?)?;
+        meshes.remove(spare)?;
+        let retire = RetireAssets {
+            meshes: &[old.mesh],
+            materials: &[old.material],
+            pairs: &[(old.mesh, old.material)],
+        };
+        assert!(
+            renderer
+                .commit_candidate(&mut change, &mut meshes, &mut materials, retire)
+                .is_err()
+        );
+        assert!(
+            renderer
+                .begin_frame()?
+                .bind_scene(group, SceneInput::new(&meshes, &materials, &[old]))
+                .is_ok()
+        );
+        renderer.collect_assets(&mut meshes, &mut materials)?;
+        renderer.commit_candidate(&mut change, &mut meshes, &mut materials, retire)?;
+        assert!(
+            renderer
+                .begin_frame()?
+                .bind_scene(group, SceneInput::new(&meshes, &materials, &[new]))
+                .is_ok()
+        );
+        assert!(materials.get(old.material).is_err());
+        renderer.collect_assets(&mut meshes, &mut materials)?;
+        let abandoned = RenderObject::new(meshes.create(mesh()?)?, new.material);
+        let mut pending = AssetCandidate::new(&meshes, &materials, &[abandoned])?;
+        assert!(
+            renderer
+                .poll_candidate(
+                    &mut pending,
+                    &mut meshes,
+                    &mut materials,
+                    UploadBudget {
+                        bytes: 4,
+                        submissions: 1
+                    },
+                )?
+                .is_pending()
+        );
+        renderer.cancel_candidate(
+            &mut pending,
+            &mut meshes,
+            &mut materials,
+            RetireAssets {
+                meshes: &[abandoned.mesh],
+                ..Default::default()
+            },
+        )?;
+        while renderer.collect_assets(&mut meshes, &mut materials)? != 0 {
+            assert!(
+                Instant::now() < deadline,
+                "cancelled transfer did not retire"
+            );
+            std::thread::yield_now();
+        }
+        assert!(
+            renderer
+                .begin_frame()?
+                .bind_scene(group, SceneInput::new(&meshes, &materials, &[new]))
+                .is_ok()
+        );
+        let mut runtime = renderer.into_runtime()?;
+        meshes.release_gpu(&mut runtime)?;
+        materials.clear(&mut runtime)?;
+        validation::check_validation(runtime)
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    #[ignore = "requires a real Vulkan device"]
+    fn vulkan_switches_ready_asset_after_retirement_is_reserved() -> PipelineResult<()> {
+        exercise(RuntimeConfig::Vulkan(Default::default()))
+    }
+
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires a real D3D12 device"]
+    fn d3d12_switches_ready_asset_after_retirement_is_reserved() -> PipelineResult<()> {
+        exercise(RuntimeConfig::D3D12(Default::default()))
+    }
+}

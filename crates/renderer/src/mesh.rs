@@ -254,6 +254,18 @@ impl Meshes {
         asset.retire_active(&mut self.retired);
         Ok(())
     }
+
+    pub(crate) fn source_revision(&self, mesh: MeshHandle) -> Result<u64, MeshError> {
+        self.registry.mesh_revision(mesh)
+    }
+
+    pub(crate) fn resident_revision(&self, mesh: MeshHandle) -> Option<u64> {
+        Some(self.assets.get(&mesh)?.active.as_ref()?.revision)
+    }
+
+    pub(crate) fn retirement_usage(&self) -> (usize, usize) {
+        self.registry.retirement_usage()
+    }
     /// Register resident buffer classes once. Budget overlapping versions at updates.
     pub fn reserve(&self, preparation: &mut Preparation) -> Result<(), GraphError> {
         self.reserve_selection(preparation, self.registry.live_mesh_handles())
