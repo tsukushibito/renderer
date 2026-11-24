@@ -1,6 +1,6 @@
 //! A repository-local store uses OS locks for transactions, in-flight builds and
 //! reader lifetimes. A crashed process releases its locks without a timeout.
-use crate::{inputs::Manifest, store};
+use crate::{image_update::Manifest, store};
 use renderer_asset::{BlobRef, Catalog, Digest};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -415,7 +415,9 @@ impl StoreGuard {
             }
             let bytes = fs::read(&path)?;
             if let Ok((hash, manifest)) = serde_json::from_slice::<(Digest, Manifest)>(&bytes)
-                && hash == Digest::of(&serde_json::to_vec(&(key, manifest))?)
+                // No snapshot can select this index. Require the canonical v1
+                // encoding so a future record with additional fields survives.
+                && bytes == serde_json::to_vec(&(hash, manifest))?
             {
                 fs::remove_file(path)?;
             }
@@ -757,8 +759,8 @@ mod tests {
             let key = Digest::of(color);
             let paths = ["snapshots", "dependencies", "recipes"]
                 .map(|dir| root.join(dir).join(key.to_string()));
-            let manifest = Manifest::new();
-            let hash = Digest::of(&serde_json::to_vec(&(key, &manifest))?);
+            let manifest = Manifest::default();
+            let hash = Digest::of(&serde_json::to_vec(&(key, id, &manifest))?);
             store::publish(&paths[0], id.to_string().as_bytes())?;
             store::publish(&paths[1], &serde_json::to_vec(&(hash, manifest))?)?;
             store::publish(&paths[2], &serde_json::to_vec(&BlobRef::of(color))?)?;
