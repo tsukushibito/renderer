@@ -9,6 +9,7 @@ use renderer::{
     unlit_forward::IDENTITY,
 };
 use renderer_bake::{BakeBackend, BakeScene, Lighting, ProbeSettings, ReflectionProbeDesc};
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 mod validation {
@@ -185,24 +186,22 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
     let red = [1., 0., 0.];
     let green = [0., 1., 0.];
     let blue = [0., 0., 1.];
-    // Adjacent rectangles for two placements of the same mesh and material.
-    let mut file = renderer::pbr::SurfaceLightmaps::MAGIC.to_vec();
-    for v in [3u32, 1, 2, 8, 4, 40, 0, 0, 1, 1, 2, 2, 41, 0, 0, 5, 1, 2, 2] {
-        file.extend(v.to_le_bytes());
-    }
-    for _y in 0..4 {
-        for x in 0..8 {
-            let keys = if x < 4 {
-                [red, green, blue]
-            } else {
-                [green, blue, red]
-            };
-            for rgb in keys {
-                for v in rgb {
-                    file.extend(f32::to_le_bytes(v));
-                }
+    // Independent pages for two placements of the same mesh and material.
+    let mut pages = std::collections::BTreeMap::new();
+    let mut records = Vec::new();
+    for (placement, colors) in [(40, [red, green, blue]), (41, [green, blue, red])] {
+        let mut texels: Vec<f32> = vec![1., 3., 3., 0., 5., 4., 5., 4., 2., 2., 0., 0.];
+        for _ in 0..16 {
+            for [r, g, b] in colors {
+                texels.extend([r, g, b, 0.]);
             }
         }
+        texels.resize(8 * 7 * 4, 0.);
+        let bytes: Vec<_> = texels.into_iter().flat_map(f32::to_le_bytes).collect();
+        let record =
+            renderer::pbr::SurfacePageRecord::from_texels(3, [8, 7], vec![placement], &bytes)?;
+        pages.insert(*record.sha256(), bytes);
+        records.push(record);
     }
     let probe_keys = [blue, red, green];
     let phases = [0., 0.25, 0.5, 0.75, 1.];
@@ -219,8 +218,12 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
         )?);
     }
     drop(reference);
-    quadratic_volume(probe_keys)?.write(&mut file)?;
-    let sequence = renderer::pbr::SurfaceLightmaps::from_bytes(&file)?;
+    let mut probes = Vec::new();
+    quadratic_volume(probe_keys)?.write(&mut probes)?;
+    let index =
+        renderer::pbr::SurfaceLightmapIndex::new(3, records, Sha256::digest(&probes).into())?;
+    let index = renderer::pbr::SurfaceLightmapIndex::from_bytes(&index.to_bytes())?;
+    let sequence = index.load([0, 1], Some(&probes), |hash| Ok(pages[hash].clone()))?;
     let resident = renderer.load_surface_lighting(&sequence, None)?;
     for (object, channels) in [(1, [2, 0, 1]), (2, [0, 1, 2]), (3, [1, 2, 0])] {
         for ((phase, reference), expected) in phases.into_iter().zip(&reference_rgb).zip([
@@ -249,6 +252,27 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
         }
     }
     drop(resident);
+    let mut read_bytes = 0;
+    let subset = index.load([1], None, |hash| {
+        read_bytes += pages[hash].len();
+        Ok(pages[hash].clone())
+    })?;
+    assert_eq!(read_bytes, 8 * 7 * 16);
+    assert!(subset.probes().is_none());
+    let partial = renderer.load_surface_lighting(&subset, None)?;
+    // The second page now occupies local page index zero.
+    for (phase, channel) in [(0., 1), (0.5, 2), (1., 0)] {
+        let rgb = center_pixel(
+            &mut renderer,
+            SceneInput::new(&meshes, &materials, &objects[3..4])
+                .with_baked_lighting(&partial, phase),
+        )?;
+        assert!(
+            rgb[channel] > 32 && rgb[(channel + 1) % 3] <= 32 && rgb[(channel + 2) % 3] <= 32,
+            "partial surface at {phase}: {rgb:?}"
+        );
+    }
+    drop(partial);
     let mut runtime = renderer.into_runtime()?;
     meshes.release_gpu(&mut runtime)?;
     materials.clear(&mut runtime)?;

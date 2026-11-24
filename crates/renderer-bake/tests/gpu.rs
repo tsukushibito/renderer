@@ -5,6 +5,7 @@ use renderer_bake::{
     BakeBackend, BakeScene, Lighting, LightmapVertex, Material, ProbeSettings, ProbeShOrder,
     StaticReceiver, SurfaceLayout, Triangle,
 };
+use sha2::{Digest, Sha256};
 
 fn compare(backend: BakeBackend) {
     let mut scene = BakeScene::new(
@@ -89,24 +90,42 @@ fn compare_keys<const N: usize>(
     lights: [Lighting; N],
 ) {
     let bake = |backend, sh_order| {
-        let mut file = Vec::new();
-        SurfaceLayout::new(receivers, 16, None)
-            .unwrap()
-            .bake_to(
-                scene,
-                lights,
-                ProbeSettings {
-                    backend,
-                    sh_order,
-                    rays_per_probe: 64,
-                    max_depth: 1,
-                    ..Default::default()
+        let settings = ProbeSettings {
+            backend,
+            sh_order,
+            rays_per_probe: 64,
+            max_depth: 1,
+            ..Default::default()
+        };
+        let layout = SurfaceLayout::new(receivers, 16, None).unwrap();
+        let selected: Vec<_> = (0..layout.gpu_page_count()).collect();
+        let mut pages = std::collections::BTreeMap::new();
+        let mut records = Vec::new();
+        layout
+            .bake_gpu_pages(
+                scene.prepare_surface_bake(lights, backend, 64).unwrap(),
+                &selected,
+                |_, record, bytes| {
+                    pages.insert(*record.sha256(), bytes);
+                    records.push(record);
+                    Ok(())
                 },
-                64,
-                &mut file,
             )
             .unwrap();
-        renderer::pbr::SurfaceLightmaps::from_bytes(&file).unwrap()
+        let mut probes = Vec::new();
+        scene
+            .prepare_probe_bake(lights, settings)
+            .unwrap()
+            .bake()
+            .unwrap()
+            .write(&mut probes)
+            .unwrap();
+        let index =
+            renderer::pbr::SurfaceLightmapIndex::new(N, records, Sha256::digest(&probes).into())
+                .unwrap();
+        index
+            .load(selected, Some(&probes), |hash| Ok(pages[hash].clone()))
+            .unwrap()
     };
     let [l1, l2] = [ProbeShOrder::L1, ProbeShOrder::L2].map(|order| {
         let reference = bake(BakeBackend::Cpu, order);
@@ -125,7 +144,7 @@ fn compare_keys<const N: usize>(
                 assert!((f32::from_le_bytes(*a) - f32::from_le_bytes(*b)).abs() < 0.0005);
             }
         }
-        let (cpu_probes, gpu_probes) = (reference.probes(), native.probes());
+        let (cpu_probes, gpu_probes) = (reference.probes().unwrap(), native.probes().unwrap());
         assert_eq!(gpu_probes.sh_order(), order);
         assert_eq!(gpu_probes.scenario_count(), N);
         assert_eq!(cpu_probes.extent(), gpu_probes.extent());
@@ -151,7 +170,7 @@ fn compare_keys<const N: usize>(
     }
     // This environment is directional. Inspect the high bands in every key,
     // including the unpaired last key written by a second GPU dispatch.
-    let (words, _) = l2.probes().rgba32f().as_chunks::<4>();
+    let (words, _) = l2.probes().unwrap().rgba32f().as_chunks::<4>();
     let nodes = f32::from_le_bytes(words[4]) as usize;
     let probes = f32::from_le_bytes(words[5]) as usize;
     let header = 2 + N.max(2) + 3 * nodes;

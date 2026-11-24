@@ -326,3 +326,61 @@ impl SurfaceLightmapIndex {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn page(id: u32, color: f32) -> (SurfacePageRecord, Vec<u8>) {
+        let mut words = vec![1., 1., 3., 0., 5., 4., 5., 4., 2., 2., 0., 0.];
+        words.resize(20 * 4, color);
+        let bytes: Vec<_> = words.into_iter().flat_map(f32::to_le_bytes).collect();
+        (
+            SurfacePageRecord::from_texels(1, [5, 4], vec![id], &bytes).unwrap(),
+            bytes,
+        )
+    }
+
+    #[test]
+    fn frozen_index_reads_only_requested_images_and_retains_their_allocation() {
+        let (first, first_bytes) = page(7, 1.);
+        let (second, second_bytes) = page(9, 2.);
+        let second_hash = *second.sha256();
+        let index = SurfaceLightmapIndex::new(1, vec![first, second], [0; 32]).unwrap();
+        let index = SurfaceLightmapIndex::from_bytes(&index.to_bytes()).unwrap();
+        let pointer = second_bytes.as_ptr();
+        let mut payload = Some(second_bytes);
+        let partial = index
+            .load([1], None, |h| {
+                assert_eq!(*h, second_hash);
+                Ok(payload.take().unwrap())
+            })
+            .unwrap();
+        assert!(payload.is_none());
+        assert_eq!(partial.pages()[0].rgba32f().as_ptr(), pointer);
+        assert_eq!(
+            *partial.placements().get(&9).unwrap(),
+            LightmapAddress { page: 0, slot: 1 }
+        );
+        assert!(!partial.placements().contains_key(&7));
+        assert!(index.load([1], None, |_| Ok(first_bytes.clone())).is_err());
+        assert!(
+            index
+                .load([], Some(&first_bytes), |_| panic!("no pages requested"))
+                .is_err()
+        );
+        assert!(
+            index
+                .load([2], None, |_| panic!("invalid page ID"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn reject_duplicate_placements_and_invalid_fetch_ranges_at_import() {
+        let (record, mut bytes) = page(4, 1.);
+        assert!(SurfaceLightmapIndex::new(1, vec![record.clone(), record], [0; 32]).is_err());
+        bytes[16..20].copy_from_slice(&1000.0_f32.to_le_bytes());
+        assert!(SurfacePageRecord::from_texels(1, [5, 4], vec![4], &bytes).is_err());
+        assert!(SurfaceLightmapIndex::from_bytes(b"RSURF002").is_err());
+    }
+}
