@@ -157,7 +157,10 @@ impl Game {
             for i in 0..128 {
                 let mut pos = game.random_pos();
                 if !game.arena.open(pos, 0.) {
-                    pos = game.enemies[i].pos;
+                    let Some(subject) = game.enemies.get(i) else {
+                        continue;
+                    };
+                    pos = subject.pos;
                 }
                 game.drops.push(Drop { pos, value: 1 });
             }
@@ -249,14 +252,14 @@ impl Game {
     fn repopulate(&mut self) {
         let count = (STARTING_ENEMIES + (self.elapsed / 180) as usize).min(MAX_ENEMIES);
         while self.enemies.len() < count {
-            let mut spawn = self.player;
-            for _ in 0..64 {
+            let spawn = (0..64).find_map(|_| {
                 let p = self.random_pos();
-                if distance_squared(p, self.player) >= 16. && self.arena.open(p, ENEMY_RADIUS) {
-                    spawn = p;
-                    break;
-                }
-            }
+                (distance_squared(p, self.player) >= 16. && self.arena.open(p, ENEMY_RADIUS))
+                    .then_some(p)
+            });
+            let Some(spawn) = spawn else {
+                break;
+            };
             let id = self.next_id;
             self.next_id += 1;
             self.enemies.push(Enemy {
@@ -414,6 +417,19 @@ mod tests {
         let mut arena = Arena::default();
         arena.marker = arena.obstacles[0].center;
         assert!(Arena::from_json(&serde_json::to_string(&arena).unwrap()).is_err());
+    }
+
+    #[test]
+    fn confined_arena_defers_spawns_and_keeps_endgame_drops_on_open_floor() {
+        let source = r#"{"half_extent":[2,2],"player_spawn":[0,0],"marker":[0,1],"obstacles":[{"center":[1.2,0],"half_extent":[0.7,1.8]}]}"#;
+        let mut game = Game::new(Arena::from_json(source).unwrap(), Scenario::Endgame, 506);
+        assert!(!game.drops.is_empty());
+        assert!(game.drops.iter().all(|drop| game.arena.open(drop.pos, 0.)));
+        for _ in 0..2 {
+            game.step(Input::default());
+            assert!(game.enemies.is_empty());
+            assert_eq!(game.hp, Game::MAX_HP);
+        }
     }
 
     #[test]
