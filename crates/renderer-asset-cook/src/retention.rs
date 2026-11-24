@@ -1,5 +1,6 @@
 //! A repository-local store uses OS locks for transactions, in-flight builds and
 //! reader lifetimes. A crashed process releases its locks without a timeout.
+use crate::store::FileLock;
 use crate::{image_update::Manifest, store};
 use renderer_asset::{BlobRef, Catalog, Digest};
 use serde::{Deserialize, Serialize};
@@ -25,14 +26,6 @@ fn gate(path: &Path) -> io::Result<File> {
         .read(true)
         .write(true)
         .open(path)
-}
-
-fn exclusive(file: &File) -> io::Result<bool> {
-    match file.try_lock() {
-        Ok(()) => Ok(true),
-        Err(std::fs::TryLockError::WouldBlock) => Ok(false),
-        Err(std::fs::TryLockError::Error(e)) => Err(e),
-    }
 }
 
 fn partial(name: &str) -> bool {
@@ -81,15 +74,14 @@ pub(super) struct StoreGuard {
     root: PathBuf,
     store_id: Digest,
     namespace: Digest,
-    _transaction: File,
+    _transaction: FileLock,
 }
 
 impl StoreGuard {
     pub(super) fn lock(root: &Path, namespace: Digest) -> io::Result<Self> {
         fs::create_dir_all(root)?;
         let root = root.canonicalize()?;
-        let transaction = gate(&root.join(LOCK))?;
-        transaction.lock()?;
+        let transaction = FileLock::exclusive(gate(&root.join(LOCK))?)?;
         let format = root.join("format");
         match store::read_if_present(&format)? {
             Some(data) if data == FORMAT => (),
@@ -124,21 +116,19 @@ impl StoreGuard {
 
     /// Acquire while holding the store transaction, then release the transaction
     /// during conversion. GC never waits for a builder while holding a transaction.
-    pub(super) fn build(root: &Path) -> io::Result<File> {
+    pub(super) fn build(root: &Path) -> io::Result<FileLock> {
         let file = gate(&root.join("build.lock"))?;
-        file.lock_shared()?;
-        Ok(file)
+        FileLock::shared(file)
     }
 
-    fn idle_builds(&self) -> io::Result<File> {
+    fn idle_builds(&self) -> io::Result<FileLock> {
         let file = gate(&self.root.join("build.lock"))?;
-        if !exclusive(&file)? {
-            return Err(io::Error::new(
+        FileLock::try_exclusive(file)?.ok_or_else(|| {
+            io::Error::new(
                 ErrorKind::WouldBlock,
                 "asset cook in progress; retry collection after it finishes",
-            ));
-        }
-        Ok(file)
+            )
+        })
     }
 
     fn pin_path(&self, git_dir: &Path, namespace: Digest) -> PathBuf {
@@ -251,9 +241,9 @@ impl StoreGuard {
         )
     }
 
-    /// Keep the returned file open for all consumers of this catalog generation,
+    /// Keep the returned guard alive for all consumers of this catalog generation,
     /// including asynchronous reads after a worktree moves to a newer selection.
-    pub(super) fn lease(&self, generation: Digest) -> io::Result<File> {
+    pub(super) fn lease(&self, generation: Digest) -> io::Result<FileLock> {
         if !self
             .root
             .join("catalogs")
@@ -268,8 +258,7 @@ impl StoreGuard {
         let directory = self.root.join("leases");
         fs::create_dir_all(&directory)?;
         let file = gate(&directory.join(generation.to_string()))?;
-        file.lock_shared()?;
-        Ok(file)
+        FileLock::shared(file)
     }
 
     fn protected(&self, skip: Option<&Path>) -> io::Result<BTreeSet<Digest>> {
@@ -283,7 +272,7 @@ impl StoreGuard {
             }
         }
         for (generation, path) in self.lease_files()? {
-            if !exclusive(&gate(&path)?)? {
+            if FileLock::try_exclusive(gate(&path)?)?.is_none() {
                 live.insert(generation);
             }
         }
@@ -458,7 +447,7 @@ impl StoreGuard {
             if removed == limit {
                 break;
             }
-            if exclusive(&gate(&path)?)? {
+            if FileLock::try_exclusive(gate(&path)?)?.is_some() {
                 fs::remove_file(path)?;
                 removed += 1;
             }
