@@ -56,19 +56,10 @@ fn capture(game: &Game, o: &Options, extent: [u32; 2], path: &Path) -> PipelineR
     let mut renderer = Renderer::headless(o.config, camera, visual.assets())?;
     visual.prepare_headless(&mut renderer)?;
     visual.sync(game, &camera)?;
-    let mut frame = renderer.begin_frame()?;
-    draw(&mut frame, &mut visual, game)?;
-    let ticket = frame.capture()?;
-    let mut pixels = vec![0; extent[0] as usize * extent[1] as usize * 4];
-    if !renderer.read_capture(&ticket, &mut pixels, TIMEOUT)? {
-        return Err("final scene capture timed out".into());
-    }
-    let mut output = BufWriter::new(File::create(path)?);
-    writeln!(output, "P6\n{} {}\n255", extent[0], extent[1])?;
-    for rgba in pixels.as_chunks::<4>().0 {
-        output.write_all(&rgba[..3])?;
-    }
-    output.flush()?;
+    let image = sashiko::capture::CaptureImage::render(&mut renderer, TIMEOUT, |frame| {
+        draw(frame, &mut visual, game)
+    })?;
+    image.write_ppm(BufWriter::new(File::create(path)?))?;
     let mut runtime = renderer.into_runtime()?;
     visual.release(&mut runtime)?;
     check_validation(runtime)
@@ -143,7 +134,7 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
                 } else if self.fixed {
                     benchmark_input(game)
                 } else {
-                    controls.next_input()
+                    input::next_input(controls)
                 };
                 if let Some(tape) = self.recorded {
                     tape.push(input);
@@ -221,7 +212,7 @@ pub fn run(
     if o.gpu_profile && o.metrics.is_none() || o.metrics.is_some() && o.frames.is_none() {
         return Err("profiling requires --metrics; metrics require --frames".into());
     }
-    let mut host = WindowHost::open(PLAY_TITLE, o.extent, Controls::default(), TIMEOUT)?;
+    let mut host = WindowHost::open(PLAY_TITLE, o.extent, input::controls(), TIMEOUT)?;
     let window = host.window();
     let physical = window.inner_size();
     let extent = [physical.width, physical.height];

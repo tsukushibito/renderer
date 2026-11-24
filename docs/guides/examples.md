@@ -4,6 +4,10 @@
 [必要なツール](development.md#必要なツール)、GPUの検証設定は
 [製品・開発用の検証設定](development.md#validation-settings)を参照してください。
 
+## ゲーム更新を Rust で書く
+
+小さな入力・更新ループは `cargo run --locked -p sashiko --example fixed_game` で実行できます。[サンプル](../../crates/sashiko/examples/fixed_game.rs)は右移動を 3 更新続け、その間のジャンプ押下を 1 回消費します。ゲームはキーとアクションの対応を `ActionMap` に渡し、固定更新ごとに `sample` で押下・解放・軸値を読み取ります。Windows ホストでは `WindowInput` が同じマップに物理キーの変化を渡します。
+
 <a id="survivor"></a>
 
 ## 研究施設のサバイバーを遊ぶ

@@ -205,3 +205,32 @@ impl<A: Keyboard> WindowHost<A> {
         Ok(())
     }
 }
+
+/// Keyboard bindings plus the host's quit key. Game code samples the action
+/// map once per simulation tick. Escape presses survive a subsequent focus loss.
+pub struct WindowInput<A> {
+    pub actions: crate::input::ActionMap<KeyCode, A>,
+    quit_key: KeyCode,
+    quit: bool,
+}
+impl<A: Eq + Copy> WindowInput<A> {
+    pub fn new(bindings: &[(KeyCode, A)], quit_key: KeyCode) -> Self {
+        Self {
+            actions: crate::input::ActionMap::new(bindings),
+            quit_key,
+            quit: false,
+        }
+    }
+}
+impl<A: Eq + Copy> Keyboard for WindowInput<A> {
+    fn key(&mut self, key: KeyCode, pressed: bool) {
+        self.quit |= pressed && key == self.quit_key;
+        self.actions.button(key, pressed);
+    }
+    fn quit_requested(&self) -> bool {
+        self.quit
+    }
+    fn focus_lost(&mut self) {
+        self.actions.clear();
+    }
+}
