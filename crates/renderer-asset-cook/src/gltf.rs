@@ -96,66 +96,8 @@ impl Source {
             }
         }
 
-        let scene = document
-            .default_scene()
-            .or_else(|| document.scenes().next())
-            .ok_or("missing scene")?;
-        let mut nodes: Vec<_> = scene.nodes().map(|node| (node, Mat4::IDENTITY)).collect();
-        nodes.reverse();
-        let mut visited = HashSet::new();
-        let mut parts = Vec::new();
-        while let Some((node, parent)) = nodes.pop() {
-            if !visited.insert(node.index()) {
-                return Err(format!("repeated or cyclic node {}", node.index()).into());
-            }
-            let transform = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
-            if !transform.is_finite() || transform.row(3) != glam::Vec4::W {
-                return Err(format!("node {} has invalid affine transform", node.index()).into());
-            }
-            if let Some(mesh) = node.mesh() {
-                for primitive in mesh.primitives() {
-                    if primitive.mode() != Mode::Triangles || primitive.morph_targets().len() != 0 {
-                        return Err(format!(
-                            "mesh {} primitive {} needs static triangles without morph targets",
-                            mesh.index(),
-                            primitive.index()
-                        )
-                        .into());
-                    }
-                    for (semantic, _) in primitive.attributes() {
-                        if !matches!(
-                            semantic,
-                            Semantic::Positions
-                                | Semantic::Normals
-                                | Semantic::Tangents
-                                | Semantic::TexCoords(0)
-                        ) {
-                            return Err(format!(
-                                "mesh {} unsupported attribute {semantic:?}",
-                                mesh.index()
-                            )
-                            .into());
-                        }
-                    }
-                    let material = material::SourceMaterial::read(primitive.material())?;
-                    parts.push(Part {
-                        mesh: mesh.index(),
-                        primitive: primitive.index(),
-                        transform,
-                        material,
-                    });
-                }
-            }
-            let children: Vec<_> = node.children().collect();
-            nodes.extend(children.into_iter().rev().map(|child| (child, transform)));
-        }
-        if parts.is_empty() {
-            return Err("scene contains no static mesh primitives".into());
-        }
-        let selected: HashSet<_> = parts
-            .iter()
-            .flat_map(|p| p.material.images.iter().flatten().map(|(i, _)| *i))
-            .collect();
+        let parts = scene_parts(&document)?;
+        let selected = selected_images(&parts);
         let mut images = Vec::new();
         for image in document.images() {
             let data = if selected.contains(&image.index()) {
@@ -230,7 +172,96 @@ impl Source {
     }
 }
 
-fn read_uri(source_root: &Path, directory: &Path, uri: &str) -> Result<Vec<u8>> {
+fn scene_parts(document: &Document) -> Result<Vec<Part>> {
+    let scene = document
+        .default_scene()
+        .or_else(|| document.scenes().next())
+        .ok_or("missing scene")?;
+    let mut nodes: Vec<_> = scene.nodes().map(|node| (node, Mat4::IDENTITY)).collect();
+    nodes.reverse();
+    let mut visited = HashSet::new();
+    let mut parts = Vec::new();
+    while let Some((node, parent)) = nodes.pop() {
+        if !visited.insert(node.index()) {
+            return Err(format!("repeated or cyclic node {}", node.index()).into());
+        }
+        let transform = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
+        if !transform.is_finite() || transform.row(3) != glam::Vec4::W {
+            return Err(format!("node {} has invalid affine transform", node.index()).into());
+        }
+        if let Some(mesh) = node.mesh() {
+            for primitive in mesh.primitives() {
+                if primitive.mode() != Mode::Triangles || primitive.morph_targets().len() != 0 {
+                    return Err(format!(
+                        "mesh {} primitive {} needs static triangles without morph targets",
+                        mesh.index(),
+                        primitive.index()
+                    )
+                    .into());
+                }
+                for (semantic, _) in primitive.attributes() {
+                    if !matches!(
+                        semantic,
+                        Semantic::Positions
+                            | Semantic::Normals
+                            | Semantic::Tangents
+                            | Semantic::TexCoords(0)
+                    ) {
+                        return Err(format!(
+                            "mesh {} unsupported attribute {semantic:?}",
+                            mesh.index()
+                        )
+                        .into());
+                    }
+                }
+                let material = material::SourceMaterial::read(primitive.material())?;
+                parts.push(Part {
+                    mesh: mesh.index(),
+                    primitive: primitive.index(),
+                    transform,
+                    material,
+                });
+            }
+        }
+        let children: Vec<_> = node.children().collect();
+        nodes.extend(children.into_iter().rev().map(|child| (child, transform)));
+    }
+    if parts.is_empty() {
+        return Err("scene contains no static mesh primitives".into());
+    }
+    Ok(parts)
+}
+
+fn selected_images(parts: &[Part]) -> HashSet<usize> {
+    parts
+        .iter()
+        .flat_map(|p| p.material.images.iter().flatten().map(|(i, _)| *i))
+        .collect()
+}
+
+/// Determine exactly which external files the importer opens for this scene.
+pub(super) fn external_paths(bytes: &[u8]) -> Result<Vec<std::path::PathBuf>> {
+    let gltf = gltf::Gltf::from_slice(bytes)?;
+    let selected = selected_images(&scene_parts(&gltf.document)?);
+    let buffers = gltf
+        .document
+        .buffers()
+        .filter_map(|buffer| match buffer.source() {
+            gltf::buffer::Source::Uri(uri) => Some(uri),
+            gltf::buffer::Source::Bin => None,
+        });
+    let images = gltf
+        .document
+        .images()
+        .filter(|image| selected.contains(&image.index()))
+        .filter_map(|image| match image.source() {
+            gltf::image::Source::Uri { uri, .. } => Some(uri),
+            gltf::image::Source::View { .. } => None,
+        });
+    buffers.chain(images).map(decode_uri).collect()
+}
+
+fn decode_uri(uri: &str) -> Result<std::path::PathBuf> {
     // External relative files only. Resolve escaped UTF-8 before checking the path.
     let mut bytes = uri.bytes();
     let mut decoded = Vec::new();
@@ -259,8 +290,12 @@ fn read_uri(source_root: &Path, directory: &Path, uri: &str) -> Result<Vec<u8>> 
     {
         return Err(format!("unsupported asset URI {uri}").into());
     }
+    Ok(name.into())
+}
+
+fn read_uri(source_root: &Path, directory: &Path, uri: &str) -> Result<Vec<u8>> {
     let resolved = directory
-        .join(name)
+        .join(decode_uri(uri)?)
         .canonicalize()
         .map_err(|e| format!("reading {uri}: {e}"))?;
     if !resolved.starts_with(source_root) {
