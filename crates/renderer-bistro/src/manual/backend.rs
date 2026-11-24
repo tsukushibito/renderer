@@ -119,6 +119,7 @@ fn limits(options: &Options, budget: &Budget) -> RuntimeLimits {
 fn with_working_set<T>(
     options: &Options,
     buffers: &[(u64, usize)],
+    samplers: &[renderer_core::program::SamplerDescriptor],
     images: &[(ImageDesc, usize)],
     prepare: impl FnOnce(WorkingSet<'_>) -> Result<T, ExecutionError>,
 ) -> Result<T, Error> {
@@ -138,6 +139,7 @@ fn with_working_set<T>(
         resources: &resources,
         raster: &raster_requests(options),
         compute: &compute_requests(options),
+        samplers,
     })?)
 }
 
@@ -153,9 +155,13 @@ fn require_hardware(_runtime: &Runtime) -> Result<(), Error> {
 
 pub(super) fn create(options: &Options, budget: &Budget) -> Result<Runtime, Error> {
     let config = config(options, budget)?;
-    let runtime = with_working_set(options, &budget.buffers, &budget.images, |set| {
-        Runtime::new(config, limits(options, budget), set)
-    })?;
+    let runtime = with_working_set(
+        options,
+        &budget.buffers,
+        &budget.samplers,
+        &budget.images,
+        |set| Runtime::new(config, limits(options, budget), set),
+    )?;
     require_hardware(&runtime)?;
     Ok(runtime)
 }
@@ -168,9 +174,13 @@ pub(super) fn open(
     presentation: renderer_core::PresentationConfig,
 ) -> Result<(Runtime, renderer_core::runtime::WindowPresenter), Error> {
     let config = config(options, budget)?;
-    let (runtime, presenter) = with_working_set(options, &budget.buffers, &budget.images, |set| {
-        Runtime::for_window(config, limits(options, budget), set, window, presentation)
-    })?;
+    let (runtime, presenter) = with_working_set(
+        options,
+        &budget.buffers,
+        &budget.samplers,
+        &budget.images,
+        |set| Runtime::for_window(config, limits(options, budget), set, window, presentation),
+    )?;
     require_hardware(&runtime)?;
     Ok((runtime, presenter))
 }
@@ -184,6 +194,7 @@ pub(super) fn resize(
     with_working_set(
         options,
         &budget.resized_buffers(options),
+        &budget.samplers,
         &Budget::frame_images(options),
         |set| runtime.prepare_working_set(set),
     )

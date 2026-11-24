@@ -21,13 +21,27 @@ pub struct MaterialTextures<T = ImageView> {
     pub emissive: T,
 }
 
+/// Sampling state for each material map. Masked shadows use the base-color sampler.
+pub type MaterialSamplers = MaterialTextures<SamplerDescriptor>;
+
+impl<T: Copy> MaterialTextures<T> {
+    pub const fn uniform(value: T) -> Self {
+        Self {
+            base_color: value,
+            normal: value,
+            orm: value,
+            emissive: value,
+        }
+    }
+}
+
 /// Graph-local factors and texture views. The alpha mode comes from the same
 /// upload that supplies the shader factors.
 #[derive(Clone, Copy, Debug)]
 pub struct GraphMaterial {
     factors: MaterialUniform,
     textures: MaterialTextures,
-    sampler: SamplerDescriptor,
+    samplers: MaterialSamplers,
 }
 
 impl GraphMaterial {
@@ -36,15 +50,13 @@ impl GraphMaterial {
         Self {
             factors,
             textures,
-            sampler: SamplerDescriptor::LinearRepeat,
+            samplers: MaterialSamplers::uniform(SamplerDescriptor::LinearRepeat),
         }
     }
 
-    /// Use one sampler for all maps in scene drawing, including the base-color
-    /// alpha sample used by the shadow pass.
     #[must_use]
-    pub const fn with_sampler(mut self, sampler: SamplerDescriptor) -> Self {
-        self.sampler = sampler;
+    pub const fn with_samplers(mut self, samplers: MaterialSamplers) -> Self {
+        self.samplers = samplers;
         self
     }
 
@@ -55,8 +67,8 @@ impl GraphMaterial {
     pub const fn factors(self) -> MaterialUniform {
         self.factors
     }
-    pub const fn sampler(self) -> SamplerDescriptor {
-        self.sampler
+    pub const fn samplers(self) -> MaterialSamplers {
+        self.samplers
     }
     pub const fn textures(self) -> MaterialTextures {
         self.textures
@@ -684,11 +696,11 @@ impl Bindings<'_> {
         let factors = material.factors.binding();
         let textures = material.textures;
         let base = image_binding(1, 0, textures.base_color);
-        let sampler = sampler_binding(1, 4, material.sampler);
+        let sampler = sampler_binding(1, 4, material.samplers.base_color);
         let mut bindings = [camera; MAX_RASTER_BINDINGS];
         let mut count = match self {
             Self::Scene { lighting, .. } => {
-                bindings[..7].copy_from_slice(&[
+                bindings[..10].copy_from_slice(&[
                     camera,
                     factors,
                     base,
@@ -696,11 +708,14 @@ impl Bindings<'_> {
                     image_binding(1, 2, textures.orm),
                     image_binding(1, 3, textures.emissive),
                     sampler,
+                    sampler_binding(1, 5, material.samplers.normal),
+                    sampler_binding(1, 6, material.samplers.orm),
+                    sampler_binding(1, 7, material.samplers.emissive),
                 ]);
-                let count = 7 + lighting.len();
-                bindings[7..count].copy_from_slice(lighting);
+                let count = 10 + lighting.len();
+                bindings[10..count].copy_from_slice(lighting);
                 if let Some(image) = surface {
-                    bindings[7] = image_binding(2, 0, image);
+                    bindings[10] = image_binding(2, 0, image);
                 }
                 count
             }

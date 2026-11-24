@@ -208,6 +208,38 @@ class CookTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "payload length"):
             dds_levels(raw[:-1], "base_color")
 
+    def test_mixed_wrap_and_filter_are_checked_in_material_context_at_cook(self):
+        data = {
+            "materials": [{"name": "armor", "pbrMetallicRoughness": {
+                "metallicRoughnessTexture": {"index": 0}}, "occlusionTexture": {"index": 0}}],
+            "textures": [{"source": 0, "sampler": 0}],
+            "samplers": [{"wrapS": 33648, "wrapT": 33071, "magFilter": 9728, "minFilter": 9986}],
+            "images": [{}],
+        }
+        materials, roles = cook_materials(data)
+        self.assertEqual(materials[0]["orm_texture"], 0)
+        self.assertEqual(roles, {0: "orm"})
+        data["samplers"][0]["wrapT"] = 1234
+        with self.assertRaisesRegex(ValueError, "armor slot metallicRoughnessTexture sampler 0: invalid wrapT=1234"):
+            cook_materials(data)
+
+    def test_shared_color_image_retains_alpha_and_independent_texture_references(self):
+        data = {"materials": [{"name": "color", "pbrMetallicRoughness": {"baseColorTexture": {"index": 1}},
+                               "emissiveTexture": {"index": 0}}],
+                "textures": [{"source": 0}, {"source": 0, "sampler": 0}],
+                "samplers": [{"wrapS": 33071}], "images": [{}]}
+        materials, roles = cook_materials(data)
+        self.assertEqual(roles, {0: "base_color"})
+        self.assertEqual((materials[0]["base_color_texture"], materials[0]["emissive_texture"]), (1, 0))
+
+    def test_incompatible_ao_sampler_is_reported_before_publishing(self):
+        data = {"materials": [{"name": "foil", "pbrMetallicRoughness": {"metallicRoughnessTexture": {"index": 0}},
+                               "occlusionTexture": {"index": 1}}],
+                "textures": [{"source": 0}, {"source": 0, "sampler": 0}],
+                "samplers": [{"wrapS": 33071}], "images": [{}]}
+        with self.assertRaisesRegex(ValueError, "foil slot occlusionTexture=1: packed ORM"):
+            cook_materials(data)
+
     def test_alpha_zero_and_missing_orm_scalar_are_not_repaired(self):
         data = {"materials": [{"name": "labels", "alphaMode": "BLEND", "doubleSided": True,
                                "pbrMetallicRoughness": {"baseColorFactor": [1, 1, 1, 0],

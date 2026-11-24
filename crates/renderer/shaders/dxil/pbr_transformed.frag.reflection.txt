@@ -19,7 +19,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: 30e7e4e3e5bacfd23939cf7dba79315a
+; shader hash: 7d11f2dbd558cae5f45701bc77bca768
 ;
 ; Pipeline Runtime Information:
 ;
@@ -137,8 +137,11 @@
 ; camera                            cbuffer      NA          NA     CB1            cb0     1
 ; ReflectionMetadata                cbuffer      NA          NA     CB2     cb5,space2     1
 ; material_sampler                  sampler      NA          NA      S0      s4,space1     1
-; environment_sampler               sampler      NA          NA      S1      s3,space2     1
-; shadow_sampler                    sampler      NA          NA      S2      s4,space3     1
+; normal_sampler                    sampler      NA          NA      S1      s5,space1     1
+; orm_sampler                       sampler      NA          NA      S2      s6,space1     1
+; emissive_sampler                  sampler      NA          NA      S3      s7,space1     1
+; environment_sampler               sampler      NA          NA      S4      s3,space2     1
+; shadow_sampler                    sampler      NA          NA      S5      s4,space3     1
 ; base_image                        texture     f32          2d      T0      t0,space1     1
 ; normal_image                      texture     f32          2d      T1      t1,space1     1
 ; orm_image                         texture     f32          2d      T2      t2,space1     1
