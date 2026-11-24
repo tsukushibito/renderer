@@ -22,6 +22,16 @@ cargo run --locked --release -p survivor -- --seed 506 --record run-input.json
 cargo run --locked --release -p survivor --no-default-features -- --headless --seed 506 --replay run-input.json
 ```
 
+通常プレイで初めて敵を撃破すると別の実験スーツが解放され、次に起動した通常プレイで反映されます。Windows の保存先は `%LOCALAPPDATA%/sashiko/survivor` です。`--profile-status` で解放状態と設定を JSON 表示できます。`--width`、`--height`、`--volume`（0〜1）を指定した通常プレイでは次回の設定も更新します。再生・記録・計測・ヘッドレスでは毎回既定設定から開始します。`--user-dir <directory>` を明示すると、その専用プロファイルで保存の試験ができます。
+
+配布用には release 実行ファイルと cook 済み素材をまとめます。出力には新しいディレクトリを指定します。パッケージ内で相対配置を保ったままディレクトリごと移動できます。検証コマンドはチェックサムを照合し、一時作業ディレクトリからプレイ・保存・再起動と設定復元を実行します。`--backend vulkan` または `--backend d3d12` を付けると、別プロセスで配布版のウィンドウを起動し画像の読み戻しまで確認します。
+
+```powershell
+cargo build --locked --release -p survivor
+python tools/package_game.py --project assets/survivor/package.json --exe target/release/survivor.exe --output build/survivor-package
+python tools/survivor/verify_package.py build/survivor-package --backend vulkan
+```
+
 終盤直行では実験体 500 体を活動させます。初回の計測条件と受入の範囲は[ゲームの制作計画](../design/survivor-game.md)にまとめています。
 
 <a id="bistro-baked-lighting"></a>

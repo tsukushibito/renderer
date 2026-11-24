@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "mount": "assets/survivor",
+  "files": [
+    "arena.json",
+    "characters/*.json",
+    "characters/*.skin",
+    "characters/*.rgba",
+    "characters/README.md",
+    "environment/README.md",
+    "environment/sources.json"
+  ]
+}

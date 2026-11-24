@@ -33,6 +33,7 @@ use winit::{
 pub struct Options {
     pub config: RuntimeConfig,
     pub extent: [u32; 2],
+    pub volume: f32,
     pub warmup: usize,
     pub frames: Option<usize>,
     pub metrics: Option<PathBuf>,
@@ -110,7 +111,11 @@ fn title(phase: Phase) -> &'static str {
     }
 }
 
-pub fn run(mut game: Game, o: Options) -> PipelineResult<Game> {
+pub fn run(
+    mut game: Game,
+    o: Options,
+    profile: &mut crate::profile::Player,
+) -> PipelineResult<Game> {
     let limit = match o.frames {
         Some(frames) => Some(frames.checked_add(o.warmup).ok_or("frame count overflow")?),
         None => o.replay.as_ref().map(Vec::len),
@@ -196,7 +201,8 @@ pub fn run(mut game: Game, o: Options) -> PipelineResult<Game> {
             } else {
                 controls.next_input()
             };
-            game.step(input);
+            let events = game.step(input);
+            profile.observe(events.kills)?;
             if let Some(tape) = &mut recorded {
                 tape.push(input);
             }
