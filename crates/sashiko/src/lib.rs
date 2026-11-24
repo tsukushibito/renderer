@@ -7,6 +7,7 @@ pub use renderer_asset as asset;
 
 pub mod animation;
 pub mod audio;
+pub mod authoring;
 pub mod effects;
 pub mod save;
 pub mod scene;
