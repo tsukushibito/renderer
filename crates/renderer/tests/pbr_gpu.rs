@@ -753,10 +753,17 @@ mod gpu {
             let green = capture(repeat, repeat);
             let hole = capture(mirror, repeat);
             let (r, depth) = probe(&red).unwrap();
-            let (g, _) = probe(&green).unwrap();
+            let [width, height] = super::scene::EXTENT;
+            let center = ((height / 2 * width + width / 2) * 4) as usize;
+            let g = &green.sdr[center..center + 4];
             assert!(r[0] > r[1].saturating_add(30), "{technique:?}: {r:?}");
             assert!(g[1] > g[0].saturating_add(30), "{technique:?}: {g:?}");
-            assert_ne!(depth, probe(&hole).unwrap().1, "{technique:?} alpha mask");
+            assert!(depth.unwrap() < 1.0);
+            assert_eq!(
+                hole.depth.as_ref().unwrap()[center..center + 4],
+                1.0_f32.to_le_bytes(),
+                "{technique:?} alpha mask"
+            );
             assert_eq!(
                 red.shadow_maps, green.shadow_maps,
                 "{technique:?} emission changed shadow"

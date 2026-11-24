@@ -77,7 +77,9 @@ Bistro のビルド記録では、シーンと照明の入力識別子、時刻�
 
 ### 実装状況と受け入れ手順
 
-現時点では [Bistro の cook](../../tools/bistro/cook.py) が配置を焼いた頂点・インデックスや画像を生成し、[Bistro のローダー](../../crates/renderer-bistro/src/shared/asset.rs)が素材を検査する。[訓練場の装備要求](../../crates/training-yard/src/yard/equipment.rs)は古い要求や削除済みの装着先への結果を破棄できる。描画用の [Model](../../crates/renderer/src/model.rs) は再利用できるが、[SceneAssets](../../crates/renderer/src/pipeline/setup.rs) はモデルの全 LOD を準備集合に含め、[現在の prepare_assets](../../crates/renderer/src/pipeline/setup/scene_renderer.rs) は転送バッチごとに GPU 完了を待つ。既存の実証範囲は [エンジン統合](../verification/current.md#engine-integration)と [Bistro の常駐・差し替え](../verification/current.md#bistro-residency)に記録している。
+[Bistro の cook](../../tools/bistro/cook.py) は配置を焼いた頂点・インデックスと、用途別の画像・サンプラーを生成する。静的照明は表面とプローブの実行条件を別々に記録し、世代索引から必要な照明ページを選んで読み込める。[訓練場の装備要求](../../crates/training-yard/src/yard/equipment.rs) は要求世代と装着先を追跡する。
+
+標準 Renderer では、起動時の `prepare_assets` とプレイ中の [AssetCandidate](../../crates/renderer/src/pipeline/setup/candidate.rs) が同じ転送・公開処理を使う。プレイ中は変更対象だけを候補に含め、`poll_candidate` に各回の転送バイト数・投入回数の上限を渡す。完了後に `commit_candidate` で全ビューへ反映し、最後の利用者が手放した資源を同時に退役させる。要求が古くなった場合は `cancel_candidate` を呼ぶ。ホストが Runtime を直接扱う間は自分のフレーム ID を指定して `wait_for_frame(id, Duration::ZERO)` を使い、アセット転送の完了は `poll_candidate` または `collect_assets` に回収させる。画像の常駐 mip 範囲を広げる手順は [SceneRenderer](../../crates/renderer/src/pipeline/setup/scene_renderer.rs)、検証範囲は[検証記録](../verification/current.md#asset-preparation)に示す。
 
 **初版で通す一本の経路。** glTF の静的装備一つをモデルローカル座標で cook し、標準 PBR 材質・画像を個別ファイルとカタログで訓練場に配布する。初版から ID と版、用途依存、変更分の要求、未完了・失敗、表示への採用を区別する。ロード画面では既存の同期準備を使える。プレイ中の無停止切替の合格には、増分投入と完了照会による実機確認が必要になる。
 
