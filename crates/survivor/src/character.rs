@@ -17,7 +17,7 @@ pub(super) fn catalog_path() -> PipelineResult<PathBuf> {
         .parent()
         .ok_or("executable directory unavailable")?
         .join(relative);
-    if packaged.try_exists()? {
+    if exe.with_file_name("sashiko-package.json").try_exists()? || packaged.try_exists()? {
         return Ok(packaged);
     }
     Ok(Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -36,6 +36,7 @@ pub(super) struct Actor {
 }
 
 pub(super) struct Cast {
+    pub catalog_digest: sashiko::asset::Digest,
     pub models: Vec<AnimatedModel>,
     pub actors: Vec<Actor>,
     pub subjects: Vec<usize>,
@@ -103,6 +104,7 @@ impl Cast {
         // The first entry is the player's animation, fixed at actor slot zero.
         subject_indices.remove(0);
         Ok(Self {
+            catalog_digest: catalog.definition_digest(),
             models,
             actors,
             subjects: subject_indices,

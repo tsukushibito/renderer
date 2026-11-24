@@ -97,6 +97,20 @@ pub struct Visual {
 }
 
 impl Visual {
+    pub fn content(&self, character: &str) -> crate::RecordedVisual {
+        crate::RecordedVisual {
+            character: character.into(),
+            catalog: self.cast.catalog_digest,
+            models: self
+                .cast
+                .models
+                .iter()
+                .map(|model| model.content_digests())
+                .collect(),
+            environment: surfaces::content_digests(),
+        }
+    }
+
     pub fn new(game: &Game, catalog: &std::path::Path, character: &str) -> PipelineResult<Self> {
         let mut meshes = Meshes::new(MeshCapacity {
             meshes: 20usize

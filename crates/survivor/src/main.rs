@@ -10,12 +10,22 @@ fn rate() -> NonZeroU32 {
     NonZeroU32::new(TICK_HZ).unwrap()
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct RecordedVisual {
+    character: String,
+    catalog: sashiko::asset::Digest,
+    models: Vec<[sashiko::asset::Digest; 2]>,
+    environment: [sashiko::asset::Digest; 6],
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct RunStart {
     arena: serde_json::Value,
     scenario: Scenario,
     seed: u64,
     rules_version: u32,
+    #[serde(default)]
+    visual: Option<RecordedVisual>,
 }
 
 impl RunStart {
@@ -183,6 +193,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             scenario,
             seed,
             rules_version: 1,
+            visual: None,
         })
     };
     let (initial, replay) = if let Some(path) = args.get_one::<PathBuf>("replay") {
@@ -264,6 +275,30 @@ fn play(
         "d3d12" => RuntimeConfig::D3D12(Default::default()),
         _ => return Err("selected backend is unavailable in this build".into()),
     };
+    let explicit = args
+        .get_one::<String>("character")
+        .map(String::as_str)
+        .or_else(|| args.get_flag("alternate-model").then_some("alternate"));
+    let character = if let Some(visual) = &initial.visual {
+        if explicit.is_some_and(|selected| selected != visual.character) {
+            return Err("requested character conflicts with recorded appearance".into());
+        }
+        visual.character.clone()
+    } else {
+        explicit
+            .unwrap_or_else(|| {
+                if profile.prefs.alternate_suit_unlocked
+                    && !["record", "replay", "frames"]
+                        .iter()
+                        .any(|key| args.contains_id(key))
+                {
+                    "alternate"
+                } else {
+                    "primary"
+                }
+            })
+            .to_owned()
+    };
     window::run(
         game,
         initial,
@@ -278,22 +313,7 @@ fn play(
             metrics: args.get_one("metrics").cloned(),
             capture: args.get_one("capture").cloned(),
             gpu_profile: args.get_flag("gpu-profile"),
-            character: args
-                .get_one::<String>("character")
-                .cloned()
-                .unwrap_or_else(|| {
-                    if args.get_flag("alternate-model")
-                        || (profile.prefs.alternate_suit_unlocked
-                            && !["record", "replay", "frames"]
-                                .iter()
-                                .any(|key| args.contains_id(key)))
-                    {
-                        "alternate"
-                    } else {
-                        "primary"
-                    }
-                    .into()
-                }),
+            character,
             catalog: args
                 .get_one::<PathBuf>("character-catalog")
                 .cloned()
@@ -332,6 +352,7 @@ mod tests {
             seed: 506,
             scenario: Scenario::Early,
             rules_version: 1,
+            visual: None,
         };
         let tape = Replay::new(start, rate(), vec![Input::default()]);
         let wire = serde_json::to_vec(&tape).unwrap();

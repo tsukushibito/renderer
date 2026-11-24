@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 
 
@@ -44,9 +45,41 @@ def verify(package, backend):
             raise ValueError("display settings did not persist")
         if backend:
             picture = cwd / "frame.ppm"
-            run("--window", "--frames", "2", "--backend", backend, "--capture", picture)
-            if not picture.read_bytes().startswith(b"P6\n640 360\n"):
+            tape = cwd / "record.json"
+            run("--window", "--frames", "2", "--backend", backend, "--alternate-model",
+                "--capture", picture, "--record", tape)
+            pixels = picture.read_bytes()
+            if not pixels.startswith(b"P6\n640 360\n"):
                 raise ValueError("unexpected packaged capture extent")
+            run("--window", "--frames", "2", "--backend", backend, "--replay", tape, "--capture", picture)
+            if picture.read_bytes() != pixels:
+                raise ValueError("recorded appearance was not reproduced")
+            reference = json.loads(tape.read_text(encoding="utf-8"))["initial"]["visual"]
+            if reference["character"] != "alternate" or not reference["models"]:
+                raise ValueError("recording omitted model identity")
+            # Change only a referenced texture, keeping catalog and file size intact.
+            catalog_dir = cwd / "characters"
+            shutil.copytree(package / "assets/survivor/characters", catalog_dir)
+            catalog = catalog_dir / "catalog.json"
+            color = catalog_dir / json.loads(catalog.read_text(encoding="utf-8"))["models"]["alternate"]["color"]
+            with color.open("r+b") as texture:
+                byte = texture.read(1)[0]
+                texture.seek(0)
+                texture.write(bytes([byte ^ 1]))
+            result = subprocess.run([exe, "--window", "--backend", backend, "--replay", tape,
+                                     "--character-catalog", catalog], cwd=cwd, capture_output=True,
+                                    text=True, timeout=120)
+            if result.returncode == 0 or "visual replay assets differ" not in result.stderr:
+                raise ValueError(f"changed texture was not diagnosed: {result.stderr}")
+            cpu_dir = cwd / "cpu-only"
+            cpu_dir.mkdir()
+            cpu_exe = cpu_dir / exe.name
+            shutil.copy2(exe, cpu_exe)
+            shutil.copy2(package / "sashiko-package.json", cpu_dir)
+            cpu = subprocess.run([cpu_exe, "--headless", "--replay", tape], cwd=cwd,
+                                 capture_output=True, text=True, check=True, timeout=120)
+            if json.loads(cpu.stdout)["tick"] != 2:
+                raise ValueError("CPU replay required external assets")
         return {"ticks": after["tick"], "restored": profile_state, "window_backend": backend}
 
 

@@ -26,6 +26,8 @@ cargo run --locked --release -p survivor -- --seed 506 --record run-input.json
 cargo run --locked --release -p survivor --no-default-features -- --headless --replay run-input.json
 ```
 
+画面から記録したリプレイは選択した外観、キャラクターカタログの定義、使用したメッシュ・ポーズ・色画像と床・鋼板の画像のハッシュを保持します。描画再生では選択を復元し、素材が変わった場合は開始時に該当する記録との不一致を報告します。同じ素材を別の場所に置く場合は `--character-catalog` でその場所を指定します。CPU 再生は記録内のシーンを使い、外観のファイルを必要としません。
+
 通常プレイで初めて敵を撃破すると別の実験スーツが解放され、次に起動した通常プレイで反映されます。Windows の保存先は `%LOCALAPPDATA%/sashiko/survivor` です。`--profile-status` で解放状態と設定を JSON 表示できます。`--width`、`--height`、`--volume`（0〜1）を指定した通常プレイでは次回の設定も更新します。再生・記録・計測・ヘッドレスでは毎回既定設定から開始します。`--user-dir <directory>` を明示すると、その専用プロファイルで保存の試験ができます。
 
 配布用には release 実行ファイルと cook 済み素材をまとめます。出力には新しいディレクトリを指定します。パッケージ内で相対配置を保ったままディレクトリごと移動できます。検証コマンドはチェックサムを照合し、一時作業ディレクトリからプレイ・保存・再起動と設定復元を実行します。`--backend vulkan` または `--backend d3d12` を付けると、別プロセスで配布版のウィンドウを起動し画像の読み戻しまで確認します。
