@@ -51,7 +51,7 @@ def verify(package, backend):
             pixels = picture.read_bytes()
             if not pixels.startswith(b"P6\n640 360\n"):
                 raise ValueError("unexpected packaged capture extent")
-            run("--window", "--backend", backend, "--replay", tape, "--capture", picture)
+            run("--window", "--frames", "2", "--backend", backend, "--replay", tape, "--capture", picture)
             if picture.read_bytes() != pixels:
                 raise ValueError("recorded appearance was not reproduced")
             reference = json.loads(tape.read_text(encoding="utf-8"))["initial"]["visual"]
@@ -71,7 +71,15 @@ def verify(package, backend):
                                     text=True, timeout=120)
             if result.returncode == 0 or "visual replay assets differ" not in result.stderr:
                 raise ValueError(f"changed texture was not diagnosed: {result.stderr}")
-            run("--headless", "--replay", tape)
+            cpu_dir = cwd / "cpu-only"
+            cpu_dir.mkdir()
+            cpu_exe = cpu_dir / exe.name
+            shutil.copy2(exe, cpu_exe)
+            shutil.copy2(package / "sashiko-package.json", cpu_dir)
+            cpu = subprocess.run([cpu_exe, "--headless", "--replay", tape], cwd=cwd,
+                                 capture_output=True, text=True, check=True, timeout=120)
+            if json.loads(cpu.stdout)["tick"] != 2:
+                raise ValueError("CPU replay required external assets")
         return {"ticks": after["tick"], "restored": profile_state, "window_backend": backend}
 
 
