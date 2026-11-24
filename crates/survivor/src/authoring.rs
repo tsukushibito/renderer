@@ -106,7 +106,7 @@ impl Marker {
     }
     fn update(&mut self, _id: EntityId, ctx: &mut RuleContext) {
         let occupied =
-            crate::arena::distance_squared(ctx.player, ctx.marker) < self.radius * self.radius;
+            sashiko::space::distance_squared(ctx.player, ctx.marker) < self.radius * self.radius;
         ctx.entered_marker |= occupied && !self.occupied;
         self.occupied = occupied;
     }
