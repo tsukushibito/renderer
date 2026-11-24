@@ -1,12 +1,15 @@
 //! Load-time skin preparation and deterministic playback of sampled model-space poses.
 use renderer_asset::{AssetId, Digest};
 use serde::{Deserialize, Serialize};
+mod transition;
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
     num::NonZeroU32,
     path::{Component, Path, PathBuf},
 };
+pub use transition::Crossfade;
+use transition::Skeleton;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -193,16 +196,19 @@ impl<'a> AnimationClip<'a> {
     /// Sample a tick offset relative to playback start; resetting the offset
     /// restarts playback. Integral arithmetic preserves replay timing.
     pub fn sample(&self, elapsed_ticks: u64, tick_rate: NonZeroU32) -> &'a [Transform] {
-        let sample = u128::from(elapsed_ticks) * u128::from(self.clip.hz.get())
-            / u128::from(tick_rate.get());
+        let first = self.sample_index(u128::from(elapsed_ticks), tick_rate) * self.joints;
+        &self.poses[first..first + self.joints]
+    }
+
+    fn sample_index(&self, elapsed_ticks: u128, tick_rate: NonZeroU32) -> usize {
+        let sample = elapsed_ticks * u128::from(self.clip.hz.get()) / u128::from(tick_rate.get());
         let count = self.clip.frames as u128;
         let index = if self.clip.looping {
             sample % count
         } else {
             sample.min(count - 1)
         };
-        let first = index as usize * self.joints;
-        &self.poses[first..first + self.joints]
+        index as usize
     }
 }
 
@@ -219,6 +225,7 @@ pub struct SkinnedModel {
     joints: usize,
     frames: usize,
     poses: Vec<Transform>,
+    skeleton: Option<Skeleton>,
 }
 
 fn record_bytes<'a>(input: &mut &'a [u8], count: usize, stride: usize) -> PipelineResult<&'a [u8]> {
@@ -238,7 +245,14 @@ fn floats<const N: usize>(record: &[u8], offset: usize) -> [f32; N] {
 impl SkinnedModel {
     /// Decode the cooked mesh and joint matrix stream at asset preparation time.
     pub fn decode(input: &[u8]) -> PipelineResult<Self> {
-        let mut data = input.strip_prefix(b"SURSKIN1").ok_or("character schema")?;
+        let (mut data, has_skeleton) = if let Some(payload) = input.strip_prefix(b"SURSKIN2") {
+            (payload, true)
+        } else {
+            (
+                input.strip_prefix(b"SURSKIN1").ok_or("character schema")?,
+                false,
+            )
+        };
         let header = record_bytes(&mut data, 4, 4)?;
         let [points, elements, joints, frames] = std::array::from_fn(|i| {
             u32::from_le_bytes(header[i * 4..i * 4 + 4].try_into().unwrap()) as usize
@@ -250,6 +264,11 @@ impl SkinnedModel {
         let index_bytes = record_bytes(&mut data, elements, 4)?;
         let all_joints = frames.checked_mul(joints).ok_or("walk clip overflow")?;
         let matrices = record_bytes(&mut data, all_joints, 48)?;
+        let skeleton = if has_skeleton {
+            Some(Skeleton::decode(record_bytes(&mut data, joints, 52)?)?)
+        } else {
+            None
+        };
         if !data.is_empty() {
             return Err("trailing character data".into());
         }
@@ -294,6 +313,7 @@ impl SkinnedModel {
             }))?);
         }
         Ok(Self {
+            skeleton,
             vertices,
             indices,
             weights,

@@ -147,10 +147,21 @@ def cook(src, dest, variant, recipe):
 
     dest.mkdir(parents=True, exist_ok=True)
     with (dest / f"{variant}.skin").open("wb") as f:
-        f.write(struct.pack("<8s4I", b"SURSKIN1", len(vertices), len(indices), len(names), frames))
+        f.write(struct.pack("<8s4I", b"SURSKIN2", len(vertices), len(indices), len(names), frames))
         f.writelines(vertices)
         f.write(struct.pack(f"<{len(indices)}I", *indices))
         f.write(poses)
+        # Skin matrices map mesh-space bind points to posed mesh-space points.
+        # Preserve bind frames and nearest retained parents for local-space blends.
+        joint_ids = {name: i for i, name in enumerate(names)}
+        for name in names:
+            bone = rig.data.bones[name]
+            parent = bone.parent
+            while parent and parent.name not in joint_ids:
+                parent = parent.parent
+            parent_id = joint_ids[parent.name] if parent else 0xffffffff
+            bind = to_game @ bone.matrix_local
+            f.write(struct.pack("<I12f", parent_id, *(x for row in list(bind)[:3] for x in row)))
     atlas = np.concatenate([image_bytes(src / recipe["albedo"], 224),
                             image_bytes(src / "T_Eye_Brown.png", 32)], axis=1)
     (dest / f"{variant}.rgba").write_bytes(atlas.tobytes())
