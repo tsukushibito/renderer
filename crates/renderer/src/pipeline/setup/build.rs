@@ -51,6 +51,7 @@ impl<'a, R: BorrowMut<Runtime>> RendererBuild<'a, R> {
                 definitions: plan.definitions,
                 transfers: super::candidate::Transfers::new(runtime.borrow_mut().limits().frames),
                 configured: plan.preparation,
+                streaming: None,
                 retired: None,
                 driver: plan.driver,
                 pool,

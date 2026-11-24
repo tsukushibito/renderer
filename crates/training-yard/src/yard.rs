@@ -532,14 +532,38 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(root.join("catalogs"))?;
-        let mut yard = Yard::with_asset_catalog(&fixture, 2)?;
+        std::fs::create_dir_all(root.join("objects"))?;
+        for entry in std::fs::read_dir(fixture.join("objects"))? {
+            let entry = entry?;
+            std::fs::copy(entry.path(), root.join("objects").join(entry.file_name()))?;
+        }
         let old = Generation::open(&fixture)?;
+        let original = old.id().to_string();
+        std::fs::copy(
+            fixture.join("catalogs").join(&original),
+            root.join("catalogs").join(&original),
+        )?;
+        std::fs::copy(fixture.join("current"), root.join("current"))?;
+        let mut yard = Yard::with_asset_catalog(&root, 2)?;
         let mut catalog: Catalog = serde_json::from_slice(&std::fs::read(
             fixture.join("catalogs").join(old.id().to_string()),
         )?)?;
         let id = EquipmentAsset::Wide.id();
         let second = catalog.assets[&EquipmentAsset::Narrow.id()].primitives[0].clone();
         catalog.assets.get_mut(&id).unwrap().primitives.push(second);
+        let triangle = renderer_asset::AssetId::from_u128(6);
+        let mut alternate = catalog.assets[&EquipmentAsset::Narrow.id()].clone();
+        let mesh = &mut alternate.primitives[0].mesh;
+        let mut data = renderer_asset::MeshBlob::decode(&std::fs::read(
+            root.join("objects").join(mesh.hash.to_string()),
+        )?)?;
+        data.vertices.truncate(3);
+        data.indices = vec![0, 1, 2];
+        let bytes = data.encode()?;
+        mesh.hash = Digest::of(&bytes);
+        mesh.size = bytes.len() as u64;
+        std::fs::write(root.join("objects").join(mesh.hash.to_string()), bytes)?;
+        catalog.assets.insert(triangle, alternate);
         let publish = |c: &Catalog| -> PipelineResult<Generation> {
             let bytes = serde_json::to_vec(c)?;
             let hash = Digest::of(&bytes);
@@ -600,6 +624,50 @@ mod tests {
             &mut pixels,
             std::time::Duration::from_secs(15)
         )?);
+        // Force a failure after the comparison material and all of its images have
+        // been registered. Retrying after slots are freed must make forward progress.
+        let comparison = renderer_asset::AssetId::from_u128(5);
+        let positions = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]];
+        let vertices = positions.map(|position| {
+            super::PbrVertex::new(position, [0., 0., 1.], [1., 0., 0., 1.], [0., 0.]).unwrap()
+        });
+        let mut fillers = Vec::new();
+        while let Ok(handle) = yard
+            .meshes
+            .create(super::MeshData::pbr(&vertices, &[0, 1, 2])?)
+        {
+            fillers.push(handle);
+        }
+        for _ in 0..3 {
+            yard.request_equipment(0, comparison)?;
+            poll(&mut yard, &mut renderer, parts.clone())?;
+            assert!(yard.load_error().is_some());
+            assert_eq!(yard.saved_equipment(0), Some(id));
+        }
+        for handle in fillers {
+            yard.meshes.remove(handle)?;
+        }
+        let mut previous = parts;
+        for next in [comparison, triangle, id, comparison, triangle, id] {
+            yard.request_equipment(0, next)?;
+            poll(&mut yard, &mut renderer, previous)?;
+            assert_eq!(
+                yard.saved_equipment(0),
+                Some(next),
+                "{:?}",
+                yard.load_error()
+            );
+            previous = yard.equipment.objects(0).collect();
+            let mut frame = renderer.begin_frame()?;
+            frame.draw_scene(yard.extract(&camera, &mut objects), 1.)?;
+            let capture = frame.capture()?;
+            assert!(renderer.read_capture(
+                &capture,
+                &mut pixels,
+                std::time::Duration::from_secs(15)
+            )?);
+        }
+        let parts = previous;
         catalog.assets.get_mut(&id).unwrap().primitives[1].mesh.hash =
             Digest::of(b"missing second primitive");
         yard.set_asset_generation(publish(&catalog)?);

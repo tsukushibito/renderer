@@ -1,5 +1,6 @@
-//! Incremental publication of one armor primitive per actor's equipment slot.
+//! Incremental publication of an armor item per actor's equipment slot.
 mod cooked;
+mod resources;
 use cooked::LoadedPart;
 use renderer::{
     core::{
@@ -15,6 +16,7 @@ use renderer::{
     },
 };
 use renderer_asset::{AssetId, Digest, Generation, ObjectBytes, ObjectStore, Primitive};
+use resources::{Requirements, Reservations};
 use std::collections::VecDeque;
 use std::{
     collections::HashMap,
@@ -42,8 +44,8 @@ fn can_retry(recovery: renderer::CapacityRecovery) -> bool {
 
 pub(crate) fn reserve(prep: &mut Preparation) -> Result<(), GraphError> {
     for size in [
-        4 * renderer::passes::pbr::VERTEX_BYTES as u64,
-        6 * 4,
+        resources::QUAD_VERTEX_BYTES,
+        resources::QUAD_INDEX_BYTES,
         MaterialUniform::DESC.size,
     ] {
         prep.reserve_buffer(BufferDesc { size }, ITEMS * MAX_PARTS)?;
@@ -96,6 +98,7 @@ struct Part {
 
 type Armor = Vec<Part>;
 struct Decoded {
+    prepared: bool,
     remaining: VecDeque<LoadedPart>,
     parts: Armor,
     images: [Option<Arc<ManagedImage>>; 4],
@@ -140,6 +143,8 @@ pub(crate) struct Equipment {
     generation: Arc<Generation>,
     pub store: ObjectStore,
     images: HashMap<Digest, Weak<ManagedImage>>,
+    requirements: [Option<Requirements>; ITEMS],
+    reservations: Reservations,
     pending_image: Option<(FrameId, Arc<ManagedImage>)>,
     cursor: usize,
     collect: bool,
@@ -160,6 +165,8 @@ impl Equipment {
             generation: Arc::new(Generation::open(root)?),
             store: ObjectStore::new(root),
             images: HashMap::new(),
+            requirements: Default::default(),
+            reservations: Default::default(),
             pending_image: None,
             cursor: 0,
             collect: false,
@@ -342,6 +349,7 @@ impl Equipment {
     fn empty(&mut self, i: usize) {
         self.items[i] = State::Empty;
         self.keys[i] = None;
+        self.requirements[i] = None;
         self.images.retain(|_, w| w.strong_count() > 0);
     }
     fn fail(&mut self, i: usize, error: String) {
@@ -386,6 +394,24 @@ impl Equipment {
             }
             let wanted = self.wanted(i);
             let admitted = self.admitted(i);
+            if matches!(&self.items[i], State::Decoded(d) if !d.prepared) && admitted {
+                let reservations = Reservations::for_items(self.requirements.iter().flatten());
+                if reservations != self.reservations {
+                    if let Err(error) = renderer.asset_renderer().replace_asset_reservations(
+                        IMAGE_NAME,
+                        &reservations.buffers,
+                        &reservations.images,
+                        &reservations.samplers,
+                    ) {
+                        return self.handle_upload_error(i, error);
+                    }
+                    self.reservations = reservations;
+                }
+                let State::Decoded(decoded) = &mut self.items[i] else {
+                    unreachable!()
+                };
+                decoded.prepared = true;
+            }
             match &mut self.items[i] {
                 State::Reading(worker) if worker.is_finished() && (admitted || !wanted) => {
                     let State::Reading(worker) = std::mem::take(&mut self.items[i]) else {
@@ -399,7 +425,15 @@ impl Equipment {
                             .unwrap_or_else(|_| Err("equipment reader panicked".into()))
                         {
                             Ok(loaded) => {
+                                match Requirements::for_parts(&loaded) {
+                                    Ok(needed) => self.requirements[i] = Some(needed),
+                                    Err(error) => {
+                                        self.fail(i, error);
+                                        return Ok(());
+                                    }
+                                }
                                 self.items[i] = State::Decoded(Decoded {
+                                    prepared: false,
                                     remaining: loaded.into(),
                                     parts: Vec::new(),
                                     images: Default::default(),
@@ -429,28 +463,11 @@ impl Equipment {
                             continue;
                         }
                         let bytes = &map.object.image()?.pixels;
-                        if bytes.len() > IMAGE_BUDGET_BYTES {
-                            self.fail(i,format!("image transfer exceeds the training-yard budget of {IMAGE_BUDGET_BYTES} bytes"));
-                            return Ok(());
-                        }
                         let (id, image) = match upload(renderer, IMAGE_NAME, map.desc, bytes) {
                             Ok(uploaded) => uploaded,
-                            Err(error) => {
-                                if let Some(runtime) =
-                                    error.downcast_ref::<renderer::core::runtime::ExecutionError>()
-                                {
-                                    if runtime.capacity().is_some_and(|c| can_retry(c.recovery)) {
-                                        self.collect = true;
-                                        return Ok(());
-                                    }
-                                    if matches!(runtime.kind(),renderer::core::runtime::ExecutionErrorKind::Unsupported|renderer::core::runtime::ExecutionErrorKind::InvalidInput|renderer::core::runtime::ExecutionErrorKind::CapacityExhausted) {
-                                        self.fail(i,error.to_string());
-                                        return Ok(())
-                                    }
-                                }
-                                return Err(error);
-                            }
+                            Err(error) => return self.handle_upload_error(i, error),
                         };
+                        self.images.retain(|_, image| image.strong_count() != 0);
                         let image = Arc::new(image);
                         self.images.insert(map.hash, Arc::downgrade(&image));
                         *slot = Some(image.clone());
@@ -528,6 +545,29 @@ impl Equipment {
             return Ok(());
         }
         Ok(())
+    }
+    fn handle_upload_error(
+        &mut self,
+        i: usize,
+        error: Box<dyn std::error::Error>,
+    ) -> PipelineResult<()> {
+        use renderer::core::runtime::{ExecutionError, ExecutionErrorKind};
+        if let Some(runtime) = error.downcast_ref::<ExecutionError>() {
+            if runtime.capacity().is_some_and(|c| can_retry(c.recovery)) {
+                self.collect = true;
+                return Ok(());
+            }
+            if matches!(
+                runtime.kind(),
+                ExecutionErrorKind::Unsupported
+                    | ExecutionErrorKind::InvalidInput
+                    | ExecutionErrorKind::CapacityExhausted
+            ) {
+                self.fail(i, error.to_string());
+                return Ok(());
+            }
+        }
+        Err(error)
     }
     fn register(
         &mut self,
