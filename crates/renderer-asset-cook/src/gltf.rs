@@ -50,7 +50,7 @@ pub(crate) struct Source {
 }
 
 impl Source {
-    pub(crate) fn open(path: &Path) -> Result<Self> {
+    pub(crate) fn open(path: &Path, source_root: &Path) -> Result<Self> {
         let bytes = fs::read(path)?;
         let gltf = gltf::Gltf::from_slice(&bytes)?;
         let document = gltf.document;
@@ -76,7 +76,7 @@ impl Source {
         let mut buffers = Vec::new();
         for buffer in document.buffers() {
             let data = match buffer.source() {
-                gltf::buffer::Source::Uri(uri) => read_uri(&root, uri)?,
+                gltf::buffer::Source::Uri(uri) => read_uri(source_root, &root, uri)?,
                 gltf::buffer::Source::Bin => gltf.blob.clone().ok_or("missing BIN chunk")?,
             };
             if data.len() < buffer.length() {
@@ -160,7 +160,7 @@ impl Source {
         for image in document.images() {
             let data = if selected.contains(&image.index()) {
                 Some(match image.source() {
-                    gltf::image::Source::Uri { uri, .. } => read_uri(&root, uri)?,
+                    gltf::image::Source::Uri { uri, .. } => read_uri(source_root, &root, uri)?,
                     gltf::image::Source::View { view, .. } => buffers[view.buffer().index()]
                         [view.offset()..view.offset() + view.length()]
                         .to_vec(),
@@ -230,7 +230,7 @@ impl Source {
     }
 }
 
-fn read_uri(root: &Path, uri: &str) -> Result<Vec<u8>> {
+fn read_uri(source_root: &Path, directory: &Path, uri: &str) -> Result<Vec<u8>> {
     // External relative files only. Resolve escaped UTF-8 before checking the path.
     let mut bytes = uri.bytes();
     let mut decoded = Vec::new();
@@ -250,17 +250,20 @@ fn read_uri(root: &Path, uri: &str) -> Result<Vec<u8>> {
     let name = std::str::from_utf8(&decoded)?;
     if name.contains([':', '\\', '?', '#', '\0'])
         || name.is_empty()
-        || Path::new(name)
-            .components()
-            .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+        || Path::new(name).components().any(|c| {
+            !matches!(
+                c,
+                Component::Normal(_) | Component::CurDir | Component::ParentDir
+            )
+        })
     {
         return Err(format!("unsupported asset URI {uri}").into());
     }
-    let resolved = root
+    let resolved = directory
         .join(name)
         .canonicalize()
         .map_err(|e| format!("reading {uri}: {e}"))?;
-    if !resolved.starts_with(root) {
+    if !resolved.starts_with(source_root) {
         return Err(format!("asset URI escapes source directory: {uri}").into());
     }
     Ok(fs::read(resolved)?)
@@ -275,7 +278,7 @@ mod tests {
     fn comparison_equipment_preserves_mikk_uvs_and_mirrored_basis() -> Result<()> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../training-yard/assets/equipment/source/comparison.gltf");
-        let mut source = Source::open(&path)?;
+        let mut source = Source::open(&path, &path.parent().unwrap().canonicalize()?)?;
         let mesh = MeshBlob::decode(&source.cook_mesh(0)?)?;
         let first = mesh.vertices[mesh.indices[0] as usize];
         // Independently read back from the Bistro cook of this fixture, in corner order.

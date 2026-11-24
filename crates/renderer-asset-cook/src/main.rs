@@ -116,8 +116,13 @@ fn discover(directory: &Path, sources: &mut BTreeMap<AssetId, PathBuf>) -> Resul
     Ok(())
 }
 
-fn cook_equipment(id: AssetId, path: &Path, cache: &mut Cache<'_>) -> Result<Equipment, Error> {
-    let src = gltf::Source::open(path)?;
+fn cook_equipment(
+    id: AssetId,
+    path: &Path,
+    source_root: &Path,
+    cache: &mut Cache<'_>,
+) -> Result<Equipment, Error> {
+    let src = gltf::Source::open(path, source_root)?;
     if src.len() == 0 {
         return Err("equipment has no triangle primitives".into());
     }
@@ -150,11 +155,12 @@ fn cook_equipment(id: AssetId, path: &Path, cache: &mut Cache<'_>) -> Result<Equ
 
 fn cook(source: &Path, output: &Path, cache_dir: &Path) -> Result<Report, Error> {
     let mut sources = BTreeMap::new();
-    discover(source, &mut sources)?;
+    let source = source.canonicalize()?;
+    discover(&source, &mut sources)?;
     let mut cache = Cache::new(cache_dir, output)?;
     let mut assets = BTreeMap::new();
     for (id, path) in sources {
-        let asset = cook_equipment(id, &path, &mut cache)
+        let asset = cook_equipment(id, &path, &source, &mut cache)
             .map_err(|e| format!("cooking {id} ({}): {e}", path.display()))?;
         assets.insert(id, asset);
     }

@@ -12,6 +12,38 @@ type Result<T = ()> = std::result::Result<T, Box<dyn Error>>;
 
 struct Project(PathBuf);
 
+#[test]
+fn moved_equipment_can_share_dependencies_from_its_parent_directory() -> Result {
+    let project = Project::new()?;
+    let before = project.report()?;
+    let root = project.0.join("source");
+    let nested = root.join("armor");
+    fs::create_dir(&nested)?;
+    let original = root.join("narrow.gltf");
+    let mut document: Value = serde_json::from_slice(&fs::read(&original)?)?;
+    for key in ["buffers", "images"] {
+        for entry in document[key].as_array_mut().unwrap() {
+            let relative = entry["uri"].as_str().unwrap();
+            entry["uri"] = Value::String(format!("../{relative}"));
+        }
+    }
+    fs::rename(&original, nested.join("narrow.gltf"))?;
+    fs::rename(
+        root.join("narrow.gltf.meta.json"),
+        nested.join("narrow.gltf.meta.json"),
+    )?;
+    fs::write(nested.join("narrow.gltf"), serde_json::to_vec(&document)?)?;
+    assert_eq!(project.report()?["generation"], before["generation"]);
+
+    fs::copy(root.join("paint.png"), project.0.join("outside.png"))?;
+    document["images"][0]["uri"] = Value::String("../../outside.png".into());
+    fs::write(nested.join("narrow.gltf"), serde_json::to_vec(&document)?)?;
+    let result = project.cook()?;
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("escapes source directory"));
+    Ok(())
+}
+
 impl Project {
     fn new() -> Result<Self> {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
