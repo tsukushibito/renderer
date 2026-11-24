@@ -163,7 +163,7 @@ impl PbrMaterial {
     /// The asset owner retains their runtime registrations while building future frames.
     pub fn resident(
         uniform: &pbr::ResidentMaterialUniform,
-        textures: MaterialTextures<ImportImage>,
+        textures: MaterialTextures<impl Into<MaterialTexture>>,
         samplers: MaterialSamplers,
     ) -> Result<Self, GraphError> {
         Self::from_source(
