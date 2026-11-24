@@ -1403,6 +1403,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sashiko"
+version = "0.1.0"
+dependencies = [
+ "renderer-asset",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1532,6 +1541,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "renderer",
+ "sashiko",
  "serde",
  "serde_json",
  "winit",

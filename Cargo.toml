@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/sashiko",
     "crates/renderer-asset",
     "crates/renderer-core",
     "crates/renderer-bake",
