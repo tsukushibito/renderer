@@ -64,40 +64,83 @@ impl BakeScene {
     /// coefficients use the production CPU bake's rays, weights and summation order.
     /// Evaluate RGB irradiance with [1, x, y, z, xy, yz, xz, x²-y², 3z²-1] for
     /// a unit surface normal (x,y,z). The result already includes the cosine integral.
+    /// Optional ray output contains little-endian f32 triples in this order:
+    /// all world-space directions, then incident RGB radiance at each position
+    /// in input order and, within each position, the same direction order.
     pub fn probe_sh_reference(
         &self,
         positions: &[Vec3],
         light: crate::Lighting,
         samples: u32,
-    ) -> Result<Vec<[Vec3; 9]>, BakeError> {
+        mut ray_output: Option<&mut dyn std::io::Write>,
+    ) -> Result<Vec<[Vec3; 9]>, Box<dyn std::error::Error>> {
         light.validate(self)?;
         if samples == 0 || positions.iter().any(|&p| !crate::finite(p)) {
-            return Err(BakeError(
-                "invalid probe reference position or sample count",
-            ));
+            return Err(BakeError("invalid probe reference position or sample count").into());
+        }
+        fn write_triple(output: &mut dyn std::io::Write, v: Vec3) -> std::io::Result<()> {
+            for component in v {
+                output.write_all(&component.to_le_bytes())?;
+            }
+            Ok(())
+        }
+        let capture = ray_output.is_some();
+        if let Some(output) = &mut ray_output {
+            for j in 0..samples {
+                write_triple(*output, probe_ray(j, samples))?;
+            }
         }
         let workers = std::thread::available_parallelism().map_or(1, usize::from);
-        let chunk = positions.len().div_ceil(workers).max(1);
+        // With a dump, keep at most 16 MiB of pending ray data or one probe.
+        let batch_size = if capture {
+            (16 * 1024 * 1024 / size_of::<Vec3>() / samples as usize).max(1)
+        } else {
+            positions.len().max(1)
+        };
         let mut result = vec![[[0.; 3]; 9]; positions.len()];
-        std::thread::scope(|scope| {
-            for (positions, coefficients) in positions.chunks(chunk).zip(result.chunks_mut(chunk)) {
-                scope.spawn(move || {
-                    for (&position, sh) in positions.iter().zip(coefficients) {
-                        for j in 0..samples {
-                            let dir = probe_ray(j, samples);
-                            let mut seed = j;
-                            let radiance = self.incoming(position, dir, light, &mut seed);
-                            let basis = linear_sh(dir).into_iter().chain(quadratic_sh(dir));
-                            for (coefficient, weight) in sh.iter_mut().zip(basis) {
-                                for (channel, l) in radiance.into_iter().enumerate() {
-                                    coefficient[channel] += l * (PI / samples as f32) * weight;
+        for (batch, out) in positions
+            .chunks(batch_size)
+            .zip(result.chunks_mut(batch_size))
+        {
+            let chunk = batch.len().div_ceil(workers);
+            std::thread::scope(|scope| -> Result<(), Box<dyn std::error::Error>> {
+                let mut jobs = Vec::new();
+                for (positions, coefficients) in batch.chunks(chunk).zip(out.chunks_mut(chunk)) {
+                    jobs.push(scope.spawn(move || {
+                        let mut radiances = Vec::new();
+                        if capture {
+                            radiances.try_reserve_exact(positions.len() * samples as usize)?;
+                        }
+                        for (&position, sh) in positions.iter().zip(coefficients) {
+                            for j in 0..samples {
+                                let dir = probe_ray(j, samples);
+                                let mut seed = j;
+                                let radiance = self.incoming(position, dir, light, &mut seed);
+                                if capture {
+                                    radiances.push(radiance);
+                                }
+                                let basis = linear_sh(dir).into_iter().chain(quadratic_sh(dir));
+                                for (coefficient, weight) in sh.iter_mut().zip(basis) {
+                                    for (channel, l) in radiance.into_iter().enumerate() {
+                                        coefficient[channel] += l * (PI / samples as f32) * weight;
+                                    }
                                 }
                             }
                         }
+                        Ok::<_, std::collections::TryReserveError>(radiances)
+                    }));
+                }
+                for job in jobs {
+                    let radiances = job.join().expect("probe worker panicked")?;
+                    if let Some(output) = &mut ray_output {
+                        for v in radiances {
+                            write_triple(*output, v)?;
+                        }
                     }
-                });
-            }
-        });
+                }
+                Ok(())
+            })?;
+        }
         Ok(result)
     }
 
@@ -328,6 +371,64 @@ impl BakeScene {
 mod tests {
     use super::*;
     use crate::Lighting;
+    #[test]
+    fn ray_dump_matches_the_projected_transport_and_input_order() {
+        let scene = BakeScene::new(
+            vec![crate::Triangle {
+                positions: [[-2., 0., -2.], [0., 0., 2.], [2., 0., -2.]],
+                material: 0,
+                uv: [[0.; 2]; 3],
+            }],
+            vec![crate::Material {
+                diffuse: [0.; 3],
+                emissive_nits: [1., 2., 3.],
+                ..Default::default()
+            }],
+            vec![],
+        )
+        .unwrap();
+        let light = Lighting {
+            sun: crate::Sun::OFF,
+            environment: None,
+            sky_rgb_nits: [0.01; 3],
+        };
+        let positions = [[0., 0.3, 0.], [42., 3., 1.]];
+        let samples = 31;
+        let mut raw = Vec::new();
+        let sh = scene
+            .probe_sh_reference(&positions, light, samples, Some(&mut raw))
+            .unwrap();
+        assert_eq!(
+            sh,
+            scene
+                .probe_sh_reference(&positions, light, samples, None)
+                .unwrap()
+        );
+        assert_ne!(sh[0][0], sh[1][0]);
+        let triples: Vec<Vec3> = raw
+            .as_chunks::<12>()
+            .0
+            .iter()
+            .map(|bytes| {
+                std::array::from_fn(|i| {
+                    f32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap())
+                })
+            })
+            .collect();
+        assert_eq!(raw.len(), (positions.len() + 1) * samples as usize * 12);
+        for j in 0..samples {
+            let dir = probe_ray(j, samples);
+            assert_eq!(triples[j as usize], dir);
+            for (i, p) in positions.iter().enumerate() {
+                let mut seed = j;
+                assert_eq!(
+                    triples[(i + 1) * samples as usize + j as usize],
+                    scene.incoming(*p, dir, light, &mut seed)
+                );
+            }
+        }
+    }
+
     #[test]
     fn quadratic_projection_recovers_rotated_legendre_kernel() {
         for ray in 0..17 {

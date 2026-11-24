@@ -200,6 +200,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut reference = None;
     let mut diffuse_reference = None;
     let mut probe_sh_reference = None;
+    let mut probe_ray_output = None;
     let mut ibl_manifest = None;
     let mut look = Look::LumberyardDay;
     let mut day_only = false;
@@ -212,6 +213,10 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut estimate = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--probe-ray-output" => {
+                probe_ray_output =
+                    Some(PathBuf::from(args.next().ok_or("missing ray output path")?));
+            }
             "--probe-sh-reference" => {
                 probe_sh_reference = Some(PathBuf::from(
                     args.next().ok_or("missing probe positions file")?,
@@ -284,6 +289,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
                 println!(
                     "Placement options: --placement-method floor|remedy --max-probes N (1..32)"
                 );
+                println!(
+                    "--probe-sh-reference also accepts --probe-ray-output FILE: little-endian f32 triples; one direction per sample, then one RGB radiance per probe and sample."
+                );
                 return Ok(());
             }
             _ => return Err(format!("unknown bake option {arg}").into()),
@@ -299,6 +307,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         .into_iter()
         .filter(|path| path.is_some())
         .count();
+    if probe_ray_output.is_some() && probe_sh_reference.is_none() {
+        return Err("--probe-ray-output requires --probe-sh-reference".into());
+    }
     if reference_count > 0
         && (layout.is_some()
             || reference_count > 1
@@ -439,25 +450,51 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let lights = [lighting(scenarios[0])?, lighting(scenarios[1])?];
     if let Some(path) = probe_sh_reference {
         let positions: Vec<[f32; 3]> = serde_json::from_slice(&std::fs::read(path)?)?;
-        let coefficients =
-            bake.probe_sh_reference(&positions, lights[0], settings.rays_per_probe)?;
         #[derive(serde::Serialize)]
         struct Projection {
             identity: String,
             samples: u32,
             coefficients: Vec<[[f32; 3]; 9]>,
         }
-        let mut file = std::io::BufWriter::new(std::fs::File::create_new(output)?);
-        serde_json::to_writer(
-            &mut file,
-            &Projection {
-                identity,
-                samples: settings.rays_per_probe,
-                coefficients,
-            },
-        )?;
-        file.flush()?;
-        return Ok(());
+        let mut rays = probe_ray_output
+            .as_ref()
+            .map(std::fs::File::create_new)
+            .transpose()?
+            .map(std::io::BufWriter::new);
+        let mut created_json = false;
+        let result = (|| -> Result<(), Error> {
+            let mut file = std::io::BufWriter::new(std::fs::File::create_new(&output)?);
+            created_json = true;
+            let coefficients = bake.probe_sh_reference(
+                &positions,
+                lights[0],
+                settings.rays_per_probe,
+                rays.as_mut().map(|file| file as &mut dyn Write),
+            )?;
+            if let Some(file) = &mut rays {
+                file.flush()?;
+            }
+            serde_json::to_writer(
+                &mut file,
+                &Projection {
+                    identity,
+                    samples: settings.rays_per_probe,
+                    coefficients,
+                },
+            )?;
+            file.flush()?;
+            Ok(())
+        })();
+        drop(rays);
+        if result.is_err() {
+            if created_json {
+                let _ = std::fs::remove_file(&output);
+            }
+            if let Some(path) = probe_ray_output {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        return result;
     }
     if let Some(path) = diffuse_reference {
         #[derive(serde::Deserialize)]
