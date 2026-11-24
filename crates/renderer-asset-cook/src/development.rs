@@ -12,7 +12,7 @@ use renderer_asset::{Catalog, Digest};
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
+    fs,
     io::{self, Write},
     path::{Path, PathBuf},
     process::Command,
@@ -175,7 +175,10 @@ fn build_snapshot(root: &Path, snapshot: &Snapshot, converter: Digest) -> Result
     Ok(report)
 }
 
-fn prepare<'a>(source: &Path, project: &'a Project) -> Result<(Preview<'a>, File), Error> {
+fn prepare<'a>(
+    source: &Path,
+    project: &'a Project,
+) -> Result<(Preview<'a>, store::FileLock), Error> {
     let root = &project.root;
     // Serialize successive requests from this checkout while unrelated checkouts can cook.
     let _request = store::lock(&project.git_dir.join("renderer-preview.lock"))?;
