@@ -16,7 +16,7 @@
 
 ```rust
 let scene = BakeScene::new(occluders, materials, textures)?;
-let layout = SurfaceLayout::pack(&receivers)?;
+let layout = SurfaceLayout::pack(&receivers, 3)?;
 let lights = [day, afternoon, dusk];
 let settings = ProbeSettings::default();
 let transport = scene.prepare_surface_bake(lights, settings.backend, 128)?;
@@ -37,7 +37,7 @@ publish_index(&index.to_bytes())?;
 
 この例の `write_blob` と `publish_index` は配布先に応じてアプリ側が用意します。前者は SHA-256 に対応する不変のバイト列を書き出し、後者は必要なページとプローブの確定後に索引を公開します。ハッシュ計算には `sha2::Digest` を使います。レイアウトを固定してページを再ベイクする場合は `selected` に対象ページの番号だけを渡し、対応する索引レコードを差し替えます。プローブは独立して生成できます。光源や遮蔽物の変更が影響する範囲はビルド側で判定します。
 
-固定照明には `day` を直接渡します。表裏を描く受光面には `double_sided: true` を指定すると、それぞれの向きで焼きます。透過マスクの判定には材質 UV とアルファカットオフを使います。ページの予算を検査する場合は `SurfaceLayout::new(&receivers, 2048, Some(texel_budget))?` を使います。全配置の収録に足りなければ必要なサイズとページ数を返します。単一の配置の UV 矩形は境界を含めて１ページに収めます。巨大なメッシュはクック時にプリミティブを分割してください。
+固定照明には `day` を直接渡します。表裏を描く受光面には `double_sided: true` を指定すると、それぞれの向きで焼きます。透過マスクの判定には材質 UV とアルファカットオフを使います。ページの予算を検査する場合は `SurfaceLayout::new(&receivers, 2048, 3, Some(texel_budget))?` を使います。全配置の収録に足りなければ必要なサイズとページ数を返します。単一の配置の UV 矩形は境界を含めて１ページに収めます。巨大なメッシュはクック時にプリミティブを分割してください。
 
 ```rust
 // メッシュのロード時。uvs は頂点と同じ順序の正規化 UV。

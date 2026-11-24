@@ -5,11 +5,30 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
-## 静的ライトマップのページ配置試作
+## 静的ライトマップのページ配置
 
-課題 `renderer-80ub` の試作コミットは `26bef1dc`。旧保存形式で密度、UV、表裏、余白を固定し、候補の最小容量から 1% 以内で材質とページの組数などを比較した。Bistro では 17 → 4 ページ、RGBA32F ペイロード 878.72 → 830.13 MiB、材質とページの組数 222 → 294。Sponza は 1 → 2 ページ、20.31 → 14.72 MiB。これらは試作時の結果で、現在の独立ページ形式での実測は未実施。
+現行の独立ページ形式では、密度と余白を固定し、2048 テクセルまでの候補を比較する。最小容量から 1% 以内かつ従来配置の容量以下の候補から、材質とページの組数を考慮して選ぶ。1 シナリオ・1 ray の実ベイクで、索引の各ページのハッシュとペイロード容量を確認した。
 
-[試作の測定ファイル](../../assets/verification/adaptive-lightmaps-evidence.zip) にベイク済み照明、両 API のキャプチャ・レポート、テストログを収録した。新しい worktree を最新の main から作り、`git show 26bef1dc:crates/renderer-bake/src/surface_pages/packing.rs` で候補選択を参照できる。現行の `bake_gpu_pages` が返すページ ID、独立ページの索引・ハッシュ、選択再ベイクの契約を保って移植し、見積もりと読み込み後のサイズ、CPU 参照照度、Vulkan・D3D12 の描画を再照合する。
+| シーン | 選択した一辺の上限 | ページ数 | RGBA32F バイト | 材質とページの組数 |
+|---|---:|---:|---:|---:|
+| Sponza | 768 | 2 | 15,433,728 | 40 |
+| Bistro | 2048 | 13 | 873,267,200 | 439 |
+
+両シーンで Vulkan・D3D12 の strict 描画を確認した。GPU テストでは複数シナリオの見積もりと読み込み後の容量、CPU 参照との照度を比較した。実 VRAM と描画時間は未計測。[旧保存形式の試作と測定ファイル](../../assets/verification/adaptive-lightmaps-evidence.zip)
+
+## O3DE 26.10 の Sponza 材質
+
+比較プロジェクトの無名材質はインポート時に 2 個に集約されていた。glTF の材質名に連番を付けると 25 個の Atom 材質が生成される。元の 103 プリミティブ・262,267 三角形を材質別にまとめ、三角形の UV と出現回数がコンパイル後のメッシュと一致することを確認した。ベースカラーの画像と色係数、法線とパックテクスチャの参照先も照合した。
+
+照明を除いた入力比較では、テクスチャを使う 24 材質で粗さと金属度の両方に差が出た。glTF はそれぞれ G と B を使うが、Atom の StandardPBR は両方とも R を読む。3 材質では両面・アルファマスクの設定も一致しない。このフィクスチャで昼光・露出・GI の見た目の差を照明だけに帰属させることはできない。[材質別の検査値](sponza-o3de-materials.json)・[照明を介さない入力比較](sponza-o3de-neutral.png)
+
+再現には O3DE 26.10 の SDK、Python、NumPy、Pillow を使う。元の glTF と画像・バッファをプロジェクトの `Assets/Sponza` に置き、以下の順で実行する。画像は元テクスチャとコンパイル済み材質・シェーダー設定から計算した入力値で、空欄はパックテクスチャなしを表す。
+
+```sh
+python tools/sponza/audit_o3de_materials.py prepare <project>
+# Asset Processor で SponzaNamedCheck.gltf の PC 用キャッシュを生成
+python tools/sponza/audit_o3de_materials.py audit <project> <sdk> report.json neutral.png
+```
 
 ## 装備の cook と配布物の再現性
 

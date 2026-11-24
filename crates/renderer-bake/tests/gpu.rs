@@ -97,7 +97,7 @@ fn compare_keys<const N: usize>(
             max_depth: 1,
             ..Default::default()
         };
-        let layout = SurfaceLayout::new(receivers, 16, None).unwrap();
+        let layout = SurfaceLayout::new(receivers, 16, N, None).unwrap();
         let selected: Vec<_> = (0..layout.gpu_page_count()).collect();
         let mut pages = std::collections::BTreeMap::new();
         let mut records = Vec::new();
@@ -123,9 +123,18 @@ fn compare_keys<const N: usize>(
         let index =
             renderer::pbr::SurfaceLightmapIndex::new(N, records, Sha256::digest(&probes).into())
                 .unwrap();
-        index
+        let loaded = index
             .load(selected, Some(&probes), |hash| Ok(pages[hash].clone()))
-            .unwrap()
+            .unwrap();
+        assert_eq!(
+            layout.resident_bytes(),
+            loaded
+                .pages()
+                .iter()
+                .map(|p| p.rgba32f().len() as u64)
+                .sum::<u64>()
+        );
+        loaded
     };
     let [l1, l2] = [ProbeShOrder::L1, ProbeShOrder::L2].map(|order| {
         let reference = bake(BakeBackend::Cpu, order);

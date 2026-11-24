@@ -465,8 +465,21 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     } else {
         Vec::new()
     };
-    let surfaces = renderer_bake::SurfaceLayout::new(&receivers, 2048, texel_budget)?;
+    let keys = if day_only {
+        1
+    } else if endpoints_only {
+        2
+    } else {
+        3
+    };
+    let surfaces = renderer_bake::SurfaceLayout::new(&receivers, 2048, keys, texel_budget)?;
     if surface_bake {
+        eprintln!(
+            "selected limit {}, {} resident RGBA32F bytes, {} material/page groups",
+            surfaces.page_limit(),
+            surfaces.resident_bytes(),
+            surfaces.material_page_groups()
+        );
         eprintln!(
             "{} static placements, {} receiver triangles, {} sides in {} pages, {} allocated texels/scenario",
             receivers.len(),
@@ -475,16 +488,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             surfaces.pages().len(),
             surfaces.texels()
         );
-        let keys = if day_only {
-            1
-        } else if endpoints_only {
-            2
-        } else {
-            3
-        };
         eprintln!(
             "{} RGB32 bytes for {keys} lighting scenario(s), at most {} hemisphere rays per scenario",
-            surfaces.texels() * 12 * keys,
+            surfaces.texels() * 12 * keys as u64,
             surfaces.texels() * u64::from(settings.rays_per_probe)
         );
     }

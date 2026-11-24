@@ -1,13 +1,12 @@
 //! Offline allocation and rasterization of cooked lightmap UVs. A placement owns
 //! its rectangle(s), even when several placements use identical geometry and UVs.
+mod packing;
+
 use crate::{
     BakeError, BakeScene, SurfaceBake, SurfaceSample, Vec3, cross, dot, finite, sub, unit,
 };
 use renderer::pbr::SurfacePageRecord;
-use std::{
-    collections::{BTreeMap, HashSet},
-    error::Error,
-};
+use std::{collections::HashSet, error::Error};
 
 /// Measured change-boundary costs for a single daylight bake.
 #[derive(Default)]
@@ -110,6 +109,9 @@ pub struct SurfaceLayout<'a> {
     regions: Vec<(usize, SurfaceRegion)>,
     pages: Vec<[u32; 2]>,
     gpu_pages: Vec<GpuPageLayout>,
+    scenarios: usize,
+    page_limit: u32,
+    metrics: packing::Metrics,
 }
 
 struct PageSamples<const N: usize> {
@@ -121,6 +123,20 @@ struct GpuPageLayout {
     front: usize,
     back: usize,
     charts: Vec<(SurfaceRegion, SurfaceRegion)>,
+}
+
+fn image_shape(charts: usize, pixels: u64, keys: usize) -> Option<[usize; 2]> {
+    let header = charts.checked_mul(2)?.checked_add(1)?;
+    if header > 1 << 24 {
+        return None;
+    }
+    let texels = usize::try_from(pixels)
+        .ok()?
+        .checked_mul(keys)?
+        .checked_add(header)?;
+    let width = texels.min((texels.isqrt() + 1).next_power_of_two().clamp(1, 16384));
+    let height = texels.div_ceil(width);
+    (height <= 16384).then_some([width, height])
 }
 
 impl GpuPageLayout {
@@ -142,12 +158,8 @@ impl GpuPageLayout {
         } else {
             back_offset + bw * bh
         };
-        let texels = header + pixels as usize * N;
-        let width = texels.min((texels.isqrt() + 1).next_power_of_two().clamp(1, 16384));
-        let height = texels.div_ceil(width);
-        if height > 16384 {
-            return Err("lightmap exceeds the maximum cooked image dimensions".into());
-        }
+        let [width, height] = image_shape(self.charts.len(), u64::from(pixels), N)
+            .ok_or("lightmap exceeds the maximum cooked image dimensions")?;
         let mut image = Vec::new();
         image.try_reserve_exact(width * height * 16)?;
         let mut write = |words: [u32; 4]| {
@@ -169,8 +181,8 @@ impl GpuPageLayout {
 
 impl<'a> SurfaceLayout<'a> {
     /// Choose standard page dimensions and cover every supplied placement.
-    pub fn pack(receivers: &'a [StaticReceiver]) -> Result<Self, Box<dyn Error>> {
-        Self::new(receivers, 2048, None)
+    pub fn pack(receivers: &'a [StaticReceiver], scenarios: usize) -> Result<Self, Box<dyn Error>> {
+        Self::new(receivers, 2048, scenarios, None)
     }
 
     /// Pack full-density rectangles with a one-texel border on every side.
@@ -178,14 +190,17 @@ impl<'a> SurfaceLayout<'a> {
     pub fn new(
         receivers: &'a [StaticReceiver],
         page_side: u32,
+        scenarios: usize,
         budget: Option<u64>,
     ) -> Result<Self, Box<dyn Error>> {
         if !(4..=2048).contains(&page_side) {
             return Err("invalid lightmap page size".into());
         }
-        let mut order = Vec::new();
+        if !(1..=3).contains(&scenarios) {
+            return Err("expected one to three lighting scenarios".into());
+        }
         let mut ids = HashSet::new();
-        for (i, r) in receivers.iter().enumerate() {
+        for r in receivers {
             if !ids.insert(r.placement)
                 || r.indices.is_empty()
                 || !r.indices.len().is_multiple_of(3)
@@ -206,114 +221,21 @@ impl<'a> SurfaceLayout<'a> {
                 )
                 .into());
             }
-            let [w, h] = r.extent.map(|v| v + 2);
-            let (block, offset) = if !r.double_sided {
-                ([w, h], None)
-            } else if 2 * w <= page_side {
-                ([2 * w, h], Some([w, 0]))
-            } else if 2 * h <= page_side {
-                ([w, 2 * h], Some([0, h]))
-            } else {
-                // Two dedicated pages keep the pair uploadable with one image binding.
-                ([w, h], Some([0, 0]))
-            };
-            order.push((i, block, offset));
         }
-        order.sort_by_key(|&(i, [w, h], _)| {
-            (
-                std::cmp::Reverse(h),
-                std::cmp::Reverse(w),
-                receivers[i].placement,
-            )
-        });
-        let mut regions = Vec::new();
-        let mut pages = Vec::new();
-        let (mut x, mut y, mut row) = (0, 0, 0);
-        let mut shelf = None;
-        for (i, [w, h], offset) in order {
-            let r = &receivers[i];
-            let dedicated = offset == Some([0, 0]);
-            let mut emit = |page, back, origin| {
-                regions.push((
-                    i,
-                    SurfaceRegion {
-                        placement: r.placement,
-                        page,
-                        back,
-                        origin,
-                        extent: r.extent,
-                    },
-                ))
-            };
-            if dedicated {
-                for back in [false, true] {
-                    emit(pages.len(), back, [1, 1]);
-                    pages.push([w, h]);
-                }
-                continue;
-            }
-            if x + w > page_side {
-                x = 0;
-                y += row;
-                row = 0;
-            }
-            if shelf.is_none() || y + h > page_side {
-                shelf = Some(pages.len());
-                pages.push([0, 0]);
-                (x, y, row) = (0, 0, 0);
-            }
-            let page = shelf.expect("opened shelf");
-            emit(page, false, [x + 1, y + 1]);
-            if let Some([dx, dy]) = offset {
-                emit(page, true, [x + dx + 1, y + dy + 1]);
-            }
-            x += w;
-            row = row.max(h);
-            pages[page][0] = pages[page][0].max(x);
-            pages[page][1] = pages[page][1].max(y + h);
-        }
-        // Both sides of each placement were emitted together. Dedicated back
-        // pages are published with their front in a single sampleable image.
-        let mut groups = BTreeMap::new();
-        for sides in regions.chunk_by(|a, b| a.0 == b.0) {
-            let front = sides[0].1;
-            let back = sides.last().expect("nonempty chart group").1;
-            groups
-                .entry((front.page, back.page))
-                .or_insert_with(Vec::new)
-                .push((front, back));
-        }
-        let gpu_pages = groups
-            .into_iter()
-            .map(|((front, back), mut charts)| {
-                charts.sort_unstable_by_key(|(f, _)| f.placement);
-                GpuPageLayout {
-                    front,
-                    back,
-                    charts,
-                }
-            })
-            .collect();
-        // Index regions by physical page so subset baking visits only selected geometry.
-        regions.sort_by_key(|(_, r)| r.page);
-        let layout = Self {
-            gpu_pages,
-            receivers,
-            regions,
-            pages,
-        };
-        if let Some(limit) = budget
-            && layout.texels() > limit
-        {
-            return Err(format!(
-                "lightmaps require {} texels in {} pages; budget is {limit}",
-                layout.texels(),
-                layout.pages.len()
-            )
-            .into());
-        }
-        Ok(layout)
+        packing::select(receivers, page_side, scenarios, budget)
     }
+
+    pub fn page_limit(&self) -> u32 {
+        self.page_limit
+    }
+    /// Total RGBA32F payload across all independent GPU pages.
+    pub fn resident_bytes(&self) -> u64 {
+        self.metrics.bytes
+    }
+    pub fn material_page_groups(&self) -> usize {
+        self.metrics.groups
+    }
+
     pub fn texels(&self) -> u64 {
         self.pages
             .iter()
@@ -382,6 +304,9 @@ impl<'a> SurfaceLayout<'a> {
         mut benchmark: Option<(u64, &mut BakeBenchmark)>,
         mut write: impl FnMut(usize, SurfacePageRecord, Vec<u8>) -> Result<(), Box<dyn Error>>,
     ) -> Result<(), Box<dyn Error>> {
+        if N != self.scenarios {
+            return Err("scenario count differs from the prepared layout".into());
+        }
         let mut seen = HashSet::with_capacity(selected.len());
         for &index in selected {
             if index >= self.gpu_page_count() || !seen.insert(index) {
@@ -727,7 +652,7 @@ mod tests {
             .vertices
             .iter_mut()
             .for_each(|v| v.lightmap_uv = [0.; 2]);
-        let layout = SurfaceLayout::new(&receivers, 8, None).unwrap();
+        let layout = SurfaceLayout::new(&receivers, 8, 1, None).unwrap();
         assert_eq!(layout.pages().len(), 3);
         assert_eq!(layout.gpu_page_count(), 2);
         let mut pages = Vec::new();
@@ -780,7 +705,7 @@ mod tests {
         assert_eq!(r.vertices[1].position, [12., 0., 0.]);
         assert_eq!(r.vertices[1].lightmap_uv, vertices[1].lightmap_uv);
         let receivers = [r];
-        let layout = SurfaceLayout::new(&receivers, 8, Some(128)).unwrap();
+        let layout = SurfaceLayout::new(&receivers, 8, 1, Some(128)).unwrap();
         assert_eq!(layout.pages(), &[[8, 8], [8, 8]]);
         assert_eq!(
             layout
@@ -789,6 +714,61 @@ mod tests {
                 .collect::<Vec<_>>(),
             [(9, 0, false), (9, 1, true)]
         );
-        assert!(SurfaceLayout::new(&receivers, 8, Some(127)).is_err());
+        assert!(SurfaceLayout::new(&receivers, 8, 1, Some(127)).is_err());
+    }
+    #[test]
+    fn adaptive_layout_preserves_gutters_sides_and_stable_addresses() {
+        let mut receivers: Vec<_> = (0..31)
+            .map(|i| StaticReceiver {
+                placement: i,
+                extent: [44 + (i * 7) % 90, 30 + (i * 11) % 65],
+                double_sided: i % 3 != 0,
+                material: (i % 4) as usize,
+                indices: vec![0, 1, 2],
+                vertices: vec![
+                    LightmapVertex {
+                        position: [0.; 3],
+                        normal: [0., 1., 0.],
+                        material_uv: [0.; 2],
+                        lightmap_uv: [0.; 2]
+                    };
+                    3
+                ],
+            })
+            .collect();
+        let layout = SurfaceLayout::pack(&receivers, 3).unwrap();
+        let mut regions: Vec<_> = layout.regions().collect();
+        for (i, r) in regions.iter().enumerate() {
+            let receiver = &receivers[r.placement as usize];
+            assert_eq!(r.extent, receiver.extent);
+            assert!(!r.back || receiver.double_sided);
+            assert!(
+                (0..2)
+                    .all(|d| r.origin[d] >= 1
+                        && r.origin[d] + r.extent[d] < layout.pages()[r.page][d])
+            );
+            for other in &regions[..i] {
+                assert!(
+                    r.page != other.page
+                        || (0..2).any(|d| r.origin[d] + r.extent[d] + 1 < other.origin[d]
+                            || other.origin[d] + other.extent[d] + 1 < r.origin[d])
+                );
+            }
+        }
+        assert_eq!(
+            regions.len(),
+            receivers.len() + receivers.iter().filter(|r| r.double_sided).count()
+        );
+        let pages = layout.pages().to_vec();
+        let bytes = layout.resident_bytes();
+        let texels = layout.texels();
+        regions.sort_by_key(|r| (r.placement, r.back));
+        receivers.reverse();
+        let again = SurfaceLayout::new(&receivers, 2048, 3, Some(texels)).unwrap();
+        let mut reordered: Vec<_> = again.regions().collect();
+        reordered.sort_by_key(|r| (r.placement, r.back));
+        assert_eq!(regions, reordered);
+        assert_eq!(pages, again.pages());
+        assert_eq!(bytes, again.resident_bytes());
     }
 }
