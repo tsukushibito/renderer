@@ -53,17 +53,36 @@ struct Pin {
     recovery: Option<Digest>,
 }
 
-/// Registry keys are stable Git administrative directories. The selection file
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Registration {
+    git_dir: PathBuf,
+    namespace: Digest,
+}
+
+impl Registration {
+    fn id(&self) -> Digest {
+        combine(path_id(&self.git_dir), self.namespace)
+    }
+}
+
+fn combine(location: Digest, namespace: Digest) -> Digest {
+    Digest::of(format!("{location}{namespace}").as_bytes())
+}
+
+/// Each registration identifies a Git administrative directory and a project asset
+/// namespace (source path and profile). Its independent selection file
 /// resides inside that directory, so removing/recreating a worktree, even with
 /// the same name, never resurrects the old selection.
 pub(super) struct StoreGuard {
     root: PathBuf,
-    pin_name: String,
+    store_id: Digest,
+    namespace: Digest,
     _transaction: File,
 }
 
 impl StoreGuard {
-    pub(super) fn lock(root: &Path) -> io::Result<Self> {
+    pub(super) fn lock(root: &Path, namespace: Digest) -> io::Result<Self> {
         fs::create_dir_all(root)?;
         let root = root.canonicalize()?;
         let transaction = gate(&root.join(LOCK))?;
@@ -91,7 +110,8 @@ impl StoreGuard {
             }
         }
         let guard = Self {
-            pin_name: format!("renderer-asset-{}-v1.json", path_id(&root)),
+            store_id: path_id(&root),
+            namespace,
             root,
             _transaction: transaction,
         };
@@ -120,8 +140,15 @@ impl StoreGuard {
         Ok(file)
     }
 
-    fn pin(&self, git_dir: &Path) -> io::Result<Option<Pin>> {
-        let path = git_dir.join(&self.pin_name);
+    fn pin_path(&self, git_dir: &Path, namespace: Digest) -> PathBuf {
+        git_dir.join(format!(
+            "renderer-asset-{}-v1.json",
+            combine(self.store_id, namespace)
+        ))
+    }
+
+    fn pin(&self, git_dir: &Path, namespace: Digest) -> io::Result<Option<Pin>> {
+        let path = self.pin_path(git_dir, namespace);
         let Some(bytes) = store::read_if_present(&path)? else {
             return Ok(None);
         };
@@ -141,23 +168,23 @@ impl StoreGuard {
         Ok(Some(pin))
     }
 
-    fn registrations(&self) -> io::Result<Vec<(PathBuf, Option<Pin>)>> {
+    fn registrations(&self) -> io::Result<Vec<(Registration, Option<Pin>)>> {
         let mut registrations = Vec::new();
         for (id, path) in entries(&self.root.join("registrations"))? {
-            let git_dir: PathBuf = serde_json::from_slice(&fs::read(&path)?).map_err(|e| {
+            let record: Registration = serde_json::from_slice(&fs::read(&path)?).map_err(|e| {
                 invalid(format!(
                     "invalid worktree registration {}: {e}",
                     path.display()
                 ))
             })?;
-            if !git_dir.is_absolute() || path_id(&git_dir) != id {
+            if !record.git_dir.is_absolute() || record.id() != id {
                 return Err(invalid(format!(
                     "invalid worktree path in {}",
                     path.display()
                 )));
             }
-            let pin = self.pin(&git_dir)?;
-            registrations.push((git_dir, pin));
+            let pin = self.pin(&record.git_dir, record.namespace)?;
+            registrations.push((record, pin));
         }
         Ok(registrations)
     }
@@ -176,7 +203,9 @@ impl StoreGuard {
     }
 
     pub(super) fn selected(&self, git_dir: &Path) -> io::Result<Option<Digest>> {
-        Ok(self.pin(&git_dir.canonicalize()?)?.map(|pin| pin.selected))
+        Ok(self
+            .pin(&git_dir.canonicalize()?, self.namespace)?
+            .map(|pin| pin.selected))
     }
 
     pub(super) fn select(&self, git_dir: &Path, generation: Digest) -> io::Result<()> {
@@ -192,13 +221,17 @@ impl StoreGuard {
                 format!("missing asset catalog {generation}"),
             ));
         }
-        let previous = self.pin(&git_dir)?;
+        let previous = self.pin(&git_dir, self.namespace)?;
+        let record = Registration {
+            git_dir,
+            namespace: self.namespace,
+        };
         let registration = self
             .root
             .join("registrations")
-            .join(path_id(&git_dir).to_string());
+            .join(record.id().to_string());
         if !registration.try_exists()? {
-            store::publish(&registration, &serde_json::to_vec(&git_dir)?)?;
+            store::publish(&registration, &serde_json::to_vec(&record)?)?;
         }
         if previous
             .as_ref()
@@ -211,7 +244,10 @@ impl StoreGuard {
             selected: generation,
             recovery: previous.map(|pin| pin.selected),
         };
-        store::publish(&git_dir.join(&self.pin_name), &serde_json::to_vec(&pin)?)
+        store::publish(
+            &self.pin_path(&record.git_dir, record.namespace),
+            &serde_json::to_vec(&pin)?,
+        )
     }
 
     /// Keep the returned file open for all consumers of this catalog generation,
@@ -237,8 +273,8 @@ impl StoreGuard {
 
     fn protected(&self, skip: Option<&Path>) -> io::Result<BTreeSet<Digest>> {
         let mut live = BTreeSet::new();
-        for (path, pin) in self.registrations()? {
-            if Some(path.as_path()) != skip
+        for (record, pin) in self.registrations()? {
+            if (Some(record.git_dir.as_path()) != skip || record.namespace != self.namespace)
                 && let Some(pin) = pin
             {
                 live.insert(pin.selected);
@@ -294,7 +330,7 @@ impl StoreGuard {
     }
 
     fn release_bytes(&self, git_dir: &Path) -> io::Result<u64> {
-        let Some(pin) = self.pin(git_dir)? else {
+        let Some(pin) = self.pin(git_dir, self.namespace)? else {
             return Ok(0);
         };
         let other = self.protected(Some(git_dir))?;
@@ -324,8 +360,8 @@ impl StoreGuard {
         let _idle = self.idle_builds()?;
         let git_dir = git_dir.canonicalize()?;
         let bytes = self.release_bytes(&git_dir)?;
-        if self.pin(&git_dir)?.is_some() {
-            fs::remove_file(git_dir.join(&self.pin_name))?;
+        if self.pin(&git_dir, self.namespace)?.is_some() {
+            fs::remove_file(self.pin_path(&git_dir, self.namespace))?;
         }
         Ok(bytes)
     }
@@ -349,12 +385,12 @@ impl StoreGuard {
             fs::remove_file(path)?;
             bytes += size;
         }
-        for (git_dir, pin) in self.registrations()? {
+        for (record, pin) in self.registrations()? {
             if pin.is_none() {
                 fs::remove_file(
                     self.root
                         .join("registrations")
-                        .join(path_id(&git_dir).to_string()),
+                        .join(record.id().to_string()),
                 )?;
             }
         }
@@ -521,7 +557,7 @@ mod tests {
         let root = tmp.0.join("store");
         let a = tmp.git_dir("administration-a")?;
         let b = tmp.git_dir("administration-b")?;
-        let store = StoreGuard::lock(&root)?;
+        let store = StoreGuard::lock(&root, Digest::of(b"equipment"))?;
         let (red, _) = publish(&root, b"red")?;
         let (blue, blue_bytes) = publish(&root, b"blue")?;
         store.select(&a, red)?;
@@ -544,11 +580,45 @@ mod tests {
     }
 
     #[test]
+    fn unrelated_source_roots_in_one_worktree_keep_independent_selections() -> io::Result<()> {
+        let tmp = Sandbox::new()?;
+        let root = tmp.0.join("store");
+        let git_dir = tmp.git_dir("administration")?;
+        let armor = Digest::of(b"source/armor#profile");
+        let weapons = Digest::of(b"source/weapons#profile");
+        let store = StoreGuard::lock(&root, armor)?;
+        let (red, red_bytes) = publish(&root, b"red")?;
+        store.select(&git_dir, red)?;
+        drop(store);
+
+        let store = StoreGuard::lock(&root, weapons)?;
+        assert_eq!(store.selected(&git_dir)?, None);
+        assert_eq!(store.release(&git_dir)?, 0);
+        let (blue, _) = publish(&root, b"blue")?;
+        store.select(&git_dir, blue)?;
+        drop(store);
+
+        let store = StoreGuard::lock(&root, armor)?;
+        assert_eq!(store.selected(&git_dir)?, Some(red));
+        assert_eq!(store.release(&git_dir)?, red_bytes);
+        assert_eq!(store.gc()?, red_bytes);
+        drop(store);
+
+        let store = StoreGuard::lock(&root, weapons)?;
+        assert_eq!(store.selected(&git_dir)?, Some(blue));
+        let still_live = store.estimate_release(&git_dir)?;
+        fs::remove_dir_all(&git_dir)?;
+        assert_eq!(store.gc()?, still_live);
+        assert!(fs::read_dir(root.join("registrations"))?.next().is_none());
+        Ok(())
+    }
+
+    #[test]
     fn recovery_and_recreated_worktrees_have_distinct_lifetimes() -> io::Result<()> {
         let tmp = Sandbox::new()?;
         let root = tmp.0.join("store");
         let a = tmp.git_dir("administration-a")?;
-        let store = StoreGuard::lock(&root)?;
+        let store = StoreGuard::lock(&root, Digest::of(b"equipment"))?;
         let (old, _) = publish(&root, b"old")?;
         let (new, _) = publish(&root, b"new")?;
         store.select(&a, old)?;
@@ -566,7 +636,7 @@ mod tests {
     fn builders_protect_unpublished_outputs_and_unknown_records_block_mutation() -> io::Result<()> {
         let tmp = Sandbox::new()?;
         let root = tmp.0.join("store");
-        let store = StoreGuard::lock(&root)?;
+        let store = StoreGuard::lock(&root, Digest::of(b"equipment"))?;
         let builder = StoreGuard::build(&root)?;
         let scratch = root
             .join("scratch")
@@ -581,17 +651,17 @@ mod tests {
         store.select(&a, new)?;
         assert_eq!(store.gc()?, 0);
         assert!(!scratch.exists());
-        let pin_path = a.join(&store.pin_name);
+        let pin_path = store.pin_path(&a, store.namespace);
         fs::write(
             &pin_path,
             format!(r#"{{"version":2,"selected":"{new}","recovery":null}}"#),
         )?;
         drop(store);
-        assert!(StoreGuard::lock(&root).is_err());
+        assert!(StoreGuard::lock(&root, Digest::of(b"equipment")).is_err());
         fs::remove_file(pin_path)?;
         fs::create_dir_all(root.join("leases"))?;
         fs::write(root.join("leases").join("future-reader-set"), b"")?;
-        assert!(StoreGuard::lock(&root).is_err());
+        assert!(StoreGuard::lock(&root, Digest::of(b"equipment")).is_err());
         assert!(root.join("catalogs").join(new.to_string()).exists());
         Ok(())
     }
