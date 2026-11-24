@@ -19,12 +19,18 @@ pub struct WindowRenderer {
     presenter: WindowPresenter,
     renderer: Renderer,
     accepted: Option<FrameId>,
+    defer_for_asset_change: bool,
 }
 
 impl crate::pipeline::AssetTarget for WindowRenderer {
     type Device = Runtime;
     fn asset_renderer(&mut self) -> &mut crate::pipeline::SceneRenderer {
         &mut self.renderer.drawing
+    }
+    fn poll_presentation_for_asset_change(&mut self) -> PipelineResult<bool> {
+        let ready = self.wait_idle(Duration::ZERO)?;
+        self.defer_for_asset_change = !ready;
+        Ok(ready)
     }
 }
 
@@ -76,6 +82,7 @@ impl WindowRenderer {
                 host,
             },
             accepted: None,
+            defer_for_asset_change: false,
         })
     }
 
@@ -270,6 +277,11 @@ impl WindowRenderer {
             return Ok(self
                 .presenter
                 .present_frame(self.renderer.drawing.runtime())?);
+        }
+        // Leave one opportunity to change the working set after the presented
+        // frame retires. A canceled request cannot suppress a subsequent draw.
+        if std::mem::take(&mut self.defer_for_asset_change) {
+            return Ok(PresentOutcome::NotReady);
         }
         if let Some(id) = self.accepted {
             if self

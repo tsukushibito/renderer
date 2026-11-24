@@ -306,7 +306,7 @@ struct MonitorWindow {
 impl crate::replay::Viewport for MonitorWindow {
     fn begin(
         &mut self,
-        runtime: &mut Runtime,
+        drawing: &mut renderer::pipeline::SceneRenderer,
         pending_click: bool,
     ) -> PipelineResult<ControlFlow<(), Option<[u32; 2]>>> {
         let start = Instant::now();
@@ -344,7 +344,7 @@ impl crate::replay::Viewport for MonitorWindow {
                     let mut prep = Preparation::new(self.base.frames_in_flight());
                     prep.add_requirements(self.base.graph_requirements(), self.base.working_set())?;
                     reserve_screen(&mut prep, [w, h])?;
-                    runtime.prepare_fitted_working_set(&prep, 0, 0)?;
+                    drawing.replace_resource_reservations(prep, 0)?;
                     self.extent = [w, h];
                 }
                 return Ok(ControlFlow::Continue(Some([w, h])));
@@ -353,6 +353,16 @@ impl crate::replay::Viewport for MonitorWindow {
                 return Err("monitor surface timed out".into());
             }
         }
+    }
+    fn poll_loading(&mut self) -> PipelineResult<ControlFlow<()>> {
+        self.events
+            .pump_app_events(Some(Duration::ZERO), &mut self.input);
+        self.presenter.poll()?;
+        Ok(if self.input.closed {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        })
     }
     fn present(&mut self, runtime: &mut Runtime, screen: ManagedImage) -> PipelineResult<()> {
         let start = Instant::now();
