@@ -19,6 +19,25 @@ def safe_member(value):
     return path
 
 
+def referenced_files(root, spec):
+    """Each referenced file is relative to its catalog, as it is at runtime."""
+    for catalog, selectors in spec.get("references", {}).items():
+        path = root / safe_member(catalog)
+        if not path.resolve().is_relative_to(root):
+            raise ValueError(f"catalog escapes project: {catalog}")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        yield path
+        for selector in selectors:
+            values = [data]
+            for field in selector.split("/"):
+                if field == "*":
+                    values = [child for obj in values for child in obj.values()]
+                else:
+                    values = [obj[field] for obj in values]
+            for value in values:
+                yield path.parent / safe_member(value)
+
+
 def package(project, executable, output):
     spec = json.loads(project.read_text(encoding="utf-8"))
     if spec["version"] != 1:
@@ -26,16 +45,18 @@ def package(project, executable, output):
     root = project.resolve().parent
     mount = safe_member(spec["mount"])
     sources = {executable.name: executable}
+    assets = set(referenced_files(root, spec))
     for pattern in spec["files"]:
         safe_member(pattern)
         paths = sorted(root.glob(pattern))
         if not paths:
             raise FileNotFoundError(f"{project}: missing required file group {pattern}")
-        for path in paths:
-            if not path.is_file() or not path.resolve().is_relative_to(root):
-                raise ValueError(f"{path}: expected a regular asset inside the project")
-            relative = (mount / path.relative_to(root).as_posix()).as_posix()
-            sources[relative] = path
+        assets.update(paths)
+    for path in assets:
+        if not path.is_file() or not path.resolve().is_relative_to(root):
+            raise ValueError(f"{path}: expected a regular asset inside the project")
+        relative = (mount / path.relative_to(root).as_posix()).as_posix()
+        sources[relative] = path
     if output.exists():
         raise FileExistsError(f"{output} already exists; choose a new package directory")
     output.parent.mkdir(parents=True, exist_ok=True)
