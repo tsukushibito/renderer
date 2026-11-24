@@ -223,7 +223,7 @@ mod native {
         graph::{
             BindingResource, BufferDesc, BufferHandle, CompiledGraph, ImageHandle, PassHandle,
         },
-        program::ManagedRasterProgram,
+        program::{ManagedRasterProgram, SamplerDescriptor},
         vulkan::{
             FrameCapacity, ResourceClass, RuntimeConfig, RuntimeErrorKind, ValidationMode,
             VulkanRuntime,
@@ -264,6 +264,9 @@ mod native {
     }
     fn prepare_vk(runtime: &mut VulkanRuntime) {
         runtime
+            .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+            .unwrap();
+        runtime
             .prepare_working_set(
                 FrameCapacity {
                     graph: fixture::capacity(),
@@ -281,6 +284,9 @@ mod native {
             .unwrap();
     }
     fn prepare_dx(runtime: &mut D3D12Runtime) {
+        runtime
+            .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+            .unwrap();
         runtime
             .prepare_graph_working_set(
                 None,

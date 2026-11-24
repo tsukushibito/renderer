@@ -236,6 +236,9 @@ fn vulkan_layout_transition_orders_different_sampled_stages() {
     )
     .unwrap();
     let monitor = runtime.validation_monitor();
+    runtime
+        .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+        .unwrap();
     let graph_capacity = GraphCapacity::default();
     let mut graphs = GraphPool::new(graph_capacity, 2).unwrap();
     runtime

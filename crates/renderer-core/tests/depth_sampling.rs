@@ -22,10 +22,10 @@ use renderer_core::graph::{
     ImageDesc, LoadOp, PassHandle, RasterAttachments, RasterConstants, RasterDraw, StoreOp,
 };
 use renderer_core::program::{
-    BindingLayout, BindingType, BlendState, CompareOp, D3D12InlineConstantBinding,
-    D3D12RasterShaders, DepthState, ManagedRasterProgram, RasterParameterLayout,
-    RasterProgramDescriptor, RasterShaderStages, SampledImageSamplerPair, SamplerDescriptor,
-    ShaderBinaries, ShaderStages, VertexAttribute, VertexFormat,
+    AddressMode, BindingLayout, BindingType, BlendState, CompareOp, D3D12InlineConstantBinding,
+    D3D12RasterShaders, DepthState, FilterMode, ManagedRasterProgram, MipFilter,
+    RasterParameterLayout, RasterProgramDescriptor, RasterShaderStages, SampledImageSamplerPair,
+    SamplerDescriptor, ShaderBinaries, ShaderStages, VertexAttribute, VertexFormat,
 };
 use renderer_core::{
     d3d12::{
@@ -38,6 +38,16 @@ use serde_json::json;
 use std::time::Duration;
 
 const WAIT: Duration = Duration::from_secs(30);
+const MIRROR_BASE: SamplerDescriptor = SamplerDescriptor {
+    wrap_u: AddressMode::MirroredRepeat,
+    wrap_v: AddressMode::Repeat,
+    mip_filter: MipFilter::None,
+    ..SamplerDescriptor::LinearRepeat
+};
+const POINT_MAG: SamplerDescriptor = SamplerDescriptor {
+    mag_filter: FilterMode::Nearest,
+    ..MIRROR_BASE
+};
 const IMAGE: BindingLayout = BindingLayout {
     group: 0,
     binding: 0,
@@ -171,13 +181,13 @@ fn output_desc() -> ImageDesc {
 }
 fn capacity() -> GraphCapacity {
     GraphCapacity {
-        resources: 8,
-        passes: 16,
+        resources: 10,
+        passes: 20,
         accesses: 48,
-        draws: 4,
+        draws: 7,
         raster_constant_words: None,
-        bindings: 16,
-        attachments: 4,
+        bindings: 28,
+        attachments: 7,
         dependencies: 32,
         initial_ranges: 32,
         name_bytes: 1024,
@@ -198,14 +208,10 @@ fn half_eighths(value: u16) -> u16 {
         0, 0x3000, 0x3400, 0x3600, 0x3800, 0x3900, 0x3a00, 0x3b00, 0x3c00,
     ][usize::from(value)]
 }
-fn expected_color(repeat_u: bool, mip_blend: bool) -> Vec<u8> {
-    let r = if repeat_u { [6, 2, 6, 2] } else { [0, 2, 8, 8] };
-    let g = [0, 2, 8, 8];
+fn expected_color(r: [u16; 4], g: [u16; 4]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(128);
     for g in g {
         for (x, r) in r.into_iter().enumerate() {
-            let r = if mip_blend { (r + 8) / 2 } else { r };
-            let g = if mip_blend { g / 2 } else { g };
             let depth = if x < 2 { 8 } else { 2 };
             bytes.extend(
                 [r, g, depth, 8]
@@ -305,27 +311,51 @@ fn build() -> (GraphPool, CompiledGraph, Vec<Capture>) {
         name: "alpha holes",
         bytes: depth_bytes,
     }];
-    for (policy, lod, name, repeat_u, mip_blend) in [
+    // R varies along U, G along V. Expected columns and rows are in eighths.
+    let clamp = [0, 2, 8, 8];
+    let repeat = [6, 2, 6, 2];
+    for (policy, lod, name, red, green) in [
         (
             SamplerDescriptor::LinearClamp,
             0_f32,
             "linear clamp",
-            false,
-            false,
+            clamp,
+            clamp,
         ),
         (
             SamplerDescriptor::LinearRepeatUClampV,
             0_f32,
             "repeat U clamp V",
-            true,
-            false,
+            repeat,
+            clamp,
         ),
         (
             SamplerDescriptor::LinearRepeatUClampV,
             0.5_f32,
             "fractional mip",
-            true,
-            true,
+            [7, 5, 7, 5],
+            [0, 1, 4, 4],
+        ),
+        (
+            MIRROR_BASE,
+            1_f32,
+            "mirror U repeat V base mip only",
+            [0, 2, 8, 6],
+            repeat,
+        ),
+        (
+            POINT_MAG,
+            -1_f32,
+            "nearest magnification",
+            [0, 0, 8, 8],
+            [8, 0, 8, 0],
+        ),
+        (
+            POINT_MAG,
+            1_f32,
+            "linear minification without mips",
+            [0, 2, 8, 6],
+            repeat,
         ),
     ] {
         let output = graph.image(name, output_desc()).unwrap();
@@ -385,7 +415,7 @@ fn build() -> (GraphPool, CompiledGraph, Vec<Capture>) {
         captures.push(Capture {
             pass: graph.readback_image(name, output).unwrap(),
             name,
-            bytes: expected_color(repeat_u, mip_blend),
+            bytes: expected_color(red, green),
         });
     }
     (pool, graph.compile().unwrap(), captures)
@@ -472,8 +502,8 @@ fn run(strict: bool) {
     let mut vk = VulkanRuntime::new_with_validation(
         RuntimeConfig {
             execution_slots: 1,
-            resource_capacity: 8,
-            max_shader_bindings: 4,
+            resource_capacity: 10,
+            max_shader_bindings: 7,
             staging_bytes: 8192,
             staging_ranges: 16,
         },
@@ -493,9 +523,9 @@ fn run(strict: bool) {
         capacity: D3D12FrameCapacity {
             executions: 1,
             results: 1,
-            resources: 8,
-            resource_capacity: 8,
-            operations: 16,
+            resources: 10,
+            resource_capacity: 10,
+            operations: 20,
             buffers: 2,
             buffer_bytes: 32,
             upload_bytes: 8192,
@@ -518,7 +548,7 @@ fn run(strict: bool) {
     let images = [
         (source_desc(), 1),
         (ImageDesc::depth32(4, 4), 1),
-        (output_desc(), 3),
+        (output_desc(), 6),
     ];
     let mut resources = vec![
         ResourceClass::Buffer {
@@ -553,6 +583,14 @@ fn run(strict: bool) {
         &[],
     )
     .unwrap();
+    let samplers = [
+        SamplerDescriptor::NearestClamp,
+        SamplerDescriptor::LinearClamp,
+        SamplerDescriptor::LinearRepeatUClampV,
+        MIRROR_BASE,
+    ];
+    vk.prepare_samplers(&samplers).unwrap();
+    dx.prepare_samplers(&samplers).unwrap();
     let (pool, plan, captures) = build();
     let error = vk
         .submit(&plan)
@@ -581,6 +619,20 @@ fn run(strict: bool) {
         &resources,
     )
     .unwrap();
+    let vk_error = vk.submit(&plan).err().expect("unprepared sampler");
+    let dx_error = dx.prepare(&plan).err().expect("unprepared sampler");
+    for failure in [vk_error.capacity().unwrap(), dx_error.capacity().unwrap()] {
+        assert_eq!(
+            failure.resource,
+            renderer_core::capacity::RuntimeCapacityKind::Samplers
+        );
+        assert_eq!(
+            failure.recovery,
+            renderer_core::capacity::CapacityRecovery::Prepare
+        );
+    }
+    vk.prepare_samplers(&[POINT_MAG]).unwrap();
+    dx.prepare_samplers(&[POINT_MAG]).unwrap();
     let mut vk_pixels = Vec::with_capacity(2);
     let mut dx_pixels = Vec::with_capacity(2);
     for _ in 0..2 {
@@ -623,8 +675,9 @@ fn run(strict: bool) {
             "memory_profiling":cfg!(feature="memory-profiling"),
             "debug_assertions":cfg!(debug_assertions),"external_layer_injection_checked":false},
         "binding_capacity_rejection_and_recovery":true,
-        "cases":["alpha holes", "linear clamp", "repeat U clamp V", "fractional mip"],
-        "compared_bytes_per_run":448,
+        "sampler_preparation_rejection_and_recovery":true,
+        "cases":captures.iter().map(|capture| capture.name).collect::<Vec<_>>(),
+        "compared_bytes_per_run":captures.iter().map(|capture| capture.bytes.len()).sum::<usize>(),
         "interpolated_rg_half_ulp_tolerance":1,"depth_alpha_and_clamp_endpoints_bit_exact":true,
         "cross_api_max_half_ulp":cross_api_max_half_ulp,
         "cross_api_content_checked":true,
