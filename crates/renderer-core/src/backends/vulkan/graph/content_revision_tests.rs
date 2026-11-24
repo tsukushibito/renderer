@@ -67,6 +67,9 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
                 crate::program::ManagedProgram::sampled_readback(),
             ])
             .unwrap();
+        runtime
+            .prepare_samplers(&[crate::program::SamplerDescriptor::NearestClamp])
+            .unwrap();
         let pixels = [10, 20, 30, 255].repeat(4);
         let bytes = (0..16).collect::<Vec<u8>>();
         let mut initial = Graph::test_new();
