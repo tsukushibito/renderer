@@ -29,3 +29,9 @@ For compatible FBX rigs, add entries in `tools/survivor/character-recipes.json` 
 To add a visual variant from an already cooked skin, add a model entry with a unique stable 32-hex-digit ID, paths to its cooked skin and top-row-first RGBA8 color texture, color extent and named clips. Paths are relative to the catalog directory. Each clip declares its first sample, sample count, sample rate and loop flag. To reuse a mesh for a faster movement, another clip can reference the same sample range and specify a higher playback rate. A one-shot clip holds its last sample.
 
 A `Subject` prefab can select the catalog entry with its `model` field and a named animation with `clip`. A null model follows the player's selected model; the player uses the `walk` clip. Subjects sharing a model and clip share four phase-shifted pose streams at runtime.
+
+## Transition between clips
+
+The version 2 skin stores the target rig's bind transforms and nearest retained parents. Prepare a clip pair once with `model.prepare_crossfade("walk", "jog")?`. For a walk already at tick 36 and a 12-tick transition, call `fade.sample(36, elapsed_ticks, duration, tick_rate)?` as the fixed clock advances. Pass the returned palette to the posed mesh. Both clips advance through the transition. The exact cooked source and destination samples are returned at the endpoints.
+
+Preparing the pair recovers the joint-local poses from the final skin matrices. Sampling interpolates positive scales and translations linearly and takes the shortest quaternion arc for rotations, then propagates the pose from parent to child before applying inverse bind transforms. Interpolation is relative to the nearest retained ancestor where the cook dropped unweighted bones. Joint-local shear and reflections are reported during transition preparation. Direct clip playback uses the original matrix samples for both skin versions and allocates no blend tracks.

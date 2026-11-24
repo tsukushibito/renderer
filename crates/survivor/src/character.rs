@@ -201,4 +201,28 @@ mod tests {
         assert_ne!(cast.actors[0].mesh, cast.actors[1].mesh);
         cast.animate(20, &mut meshes)
     }
+    #[test]
+    fn both_cooked_rigs_crossfade_walk_to_jog() -> PipelineResult<()> {
+        let catalog = CharacterCatalog::open(&catalog_path()?)?;
+        let rate = survivor::TICK_HZ.try_into().unwrap();
+        let duration = std::num::NonZeroU64::new(12).unwrap();
+        for name in catalog.names() {
+            let model = catalog.load(catalog.id(name).unwrap())?;
+            let mut fade = model.prepare_crossfade("walk", "jog")?;
+            assert_eq!(
+                fade.sample(36, 0, duration, rate)?,
+                model.clip("walk").unwrap().sample(36, rate)
+            );
+            for tick in 1..12 {
+                let pose = fade.sample(36, tick, duration, rate)?;
+                assert_eq!(pose.len(), 62);
+                assert_ne!(pose, model.clip("jog").unwrap().sample(tick, rate));
+            }
+            assert_eq!(
+                fade.sample(36, 12, duration, rate)?,
+                model.clip("jog").unwrap().sample(12, rate)
+            );
+        }
+        Ok(())
+    }
 }
