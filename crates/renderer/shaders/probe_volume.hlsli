@@ -4,7 +4,7 @@ uint baked_debug() {
 float baked_blend() {
     return saturate(camera.shadow_bias.w - 1.0 - 2.0 * (float)baked_debug());
 }
-// RBKLGI01, RGB irradiance SH in world space. Bound every texture fetch and
+// RGB irradiance SH in world space. Bound every texture fetch and
 // traversal even for graph users supplying an unrelated image or uniform.
 float4 probe_load(uint index, uint2 dims) {
     index = min(index, dims.x * dims.y - 1u);
@@ -13,12 +13,19 @@ float4 probe_load(uint index, uint2 dims) {
 uint probe_index(float value, uint maximum) {
     return (uint)(value >= 0.0 ? min(value, (float)maximum) : 0.0);
 }
-// The original paired layout used tag 0; sequence assets store their key count.
+// The original paired layout used tag 0. L2 stores the negated key count.
 uint lighting_keys(float tag) {
-    return tag == 0.0 ? 2u : clamp(probe_index(tag,16u),1u,16u);
+    return tag == 0.0 ? 2u : clamp(probe_index(abs(tag),16u),1u,16u);
+}
+float3 probe_coefficient(uint at_key, uint coefficients, float mix, uint2 dims) {
+    float3 value = probe_load(at_key, dims).rgb;
+    [branch] if (mix > 0.0) {
+        value = lerp(value, probe_load(at_key + coefficients, dims).rgb, mix);
+    }
+    return value;
 }
 float3 sample_probe_volume(uint2 dims, float4 bounds, float3 f, float3 n, float4 layout,
-                           uint header, uint stride, uint key, float mix) {
+                           uint header, uint stride, uint coefficients, uint key, float mix) {
     uint maximum = dims.x * dims.y - 1u;
     if (any(f < 0.0) || any(f > 1.0)) {
         float3 sky = probe_load(2u+key, dims).rgb;
@@ -56,14 +63,19 @@ float3 sample_probe_volume(uint2 dims, float4 bounds, float3 f, float3 n, float4
                 float3 visibility =
                     saturate(1.0 + (depth_to_wall - abs(delta)) / max(size * 0.05, 1e-6));
                 weight *= min(visibility.x, min(visibility.y, visibility.z));
+                uint at_key = p + 2u + coefficients * key;
                 float3 sh = 0.0;
                 [unroll] for (uint k = 0u; k < 4u; ++k) {
-                    uint at_key = p + 2u + 4u * key + k;
-                    float3 coeff = probe_load(at_key, dims).rgb;
-                    [branch] if (mix > 0.0) {
-                        coeff = lerp(coeff, probe_load(at_key + 4u, dims).rgb, mix);
+                    sh += probe_coefficient(at_key + k, coefficients, mix, dims) * float4(1.0, n)[k];
+                }
+                [branch] if (coefficients == 9u) {
+                    float quadratic[5] = {
+                        n.x * n.y, n.y * n.z, n.x * n.z,
+                        n.x * n.x - n.y * n.y, 3.0 * n.z * n.z - 1.0
+                    };
+                    [unroll] for (uint k = 0u; k < 5u; ++k) {
+                        sh += probe_coefficient(at_key + 4u + k, coefficients, mix, dims) * quadratic[k];
                     }
-                    sh += coeff * float4(1.0, n)[k];
                 }
                 sum += sh * weight;
                 weights += weight;
@@ -93,11 +105,12 @@ float3 probe_irradiance(float3 position, float3 n, float blend) {
     uint key = (uint)phase;
     float mix = frac(phase);
     uint header = 2u + max(count,2u);
-    uint stride = 2u + 4u * count;
+    uint coefficients = layout.w < 0.0 ? 9u : 4u;
+    uint stride = 2u + coefficients * count;
     // At the first key, load SH from the same texels as the relocation vector.
     // Select once before traversal so every corner can reuse the same fetches.
     [branch] if (phase == 0.0) {
-        return sample_probe_volume(dims,bounds,f,n,layout,header,stride,0u,0.0);
+        return sample_probe_volume(dims,bounds,f,n,layout,header,stride,coefficients,0u,0.0);
     }
-    return sample_probe_volume(dims,bounds,f,n,layout,header,stride,key,mix);
+    return sample_probe_volume(dims,bounds,f,n,layout,header,stride,coefficients,key,mix);
 }
