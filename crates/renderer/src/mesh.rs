@@ -121,6 +121,7 @@ impl MeshData {
 struct Resident {
     layout: Arc<Layout>,
     revision: u64,
+    uploaded_by: renderer_core::runtime::FrameId,
     buffers: [Option<ImportBuffer>; 3],
 }
 #[derive(Default)]
@@ -261,6 +262,13 @@ impl Meshes {
 
     pub(crate) fn resident_revision(&self, mesh: MeshHandle) -> Option<u64> {
         Some(self.assets.get(&mesh)?.active.as_ref()?.revision)
+    }
+
+    pub(crate) fn resident_submission(
+        &self,
+        mesh: MeshHandle,
+    ) -> Option<renderer_core::runtime::FrameId> {
+        Some(self.assets.get(&mesh)?.active.as_ref()?.uploaded_by)
     }
 
     pub(crate) fn retirement_usage(&self) -> (usize, usize) {

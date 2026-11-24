@@ -267,6 +267,7 @@ impl Meshes {
                 asset.active = Some(Resident {
                     layout: asset.layout.clone(),
                     revision: asset.revision,
+                    uploaded_by: sent.id(),
                     buffers,
                 });
                 asset.upload = Default::default();

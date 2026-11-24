@@ -60,6 +60,7 @@ pub struct MaterialHandle(u64);
 #[derive(Clone, Debug)]
 pub struct PbrMaterial {
     source: PbrSource,
+    pub(crate) uploaded_by: Option<renderer_core::runtime::FrameId>,
     textures: MaterialTextures<Option<ImportImage>>,
     alpha: AlphaMode,
 }
@@ -105,6 +106,7 @@ impl PbrMaterial {
         }
         Ok(Self {
             source,
+            uploaded_by: None,
             alpha,
             textures,
         })

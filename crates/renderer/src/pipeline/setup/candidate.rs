@@ -78,7 +78,9 @@ enum Stage {
 /// A delta to the prepared drawing set. Stage replacement data under fresh
 /// handles. Live unchanged resources can be shared. The engine retains owners
 /// of referenced images and both registries while the request is outstanding.
-/// Multiple candidates may reference the same unchanged geometry or material.
+/// Concurrent candidates may share both fully prepared revisions and uploads in
+/// progress on this renderer. All dependants observe the producer's completion
+/// before becoming ready. Externally submitted uploads remain the host's responsibility.
 #[must_use]
 pub struct AssetCandidate {
     objects: Vec<RenderObject>,
@@ -194,6 +196,36 @@ impl AssetCandidate {
             return Err("asset candidate belongs to another renderer".into());
         }
         Ok(())
+    }
+
+    /// A shared native revision can become importable at queue acceptance,
+    /// including through a duplicate material handle. Adoption also requires
+    /// completion of the asset transfer that produced that exact revision.
+    fn pending_upload(
+        &self,
+        meshes: &Meshes,
+        materials: &Materials,
+        transfers: &Transfers,
+    ) -> Result<Option<FrameId>, GraphError> {
+        if transfers.pending.is_empty() {
+            return Ok(None);
+        }
+        for &mesh in &self.meshes {
+            if let Some(id) = meshes.resident_submission(mesh)
+                && transfers.pending.contains(&id)
+            {
+                return Ok(Some(id));
+            }
+        }
+        for &handle in &self.materials {
+            if let MaterialInstance::Pbr(material) = materials.get(handle)?
+                && let Some(id) = material.uploaded_by
+                && transfers.pending.contains(&id)
+            {
+                return Ok(Some(id));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -338,6 +370,9 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         // Different candidates can use the remaining prepared execution slots.
         loop {
             if c.stage == Stage::Ready || budget.submissions == 0 {
+                if c.stage == Stage::Ready && c.pending.is_none() {
+                    c.pending = c.pending_upload(meshes, materials, &self.transfers)?;
+                }
                 return Ok(if c.stage == Stage::Ready && c.pending.is_none() {
                     Poll::Ready(())
                 } else {
@@ -406,7 +441,11 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         self.driver.check_idle()?;
         retire.check(meshes, materials)?;
         if publish {
-            if c.stage != Stage::Ready || c.pending.is_some() {
+            if c.stage != Stage::Ready
+                || c.pending.is_some()
+                || c.pending_upload(meshes, materials, &self.transfers)?
+                    .is_some()
+            {
                 return Err("asset candidate has not completed preparation".into());
             }
             if retire.meshes.iter().any(|h| c.meshes.contains(h))
