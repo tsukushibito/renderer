@@ -54,6 +54,14 @@ impl Source {
         let bytes = fs::read(path)?;
         let gltf = gltf::Gltf::from_slice(&bytes)?;
         let document = gltf.document;
+        let asset = &document.as_json().asset;
+        if asset.version != "2.0" || asset.min_version.as_deref().is_some_and(|v| v != "2.0") {
+            return Err(format!(
+                "unsupported glTF version {} (minimum {:?})",
+                asset.version, asset.min_version
+            )
+            .into());
+        }
         if let Some(extension) = document.extensions_required().next() {
             return Err(format!("unsupported required extension {extension}").into());
         }
@@ -256,4 +264,63 @@ fn read_uri(root: &Path, uri: &str) -> Result<Vec<u8>> {
         return Err(format!("asset URI escapes source directory: {uri}").into());
     }
     Ok(fs::read(resolved)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use renderer_asset::{MaterialBlob, MeshBlob};
+
+    #[test]
+    fn comparison_equipment_preserves_mikk_uvs_and_mirrored_basis() -> Result<()> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../training-yard/assets/equipment/source/comparison.gltf");
+        let mut source = Source::open(&path)?;
+        let mesh = MeshBlob::decode(&source.cook_mesh(0)?)?;
+        let first = mesh.vertices[mesh.indices[0] as usize];
+        // Independently read back from the Bistro cook of this fixture, in corner order.
+        let expected = [
+            -0.35,
+            0.,
+            0.5,
+            0.,
+            0.,
+            -1.,
+            0.9916721,
+            -0.12878859,
+            0.,
+            1.,
+            -0.25,
+            0.1,
+        ];
+        for (actual, reference) in first.into_iter().zip(expected) {
+            assert!((actual - reference).abs() < 2e-6);
+        }
+        let material = MaterialBlob::decode(&source.cook_material(0)?)?;
+        assert_eq!(source.images(0)[0], source.images(0)[3]);
+        assert_ne!(material.samplers[0], material.samplers[3]);
+        let initial_key = source.mesh_inputs(0)?;
+        source.parts[0].transform = Mat4::from_scale(glam::vec3(-2., 3., 1.5));
+        assert_ne!(source.mesh_inputs(0)?, initial_key);
+        let mirrored = MeshBlob::decode(&source.cook_mesh(0)?)?;
+        for (original, reflected) in mesh
+            .indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(mirrored.indices.as_chunks::<3>().0)
+        {
+            for (&a, b) in original
+                .iter()
+                .zip([reflected[0], reflected[2], reflected[1]])
+            {
+                let a = mesh.vertices[a as usize];
+                let b = mirrored.vertices[b as usize];
+                assert_eq!(b[..3], [-2. * a[0], 3. * a[1], 1.5 * a[2]]);
+                assert_eq!(b[9], -a[9]);
+                assert_eq!(b[10..], a[10..]);
+            }
+        }
+        Ok(())
+    }
 }

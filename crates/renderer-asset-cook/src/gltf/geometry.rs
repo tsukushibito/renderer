@@ -253,7 +253,7 @@ pub(super) fn cook(
         result.push(id);
     }
     if det < 0. {
-        for tri in result.chunks_exact_mut(3) {
+        for tri in result.as_chunks_mut::<3>().0 {
             tri.swap(1, 2);
         }
     }
