@@ -5,3 +5,4 @@ pub mod space;
 pub mod ui;
 pub mod view;
 pub mod save;
+pub mod scene;

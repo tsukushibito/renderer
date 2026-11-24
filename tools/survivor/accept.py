@@ -51,7 +51,11 @@ def run(exe, arena_path, output, backend, playthrough):
     # Walk directly toward the marker. An edited lab table blocks that exact route.
     open_arena = output / "open.json"
     write_json(open_arena, arena)
-    arena["obstacles"].append({"center": [0, 4.5], "half_extent": [0.8, 0.3]})
+    if arena.get("schema_version") == 1:
+        arena["placements"].append({"id": "test-obstacle", "prefab": "table",
+                                    "translation": [0, 0, 4.5], "overrides": {"half_extent": [0.8, 0.3]}})
+    else:
+        arena["obstacles"].append({"center": [0, 4.5], "half_extent": [0.8, 0.3]})
     edited_arena = output / "edited.json"
     write_json(edited_arena, arena)
     movement = {"movement": [0, -1], "restart": False, "upgrade": None}

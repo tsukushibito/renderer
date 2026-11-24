@@ -1,11 +1,22 @@
 {
-  "half_extent": [18.0, 14.0],
-  "player_spawn": [0.0, 6.0],
-  "marker": [0.0, 3.0],
-  "obstacles": [
-    { "center": [-3.2, 0.0], "half_extent": [2.3, 1.1] },
-    { "center": [3.2, 0.0], "half_extent": [2.3, 1.1] },
-    { "center": [-10.0, -6.0], "half_extent": [1.4, 2.0] },
-    { "center": [10.0, 6.0], "half_extent": [1.4, 2.0] }
+  "schema_version": 1,
+  "prefabs": {
+    "hall": {"kind": "Room", "fields": {"half_extent": [18.0, 14.0]}},
+    "table": {"kind": "Bench", "fields": {"half_extent": [2.3, 1.1]}},
+    "spawn": {"kind": "PlayerSpawn", "fields": {}},
+    "goal": {"kind": "Marker", "fields": {}},
+    "lunger": {"kind": "Subject", "fields": {"copies": 1, "hp": 3, "walk_speed": 1.25, "model": null, "clip": "walk", "lunge": {"range": 3.5, "speed": 8.0, "windup_ticks": 30, "dash_ticks": 16, "recovery_ticks": 120}}},
+    "walker": {"kind": "Subject", "fields": {"copies": 3, "hp": 1, "walk_speed": 1.7, "model": null, "clip": "walk", "lunge": null}}
+  },
+  "placements": [
+    {"id": "room", "prefab": "hall"},
+    {"id": "player", "prefab": "spawn", "translation": [0, 0, 6]},
+    {"id": "marker", "prefab": "goal", "translation": [0, 0, 3]},
+    {"id": "bench-west", "prefab": "table", "parent": "room", "translation": [-3.2, 0, 0.0]},
+    {"id": "bench-east", "prefab": "table", "parent": "room", "translation": [3.2, 0, 0.0]},
+    {"id": "bench-north", "prefab": "table", "parent": "room", "translation": [-10.0, 0, -6.0], "overrides": {"half_extent": [1.4, 2.0]}},
+    {"id": "bench-south", "prefab": "table", "parent": "room", "translation": [10.0, 0, 6.0], "overrides": {"half_extent": [1.4, 2.0]}},
+    {"id": "lunger", "prefab": "lunger"},
+    {"id": "walker", "prefab": "walker"}
   ]
 }

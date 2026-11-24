@@ -1,5 +1,6 @@
 //! Fixed-step research facility simulation shared by the window and replay hosts.
 mod arena;
+pub mod authoring;
 mod combat;
 pub use arena::{Arena, Obstacle};
 use sashiko::space::{CrowdNavigation, direction, distance_squared, unit_or_zero};
@@ -55,6 +56,7 @@ pub struct Events {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Enemy {
+    pub archetype: usize,
     pub id: u64,
     pub pos: [f32; 2],
     pub facing: [f32; 2],
@@ -272,12 +274,32 @@ impl Game {
             };
             let id = self.next_id;
             self.next_id += 1;
+            let mut slot = id
+                % self
+                    .arena
+                    .subjects
+                    .iter()
+                    .map(|s| u64::from(s.copies))
+                    .sum::<u64>();
+            let archetype = self
+                .arena
+                .subjects
+                .iter()
+                .position(|s| {
+                    if slot < u64::from(s.copies) {
+                        return true;
+                    }
+                    slot -= u64::from(s.copies);
+                    false
+                })
+                .expect("validated nonempty spawn table");
             self.enemies.push(Enemy {
+                archetype,
                 id,
                 pos: spawn,
                 facing: direction(spawn, self.player),
                 windup: false,
-                hp: if id.is_multiple_of(4) { 3 } else { 1 },
+                hp: self.arena.subjects[archetype].hp,
                 windup_left: 0,
                 dash_left: 0,
                 recovery: (id % 40) as u8,
@@ -291,29 +313,32 @@ impl Game {
             .expect("enemies fit prepared capacity");
         for (index, enemy) in self.enemies.iter_mut().enumerate() {
             let d = distance_squared(self.player, enemy.pos);
-            let lunger = enemy.id.is_multiple_of(4);
+            let subject = &self.arena.subjects[enemy.archetype];
             enemy.recovery = enemy.recovery.saturating_sub(1);
             let speed = if enemy.windup_left > 0 {
                 enemy.windup_left -= 1;
                 if enemy.windup_left == 0 {
                     enemy.windup = false;
-                    enemy.dash_left = 16;
+                    enemy.dash_left = subject.lunge.as_ref().expect("active windup").dash_ticks;
                 }
                 0.
             } else if enemy.dash_left > 0 {
                 enemy.dash_left -= 1;
                 if enemy.dash_left == 0 {
-                    enemy.recovery = 120;
+                    enemy.recovery = subject.lunge.as_ref().expect("active dash").recovery_ticks;
                 }
-                8.
-            } else if lunger && d < 3.5 * 3.5 && enemy.recovery == 0 {
+                subject.lunge.as_ref().expect("active dash").speed
+            } else if let Some(lunge) = &subject.lunge
+                && d < lunge.range * lunge.range
+                && enemy.recovery == 0
+            {
                 enemy.facing = direction(enemy.pos, self.player);
                 enemy.windup = true;
-                enemy.windup_left = 30;
+                enemy.windup_left = lunge.windup_ticks;
                 0.
             } else {
                 enemy.facing = self.nav.steer(index, 0.6, 1.6).expect("indexed snapshot");
-                if lunger { 1.25 } else { 1.7 }
+                subject.walk_speed
             };
             enemy.pos = self
                 .arena
