@@ -1,0 +1,1491 @@
+{
+  "tested_revision": "0637ddf35165effd61d17b6b707732d0e1286f9c",
+  "shipping_sha256": "f495cc46368587af375d2f857ae818c74223b43bf5a67113a789fc6bc2d67626",
+  "gpu_diagnostic_sha256": "d81f11952343c2ee8d704b29c559f6a3550f82f2a9362d04c7a893223daa2b63",
+  "date": "2026-11-25T08:30+09:00",
+  "hardware": {
+    "cpu": "Intel Core i5-14600KF",
+    "gpu": "NVIDIA GeForce RTX 3060, 610.88, 12288 MiB",
+    "os": "Windows-10-10.0.26200-SP0"
+  },
+  "configuration": {
+    "backend": "vulkan",
+    "extent": [
+      1920,
+      1080
+    ],
+    "seed": 506,
+    "warmup_presented": 120,
+    "measured_presented": 600,
+    "vsync": false,
+    "frame_budget_ms": 16.666666666666668,
+    "replay": {
+      "prefix": 88612,
+      "sha256": "c9df84b1f57ab6df981cd63f1bf7d16d4c834abb5959a7af214f4b49ebe4c11f"
+    }
+  },
+  "scenarios": {
+    "early": {
+      "workload_sha256": "f3ae69f377008ded3dd4e4e4d4a91511f54108a6b72051e2e869b99fc9bca618",
+      "shot_and_pulse_frames": 0,
+      "counts_min_median_max": {
+        "active": [
+          8,
+          10.0,
+          12
+        ],
+        "visible": [
+          8,
+          9.0,
+          11
+        ],
+        "drawn": [
+          8,
+          9.0,
+          11
+        ],
+        "shots": [
+          0,
+          1.0,
+          2
+        ],
+        "drops": [
+          2,
+          3.0,
+          8
+        ],
+        "pulse": [
+          0,
+          0.0,
+          0
+        ],
+        "rapid_level": [
+          0,
+          0.0,
+          0
+        ],
+        "pierce_level": [
+          0,
+          0.0,
+          0
+        ],
+        "pulse_level": [
+          0,
+          0.0,
+          0
+        ]
+      },
+      "final_state": {
+        "tick": 720,
+        "phase": "playing",
+        "player": [
+          -1.1999997,
+          -10.199983
+        ],
+        "hp": 100,
+        "xp": 1,
+        "level": 1,
+        "kills": 9,
+        "enemies": 12,
+        "shots": 0,
+        "drops": 8,
+        "upgrades": [
+          0,
+          0,
+          0
+        ],
+        "contacts": 0,
+        "marker_entries": 0
+      },
+      "runs": [
+        {
+          "mode": "ordinary",
+          "repetition": 1,
+          "peak_process_working_set_bytes": 1928105984,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              2.58435,
+              2.95889,
+              3.26845
+            ],
+            "update_ms": [
+              0.0023,
+              0.01041,
+              0.0265
+            ],
+            "draw_ms": [
+              2.4773,
+              2.83342,
+              3.16211
+            ]
+          }
+        },
+        {
+          "mode": "timestamps",
+          "repetition": 1,
+          "peak_process_working_set_bytes": 1927135232,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              2.6145,
+              2.94472,
+              3.22286
+            ],
+            "update_ms": [
+              0.0022,
+              0.0088,
+              0.0134
+            ],
+            "draw_ms": [
+              2.50065,
+              2.81025,
+              3.10846
+            ],
+            "graph_gpu_ms": [
+              2.25904,
+              2.5072,
+              2.58107
+            ],
+            "present_gpu_ms": [
+              0.02835,
+              0.02899,
+              0.02928
+            ],
+            "graph_prepare_ms": [
+              0.0294,
+              0.0433,
+              0.06925
+            ],
+            "graph_record_ms": [
+              0.03255,
+              0.07635,
+              0.09911
+            ],
+            "graph_submit_ms": [
+              0.0148,
+              0.0458,
+              0.0642
+            ],
+            "graph_retire_ms": [
+              0.0066,
+              0.01562,
+              0.0391
+            ]
+          }
+        },
+        {
+          "mode": "ordinary",
+          "repetition": 2,
+          "peak_process_working_set_bytes": 1927135232,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              2.625,
+              3.00127,
+              3.23812
+            ],
+            "update_ms": [
+              0.002,
+              0.00861,
+              0.0107
+            ],
+            "draw_ms": [
+              2.513,
+              2.87833,
+              3.11181
+            ]
+          }
+        },
+        {
+          "mode": "timestamps",
+          "repetition": 2,
+          "peak_process_working_set_bytes": 1927155712,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              2.76325,
+              3.18442,
+              3.72937
+            ],
+            "update_ms": [
+              0.0074,
+              0.01566,
+              0.0201
+            ],
+            "draw_ms": [
+              2.57945,
+              3.01713,
+              3.51841
+            ],
+            "graph_gpu_ms": [
+              2.22392,
+              2.40881,
+              2.44677
+            ],
+            "present_gpu_ms": [
+              0.0287,
+              0.02922,
+              0.02947
+            ],
+            "graph_prepare_ms": [
+              0.0618,
+              0.13301,
+              0.1974
+            ],
+            "graph_record_ms": [
+              0.0867,
+              0.1437,
+              0.21139
+            ],
+            "graph_submit_ms": [
+              0.0466,
+              0.0719,
+              0.09507
+            ],
+            "graph_retire_ms": [
+              0.0225,
+              0.04304,
+              0.07413
+            ]
+          }
+        },
+        {
+          "mode": "ordinary",
+          "repetition": 3,
+          "peak_process_working_set_bytes": 1927274496,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              2.63535,
+              2.94488,
+              3.14276
+            ],
+            "update_ms": [
+              0.0023,
+              0.009,
+              0.01431
+            ],
+            "draw_ms": [
+              2.5191,
+              2.81878,
+              3.03525
+            ]
+          }
+        },
+        {
+          "mode": "timestamps",
+          "repetition": 3,
+          "peak_process_working_set_bytes": 1927385088,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              2.6204,
+              2.98399,
+              3.27829
+            ],
+            "update_ms": [
+              0.0024,
+              0.00951,
+              0.02105
+            ],
+            "draw_ms": [
+              2.5081,
+              2.86187,
+              3.13021
+            ],
+            "graph_gpu_ms": [
+              2.26469,
+              2.52434,
+              2.58676
+            ],
+            "present_gpu_ms": [
+              0.02864,
+              0.02922,
+              0.02941
+            ],
+            "graph_prepare_ms": [
+              0.0291,
+              0.05526,
+              0.09462
+            ],
+            "graph_record_ms": [
+              0.03305,
+              0.08446,
+              0.118
+            ],
+            "graph_submit_ms": [
+              0.01485,
+              0.04691,
+              0.08853
+            ],
+            "graph_retire_ms": [
+              0.0069,
+              0.01972,
+              0.04521
+            ]
+          }
+        }
+      ]
+    },
+    "endgame": {
+      "workload_sha256": "8c12ed3c7fd2d5108aabaa19d2a480fec2851ca52796f99c8720edffd3fc8cb5",
+      "shot_and_pulse_frames": 145,
+      "counts_min_median_max": {
+        "active": [
+          500,
+          500.0,
+          500
+        ],
+        "visible": [
+          378,
+          471.0,
+          492
+        ],
+        "drawn": [
+          378,
+          471.0,
+          492
+        ],
+        "shots": [
+          0,
+          3.0,
+          6
+        ],
+        "drops": [
+          180,
+          245.0,
+          347
+        ],
+        "pulse": [
+          0,
+          0.0,
+          1
+        ],
+        "rapid_level": [
+          2,
+          2.0,
+          2
+        ],
+        "pierce_level": [
+          2,
+          2.0,
+          2
+        ],
+        "pulse_level": [
+          2,
+          6.0,
+          8
+        ]
+      },
+      "final_state": {
+        "tick": 720,
+        "phase": "playing",
+        "player": [
+          -0.67499965,
+          -10.199983
+        ],
+        "hp": 32,
+        "xp": 13,
+        "level": 13,
+        "kills": 358,
+        "enemies": 500,
+        "shots": 2,
+        "drops": 340,
+        "upgrades": [
+          2,
+          2,
+          8
+        ],
+        "contacts": 50,
+        "marker_entries": 0
+      },
+      "runs": [
+        {
+          "mode": "ordinary",
+          "repetition": 1,
+          "peak_process_working_set_bytes": 1927368704,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              8.7252,
+              9.55385,
+              10.00573
+            ],
+            "update_ms": [
+              0.06895,
+              0.09973,
+              0.13269
+            ],
+            "draw_ms": [
+              8.27205,
+              9.01076,
+              9.41367
+            ]
+          }
+        },
+        {
+          "mode": "timestamps",
+          "repetition": 1,
+          "peak_process_working_set_bytes": 1926938624,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              8.84985,
+              9.92312,
+              10.319
+            ],
+            "update_ms": [
+              0.07085,
+              0.12491,
+              0.163
+            ],
+            "draw_ms": [
+              8.37695,
+              9.36534,
+              9.68923
+            ],
+            "graph_gpu_ms": [
+              7.92074,
+              8.58935,
+              8.89127
+            ],
+            "present_gpu_ms": [
+              0.03018,
+              0.03094,
+              0.03133
+            ],
+            "graph_prepare_ms": [
+              0.0556,
+              0.11732,
+              0.15644
+            ],
+            "graph_record_ms": [
+              0.12885,
+              0.26733,
+              0.3419
+            ],
+            "graph_submit_ms": [
+              0.02755,
+              0.06152,
+              0.06941
+            ],
+            "graph_retire_ms": [
+              0.0133,
+              0.04081,
+              0.0615
+            ]
+          }
+        },
+        {
+          "mode": "ordinary",
+          "repetition": 2,
+          "peak_process_working_set_bytes": 1927184384,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              8.8174,
+              9.65799,
+              9.8963
+            ],
+            "update_ms": [
+              0.06815,
+              0.0912,
+              0.13726
+            ],
+            "draw_ms": [
+              8.3528,
+              9.13234,
+              9.39764
+            ]
+          }
+        },
+        {
+          "mode": "timestamps",
+          "repetition": 2,
+          "peak_process_working_set_bytes": 1927163904,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              8.88695,
+              9.59825,
+              9.86227
+            ],
+            "update_ms": [
+              0.06995,
+              0.10365,
+              0.13983
+            ],
+            "draw_ms": [
+              8.40425,
+              9.08329,
+              9.33158
+            ],
+            "graph_gpu_ms": [
+              7.99304,
+              8.57819,
+              8.8065
+            ],
+            "present_gpu_ms": [
+              0.03021,
+              0.03098,
+              0.03127
+            ],
+            "graph_prepare_ms": [
+              0.0514,
+              0.0717,
+              0.09726
+            ],
+            "graph_record_ms": [
+              0.1237,
+              0.17908,
+              0.25001
+            ],
+            "graph_submit_ms": [
+              0.0254,
+              0.0406,
+              0.05636
+            ],
+            "graph_retire_ms": [
+              0.0122,
+              0.03412,
+              0.04958
+            ]
+          }
+        },
+        {
+          "mode": "ordinary",
+          "repetition": 3,
+          "peak_process_working_set_bytes": 1927237632,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              8.8289,
+              9.62618,
+              10.09431
+            ],
+            "update_ms": [
+              0.0692,
+              0.09774,
+              0.14402
+            ],
+            "draw_ms": [
+              8.36125,
+              9.10794,
+              9.52562
+            ]
+          }
+        },
+        {
+          "mode": "timestamps",
+          "repetition": 3,
+          "peak_process_working_set_bytes": 1927573504,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              8.8609,
+              9.68153,
+              10.31829
+            ],
+            "update_ms": [
+              0.0717,
+              0.11281,
+              0.1621
+            ],
+            "draw_ms": [
+              8.39715,
+              9.1716,
+              9.77671
+            ],
+            "graph_gpu_ms": [
+              7.94184,
+              8.62603,
+              8.85102
+            ],
+            "present_gpu_ms": [
+              0.03018,
+              0.03101,
+              0.03126
+            ],
+            "graph_prepare_ms": [
+              0.04885,
+              0.08902,
+              0.13396
+            ],
+            "graph_record_ms": [
+              0.12035,
+              0.22386,
+              0.33336
+            ],
+            "graph_submit_ms": [
+              0.0237,
+              0.0453,
+              0.07112
+            ],
+            "graph_retire_ms": [
+              0.0102,
+              0.04401,
+              0.07281
+            ]
+          }
+        }
+      ]
+    },
+    "overlap": {
+      "workload_sha256": "658137e02e76fbd24db8f47b1642687e9f651a1177dfc6169a229bde031d4f4a",
+      "shot_and_pulse_frames": 162,
+      "counts_min_median_max": {
+        "active": [
+          500,
+          500.0,
+          500
+        ],
+        "visible": [
+          472,
+          485.0,
+          494
+        ],
+        "drawn": [
+          472,
+          485.0,
+          494
+        ],
+        "shots": [
+          5,
+          10.0,
+          12
+        ],
+        "drops": [
+          1024,
+          1024.0,
+          1024
+        ],
+        "pulse": [
+          0,
+          0.0,
+          1
+        ],
+        "rapid_level": [
+          5,
+          5.0,
+          5
+        ],
+        "pierce_level": [
+          3,
+          3.0,
+          3
+        ],
+        "pulse_level": [
+          45,
+          45.0,
+          45
+        ]
+      },
+      "final_state": {
+        "tick": 89332,
+        "phase": "playing",
+        "player": [
+          15.61424,
+          4.223198
+        ],
+        "hp": 100,
+        "xp": 16,
+        "level": 54,
+        "kills": 15583,
+        "enemies": 500,
+        "shots": 12,
+        "drops": 1024,
+        "upgrades": [
+          5,
+          3,
+          45
+        ],
+        "contacts": 0,
+        "marker_entries": 0
+      },
+      "runs": [
+        {
+          "mode": "ordinary",
+          "repetition": 1,
+          "peak_process_working_set_bytes": 1928540160,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              8.4208,
+              9.29133,
+              9.6091
+            ],
+            "update_ms": [
+              0.1187,
+              0.15351,
+              0.17798
+            ],
+            "draw_ms": [
+              7.95435,
+              8.79128,
+              9.1331
+            ]
+          }
+        },
+        {
+          "mode": "timestamps",
+          "repetition": 1,
+          "peak_process_working_set_bytes": 1928400896,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              8.42905,
+              9.39254,
+              10.14864
+            ],
+            "update_ms": [
+              0.1206,
+              0.17733,
+              0.27653
+            ],
+            "draw_ms": [
+              7.9478,
+              8.89512,
+              9.64331
+            ],
+            "graph_gpu_ms": [
+              7.2429,
+              8.07772,
+              8.27379
+            ],
+            "present_gpu_ms": [
+              0.02922,
+              0.02998,
+              0.0306
+            ],
+            "graph_prepare_ms": [
+              0.0492,
+              0.0835,
+              0.15454
+            ],
+            "graph_record_ms": [
+              0.16595,
+              0.2769,
+              0.40922
+            ],
+            "graph_submit_ms": [
+              0.0225,
+              0.0373,
+              0.06271
+            ],
+            "graph_retire_ms": [
+              0.0094,
+              0.04403,
+              0.06392
+            ]
+          }
+        },
+        {
+          "mode": "ordinary",
+          "repetition": 2,
+          "peak_process_working_set_bytes": 1928556544,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              8.43475,
+              10.16388,
+              10.52667
+            ],
+            "update_ms": [
+              0.1246,
+              0.17242,
+              0.2264
+            ],
+            "draw_ms": [
+              7.96545,
+              9.56311,
+              9.93177
+            ]
+          }
+        },
+        {
+          "mode": "timestamps",
+          "repetition": 2,
+          "peak_process_working_set_bytes": 1928679424,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              8.63465,
+              9.49603,
+              9.86464
+            ],
+            "update_ms": [
+              0.12125,
+              0.20522,
+              0.35849
+            ],
+            "draw_ms": [
+              8.1446,
+              8.92239,
+              9.37174
+            ],
+            "graph_gpu_ms": [
+              7.32091,
+              8.07311,
+              8.27892
+            ],
+            "present_gpu_ms": [
+              0.02944,
+              0.03008,
+              0.0303
+            ],
+            "graph_prepare_ms": [
+              0.0621,
+              0.10774,
+              0.1583
+            ],
+            "graph_record_ms": [
+              0.1903,
+              0.33531,
+              0.47746
+            ],
+            "graph_submit_ms": [
+              0.0281,
+              0.05066,
+              0.0878
+            ],
+            "graph_retire_ms": [
+              0.0129,
+              0.03552,
+              0.06225
+            ]
+          }
+        },
+        {
+          "mode": "ordinary",
+          "repetition": 3,
+          "peak_process_working_set_bytes": 1928675328,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              8.47765,
+              9.8334,
+              10.66937
+            ],
+            "update_ms": [
+              0.12435,
+              0.2302,
+              0.31282
+            ],
+            "draw_ms": [
+              7.991,
+              9.26914,
+              10.06643
+            ]
+          }
+        },
+        {
+          "mode": "timestamps",
+          "repetition": 3,
+          "peak_process_working_set_bytes": 1929031680,
+          "timings_median_p95_p99_ms": {
+            "interval_ms": [
+              8.394,
+              9.38002,
+              9.66776
+            ],
+            "update_ms": [
+              0.11705,
+              0.14723,
+              0.17872
+            ],
+            "draw_ms": [
+              7.9282,
+              8.88447,
+              9.13208
+            ],
+            "graph_gpu_ms": [
+              7.25515,
+              8.15223,
+              8.35483
+            ],
+            "present_gpu_ms": [
+              0.02941,
+              0.03008,
+              0.03053
+            ],
+            "graph_prepare_ms": [
+              0.0496,
+              0.0685,
+              0.08293
+            ],
+            "graph_record_ms": [
+              0.16445,
+              0.20133,
+              0.27165
+            ],
+            "graph_submit_ms": [
+              0.0214,
+              0.03331,
+              0.03911
+            ],
+            "graph_retire_ms": [
+              0.0081,
+              0.03004,
+              0.05851
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "overlap_renderer_memory": [
+    {
+      "game": {
+        "drops": [
+          1024,
+          1024
+        ],
+        "enemies": [
+          499,
+          500
+        ],
+        "shots": [
+          12,
+          128
+        ]
+      },
+      "native": {
+        "backend": "vulkan",
+        "cached_bytes": 78569676,
+        "device_local_budget_bytes": 11890851840,
+        "device_local_process_usage_bytes": 422539264,
+        "readback_capacity_bytes": 4194304,
+        "readback_peak_reserved_bytes": 0,
+        "readback_used_bytes": 0,
+        "registered_bytes": 3712080,
+        "retained_bytes": 0,
+        "upload_capacity_bytes": 4194304,
+        "upload_peak_reserved_bytes": 1048768,
+        "upload_used_bytes": 0,
+        "vma_allocation_bytes": 95124288,
+        "vma_allocations": 171,
+        "vma_block_bytes": 177733632,
+        "vma_blocks": 10
+      },
+      "prepared": {
+        "frame_slots": 4,
+        "graph_accesses": 72512,
+        "graph_draws": 3204,
+        "graph_passes": 256,
+        "graph_resources": 5469,
+        "resource_slots": 246,
+        "result_slots": 8
+      },
+      "stage": "prepared",
+      "tick": 88612
+    },
+    {
+      "game": {
+        "drops": [
+          1024,
+          1024
+        ],
+        "enemies": [
+          500,
+          500
+        ],
+        "shots": [
+          12,
+          128
+        ]
+      },
+      "native": {
+        "backend": "vulkan",
+        "cached_bytes": 13636924,
+        "device_local_budget_bytes": 11890851840,
+        "device_local_process_usage_bytes": 330264576,
+        "readback_capacity_bytes": 4194304,
+        "readback_peak_reserved_bytes": 0,
+        "readback_used_bytes": 0,
+        "registered_bytes": 18297936,
+        "retained_bytes": 50346896,
+        "upload_capacity_bytes": 4194304,
+        "upload_peak_reserved_bytes": 1048768,
+        "upload_used_bytes": 482192,
+        "vma_allocation_bytes": 95124288,
+        "vma_allocations": 171,
+        "vma_block_bytes": 177733632,
+        "vma_blocks": 10
+      },
+      "prepared": {
+        "frame_slots": 4,
+        "graph_accesses": 72512,
+        "graph_draws": 3204,
+        "graph_passes": 256,
+        "graph_resources": 5469,
+        "resource_slots": 246,
+        "result_slots": 8
+      },
+      "stage": "active",
+      "tick": 89332
+    },
+    {
+      "game": {
+        "drops": [
+          1024,
+          1024
+        ],
+        "enemies": [
+          500,
+          500
+        ],
+        "shots": [
+          12,
+          128
+        ]
+      },
+      "native": {
+        "backend": "vulkan",
+        "cached_bytes": 72278220,
+        "device_local_budget_bytes": 11890851840,
+        "device_local_process_usage_bytes": 330264576,
+        "readback_capacity_bytes": 4194304,
+        "readback_peak_reserved_bytes": 0,
+        "readback_used_bytes": 0,
+        "registered_bytes": 10003536,
+        "retained_bytes": 0,
+        "upload_capacity_bytes": 4194304,
+        "upload_peak_reserved_bytes": 1048768,
+        "upload_used_bytes": 0,
+        "vma_allocation_bytes": 95124288,
+        "vma_allocations": 171,
+        "vma_block_bytes": 177733632,
+        "vma_blocks": 10
+      },
+      "prepared": {
+        "frame_slots": 4,
+        "graph_accesses": 72512,
+        "graph_draws": 3204,
+        "graph_passes": 256,
+        "graph_resources": 5469,
+        "resource_slots": 246,
+        "result_slots": 8
+      },
+      "stage": "drained",
+      "tick": 89332
+    }
+  ],
+  "renderdoc": {
+    "version": "1.47",
+    "headers_commit": "b0e1370309f7d7bf986a73830446ca39d9b8c1fd",
+    "method": "Sum of EventGPUDuration grouped by marker in a separate diagnostic capture replay per scenario. Single frames; action query serialization differs from live queue timestamp intervals.",
+    "frames": [
+      {
+        "scenario": "early",
+        "capture_frame": 421,
+        "reference_simulation_tick": 421,
+        "passes": {
+          "renderer.graph/upload posed vertices": {
+            "events": 4,
+            "gpu_ms": 0.018912
+          },
+          "renderer.graph/pbr camera upload": {
+            "events": 1,
+            "gpu_ms": 0.001472
+          },
+          "renderer.graph/pbr transforms upload": {
+            "events": 1,
+            "gpu_ms": 0.005376
+          },
+          "renderer.graph/local light update": {
+            "events": 1,
+            "gpu_ms": 0.001408
+          },
+          "renderer.graph/scene_opaque": {
+            "events": 22,
+            "gpu_ms": 2.2353920000000005
+          },
+          "renderer.graph/scene_transparent": {
+            "events": 9,
+            "gpu_ms": 0.014336
+          },
+          "renderer.graph/frame tone map": {
+            "events": 1,
+            "gpu_ms": 0.054272
+          },
+          "renderer.graph/canvas": {
+            "events": 35,
+            "gpu_ms": 0.004096
+          },
+          "renderer.graph/frame output transfer": {
+            "events": 1,
+            "gpu_ms": 0.04096
+          },
+          "Graph linear output -> sRGB presentation": {
+            "events": 1,
+            "gpu_ms": 0.029696
+          }
+        }
+      },
+      {
+        "scenario": "endgame",
+        "capture_frame": 421,
+        "reference_simulation_tick": 421,
+        "passes": {
+          "renderer.graph/upload posed vertices": {
+            "events": 4,
+            "gpu_ms": 0.018944000000000003
+          },
+          "renderer.graph/pbr camera upload": {
+            "events": 1,
+            "gpu_ms": 0.001408
+          },
+          "renderer.graph/pbr transforms upload": {
+            "events": 1,
+            "gpu_ms": 0.0128
+          },
+          "renderer.graph/local light update": {
+            "events": 1,
+            "gpu_ms": 0.002752
+          },
+          "renderer.graph/scene_opaque": {
+            "events": 692,
+            "gpu_ms": 8.537087999999978
+          },
+          "renderer.graph/scene_transparent": {
+            "events": 473,
+            "gpu_ms": 0.23039999999999966
+          },
+          "renderer.graph/frame tone map": {
+            "events": 1,
+            "gpu_ms": 0.058368
+          },
+          "renderer.graph/canvas": {
+            "events": 35,
+            "gpu_ms": 0.003072
+          },
+          "renderer.graph/frame output transfer": {
+            "events": 1,
+            "gpu_ms": 0.044032
+          },
+          "Graph linear output -> sRGB presentation": {
+            "events": 1,
+            "gpu_ms": 0.03072
+          }
+        }
+      },
+      {
+        "scenario": "overlap",
+        "capture_frame": 181,
+        "reference_simulation_tick": 88793,
+        "passes": {
+          "renderer.graph/upload posed vertices": {
+            "events": 4,
+            "gpu_ms": 0.019136
+          },
+          "renderer.graph/pbr camera upload": {
+            "events": 1,
+            "gpu_ms": 0.001408
+          },
+          "renderer.graph/pbr transforms upload": {
+            "events": 1,
+            "gpu_ms": 0.012512
+          },
+          "renderer.graph/local light update": {
+            "events": 1,
+            "gpu_ms": 0.002656
+          },
+          "renderer.graph/scene_opaque": {
+            "events": 1492,
+            "gpu_ms": 7.368704000000026
+          },
+          "renderer.graph/scene_transparent": {
+            "events": 481,
+            "gpu_ms": 0.09727999999999992
+          },
+          "renderer.graph/frame tone map": {
+            "events": 1,
+            "gpu_ms": 0.055296
+          },
+          "renderer.graph/canvas": {
+            "events": 35,
+            "gpu_ms": 0.01024
+          },
+          "renderer.graph/frame output transfer": {
+            "events": 1,
+            "gpu_ms": 0.041984
+          },
+          "Graph linear output -> sRGB presentation": {
+            "events": 1,
+            "gpu_ms": 0.029696
+          }
+        }
+      }
+    ]
+  },
+  "engine_api_check": {
+    "revision": "68cae856",
+    "executable_sha256": "007b31b9a90ce3d58758579cb30652b3f740dcccd4bd11c2a071b3734f682a7a",
+    "matching_timing_workload_sha256": "658137e02e76fbd24db8f47b1642687e9f651a1177dfc6169a229bde031d4f4a",
+    "memory_run": [
+      {
+        "process": {
+          "peak_working_set_bytes": 57315328,
+          "working_set_bytes": 10743808
+        },
+        "stage": "before_window",
+        "tick": 88612
+      },
+      {
+        "process": {
+          "peak_working_set_bytes": 57315328,
+          "working_set_bytes": 22429696
+        },
+        "stage": "visual_assets",
+        "tick": 88612
+      },
+      {
+        "game": {
+          "drops": [
+            1024,
+            1024
+          ],
+          "enemies": [
+            499,
+            500
+          ],
+          "shots": [
+            12,
+            128
+          ]
+        },
+        "native": {
+          "backend": "vulkan",
+          "cached_bytes": 73230368,
+          "device_local_budget_bytes": 11890851840,
+          "device_local_process_usage_bytes": 319778816,
+          "readback_capacity_bytes": 4194304,
+          "readback_peak_reserved_bytes": 0,
+          "readback_used_bytes": 0,
+          "registered_bytes": 1352792,
+          "retained_bytes": 0,
+          "upload_capacity_bytes": 4194304,
+          "upload_peak_reserved_bytes": 1048768,
+          "upload_used_bytes": 0,
+          "vma_allocation_bytes": 87401600,
+          "vma_allocations": 78,
+          "vma_block_bytes": 177733632,
+          "vma_blocks": 10
+        },
+        "prepared": {
+          "frame_slots": 4,
+          "graph_accesses": 72474,
+          "graph_draws": 3204,
+          "graph_passes": 256,
+          "graph_resources": 5463,
+          "resource_slots": 152,
+          "result_slots": 8
+        },
+        "process": {
+          "peak_working_set_bytes": 1063223296,
+          "working_set_bytes": 1062043648
+        },
+        "stage": "window_renderer",
+        "tick": 88612
+      },
+      {
+        "game": {
+          "drops": [
+            1024,
+            1024
+          ],
+          "enemies": [
+            499,
+            500
+          ],
+          "shots": [
+            12,
+            128
+          ]
+        },
+        "native": {
+          "backend": "vulkan",
+          "cached_bytes": 78569676,
+          "device_local_budget_bytes": 11890851840,
+          "device_local_process_usage_bytes": 422539264,
+          "readback_capacity_bytes": 4194304,
+          "readback_peak_reserved_bytes": 0,
+          "readback_used_bytes": 0,
+          "registered_bytes": 3712080,
+          "retained_bytes": 0,
+          "upload_capacity_bytes": 4194304,
+          "upload_peak_reserved_bytes": 1048768,
+          "upload_used_bytes": 0,
+          "vma_allocation_bytes": 95124288,
+          "vma_allocations": 171,
+          "vma_block_bytes": 177733632,
+          "vma_blocks": 10
+        },
+        "prepared": {
+          "frame_slots": 4,
+          "graph_accesses": 72512,
+          "graph_draws": 3204,
+          "graph_passes": 256,
+          "graph_resources": 5469,
+          "resource_slots": 246,
+          "result_slots": 8
+        },
+        "process": {
+          "peak_working_set_bytes": 1929494528,
+          "working_set_bytes": 1098514432
+        },
+        "stage": "prepared",
+        "tick": 88612
+      },
+      {
+        "game": {
+          "drops": [
+            1024,
+            1024
+          ],
+          "enemies": [
+            500,
+            500
+          ],
+          "shots": [
+            12,
+            128
+          ]
+        },
+        "native": {
+          "backend": "vulkan",
+          "cached_bytes": 21931324,
+          "device_local_budget_bytes": 11890851840,
+          "device_local_process_usage_bytes": 330264576,
+          "readback_capacity_bytes": 4194304,
+          "readback_peak_reserved_bytes": 0,
+          "readback_used_bytes": 0,
+          "registered_bytes": 18297936,
+          "retained_bytes": 42052496,
+          "upload_capacity_bytes": 4194304,
+          "upload_peak_reserved_bytes": 1048768,
+          "upload_used_bytes": 482192,
+          "vma_allocation_bytes": 95124288,
+          "vma_allocations": 171,
+          "vma_block_bytes": 177733632,
+          "vma_blocks": 10
+        },
+        "prepared": {
+          "frame_slots": 4,
+          "graph_accesses": 72512,
+          "graph_draws": 3204,
+          "graph_passes": 256,
+          "graph_resources": 5469,
+          "resource_slots": 246,
+          "result_slots": 8
+        },
+        "process": {
+          "peak_working_set_bytes": 1929494528,
+          "working_set_bytes": 1091350528
+        },
+        "stage": "active",
+        "tick": 89332
+      },
+      {
+        "game": {
+          "drops": [
+            1024,
+            1024
+          ],
+          "enemies": [
+            500,
+            500
+          ],
+          "shots": [
+            12,
+            128
+          ]
+        },
+        "native": {
+          "backend": "vulkan",
+          "cached_bytes": 72278220,
+          "device_local_budget_bytes": 11890851840,
+          "device_local_process_usage_bytes": 330264576,
+          "readback_capacity_bytes": 4194304,
+          "readback_peak_reserved_bytes": 0,
+          "readback_used_bytes": 0,
+          "registered_bytes": 10003536,
+          "retained_bytes": 0,
+          "upload_capacity_bytes": 4194304,
+          "upload_peak_reserved_bytes": 1048768,
+          "upload_used_bytes": 0,
+          "vma_allocation_bytes": 95124288,
+          "vma_allocations": 171,
+          "vma_block_bytes": 177733632,
+          "vma_blocks": 10
+        },
+        "prepared": {
+          "frame_slots": 4,
+          "graph_accesses": 72512,
+          "graph_draws": 3204,
+          "graph_passes": 256,
+          "graph_resources": 5469,
+          "resource_slots": 246,
+          "result_slots": 8
+        },
+        "process": {
+          "peak_working_set_bytes": 1929494528,
+          "working_set_bytes": 1091350528
+        },
+        "stage": "drained",
+        "tick": 89332
+      }
+    ],
+    "timings_median_p95_p99_ms": {
+      "interval_ms": [
+        8.5553,
+        9.44239,
+        10.14
+      ],
+      "update_ms": [
+        0.1221,
+        0.19874,
+        0.22544
+      ],
+      "draw_ms": [
+        8.05935,
+        8.91397,
+        9.55824
+      ],
+      "graph_gpu_ms": [
+        7.25898,
+        8.06045,
+        8.3489
+      ],
+      "present_gpu_ms": [
+        0.02934,
+        0.02995,
+        0.03014
+      ],
+      "graph_prepare_ms": [
+        0.0568,
+        0.11462,
+        0.16095
+      ],
+      "graph_record_ms": [
+        0.171,
+        0.32066,
+        0.41143
+      ],
+      "graph_submit_ms": [
+        0.02485,
+        0.05842,
+        0.07931
+      ],
+      "graph_retire_ms": [
+        0.0102,
+        0.0339,
+        0.04264
+      ]
+    }
+  },
+  "endgame_tick_280_image_comparison": {
+    "before_sha256": "fd6a8c7e13354eba7178d63584cd621f09998675fd5eec89cd8602225e2e0365",
+    "after_sha256": "fd6a8c7e13354eba7178d63584cd621f09998675fd5eec89cd8602225e2e0365",
+    "changed_pixels": 0,
+    "size": [
+      1920,
+      1080
+    ],
+    "max_rgb": [
+      0,
+      0,
+      0
+    ],
+    "mean_rgb_abs": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "changed_bbox": null
+  }
+}
