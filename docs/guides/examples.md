@@ -63,6 +63,35 @@ python tools/editor/scene.py build/arena-edit.json --inspector target/release/su
 
 <a id="bistro-baked-lighting"></a>
 
+### 終盤の負荷を再生する
+
+通常の初期状態から WASD 相当の入力で施設を周回し、経験値を獲得して連射・貫通・衝撃波を選びます。
+次のコマンドは敵500体を維持した最後の720 tickを含む全入力を書き出します。計測器は開始地点までの入力を
+CPUで再生してから120フレームを表示してウォームアップし、続く600フレームを記録します。
+序盤・既存の終盤・この入力列を各3回、通常とGPUタイムスタンプ付きで別々に測ります。
+
+~~~powershell
+cargo run --locked --release -p survivor --no-default-features --example overlap_replay -- build/earned.json
+cargo build --locked --release -p survivor
+python -B tools/survivor/benchmark.py --exe target/release/survivor.exe --overlap-replay build/earned.json --output build/survivor-measured
+~~~
+
+CSVの各行に敵、弾、ドロップ、強化段階と攻撃中の衝撃波を保存します。独立した起動で得る
+overlap-memory.json には描画準備後、最後の提示直後、GPUの完了待ち後の資源量を記録します。
+ゲーム配列の値は [使用要素, 確保要素]、VMAのバイト数はアロケーションと確保ブロックをそれぞれ示します。
+
+GPUパスの内訳は同じリビジョンのVulkan診断ビルドで計測します。Windowsのx64 Visual Studio Developer Shellで、
+RenderDoc 1.47の公式バイナリと同じ版の renderdoc/api/replay ヘッダを指定してください。
+
+~~~powershell
+cargo build --locked --release -p survivor --features renderer/vulkan-diagnostics --target-dir target/pass-capture
+python -B tools/survivor/renderdoc_passes.py --exe target/pass-capture/release/survivor.exe --benchmark build/survivor-measured --replay build/earned.json --output build/survivor-passes --renderdoc .tools/renderdoc/RenderDoc_1.47_64 --headers build/renderdoc-sdk/renderdoc/api/replay
+~~~
+
+取得した各シナリオの代表フレームをRenderDocで再生し、GPUアクション時間をGraphパスのマーカーごとに合算します。
+同名のアップロードなどはまとめ、提示は独立して出力します。再生時のアクション時間と通常実行のフレーム間隔は
+それぞれ個別に記録します。
+
 ## ライトマップと照度プローブを使う
 
 静的配置には面に沿った拡散間接照度を、移動・スキニングする物体にはワールド空間の照度プローブを使います。メッシュには、材質の UV0 と独立したライトマップ用 UV を一度だけ用意します。同じメッシュと材質を複数の場所に置けます。照度のアドレスは静的配置の ID が決めます。
