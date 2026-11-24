@@ -1,6 +1,7 @@
 use crate::{Error, PROFILE, store};
 use renderer_asset::{AssetId, BlobRef, Digest};
 use serde::Serialize;
+use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -17,11 +18,13 @@ pub(super) struct Event {
 #[derive(Serialize)]
 pub(super) struct Report {
     pub generation: Digest,
+    pub converter_sha256: Digest,
     pub events: Vec<Event>,
     pub published_bytes: u64,
 }
 
 pub(super) struct Cache<'a> {
+    converter: Digest,
     directory: &'a Path,
     output: &'a Path,
     recipes: BTreeMap<Digest, BlobRef>,
@@ -30,14 +33,19 @@ pub(super) struct Cache<'a> {
 }
 
 impl<'a> Cache<'a> {
-    pub fn new(directory: &'a Path, output: &'a Path) -> Self {
-        Self {
+    pub fn new(directory: &'a Path, output: &'a Path) -> Result<Self, Error> {
+        // The executable includes the selected Rust and native converter code and build flags.
+        let mut digest = Sha256::new();
+        let mut executable = std::fs::File::open(std::env::current_exe()?)?;
+        std::io::copy(&mut executable, &mut digest)?;
+        Ok(Self {
+            converter: format!("{:x}", digest.finalize()).parse()?,
             directory,
             output,
             recipes: BTreeMap::new(),
             published_bytes: 0,
             events: Vec::new(),
-        }
+        })
     }
 
     pub fn convert(
@@ -50,7 +58,7 @@ impl<'a> Cache<'a> {
     ) -> Result<BlobRef, Error> {
         // The recipe digest locates a candidate. Its output digest separately verifies bytes.
         let key = Digest::of(&serde_json::to_vec(&(
-            env!("ASSET_COOK_REVISION"),
+            self.converter,
             PROFILE,
             stage,
             variant,
@@ -118,6 +126,7 @@ impl<'a> Cache<'a> {
     pub fn report(self, generation: Digest) -> Report {
         Report {
             generation,
+            converter_sha256: self.converter,
             published_bytes: self.published_bytes,
             events: self.events,
         }
