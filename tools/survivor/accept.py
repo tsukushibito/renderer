@@ -75,9 +75,9 @@ def run(exe, arena_path, output, backend, playthrough):
                  "--frames", str(len(route)), "--replay", input_path, "--record", recorded,
                  "--capture", capture, *options],
             )
-            if json.loads(recorded.read_text(encoding="utf-8")) != route:
+            if json.loads(recorded.read_text(encoding="utf-8"))["inputs"] != route:
                 raise ValueError(f"{name}: window consumed a different input sequence")
-            cpu = execute(f"{name}-cpu", ["--headless", "--arena", layout, "--replay", recorded])
+            cpu = execute(f"{name}-cpu", ["--headless", "--replay", recorded])
             if presented != cpu:
                 raise ValueError(f"{name}: window state {presented} differs from replay {cpu}")
             if presented["tick"] != len(route):

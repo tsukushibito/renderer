@@ -14,111 +14,72 @@ use renderer::{
     },
     pipeline::PipelineResult,
 };
+use sashiko::window::{KeyCode, Keyboard, WindowHost};
 use std::{
     ops::ControlFlow,
     sync::Arc,
     time::{Duration, Instant},
 };
-use winit::{
-    application::ApplicationHandler,
-    dpi::PhysicalSize,
-    event::{ElementState, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
-    platform::{pump_events::EventLoopExtPumpEvents, windows::EventLoopBuilderExtWindows},
-    window::{Window, WindowId},
-};
+use winit::dpi::PhysicalSize;
 
 #[derive(Default)]
 struct Events {
-    window: Option<Arc<Window>>,
-    size: Option<[u32; 2]>,
     actions: std::collections::VecDeque<Action>,
     equipment_step: usize,
     lane_step: Option<usize>,
     show_monitor_replay: bool,
     closed: bool,
-    error: Option<winit::error::OsError>,
 }
 
-impl ApplicationHandler for Events {
-    fn resumed(&mut self, events: &ActiveEventLoop) {
-        if self.window.is_some() {
+impl Keyboard for Events {
+    fn key(&mut self, code: KeyCode, pressed: bool) {
+        if !pressed {
             return;
         }
-        let attributes = Window::default_attributes()
-            .with_title("Training yard")
-            .with_inner_size(PhysicalSize::new(384, 192));
-        match events.create_window(attributes) {
-            Ok(window) => self.window = Some(Arc::new(window)),
-            Err(error) => self.error = Some(error),
-        }
-    }
-    fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
-        match event {
-            WindowEvent::CloseRequested => self.closed = true,
-            WindowEvent::Resized(size) => self.size = Some([size.width, size.height]),
-            WindowEvent::KeyboardInput { event, .. }
-                if event.state == ElementState::Pressed && !event.repeat =>
-            {
-                let PhysicalKey::Code(code) = event.physical_key else {
-                    return;
+        let step = match code {
+            KeyCode::Digit1 => 1,
+            KeyCode::Digit2 => 2,
+            KeyCode::Digit3 => 3,
+            KeyCode::Digit4 => 4,
+            KeyCode::Digit5 => 5,
+            KeyCode::Digit6 => 6,
+            KeyCode::KeyF => {
+                self.lane_step = match self.lane_step {
+                    None => Some(0),
+                    Some(n) if n + 1 < effects::FRAMES => Some(n + 1),
+                    _ => None,
                 };
-                let step = match code {
-                    KeyCode::Digit1 => 1,
-                    KeyCode::Digit2 => 2,
-                    KeyCode::Digit3 => 3,
-                    KeyCode::Digit4 => 4,
-                    KeyCode::Digit5 => 5,
-                    KeyCode::Digit6 => 6,
-                    KeyCode::KeyF => {
-                        self.lane_step = match self.lane_step {
-                            None => Some(0),
-                            Some(n) if n + 1 < effects::FRAMES => Some(n + 1),
-                            _ => None,
-                        };
-                        return;
-                    }
-                    KeyCode::KeyV => {
-                        self.show_monitor_replay = true;
-                        return;
-                    }
-                    KeyCode::Space => {
-                        let step = 14 + self.equipment_step;
-                        self.equipment_step = (self.equipment_step + 1) % (REPLAY_FRAMES - 14);
-                        step
-                    }
-                    KeyCode::Escape => {
-                        self.closed = true;
-                        return;
-                    }
-                    _ => return,
-                };
-                if let Some(action) = replay_action(step) {
-                    self.actions.push_back(action);
-                }
+                return;
             }
-            _ => {}
+            KeyCode::KeyV => {
+                self.show_monitor_replay = true;
+                return;
+            }
+            KeyCode::Space => {
+                let step = 14 + self.equipment_step;
+                self.equipment_step = (self.equipment_step + 1) % (REPLAY_FRAMES - 14);
+                step
+            }
+            KeyCode::Escape => {
+                self.closed = true;
+                return;
+            }
+            _ => return,
+        };
+        if let Some(action) = replay_action(step) {
+            self.actions.push_back(action);
         }
     }
 }
 
 pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
-    let mut events = EventLoop::builder().with_any_thread(true).build()?;
-    let mut input = Events::default();
-    let start = Instant::now();
-    let window = loop {
-        events.pump_app_events(Some(Duration::from_millis(5)), &mut input);
-        if let Some(error) = input.error.take() {
-            return Err(error.into());
-        }
-        if let Some(window) = &input.window {
-            break Arc::clone(window);
-        }
-        if start.elapsed() > Duration::from_secs(20) {
-            return Err("window creation timed out".into());
-        }
-    };
+    let mut host = WindowHost::open(
+        "Training yard",
+        [384, 192],
+        Events::default(),
+        Duration::from_secs(20),
+    )?;
+    let window = host.window();
     let size = window.inner_size();
     let mut camera = camera(1, [size.width, size.height])?;
     let (mut yard, preview) = if interactive {
@@ -144,12 +105,15 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
     let mut step = 0;
     let mut advance = true;
     let mut last_progress = Instant::now();
-    while !input.closed && (interactive || step < REPLAY_FRAMES + effects::FRAMES) {
-        events.pump_app_events(Some(Duration::from_millis(4)), &mut input);
-        if interactive && input.show_monitor_replay {
+    while !host.closed()
+        && !host.input().closed
+        && (interactive || step < REPLAY_FRAMES + effects::FRAMES)
+    {
+        host.pump(Duration::from_millis(4));
+        if interactive && host.input().show_monitor_replay {
             break;
         }
-        if let Some(extent) = input.size.take() {
+        if let Some(extent) = host.take_resize() {
             renderer.resize(
                 extent,
                 if active_lane {
@@ -170,14 +134,14 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
         }
         if advance {
             lane_step = if interactive {
-                input.lane_step
+                host.input().lane_step
             } else {
                 step.checked_sub(REPLAY_FRAMES)
             };
             let action = if lane_step.is_some() {
                 None
             } else if interactive {
-                input.actions.pop_front()
+                host.input().actions.pop_front()
             } else {
                 replay_action(step)
             };
@@ -235,7 +199,7 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
             }
             PresentOutcome::RecreateRequired => {
                 let size = window.inner_size();
-                input.size = Some([size.width, size.height]);
+                host.queue_resize([size.width, size.height]);
             }
             _ => {}
         }
@@ -260,7 +224,7 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
     if !interactive && step != REPLAY_FRAMES + effects::FRAMES {
         return Err("window closed during replay".into());
     }
-    if input.closed {
+    if host.closed() || host.input().closed {
         return validation::check_validation(runtime);
     }
     let size = window.inner_size();
@@ -278,8 +242,7 @@ pub fn run(config: RuntimeConfig, interactive: bool) -> PipelineResult<()> {
             plan.begin_with_runtime(runtime)?.wait()?,
             MonitorWindow {
                 presenter,
-                events,
-                input,
+                host,
                 base,
                 extent,
                 interactive,
@@ -317,8 +280,7 @@ const MONITOR_RESIZE: [u32; 2] = [320, 160];
 
 struct MonitorWindow {
     presenter: WindowPresenter,
-    events: EventLoop<()>,
-    input: Events,
+    host: WindowHost<Events>,
     base: Preparation,
     extent: [u32; 2],
     interactive: bool,
@@ -335,22 +297,19 @@ impl crate::replay::Viewport for MonitorWindow {
         if !self.interactive && self.presented == 8 {
             let [w, h] = MONITOR_RESIZE;
             if let Some(size) = self
-                .input
-                .window
-                .as_ref()
-                .expect("live replay window")
+                .host
+                .window()
                 .request_inner_size(PhysicalSize::new(w, h))
             {
-                self.input.size = Some([size.width, size.height]);
+                self.host.queue_resize([size.width, size.height]);
             }
         }
         loop {
-            self.events
-                .pump_app_events(Some(Duration::from_millis(4)), &mut self.input);
-            if self.input.closed {
+            self.host.pump(Duration::from_millis(4));
+            if self.host.closed() || self.host.input().closed {
                 return Ok(ControlFlow::Break(()));
             }
-            if let Some([w, h]) = self.input.size.take() {
+            if let Some([w, h]) = self.host.take_resize() {
                 self.presenter.resize(w, h);
             }
             self.presenter.poll()?;
@@ -377,10 +336,9 @@ impl crate::replay::Viewport for MonitorWindow {
         }
     }
     fn poll_loading(&mut self) -> PipelineResult<ControlFlow<()>> {
-        self.events
-            .pump_app_events(Some(Duration::ZERO), &mut self.input);
+        self.host.pump(Duration::ZERO);
         self.presenter.poll()?;
-        Ok(if self.input.closed {
+        Ok(if self.host.closed() || self.host.input().closed {
             ControlFlow::Break(())
         } else {
             ControlFlow::Continue(())
@@ -403,9 +361,8 @@ impl crate::replay::Viewport for MonitorWindow {
                         .is_some_and(|c| c.recovery == CapacityRecovery::Poll) => {}
                 Err(error) => return Err(error.into()),
             }
-            self.events
-                .pump_app_events(Some(Duration::from_millis(1)), &mut self.input);
-            if self.input.closed || self.input.size.is_some() {
+            self.host.pump(Duration::from_millis(1));
+            if self.host.closed() || self.host.input().closed || self.host.pending_resize() {
                 return Ok(());
             }
             if start.elapsed() > Duration::from_secs(30) {

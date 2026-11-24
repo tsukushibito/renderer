@@ -9,7 +9,7 @@ rust-version.workspace = true
 default = ["vulkan", "presentation"]
 vulkan = ["renderer/vulkan"]
 d3d12 = ["renderer/d3d12"]
-presentation = ["renderer/presentation", "dep:winit"]
+presentation = ["renderer/presentation", "sashiko/presentation"]
 development-validation = ["renderer?/development-validation"]
 memory-profiling = ["renderer?/memory-profiling"]
 
@@ -21,7 +21,6 @@ clap = { version = "4", default-features = false, features = ["std", "help", "us
 
 [target.'cfg(windows)'.dependencies]
 renderer = { version = "0.1.0", path = "../renderer", optional = true }
-winit = { version = "0.30", default-features = false, features = ["rwh_06"], optional = true }
 
 [lints]
 workspace = true

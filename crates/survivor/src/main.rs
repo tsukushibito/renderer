@@ -1,8 +1,22 @@
 mod profile;
 
 use clap::{Arg, ArgAction, Command, value_parser};
+use sashiko::{App, app::Replay};
+use std::num::NonZeroU32;
 use std::{error::Error, fs, path::PathBuf};
-use survivor::{Arena, Game, Input, Scenario, benchmark_input};
+use survivor::{Arena, Game, Input, Scenario, TICK_HZ, benchmark_input};
+
+fn rate() -> NonZeroU32 {
+    NonZeroU32::new(TICK_HZ).unwrap()
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct RunStart {
+    arena: Arena,
+    scenario: Scenario,
+    seed: u64,
+    rules_version: u32,
+}
 
 #[cfg(all(
     windows,
@@ -134,13 +148,41 @@ fn main() -> Result<(), Box<dyn Error>> {
         _ => Scenario::Early,
     };
     let seed = *args.get_one::<u64>("seed").unwrap();
-    let game = Game::new(arena, scenario, seed);
-    let replay: Option<Vec<Input>> = args
-        .get_one::<PathBuf>("replay")
-        .map(|p| -> Result<_, Box<dyn Error>> { Ok(serde_json::from_slice(&fs::read(p)?)?) })
-        .transpose()?;
+    let requested = RunStart {
+        arena,
+        scenario,
+        seed,
+        rules_version: 1,
+    };
+    let (initial, replay) = if let Some(path) = args.get_one::<PathBuf>("replay") {
+        let replay =
+            Replay::<RunStart, Input>::read(fs::File::open(path)?, requested.clone(), rate())?;
+        let init = replay.initial;
+        if init.rules_version != 1 {
+            return Err("replay uses an incompatible game rules version".into());
+        }
+        if args.get_one::<PathBuf>("arena").is_some()
+            && serde_json::to_value(&requested.arena)? != serde_json::to_value(&init.arena)?
+        {
+            return Err("explicit arena conflicts with recorded replay".into());
+        }
+        for (arg, differs) in [
+            ("seed", requested.seed != init.seed),
+            ("scenario", requested.scenario != init.scenario),
+        ] {
+            if differs && args.value_source(arg) == Some(clap::parser::ValueSource::CommandLine) {
+                return Err(format!("explicit {arg} conflicts with recorded replay").into());
+            }
+        }
+        // Apply the same game-owned scene validation to stored replay metadata.
+        Arena::from_json(&serde_json::to_string(&init.arena)?)?;
+        (init, Some(replay.inputs))
+    } else {
+        (requested, None)
+    };
+    let game = Game::new(initial.arena.clone(), initial.scenario, initial.seed);
     let game = if args.get_flag("headless") {
-        let mut game = game;
+        let mut app = App::new(game, rate());
         let ticks = args
             .get_one::<usize>("ticks")
             .copied()
@@ -148,16 +190,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         if replay.as_ref().is_some_and(|inputs| ticks > inputs.len()) {
             return Err("replay ends before the requested tick count".into());
         }
-        for tick in 0..ticks {
-            let input = replay
-                .as_ref()
-                .map_or_else(|| benchmark_input(&game), |inputs| inputs[tick]);
-            let events = game.step(input);
-            profile.observe(events.kills)?;
-        }
-        game
+        app.try_advance(
+            ticks as u128,
+            |tick, game| {
+                replay
+                    .as_ref()
+                    .map_or_else(|| benchmark_input(game), |inputs| inputs[tick])
+            },
+            |game, input| profile.observe(game.step(input).kills),
+        )?;
+        app.game
     } else {
-        play(game, replay, &args, &mut profile)?
+        play(game, initial, replay, &args, &mut profile)?
     };
     println!("{}", serde_json::to_string(&game.snapshot())?);
     Ok(())
@@ -170,6 +214,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 ))]
 fn play(
     game: Game,
+    initial: RunStart,
     replay: Option<Vec<Input>>,
     args: &clap::ArgMatches,
     profile: &mut profile::Player,
@@ -192,6 +237,7 @@ fn play(
     };
     window::run(
         game,
+        initial,
         window::Options {
             config,
             replay,
@@ -220,6 +266,7 @@ fn play(
 )))]
 fn play(
     _: Game,
+    _: RunStart,
     _: Option<Vec<Input>>,
     _: &clap::ArgMatches,
     _: &mut profile::Player,
