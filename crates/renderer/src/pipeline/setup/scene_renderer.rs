@@ -29,6 +29,7 @@ pub struct SceneRenderer<R: BorrowMut<Runtime> = Runtime> {
     pub(super) runtime: Option<R>,
     pub(super) mesh_budget: u64,
     pub(super) configured: Preparation,
+    pub(super) streaming: Option<(Preparation, u64)>,
     pub(super) retired: Option<ViewRenderer>,
     pub(super) transfers: super::candidate::Transfers,
 }
@@ -42,7 +43,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     /// set or failed initialization preserves the old views. If old-view release
     /// fails after publication, the error is a [`RetiredViewError`].
     pub fn replace_working_set(&mut self, plan: PreparedSetup<'_>) -> PipelineResult<()> {
-        self.replace_plan(plan, |plan, runtime, overlap| {
+        self.replace_plan(plan, |plan, runtime, overlap, _| {
             plan.check_runtime(runtime)?;
             Ok(runtime.prepare_working_set(overlap.working_set())?)
         })
@@ -51,10 +52,10 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         &mut self,
         plan: PreparedSetup<'_>,
     ) -> PipelineResult<()> {
-        self.replace_plan(plan, |plan, runtime, overlap| {
+        self.replace_plan(plan, |plan, runtime, overlap, streaming_transfer| {
             Ok(runtime.prepare_fitted_working_set(
                 overlap,
-                plan.upload_capacity()?,
+                plan.upload_capacity()?.max(streaming_transfer),
                 plan.readback,
             )?)
         })
@@ -63,7 +64,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     fn replace_plan(
         &mut self,
         plan: PreparedSetup<'_>,
-        prepare: impl FnOnce(&PreparedSetup<'_>, &mut Runtime, &Preparation) -> PipelineResult<()>,
+        prepare: impl FnOnce(&PreparedSetup<'_>, &mut Runtime, &Preparation, u64) -> PipelineResult<()>,
     ) -> PipelineResult<()> {
         self.collect_retired_views()?;
         self.driver.check_idle()?;
@@ -75,7 +76,13 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         old.add_working_set(self.configured.working_set())?;
         let mut overlap = Preparation::new(old.frames_in_flight());
         overlap.add_alternatives(&[&old, plan.preparation()])?;
-        prepare(&plan, runtime, &overlap)?;
+        let streaming_transfer = if let Some((streaming, transfer)) = &self.streaming {
+            overlap.add_requirements(streaming.graph_requirements(), streaming.working_set())?;
+            *transfer
+        } else {
+            0
+        };
+        prepare(&plan, runtime, &overlap, streaming_transfer)?;
         let mut next = plan.begin_with_runtime(runtime)?.wait()?;
         self.retired = Some(std::mem::replace(
             &mut self.driver,
@@ -104,19 +111,82 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         set: Preparation,
         transfer: u64,
     ) -> PipelineResult<()> {
+        if let Some((streaming, bytes)) = &self.streaming {
+            let mut combined = Preparation::new(set.frames_in_flight());
+            combined.add_requirements(set.graph_requirements(), set.working_set())?;
+            combined.add_requirements(streaming.graph_requirements(), streaming.working_set())?;
+            self.apply_native_set(&combined, transfer.max(*bytes))?;
+        } else {
+            self.apply_native_set(&set, transfer)?;
+        }
+        self.configured = set;
+        Ok(())
+    }
+
+    fn apply_native_set(&mut self, set: &Preparation, transfer: u64) -> PipelineResult<()> {
         let limits = self.runtime().limits();
         let graph = set.replacement_limits(limits)?.graph;
         let pool = (graph != limits.graph)
             .then(|| GraphPool::new(graph, set.frames_in_flight().get()))
             .transpose()?;
         self.runtime()
-            .prepare_fitted_working_set(&set, transfer, 0)?;
+            .prepare_fitted_working_set(set, transfer, 0)?;
         if let Some(pool) = pool {
             self.pool = pool;
         }
-        self.configured = set;
         Ok(())
     }
+    /// Replace the physical reservations for a stream of immutable assets without
+    /// recreating cameras or changing their history. Supply one descriptor per
+    /// simultaneously needed buffer or image. Texture transfers are serialized.
+    /// Call at an explicit change boundary after returning outstanding frame results.
+    pub fn replace_asset_reservations(
+        &mut self,
+        texture_name: &str,
+        buffers: &[renderer_core::graph::BufferDesc],
+        images: &[ImageDesc],
+        samplers: &[renderer_core::program::SamplerDescriptor],
+    ) -> PipelineResult<()> {
+        let frames = self.configured.frames_in_flight();
+        let mut streaming = Preparation::new(frames);
+        for sampler in samplers {
+            streaming.reserve_sampler(*sampler);
+        }
+        for &desc in buffers {
+            streaming.add_working_set(WorkingSet {
+                resources: &[ResourceClass::Buffer { desc, count: 1 }],
+                ..Default::default()
+            })?;
+        }
+        let mut transfer = 0;
+        let mut uploads = Vec::new();
+        for &desc in images {
+            streaming.add_working_set(WorkingSet {
+                resources: &[ResourceClass::Image { desc, count: 1 }],
+                ..Default::default()
+            })?;
+            if !uploads.iter().any(|(already, _)| *already == desc) {
+                self.check_texture_support(desc, false)?;
+                let mut upload = Preparation::new(frames);
+                transfer =
+                    transfer.max(reserve_texture_upload(&mut upload, texture_name, desc, 1)?);
+                let mut declarations = Preparation::new(frames);
+                declarations.add_graph_requirements(upload.graph_requirements())?;
+                uploads.push((desc, declarations));
+            }
+        }
+        streaming.add_alternatives(&uploads.iter().map(|(_, p)| p).collect::<Vec<_>>())?;
+        let mut combined = Preparation::new(frames);
+        combined.add_requirements(
+            self.configured.graph_requirements(),
+            self.configured.working_set(),
+        )?;
+        combined.add_requirements(streaming.graph_requirements(), streaming.working_set())?;
+        self.apply_native_set(&combined, transfer)?;
+        self.streaming = Some((streaming, transfer));
+        Ok(())
+    }
+
     /// Publish changed asset revisions within the prepared limits. Invoke after
     /// submitting or discarding graphs that refer to previous revisions. Accepted
     /// uploads survive errors so this maintenance operation can be retried.
