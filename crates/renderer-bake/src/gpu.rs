@@ -302,6 +302,7 @@ impl<const N: usize> Transport<N> {
             resources: &resources,
             compute: &programs,
             raster: &[],
+            samplers: &[],
         };
         let upload =
             (u64::from(desc.width) * 16).next_multiple_of(256) * u64::from(desc.height) + 512;
