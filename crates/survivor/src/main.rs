@@ -85,6 +85,19 @@ fn arguments() -> Command {
                 .default_value("506"),
         )
         .arg(path("arena").help("Load edited arena JSON"))
+        .arg(
+            Arg::new("replay-from")
+                .long("replay-from")
+                .requires("replay")
+                .conflicts_with("record")
+                .value_parser(value_parser!(usize))
+                .help("Simulate this many recorded inputs before starting the requested segment"),
+        )
+        .arg(
+            path("memory-samples")
+                .requires("frames")
+                .help("Write prepared, active and drained memory observations"),
+        )
         .arg(path("replay").help("Consume one recorded input per tick"))
         .arg(
             path("record")
@@ -196,7 +209,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             visual: None,
         })
     };
-    let (initial, replay) = if let Some(path) = args.get_one::<PathBuf>("replay") {
+    let (initial, mut replay) = if let Some(path) = args.get_one::<PathBuf>("replay") {
         let replay = Replay::<RunStart, Input>::read(fs::File::open(path)?, requested, rate())?;
         let init = replay.initial;
         if init.rules_version != 1 {
@@ -220,7 +233,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         (requested()?, None)
     };
-    let game = initial.game()?;
+    let mut game = initial.game()?;
+    if let Some(&prefix) = args.get_one::<usize>("replay-from") {
+        let inputs = replay.as_mut().expect("replay required by CLI");
+        if prefix >= inputs.len() {
+            return Err(
+                "replay prefix must leave at least one input for the requested segment".into(),
+            );
+        }
+        for input in inputs.drain(..prefix) {
+            profile.observe(game.step(input).kills)?;
+        }
+    }
     let game = if args.get_flag("headless") {
         let mut app = App::new(game, rate());
         let ticks = args
@@ -311,6 +335,7 @@ fn play(
             warmup: args.get_one("warmup").copied().unwrap_or(0),
             record: args.get_one("record").cloned(),
             metrics: args.get_one("metrics").cloned(),
+            memory: args.get_one("memory-samples").cloned(),
             capture: args.get_one("capture").cloned(),
             gpu_profile: args.get_flag("gpu-profile"),
             character,

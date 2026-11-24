@@ -20,6 +20,8 @@ pub(super) struct Sample {
     pub shots: usize,
     pub drops: usize,
     pub tick: u64,
+    pub pulse: bool,
+    pub upgrades: [u8; 3],
 }
 
 pub(super) struct Measurements {
@@ -70,7 +72,7 @@ impl Measurements {
         let mut csv = BufWriter::new(File::create(path)?);
         writeln!(
             csv,
-            "frame,interval_ms,update_ms,draw_ms,active,visible,drawn,shots,drops,graph_gpu_ms,present_gpu_ms,graph_prepare_ms,graph_record_ms,graph_submit_ms,graph_retire_ms,tick"
+            "frame,interval_ms,update_ms,draw_ms,active,visible,drawn,shots,drops,graph_gpu_ms,present_gpu_ms,graph_prepare_ms,graph_record_ms,graph_submit_ms,graph_retire_ms,tick,pulse,rapid_level,pierce_level,pulse_level"
         )?;
         for (index, sample) in self.samples.iter().enumerate().skip(warmup) {
             write!(
@@ -101,7 +103,13 @@ impl Measurements {
             } else {
                 write!(csv, ",,,,,")?;
             }
-            writeln!(csv, ",{}", sample.tick)?;
+            let [rapid, pierce, pulse] = sample.upgrades;
+            writeln!(
+                csv,
+                ",{},{},{rapid},{pierce},{pulse}",
+                sample.tick,
+                u8::from(sample.pulse)
+            )?;
         }
         csv.flush()?;
         Ok(())
