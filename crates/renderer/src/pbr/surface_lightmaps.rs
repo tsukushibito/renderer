@@ -14,6 +14,31 @@ pub struct LightmapPage {
     texels: Vec<u8>,
 }
 impl LightmapPage {
+    /// Physical page limit in the RSURF002 file. The GPU image also holds
+    /// placement addresses and consecutive lighting scenarios.
+    pub const MAX_SIDE: u32 = 4096;
+
+    /// Resident RGBA32F extent for one uploaded front/back page group.
+    pub fn packed_extent(
+        placements: usize,
+        surface_texels: u64,
+        scenarios: usize,
+    ) -> Option<[u32; 2]> {
+        let header = (placements as u64).checked_mul(2)?.checked_add(1)?;
+        if header > 1 << 24 || !(1..=BakedLighting::MAX_SCENARIOS).contains(&scenarios) {
+            return None;
+        }
+        let size = surface_texels
+            .checked_mul(scenarios as u64)?
+            .checked_add(header)?;
+        if size > 16384 * 16384 {
+            return None;
+        }
+        let width = size.min((size.isqrt() + 1).next_power_of_two().min(16384));
+        let height = size.div_ceil(width);
+        (width * height * 16 <= isize::MAX as u64).then_some([width as u32, height as u32])
+    }
+
     pub fn extent(&self) -> [u32; 2] {
         self.extent
     }
@@ -82,7 +107,7 @@ impl SurfaceLightmaps {
         let mut extents = Vec::with_capacity(count);
         for _ in 0..count {
             let e = [word(&mut data)?, word(&mut data)?];
-            if e.iter().any(|v| !(1..=2048).contains(v)) {
+            if e.iter().any(|v| !(1..=LightmapPage::MAX_SIDE).contains(v)) {
                 return Err(invalid());
             }
             extents.push(e);
@@ -169,21 +194,16 @@ impl SurfaceLightmaps {
             let header = 1 + members.len() * 2;
             let front_len = raw[front].len() / 12;
             let back_offset = if back == front { 0 } else { front_len };
-            let size = header
-                + front_len
-                + if back == front {
+            let texel_count = (front_len
+                + if front == back {
                     0
                 } else {
                     raw[back].len() / 12
-                };
-            if header > 1 << 24 {
-                return Err(invalid());
-            }
-            let width = size.min((size.isqrt() + 1).next_power_of_two().clamp(1, 16384)) as u32;
-            let height = size.div_ceil(width as usize) as u32;
-            if height > 16384 {
-                return Err(invalid());
-            }
+                })
+                / keys;
+            let [width, height] =
+                LightmapPage::packed_extent(members.len(), texel_count as u64, keys)
+                    .ok_or_else(invalid)?;
             let mut texels = Vec::with_capacity(width as usize * height as usize * 16);
             // Metadata is encoded as finite numeric words. Split the page base
             // from the scenario stride so offsets remain exact in float32.
@@ -199,13 +219,9 @@ impl SurfaceLightmaps {
                         slot: index as u32 + 1,
                     },
                 );
-                push([
-                    f.start,
-                    extents[front][0],
-                    b.start + (back_offset / keys) as u32,
-                    extents[back][0],
-                ]);
-                push([f.extent[0], f.extent[1], 0, 0]);
+                push([f.start, extents[front][0], b.start, extents[back][0]]);
+                // Each index fits exactly in float32, even if their sum exceeds 2^24.
+                push([f.extent[0], f.extent[1], (back_offset / keys) as u32, 0]);
             }
             for bytes in std::iter::once(raw[front]).chain((front != back).then_some(raw[back])) {
                 for rgb in bytes.as_chunks::<12>().0 {

@@ -208,6 +208,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut output = None;
     let mut settings = ProbeSettings::default();
     let mut texel_budget = None;
+    let mut page_limit = renderer::pbr::LightmapPage::MAX_SIDE;
     let mut estimate = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -247,6 +248,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
                 }
             }
             "--estimate" => estimate = true,
+            "--lightmap-page-limit" => {
+                page_limit = args.next().ok_or("missing physical page limit")?.parse()?
+            }
             "--lightmap-texels" => {
                 texel_budget = Some(args.next().ok_or("missing texel budget")?.parse()?)
             }
@@ -255,7 +259,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--lightmap-page-limit N] [--reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
                 );
                 return Ok(());
             }
@@ -288,7 +292,14 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     } else {
         Vec::new()
     };
-    let surfaces = renderer_bake::SurfaceLayout::new(&receivers, 2048, texel_budget)?;
+    let keys = if day_only {
+        1
+    } else if endpoints_only {
+        2
+    } else {
+        3
+    };
+    let surfaces = renderer_bake::SurfaceLayout::new(&receivers, page_limit, keys, texel_budget)?;
     if reference.is_none() && diffuse_reference.is_none() && layout.is_none() {
         eprintln!(
             "{} static placements, {} receiver triangles, {} sides in {} pages, {} allocated texels/scenario",
@@ -298,16 +309,17 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             surfaces.pages().len(),
             surfaces.texels()
         );
-        let keys = if day_only {
-            1
-        } else if endpoints_only {
-            2
-        } else {
-            3
-        };
+        eprintln!(
+            "selected page limit {}, {} unused page texels, {} RGBA32F bytes in {} GPU images, {} material/page groups",
+            surfaces.page_limit(),
+            surfaces.unused_page_texels(),
+            surfaces.resident_bytes(),
+            surfaces.gpu_image_count(),
+            surfaces.material_page_groups()
+        );
         eprintln!(
             "{} RGB32 bytes for {keys} lighting scenario(s), at most {} hemisphere rays per scenario",
-            surfaces.texels() * 12 * keys,
+            surfaces.texels() * 12 * keys as u64,
             surfaces.texels() * u64::from(settings.rays_per_probe)
         );
     }

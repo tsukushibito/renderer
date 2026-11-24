@@ -19,8 +19,10 @@ void apply_lightmap(inout Surface s, uint slot, bool front, float2 uv) {
     uint start = probe_index(header.z, last);
     float4 rect = probe_load(2u * slot - 1u, dims);
     uint origin = probe_index(front ? rect.x : rect.z, last);
-    uint pitch = probe_index(front ? rect.y : rect.w, 2048u);
-    float2 extent = clamp(probe_load(2u * slot, dims).xy, 1.0, 2048.0);
+    uint pitch = probe_index(front ? rect.y : rect.w, 4096u);
+    float4 shape = probe_load(2u * slot, dims);
+    if (!front) origin += probe_index(shape.z, 4096u * 4096u);
+    float2 extent = clamp(shape.xy, 1.0, 4096.0);
     float2 coord = saturate(uv) * extent - 0.5;
     int2 xy = (int2)floor(coord);
     uint i = uint(int(origin) + xy.x + xy.y * int(pitch));

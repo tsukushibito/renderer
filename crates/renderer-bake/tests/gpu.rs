@@ -75,8 +75,8 @@ fn compare(backend: BakeBackend) {
         lights: impl renderer_bake::LightingScenarios<N>,
     ) -> renderer::pbr::SurfaceLightmaps {
         let mut file = Vec::new();
-        SurfaceLayout::new(receivers, 16, None)
-            .unwrap()
+        let layout = SurfaceLayout::new(receivers, 16, N, None).unwrap();
+        layout
             .bake_to(
                 scene,
                 lights,
@@ -90,7 +90,15 @@ fn compare(backend: BakeBackend) {
                 &mut file,
             )
             .unwrap();
-        renderer::pbr::SurfaceLightmaps::from_bytes(&file).unwrap()
+        let uploaded = renderer::pbr::SurfaceLightmaps::from_bytes(&file).unwrap();
+        let bytes: u64 = uploaded
+            .pages()
+            .iter()
+            .map(|p| p.rgba32f().len() as u64)
+            .sum();
+        assert_eq!(layout.resident_bytes(), bytes);
+        assert_eq!(layout.gpu_image_count(), uploaded.pages().len());
+        uploaded
     }
     let verify = |reference: renderer::pbr::SurfaceLightmaps,
                   native: renderer::pbr::SurfaceLightmaps| {

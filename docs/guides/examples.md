@@ -16,11 +16,13 @@
 
 ```rust
 let scene = BakeScene::new(occluders, materials, textures)?;
-let layout = SurfaceLayout::pack(&receivers)?;
+let layout = SurfaceLayout::pack(&receivers, 3)?;
 layout.bake_to(&scene, [day, afternoon, dusk], ProbeSettings::default(), 128, writer)?;
 ```
 
-固定照明には `day` を直接渡します。表裏を描く受光面には `double_sided: true` を指定すると、それぞれの向きで焼きます。透過マスクの判定には材質 UV とアルファカットオフを使います。ページの予算を検査する場合は `SurfaceLayout::new(&receivers, 2048, Some(texel_budget))?` を使います。全配置の収録に足りなければ必要なサイズとページ数を返します。単一の配置の UV 矩形は境界を含めて１ページに収めます。巨大なメッシュはクック時にプリミティブを分割してください。
+固定照明では条件数を 1 にして `day` を渡します。表裏を描く受光面には `double_sided: true` を指定すると、それぞれの向きで焼きます。透過マスクの判定には材質 UV とアルファカットオフを使います。密度と表裏、フィルタリング用の余白を保ってページ寸法を自動選択します。寸法とテクセル予算を制限する例は `SurfaceLayout::new(&receivers, 2048, 3, Some(texel_budget))?` です。単一の配置の UV 矩形は外周を含めて１ページに収めます。上限を超えるメッシュはクック時に分割してください。
+
+`bistro-bake --estimate` に本番と同じ照明条件（例 `--day-only`）を指定すると、選択した物理ページの一辺上限、矩形の外に残る空き、GPU 画像数と容量、材質×ページの組数が表示されます。`--lightmap-page-limit N` は物理ページの上限（4～4096、既定 4096）です。ページは使用範囲まで切り詰めます。GPU 画像には照明条件ごとの照度と配置参照表が入るため、物理ページとは寸法が異なります。表示容量は静的ライトマップの RGBA32F ペイロードです。照度プローブとドライバの割り当ては別集計です。
 
 ```rust
 // メッシュのロード時。uvs は頂点と同じ順序の正規化 UV。
