@@ -9,7 +9,7 @@ rust-version.workspace = true
 default = ["vulkan", "presentation"]
 vulkan = ["renderer/vulkan"]
 d3d12 = ["renderer/d3d12"]
-presentation = ["renderer/presentation", "sashiko/presentation"]
+presentation = ["renderer/presentation", "sashiko/presentation", "sashiko/audio-output"]
 development-validation = ["renderer?/development-validation"]
 memory-profiling = ["renderer?/memory-profiling"]
 

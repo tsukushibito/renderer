@@ -1,4 +1,5 @@
 //! Interactive and measured runs share the simulation, asset setup, and render path.
+mod audio;
 mod input;
 mod metrics;
 
@@ -91,6 +92,7 @@ fn title(phase: Phase) -> &'static str {
 }
 
 struct PlayWindow<'a> {
+    sound: Option<audio::Soundscape>,
     profile: &'a mut crate::profile::Player,
     app: &'a mut App<Game>,
     window: std::sync::Arc<sashiko::window::NativeWindow>,
@@ -155,7 +157,13 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
                 }
                 input
             },
-            |game, input| self.profile.observe(game.step(input).kills),
+            |game, input| {
+                let events = game.step(input);
+                if let Some(sound) = &mut self.sound {
+                    sound.update(game);
+                }
+                self.profile.observe(events.kills)
+            },
         )?;
 
         self.update_time = start.elapsed();
@@ -252,6 +260,11 @@ pub fn run(
     let mut app = App::new(game, rate());
     let current_phase = app.game.phase;
     let mut client = PlayWindow {
+        sound: if limit.is_none() {
+            audio::Soundscape::open(o.volume)
+        } else {
+            None
+        },
         profile,
         app: &mut app,
         window,
