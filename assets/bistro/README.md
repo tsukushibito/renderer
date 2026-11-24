@@ -14,8 +14,11 @@ Amazon Lumberyard Bistro（Amazon Lumberyard、2017年）、NVIDIA Open Research
 | [比較PNG](../../docs/verification/bistro-assets-preview.png) | 元FBXとglTF再取込のCPU比較画像 | 3,422,828 |
 | [alpha近景PNG](../../docs/verification/bistro-alpha-preview.png) | 元alpha保持・対象だけ不透明化・差分・対象coverageのCPU比較画像 | 730,465 |
 | [固定条件PNG](../../docs/verification/bistro-conditions-preview.png) | 固定7視点とstreetの照明候補を並べたCPU構図プレビュー | 1,825,564 |
+| [照明比較PNG](../../docs/verification/bistro-lighting-preview.png) | Bistro の照明比較 | 1,120,448 |
+| [ベイク照明PNG](../../docs/verification/bistro-baked-lighting-preview.png) | 昼・中間・夕方のベイク照明と受光元 | 1,040,253 |
+| [Sponza の L1・L2 比較PNG](../../docs/verification/bistro-sponza-probe-sh-preview.png) | 動的な白球のプローブ照明と表示色の差分 | 175,378 |
 
-上記412ファイル、合計1,775,343,744 byteをGit LFSで管理する。
+上記415ファイル、合計1,777,679,823 byteをGit LFSで管理する。
 [manifest.json](manifest.json)が各パス・byte数・SHA-256を固定する。
 素材と比較PNGのLFSポインタをGitで管理し、実体はoriginのLFSストレージで共有する。
 検証JSON・ライセンス・本書は通常Gitで管理する。屋内を原本ZIPに保持することは屋内描画を受入範囲へ追加する意味ではない。

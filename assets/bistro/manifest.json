@@ -2071,6 +2071,11 @@
       "path": "docs/verification/bistro-lighting-preview.png",
       "size": 1120448,
       "sha256": "bfb69238600f25834bffa1d6aaa107b6c9d4e14ee741f7038e925471be5dd0f4"
+    },
+    {
+      "path": "docs/verification/bistro-sponza-probe-sh-preview.png",
+      "size": 175378,
+      "sha256": "044c8e140bce186e23c8a4a75bf862a01628cb678fdf44d6ec0eab7d68f09467"
     }
   ]
 }
