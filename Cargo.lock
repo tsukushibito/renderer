@@ -1604,6 +1604,7 @@ dependencies = [
 name = "sashiko"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "cpal",
  "glam",
  "hound",

@@ -1,0 +1,402 @@
+{
+  "scope": "2zo2 game engine migration integrated executables; automated deterministic runs and synthetic OS input; first-time human test not executed",
+  "yard": {
+    "start_revision": "8a96719299ba6b9ce2737c03c4ee5221a8cf18ec",
+    "passed": true,
+    "commands": 26,
+    "reference_artifacts_per_configuration": 293,
+    "mismatches": [],
+    "strict_sha256": "98b0beb3d2a95fe3c27776617e1384482e5750e62d3bea95b7d35066ffb65b38",
+    "shipping_sha256": "d29da61a53b58494fc0509c06badbb9c300e4d08e67beb5ce2d6d2f16b65f6d8"
+  },
+  "bistro": {
+    "bistro": {
+      "args": [
+        "--manifest",
+        ".tools/bistro-cook/full-a3/manifest.json",
+        "--ibl-manifest",
+        ".tools/b3/ibl-final/manifest.json",
+        "--view",
+        "street",
+        "--width",
+        "1920",
+        "--height",
+        "1080",
+        "--frames",
+        "2",
+        "--warmup",
+        "1",
+        "--inflight",
+        "2"
+      ],
+      "matched_before_after": true,
+      "by_api": {
+        "vulkan": {
+          "exe": "0d1dec9c1e8947a12dbf60d504940fd05063b0b72a52e1e93d8655d569a2cb81",
+          "planes": {
+            "hdr": "a1578e144a015ef53b1ed8172a028bfe189417699818732d016f7b16b86f2904",
+            "sdr": "d4bf850ed3eab699d890deeda8efe847f7323b325a8d9b5e91335936d759a785",
+            "depth": "1622e27695f2e3eb8a6b76e7ef88f5b4d965d0624479da3bac7e1f71b101a7ef"
+          },
+          "draws": 1189,
+          "covered_pixels": 2039878,
+          "validation": {
+            "callback_failures": 0,
+            "clean": true,
+            "core_validation": null,
+            "errors": 0,
+            "mode": "disabled",
+            "requested": "Disabled",
+            "synchronization_validation": null,
+            "warnings": 0
+          }
+        },
+        "d3d12": {
+          "exe": "0d1dec9c1e8947a12dbf60d504940fd05063b0b72a52e1e93d8655d569a2cb81",
+          "planes": {
+            "hdr": "ea84062434675d9e05398ba94d88b4d9fc259407b1bc1c975c43b192b123b40b",
+            "sdr": "df7a467dfcba56cd1aafe426eb9ac08f11088e79280f62bcd52021df0a18b034",
+            "depth": "c6f61b199a1af526ea6789474b7b934ceca88fbb58764efaefe6e233aab8246f"
+          },
+          "draws": 1189,
+          "covered_pixels": 2039878,
+          "validation": {
+            "callback_failures": 0,
+            "clean": true,
+            "corruption": 0,
+            "debug_layer_enabled": false,
+            "errors": 0,
+            "gpu_based_validation_enabled": false,
+            "mode": "disabled",
+            "teardown_checked": false,
+            "warnings": 0
+          }
+        }
+      }
+    },
+    "bistro-graph": {
+      "args": [
+        "--manifest",
+        ".tools/bistro-cook/full-a3/manifest.json",
+        "--ibl-manifest",
+        ".tools/b3/ibl-final/manifest.json",
+        "--view",
+        "street",
+        "--width",
+        "1920",
+        "--height",
+        "1080",
+        "--frames",
+        "2",
+        "--warmup",
+        "1",
+        "--inflight",
+        "2"
+      ],
+      "matched_before_after": true,
+      "by_api": {
+        "vulkan": {
+          "exe": "f43458db6605e89d80f708ca672ec05f554882559f2499d549d591c5e9e69f13",
+          "planes": {
+            "hdr": "a1578e144a015ef53b1ed8172a028bfe189417699818732d016f7b16b86f2904",
+            "sdr": "d4bf850ed3eab699d890deeda8efe847f7323b325a8d9b5e91335936d759a785",
+            "depth": "1622e27695f2e3eb8a6b76e7ef88f5b4d965d0624479da3bac7e1f71b101a7ef"
+          },
+          "draws": 1189,
+          "covered_pixels": 2039878,
+          "validation": {
+            "callback_failures": 0,
+            "clean": true,
+            "core_validation": null,
+            "errors": 0,
+            "mode": "disabled",
+            "requested": "Disabled",
+            "synchronization_validation": null,
+            "warnings": 0
+          }
+        },
+        "d3d12": {
+          "exe": "f43458db6605e89d80f708ca672ec05f554882559f2499d549d591c5e9e69f13",
+          "planes": {
+            "hdr": "ea84062434675d9e05398ba94d88b4d9fc259407b1bc1c975c43b192b123b40b",
+            "sdr": "df7a467dfcba56cd1aafe426eb9ac08f11088e79280f62bcd52021df0a18b034",
+            "depth": "c6f61b199a1af526ea6789474b7b934ceca88fbb58764efaefe6e233aab8246f"
+          },
+          "draws": 1189,
+          "covered_pixels": 2039878,
+          "validation": {
+            "callback_failures": 0,
+            "clean": true,
+            "corruption": 0,
+            "debug_layer_enabled": false,
+            "errors": 0,
+            "gpu_based_validation_enabled": false,
+            "mode": "disabled",
+            "teardown_checked": false,
+            "warnings": 0
+          }
+        }
+      }
+    }
+  },
+  "survivor": {
+    "exe_sha256": "a1c5208b01b4cc3be24d03aae2c22c4da8da1270f5b20edcc18127197f1976d8",
+    "baseline_state_fields_equal": {
+      "posted": true,
+      "route": true,
+      "edited": true,
+      "defeated": true,
+      "retry": true,
+      "endgame": true
+    },
+    "vulkan": {
+      "backend": "vulkan",
+      "seed": 506,
+      "exe_sha256": "a1c5208b01b4cc3be24d03aae2c22c4da8da1270f5b20edcc18127197f1976d8",
+      "cases": {
+        "open": {
+          "state": {
+            "tick": 48,
+            "phase": "playing",
+            "player": [
+              0.0,
+              2.400004
+            ],
+            "hp": 100,
+            "xp": 1,
+            "level": 1,
+            "kills": 1,
+            "enemies": 8,
+            "shots": 0,
+            "drops": 0,
+            "upgrades": [
+              0,
+              0,
+              0
+            ],
+            "contacts": 0,
+            "marker_entries": 1
+          },
+          "pixels_sha256": "01694b5863161f6d545156d0b955df40945bf94bde9546daf2b53d762bfec36f"
+        },
+        "edited": {
+          "state": {
+            "tick": 48,
+            "phase": "playing",
+            "player": [
+              0.0,
+              5.175002
+            ],
+            "hp": 100,
+            "xp": 0,
+            "level": 1,
+            "kills": 0,
+            "enemies": 8,
+            "shots": 0,
+            "drops": 0,
+            "upgrades": [
+              0,
+              0,
+              0
+            ],
+            "contacts": 37,
+            "marker_entries": 0
+          },
+          "pixels_sha256": "069c3de9b47a20edfb15d56f7c28e55ab8662934ea5d42ae9e08092283f03dc8"
+        },
+        "alternate": {
+          "state": {
+            "tick": 48,
+            "phase": "playing",
+            "player": [
+              0.0,
+              5.175002
+            ],
+            "hp": 100,
+            "xp": 0,
+            "level": 1,
+            "kills": 0,
+            "enemies": 8,
+            "shots": 0,
+            "drops": 0,
+            "upgrades": [
+              0,
+              0,
+              0
+            ],
+            "contacts": 37,
+            "marker_entries": 0
+          },
+          "pixels_sha256": "b5f8c5b58188e98c06530044deaa487314015a26e60c9d9272c0b8efb411dad1"
+        }
+      },
+      "passed": true,
+      "model_swap_changed_pixels": 1972,
+      "playthrough": {
+        "defeated": {
+          "tick": 3000,
+          "phase": "defeated",
+          "player": [
+            0.0,
+            6.0
+          ],
+          "hp": 0,
+          "xp": 1,
+          "level": 5,
+          "kills": 72,
+          "enemies": 23,
+          "shots": 1,
+          "drops": 47,
+          "upgrades": [
+            0,
+            4,
+            0
+          ],
+          "contacts": 474,
+          "marker_entries": 0
+        },
+        "retry": {
+          "tick": 3001,
+          "phase": "playing",
+          "player": [
+            0.0,
+            6.0
+          ],
+          "hp": 100,
+          "xp": 0,
+          "level": 1,
+          "kills": 0,
+          "enemies": 8,
+          "shots": 0,
+          "drops": 0,
+          "upgrades": [
+            0,
+            0,
+            0
+          ],
+          "contacts": 0,
+          "marker_entries": 0
+        }
+      }
+    },
+    "d3d12": {
+      "backend": "d3d12",
+      "seed": 506,
+      "exe_sha256": "a1c5208b01b4cc3be24d03aae2c22c4da8da1270f5b20edcc18127197f1976d8",
+      "cases": {
+        "open": {
+          "state": {
+            "tick": 48,
+            "phase": "playing",
+            "player": [
+              0.0,
+              2.400004
+            ],
+            "hp": 100,
+            "xp": 1,
+            "level": 1,
+            "kills": 1,
+            "enemies": 8,
+            "shots": 0,
+            "drops": 0,
+            "upgrades": [
+              0,
+              0,
+              0
+            ],
+            "contacts": 0,
+            "marker_entries": 1
+          },
+          "pixels_sha256": "2fdffb860ff5483910021a0bed0a711274d8c7b948b3871a1d7e0a924bda5d9c"
+        },
+        "edited": {
+          "state": {
+            "tick": 48,
+            "phase": "playing",
+            "player": [
+              0.0,
+              5.175002
+            ],
+            "hp": 100,
+            "xp": 0,
+            "level": 1,
+            "kills": 0,
+            "enemies": 8,
+            "shots": 0,
+            "drops": 0,
+            "upgrades": [
+              0,
+              0,
+              0
+            ],
+            "contacts": 37,
+            "marker_entries": 0
+          },
+          "pixels_sha256": "05a3ea0fd981662d8dcd28bfa764d616e8c982ca6649bfdfd26a2ea06f084d10"
+        },
+        "alternate": {
+          "state": {
+            "tick": 48,
+            "phase": "playing",
+            "player": [
+              0.0,
+              5.175002
+            ],
+            "hp": 100,
+            "xp": 0,
+            "level": 1,
+            "kills": 0,
+            "enemies": 8,
+            "shots": 0,
+            "drops": 0,
+            "upgrades": [
+              0,
+              0,
+              0
+            ],
+            "contacts": 37,
+            "marker_entries": 0
+          },
+          "pixels_sha256": "42a3c1fb691dd0c653e04ff3f4591456e72caa6de89d3ea92b23f4c0d1cc6e99"
+        }
+      },
+      "passed": true,
+      "model_swap_changed_pixels": 1972
+    },
+    "synthetic_windows": {
+      "ticks": 1866,
+      "directions": {
+        "(0, -1)": 24,
+        "(-1, 0)": 24,
+        "(1, 0)": 24,
+        "(0, 1)": 24,
+        "(0, 0)": 1770
+      },
+      "all_releases": true,
+      "choice_seen": true,
+      "end": {
+        "tick": 1866,
+        "phase": "choosing",
+        "player": [
+          -1.4250002,
+          4.2000046
+        ],
+        "hp": 100,
+        "xp": 0,
+        "level": 2,
+        "kills": 35,
+        "enemies": 17,
+        "shots": 1,
+        "drops": 27,
+        "upgrades": [
+          0,
+          1,
+          0
+        ],
+        "contacts": 0,
+        "marker_entries": 0
+      },
+      "replay_matches": true
+    }
+  }
+}

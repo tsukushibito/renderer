@@ -1,6 +1,8 @@
 //! Game runtime and authoring interfaces shared by Sashiko applications.
 pub mod app;
 pub mod capture;
+#[cfg(feature = "cli")]
+pub mod cli;
 pub mod input;
 pub use app::App;
 #[cfg(all(windows, feature = "presentation"))]

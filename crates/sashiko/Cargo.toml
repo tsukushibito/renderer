@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [features]
+cli = ["dep:clap"]
 audio-output = ["dep:cpal"]
 presentation = ["dep:winit"]
 
@@ -14,6 +15,7 @@ cpal = { version = "0.16", optional = true }
 winit = { version = "0.30", default-features = false, features = ["rwh_06"], optional = true }
 
 [dependencies]
+clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"], optional = true }
 renderer = { version = "0.1.0", path = "../renderer", default-features = false }
 hound = "3.5"
 glam = "0.30"
