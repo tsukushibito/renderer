@@ -54,3 +54,8 @@
 /crates/training-yard/assets/equipment/source/*.png binary
 
 /assets/verification/*-evidence.zip filter=lfs diff=lfs merge=lfs -text
+
+# Cooked texels and joint palettes have byte-exact sizes and content.
+/assets/survivor/environment/*.rgba binary
+/assets/survivor/characters/*.rgba binary
+/assets/survivor/characters/*.skin binary

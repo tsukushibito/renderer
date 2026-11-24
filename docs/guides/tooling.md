@@ -221,6 +221,8 @@ let ready = renderer.read_capture(&capture, &mut rgba, timeout)?;
 Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受け取り、シーンと HUD を記録する。
 表示待ちの再試行では、すでに受理した画像を提示する。UI だけを描くフレームでは `draw_overlay` から開始できる。
 
+ウィンドウの GPU 時間を調べるには準備後に `set_profiling(true)` を呼び、各 `draw` の試行と最後の `wait_idle` の後で `take_graph_profile` と `take_presentation_profile` を回収する。Graph と提示用コマンドの GPU 区間を分けて扱い、通常版の提示間隔は計測を無効にした別走で採る。[研究施設の実行例](../../crates/survivor/src/window.rs)
+
 空からモデルを追加するときは、ロードの境界で `renderer.prepare_scene(SceneAssets::new(&mut meshes, &mut materials, scene.objects()))?` を呼ぶ。
 標準 `Renderer` はこの一覧から独立に動かせる個体数と必要なシェーダーを求め、同じデバイス上で必要な分を準備する。読取中の画像が変更を妨げる場合は、`error.capacity().map(|c| c.recovery())` が `Some(renderer::CapacityRecovery::ReleaseOwners)` なら、その結果を回収して再試行する。ホストが固定した GPU 予算を使う場合は `SceneRenderer::replace_working_set` で上限超過を受け取れる。
 転送が完了したら同じビューで描画できる。準備した個体を動かすフレームは描画入力の変換だけを更新する。
