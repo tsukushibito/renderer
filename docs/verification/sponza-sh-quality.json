@@ -1,0 +1,341 @@
+{
+  "issue": "renderer-eszs",
+  "base_commit": "246cdeacae1bb4dcb144659c6f785ace499d33ea",
+  "camera_sample_seed": 20261124,
+  "camera": {
+    "camera": "courtyard",
+    "dimensions": [
+      960,
+      540
+    ],
+    "rays_per_probe": 128,
+    "atlas_payload_sha256": "d84b3e697fe4e857a80cdb22c7987922b42679f8edd191c9b2861e1402c69ca0",
+    "bake_identity": "f935ec271c80203c845e697b4480788e1f3fb69283d73b7e1786d61a03bdf9c3",
+    "units": "linear RGB E/pi",
+    "probe_pixels": 454515,
+    "reconstructed_pixels": 454515,
+    "zero_weight_pixels": 1668,
+    "sampled_probes": 571,
+    "stored_l1_vs_gpu": {
+      "rgb_mae": 2.115599264964115e-05,
+      "p50_max_channel": 6.5460499704848504e-06,
+      "p95_max_channel": 0.00011081467461155256,
+      "p99_max_channel": 0.00026121139097926054,
+      "max_channel": 0.10012391036745533,
+      "pixels_over_0_001": 407,
+      "max_xy": [
+        466,
+        278
+      ]
+    },
+    "rebaked_l1_vs_gpu": {
+      "rgb_mae": 0.0019752602319877046,
+      "p50_max_channel": 0.0008972065423910325,
+      "p95_max_channel": 0.008388822659276617,
+      "p99_max_channel": 0.012667115120496555,
+      "max_channel": 0.10293443458966611,
+      "pixels_over_0_001": 213492,
+      "max_xy": [
+        466,
+        278
+      ]
+    },
+    "l2_vs_l1": {
+      "rgb_mae": 0.00703755883453014,
+      "p50_max_channel": 0.0017893376162591915,
+      "p95_max_channel": 0.04599018493783353,
+      "p99_max_channel": 0.09008929285243786,
+      "max_channel": 0.1592241502296715,
+      "pixels_over_0_001": 271281,
+      "max_xy": [
+        471,
+        183
+      ]
+    },
+    "receiver_error": {
+      "2048": {
+        "pixels": 1024,
+        "l1_rgb_mae": 0.02035785842319414,
+        "l2_rgb_mae": 0.01881194932225049,
+        "closer_with_l2": 527,
+        "equal": 8
+      },
+      "8192": {
+        "pixels": 128,
+        "l1_rgb_mae": 0.02417822620160569,
+        "l2_rgb_mae": 0.022628530218315603,
+        "closer_with_l2": 63,
+        "equal": 0
+      },
+      "subset_reference_rgb_mae_2048_vs_8192": 0.0007853826822835997,
+      "subset_2048_l1_rgb_mae": 0.024413636966772363,
+      "subset_2048_l2_rgb_mae": 0.022828467461363217
+    }
+  },
+  "dense_patches": {
+    "128": {
+      "receiver": {
+        "scene_lighting_identity": "f935ec271c80203c845e697b4480788e1f3fb69283d73b7e1786d61a03bdf9c3",
+        "probe_rays": 128,
+        "receiver_rays": 2048,
+        "unique_contributing_probes": 16,
+        "units": "linear RGB irradiance / pi; equally weighted pixels and RGB channels for MAE",
+        "source_sha256": {
+          "positions.json": "89302e6258febfb4bdea13792788b691ed5a360852a73426f2d9b0dfbe328bff",
+          "quadrature-128.json": "9015767fdd66b5b89e695b2bc69f15c620d36b70b09ae686766bfa44e7327122",
+          "light.gi": "66aa74ec3b96c970f6d6ac621d16bcaf4c766cf3526edad83f4699013c3d6e3f",
+          "views.json": "877e8ac76dd8a01a96d765e0b5801e5e4cbcb4e53ed86a1984755a2d4c0a4fa7",
+          "receivers-2048.json": "c18f1a3fef6aedae075decd1d889f325daabba5b2a03a1d3f504788577abf5e8",
+          "patch-receivers.json": "9a9a75be53849fe2245f4a309b37f6f8b6013d8e3f03bf4086a4cad5af28dd11"
+        },
+        "patches": {
+          "D": {
+            "pixels": 1408,
+            "rgb_mae_l1": 0.033732650669671245,
+            "rgb_mae_l2": 0.033205682730793926,
+            "rgb_mae_reduction_percent": 1.5621895357043836,
+            "mean_abs_l2_minus_l1_rgb": 0.0005514756263737511,
+            "luminance_mean": {
+              "l1": 0.004862909869628642,
+              "l2": 0.005379935584589725,
+              "receiver": 0.03894585481310347
+            },
+            "final_srgb8_mean_abs_channel_change": 0.3716856060606061,
+            "final_srgb8_p95_max_channel_change_per_pixel": 1.0,
+            "final_srgb8_max_channel_change": 2,
+            "atlas_l1_vs_gpu_max_abs_rgb": 2.55745851077847e-05,
+            "baked_l1_vs_atlas_mae_rgb": 0.0005965673383546596,
+            "baked_l1_vs_atlas_max_abs_rgb": 0.0021172598417546363,
+            "pixels_with_zero_probe_weight": 0
+          },
+          "G": {
+            "pixels": 1408,
+            "rgb_mae_l1": 0.0017013373225628562,
+            "rgb_mae_l2": 0.00169723600094219,
+            "rgb_mae_reduction_percent": 0.24106457704037298,
+            "mean_abs_l2_minus_l1_rgb": 4.101323709008507e-06,
+            "luminance_mean": {
+              "l1": 1.381108101729027e-05,
+              "l2": 1.7989144971408992e-05,
+              "receiver": 0.0017837958804997926
+            },
+            "final_srgb8_mean_abs_channel_change": 0.007102272727272727,
+            "final_srgb8_p95_max_channel_change_per_pixel": 0.0,
+            "final_srgb8_max_channel_change": 1,
+            "atlas_l1_vs_gpu_max_abs_rgb": 5.17629481326707e-08,
+            "baked_l1_vs_atlas_mae_rgb": 3.133701989203724e-06,
+            "baked_l1_vs_atlas_max_abs_rgb": 5.905554286284255e-06,
+            "pixels_with_zero_probe_weight": 0
+          },
+          "B": {
+            "pixels": 1408,
+            "rgb_mae_l1": 0.0030511692913871022,
+            "rgb_mae_l2": 0.0027312785755073407,
+            "rgb_mae_reduction_percent": 10.484200820411871,
+            "mean_abs_l2_minus_l1_rgb": 0.0008226639719414614,
+            "luminance_mean": {
+              "l1": 0.002554805466570276,
+              "l2": 0.0028799854048320683,
+              "receiver": 0.005448491135823961
+            },
+            "final_srgb8_mean_abs_channel_change": 0.5071022727272727,
+            "final_srgb8_p95_max_channel_change_per_pixel": 2.0,
+            "final_srgb8_max_channel_change": 3,
+            "atlas_l1_vs_gpu_max_abs_rgb": 1.4843143804353903e-05,
+            "baked_l1_vs_atlas_mae_rgb": 0.0005382726867392992,
+            "baked_l1_vs_atlas_max_abs_rgb": 0.001032651705794408,
+            "pixels_with_zero_probe_weight": 0
+          }
+        },
+        "combined": {
+          "pixels": 4224,
+          "rgb_mae_l1": 0.01282838576120707,
+          "rgb_mae_l2": 0.012544732435747817,
+          "rgb_mae_reduction_percent": 2.2111381021688525,
+          "mean_abs_l2_minus_l1_rgb": 0.00045941364067474035,
+          "luminance_mean": {
+            "l1": 0.002477175472405403,
+            "l2": 0.0027593033781310675,
+            "receiver": 0.015392713943142405
+          },
+          "final_srgb8_mean_abs_channel_change": 0.2952967171717172,
+          "final_srgb8_p95_max_channel_change_per_pixel": 2.0,
+          "final_srgb8_max_channel_change": 3
+        }
+      },
+      "probe_quadrature": {
+        "scene_lighting_identity": "f935ec271c80203c845e697b4480788e1f3fb69283d73b7e1786d61a03bdf9c3",
+        "samples_per_probe": 128,
+        "samples_per_receiver": 2048,
+        "units": "linear RGB irradiance / pi; mean over pixels and color channels",
+        "patches": {
+          "D": {
+            "pixels": 1408,
+            "l1_vs_probe_cosine_mae": 0.0008179045394700326,
+            "l2_vs_probe_cosine_mae": 0.00028825235403098196,
+            "probe_cosine_vs_receiver_mae": 0.03291743037676294,
+            "l1_vs_receiver_mae": 0.033732650669671245,
+            "l2_vs_receiver_mae": 0.033205682730793926
+          },
+          "G": {
+            "pixels": 1408,
+            "l1_vs_probe_cosine_mae": 3.4102592134322e-06,
+            "l2_vs_probe_cosine_mae": 6.990584780857235e-07,
+            "probe_cosine_vs_receiver_mae": 0.001697930588481635,
+            "l1_vs_receiver_mae": 0.0017013373225628562,
+            "l2_vs_receiver_mae": 0.00169723600094219
+          },
+          "B": {
+            "pixels": 1408,
+            "l1_vs_probe_cosine_mae": 0.001262684676687806,
+            "l2_vs_probe_cosine_mae": 0.000686217148648686,
+            "probe_cosine_vs_receiver_mae": 0.002045513077133647,
+            "l1_vs_receiver_mae": 0.0030511692913871022,
+            "l2_vs_receiver_mae": 0.0027312785755073407
+          }
+        },
+        "combined": {
+          "pixels": 4224,
+          "l1_vs_probe_cosine_mae": 0.0006946664917904235,
+          "l2_vs_probe_cosine_mae": 0.00032505618705258463,
+          "probe_cosine_vs_receiver_mae": 0.012220291347459404,
+          "l1_vs_receiver_mae": 0.01282838576120707,
+          "l2_vs_receiver_mae": 0.012544732435747817
+        }
+      },
+      "ray_dump_sha256": "c274648c7ebe4537433dbe74797659ba3aa3b84514c8a7fbbc4ed98e4f716c98"
+    },
+    "8192": {
+      "receiver": {
+        "scene_lighting_identity": "f935ec271c80203c845e697b4480788e1f3fb69283d73b7e1786d61a03bdf9c3",
+        "probe_rays": 8192,
+        "receiver_rays": 2048,
+        "unique_contributing_probes": 16,
+        "units": "linear RGB irradiance / pi; equally weighted pixels and RGB channels for MAE",
+        "source_sha256": {
+          "positions.json": "89302e6258febfb4bdea13792788b691ed5a360852a73426f2d9b0dfbe328bff",
+          "quadrature-8192.json": "5178225d4a9ca393330ae6cdca632c915e52423dd19f268db965a30c9f47f690",
+          "light.gi": "66aa74ec3b96c970f6d6ac621d16bcaf4c766cf3526edad83f4699013c3d6e3f",
+          "views.json": "877e8ac76dd8a01a96d765e0b5801e5e4cbcb4e53ed86a1984755a2d4c0a4fa7",
+          "receivers-2048.json": "c18f1a3fef6aedae075decd1d889f325daabba5b2a03a1d3f504788577abf5e8",
+          "patch-receivers.json": "9a9a75be53849fe2245f4a309b37f6f8b6013d8e3f03bf4086a4cad5af28dd11"
+        },
+        "patches": {
+          "D": {
+            "pixels": 1408,
+            "rgb_mae_l1": 0.03146213274616117,
+            "rgb_mae_l2": 0.030816804507380547,
+            "rgb_mae_reduction_percent": 2.0511268069052457,
+            "mean_abs_l2_minus_l1_rgb": 0.0006878448039746728,
+            "luminance_mean": {
+              "l1": 0.007077925844192276,
+              "l2": 0.0077185823653834855,
+              "receiver": 0.03894585481310347
+            },
+            "final_srgb8_mean_abs_channel_change": 0.3248106060606061,
+            "final_srgb8_p95_max_channel_change_per_pixel": 1.0,
+            "final_srgb8_max_channel_change": 2,
+            "atlas_l1_vs_gpu_max_abs_rgb": 2.55745851077847e-05,
+            "baked_l1_vs_atlas_mae_rgb": 0.0028670852618647336,
+            "baked_l1_vs_atlas_max_abs_rgb": 0.009676201436392275,
+            "pixels_with_zero_probe_weight": 0
+          },
+          "G": {
+            "pixels": 1408,
+            "rgb_mae_l1": 0.0016912065657428677,
+            "rgb_mae_l2": 0.0016940464229273384,
+            "rgb_mae_reduction_percent": -0.16791900185317843,
+            "mean_abs_l2_minus_l1_rgb": 2.839857184470363e-06,
+            "luminance_mean": {
+              "l1": 2.3692585543843636e-05,
+              "l2": 2.0627996694353756e-05,
+              "receiver": 0.0017837958804997926
+            },
+            "final_srgb8_mean_abs_channel_change": 0.0016571969696969697,
+            "final_srgb8_p95_max_channel_change_per_pixel": 0.0,
+            "final_srgb8_max_channel_change": 1,
+            "atlas_l1_vs_gpu_max_abs_rgb": 5.17629481326707e-08,
+            "baked_l1_vs_atlas_mae_rgb": 1.3264458809192079e-05,
+            "baked_l1_vs_atlas_max_abs_rgb": 2.849267790688005e-05,
+            "pixels_with_zero_probe_weight": 0
+          },
+          "B": {
+            "pixels": 1408,
+            "rgb_mae_l1": 0.0016255594482217908,
+            "rgb_mae_l2": 0.0020055614808588357,
+            "rgb_mae_reduction_percent": -23.3766924398078,
+            "mean_abs_l2_minus_l1_rgb": 0.0009370479715131762,
+            "luminance_mean": {
+              "l1": 0.003997813386690378,
+              "l2": 0.0034640252699371407,
+              "receiver": 0.005448491135823961
+            },
+            "final_srgb8_mean_abs_channel_change": 0.8998579545454546,
+            "final_srgb8_p95_max_channel_change_per_pixel": 3.0,
+            "final_srgb8_max_channel_change": 4,
+            "atlas_l1_vs_gpu_max_abs_rgb": 1.4843143804353903e-05,
+            "baked_l1_vs_atlas_mae_rgb": 0.0019779322733726127,
+            "baked_l1_vs_atlas_max_abs_rgb": 0.0030907535870948076,
+            "pixels_with_zero_probe_weight": 0
+          }
+        },
+        "combined": {
+          "pixels": 4224,
+          "rgb_mae_l1": 0.011592966253375277,
+          "rgb_mae_l2": 0.011505470803722242,
+          "rgb_mae_reduction_percent": 0.7547287531140756,
+          "mean_abs_l2_minus_l1_rgb": 0.0005425775442241065,
+          "luminance_mean": {
+            "l1": 0.003699810605475499,
+            "l2": 0.003734411877338327,
+            "receiver": 0.015392713943142405
+          },
+          "final_srgb8_mean_abs_channel_change": 0.40877525252525254,
+          "final_srgb8_p95_max_channel_change_per_pixel": 2.0,
+          "final_srgb8_max_channel_change": 4
+        }
+      },
+      "probe_quadrature": {
+        "scene_lighting_identity": "f935ec271c80203c845e697b4480788e1f3fb69283d73b7e1786d61a03bdf9c3",
+        "samples_per_probe": 8192,
+        "samples_per_receiver": 2048,
+        "units": "linear RGB irradiance / pi; mean over pixels and color channels",
+        "patches": {
+          "D": {
+            "pixels": 1408,
+            "l1_vs_probe_cosine_mae": 0.0008095973643784168,
+            "l2_vs_probe_cosine_mae": 0.00013184902620417473,
+            "probe_cosine_vs_receiver_mae": 0.030685572678042988,
+            "l1_vs_receiver_mae": 0.03146213274616117,
+            "l2_vs_receiver_mae": 0.030816804507380547
+          },
+          "G": {
+            "pixels": 1408,
+            "l1_vs_probe_cosine_mae": 1.6855393327505323e-06,
+            "l2_vs_probe_cosine_mae": 1.1543939942522692e-06,
+            "probe_cosine_vs_receiver_mae": 0.0016928921050756184,
+            "l1_vs_receiver_mae": 0.0016912065657428677,
+            "l2_vs_receiver_mae": 0.0016940464229273384
+          },
+          "B": {
+            "pixels": 1408,
+            "l1_vs_probe_cosine_mae": 0.001037360352750094,
+            "l2_vs_probe_cosine_mae": 0.0005511974596168956,
+            "probe_cosine_vs_receiver_mae": 0.0014543685081693544,
+            "l1_vs_receiver_mae": 0.0016255594482217908,
+            "l2_vs_receiver_mae": 0.0020055614808588357
+          }
+        },
+        "combined": {
+          "pixels": 4224,
+          "l1_vs_probe_cosine_mae": 0.0006162144188204205,
+          "l2_vs_probe_cosine_mae": 0.00022806695993844085,
+          "probe_cosine_vs_receiver_mae": 0.011277611097095987,
+          "l1_vs_receiver_mae": 0.011592966253375277,
+          "l2_vs_receiver_mae": 0.011505470803722242
+        }
+      },
+      "ray_dump_sha256": "2185e94afa2e1217511239232719ea5a59dd62162261e036ecc937dd7998d81d"
+    }
+  }
+}

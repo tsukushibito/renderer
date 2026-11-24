@@ -1,9 +1,15 @@
 # 現行実装の検証状況
 
-最終確認日は2026-11-24。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
+最終確認日は2026-11-25。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
 現在の契約は[RenderGraph](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
+
+## 静的ライトマップのページ配置試作
+
+課題 `renderer-80ub` の試作コミットは `26bef1dc`。旧保存形式で密度、UV、表裏、余白を固定し、候補の最小容量から 1% 以内で材質とページの組数などを比較した。Bistro では 17 → 4 ページ、RGBA32F ペイロード 878.72 → 830.13 MiB、材質とページの組数 222 → 294。Sponza は 1 → 2 ページ、20.31 → 14.72 MiB。これらは試作時の結果で、現在の独立ページ形式での実測は未実施。
+
+[試作の測定ファイル](../../assets/verification/adaptive-lightmaps-evidence.zip) にベイク済み照明、両 API のキャプチャ・レポート、テストログを収録した。新しい worktree を最新の main から作り、`git show 26bef1dc:crates/renderer-bake/src/surface_pages/packing.rs` で候補選択を参照できる。現行の `bake_gpu_pages` が返すページ ID、独立ページの索引・ハッシュ、選択再ベイクの契約を保って移植し、見積もりと読み込み後のサイズ、CPU 参照照度、Vulkan・D3D12 の描画を再照合する。
 
 ## 装備の cook と配布物の再現性
 
@@ -413,6 +419,64 @@ RGB は表示画像の領域平均（0–255）。日陰の床では、矩形な
 - **空間補間。** Dの中心画素で、現行のプローブ位置・可視性・補間重みを固定して独立に再計算した。通常の一次球面調和関数（SH）・128本で0.00503となり、GPUの0.00502を再現した。8,192本では同じSHで0.00747、同じ光線を正の余弦で直接積分しても0.00838。受光点自体では0.03809。残差の大部分はプローブ位置の光を受光点に割り当てる段階にある。配置と可視性重みの個別寄与は未分離。
 - **密度。** 標準の目標間隔2 m・最大深度5に対し、1 m・深度6で別アトラスをベイクした。どちらも128本、ライトマップ予算65,536テクセル。Dで誤差は減ったが、AやHでは増えた。Fはライトマップ、他の7点は拡散プローブを参照することをソース表示で確認した。
 - **材質と表示。** AOを外しても全72測定画素の拡散光HDRは同値。Sでは照度が基準より明るい一方、最終HDRをEV+1でそのままsRGBにすると表示RGBは約(27,28,28)、Neutralを通すと(2,5,6)。Dでは(23,21,18)から(9,4,1)へ下がる。AAオフで出力変換を再現し、実キャプチャとの差は最大1階調だった。側廊天井Gは受光点の基準自体が石床Fの約1.3%で、そこに物理的に届く拡散光も弱い。
+
+<a id="sponza-probe-sh-orders"></a>
+
+### Sponza の拡散プローブを一次・二次 SH で比較
+
+実験コミット `ce8d4420`、課題 `renderer-eszs`。中庭の可視プローブ面では、二次 SH にすると受光点の参照照度に対する平均絶対誤差が **7.59%** 減った。実際に暗く見える3領域では平均 **2.21%** の改善だった。以下の誤差はすべて線形 RGB の拡散間接照度を π で割り、各画素の3成分を等しく平均した値。
+
+| 受光点の選択 | プローブあたりの光線 | 受光点あたりの参照光線 | 一次 MAE | 二次 MAE | 誤差の減少 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 中庭のプローブ面から無作為に1,024画素 | 128 | 2,048 | 0.020358 | 0.018812 | 7.59% |
+| 同じ抽出順の先頭128画素 | 128 | 8,192 | 0.024178 | 0.022629 | 6.41% |
+| アーチ下面 D・側廊天井 G・柱の裏側 B、計4,224画素 | 128 | 2,048 | 0.012828 | 0.012545 | 2.21% |
+| 同じ4,224画素 | 8,192 | 2,048 | 0.011593 | 0.011505 | 0.75% |
+
+中庭では全天球あたり128本で、1,024画素のうち527画素が改善、489画素が悪化、8画素が同値。参照を8,192本に増やした128画素では、同じ128画素を2,048本で測ったときも6.49%改善した。図は既存の 960×540 Vulkan キャプチャを使い、571個のプローブで照らされる454,515画素をオフラインで再評価したもの。残り63,885画素には既存のライトマップを使った。拡散プローブ面の範囲はこの比較用キャプチャのもの。左上は撮影したシーン、右上は線形絶対差を8倍して sRGB 表示した画像。
+
+![Sponza 中庭の昼。通常表示、8倍の差分、一次と二次の拡散照度](sponza-sh-courtyard.png)
+
+暗い3領域は各44×32画素で、すべてプローブを参照し補間重みが正。128本では D の誤差が1.56%、G が0.24%、B が10.48%減った。プローブを8,192本に増やすと、B では二次の誤差が一次を23.38%上回った。128本で直接光・鏡面・材質を固定して拡散項のみ差し替えた通常表示では、8ビットの RGB 成分の平均絶対差は0.295階調、画素ごとの最大チャンネル差の95パーセンタイルは2階調。図の上から順にアーチ下面、側廊天井、柱の裏側。通常表示は EV+1、Khronos PBR Neutral、AA オフ。[照度のみの拡大と差分](sponza-sh-irradiance.png)
+
+![同じ露出で再合成した3領域。左から一次、二次、受光点で直接積分した参照](sponza-sh-shaded.png)
+
+**方向の近似誤差。** 同じ位置から同じ光線で得た入射輝度に、受光法線との正の余弦を直接掛けて積分した。セルの8隅から同じ重みで補間したこの値に対する3領域の MAE は、128本で一次 0.000695、二次 0.000325（53.2%減）。8,192本では 0.000616 → 0.000228（63.0%減）。一方、正の余弦で積分したプローブと受光点自身で積分した値の差はそれぞれ 0.012220、0.011278。ここには空間補間・可視性と有限サンプルの差が含まれる。次数を上げると方向の近似は改善するが、3領域の受光点に届く光の誤差の多くが残る。
+
+**測定条件。** 昼の `o3de-atrium`、同じクック済み形状・矩形ライト・空・2バウンス輸送を使用。CPU ベイカーで1組の光線から9個の RGB 係数を計算し、先頭4個を一次に使った。既存キャプチャから復元した深度・法線・セル・プローブ位置・可視性を固定。受光点参照も実験時のベイカーで計算した。過去のアトラスで八隅の補間を再現した際の GPU キャプチャとの RGB MAE は中庭のプローブ面で 0.0000212。最大チャンネル差が0.001を超えた407画素も集計に含めた。最も差の大きい画素では可視性重みがほぼゼロで、深度復元のわずかな差が結果に影響する。今回の測定は保存済みシーンを用いた CPU 再評価と部分画像の再合成。L2 のネイティブ描画・GPU 時間は未測定。[領域別の数値と入力ハッシュ](sponza-sh-quality.json)
+
+#### 再現手順
+
+2026-11-25 の統合時に、保存した入力から 128・8,192 本の領域比較と角度積分を再計算し、128 本の照度図と合成図が掲載 PNG とバイト一致した。ベイカー・Bistro のライブラリテストは計 115 件成功。今回の統合では GPU 描画を再測定していない。
+
+実験時には全景と両方の光線数の部分画像を再生成し、全景の測定値と PNG のバイト一致を確認した。関連2クレートの release CPU テスト103件、`bake-tool` を有効にした Clippy、Rust のフォーマット検査が通った。
+
+[測定データ](../../assets/verification/sponza-sh-quality-evidence.zip) には光線、係数、受光点参照、図と、比較に必要な入力キャプチャを収録した。リポジトリのルートから実行する。新しくベイクする場合は別途クック済み Sponza と HDR 環境を用意する。Python 依存は [Bistro の固定バージョン](../../tools/bistro/requirements.txt) の NumPy と Pillow。次は全景を新しい出力先に再現する例。
+
+```powershell
+cargo build --release --locked -p renderer-bistro --no-default-features --features bake-tool --bin bistro-bake
+$sponza = (Resolve-Path .tools/sponza-display).Path
+Expand-Archive assets/verification/sponza-sh-quality-evidence.zip build/sh-evidence
+$captures = (Resolve-Path build/sh-evidence/capture-inputs/arcade-measure).Path
+$manifest = "$sponza/cooked/manifest.json"
+$environment = "$sponza/o3de-comparison/o3de-lighting/o3de-atrium/environment/manifest.json"
+$baker = (Resolve-Path target/release/bistro-bake.exe).Path
+$run = "build/reproduce-sh"
+python -B tools/sponza/compare_probe_sh_view.py --captures $captures --baker $baker --manifest $manifest --environment $environment --out "$run/courtyard"
+```
+
+3領域を同じ受光点参照で比較する場合は、続けて次を実行する。
+
+```powershell
+python -B tools/sponza/compare_probe_sh.py --captures $captures positions --out "$run/positions.json" --receivers "$run/receivers.json"
+$lighting = @("--manifest", $manifest, "--ibl-manifest", $environment, "--day-only", "--look", "o3de-atrium", "--backend", "cpu")
+& $baker @lighting --diffuse-reference "$run/receivers.json" --samples 2048 --output "$run/reference.json"
+foreach ($count in 128, 8192) {
+    & $baker @lighting --probe-sh-reference "$run/positions.json" --samples $count --probe-ray-output "$run/rays-$count.bin" --output "$run/coeff-$count.json"
+    python -B tools/sponza/compare_probe_sh.py --captures $captures compare --positions "$run/positions.json" --coefficients "$run/coeff-$count.json" --reference "$run/reference.json" --out "$run/patch-$count"
+    python -B tools/sponza/compare_probe_quadrature.py --captures $captures --positions "$run/positions.json" --coefficients "$run/coeff-$count.json" --rays "$run/rays-$count.bin" --reference "$run/reference.json" --out "$run/angular-$count.json"
+}
+```
 
 <a id="bistro-local-reflections"></a>
 

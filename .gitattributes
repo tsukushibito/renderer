@@ -52,3 +52,5 @@
 /crates/training-yard/assets/equipment/source/*.json text eol=lf
 /crates/training-yard/assets/equipment/source/*.bin binary
 /crates/training-yard/assets/equipment/source/*.png binary
+
+/assets/verification/*-evidence.zip filter=lfs diff=lfs merge=lfs -text

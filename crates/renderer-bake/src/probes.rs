@@ -59,6 +59,13 @@ fn coords(base: [u32; 3], span: u32, i: usize) -> [u32; 3] {
     std::array::from_fn(|a| base[a] + span * c[a])
 }
 
+fn probe_ray(index: u32, count: u32) -> Vec3 {
+    let z = 1. - 2. * (index as f32 + 0.5) / count as f32;
+    let r = (1. - z * z).max(0.).sqrt();
+    let (s, c) = (TAU * (index.reverse_bits() as f64 / 4294967296.) as f32).sin_cos();
+    [r * c, z, r * s]
+}
+
 // Cartesian weights for the cosine-convolved real SH projection of one ray.
 fn linear_sh([x, y, z]: Vec3) -> [f32; 4] {
     [1., 2. * x, 2. * y, 2. * z]
@@ -94,10 +101,7 @@ impl BakeScene {
         let sample_weight = PI / samples as f32;
         let (scenarios, _) = coefficients.as_chunks_mut::<K>();
         for j in 0..samples {
-            let z = 1. - 2. * (j as f32 + 0.5) / samples as f32;
-            let r = (1. - z * z).max(0.).sqrt();
-            let (s, c) = (TAU * (j.reverse_bits() as f64 / 4294967296.) as f32).sin_cos();
-            let dir = [r * c, z, r * s];
+            let dir = probe_ray(j, samples);
             let weights = basis(dir);
             for (&light, dst) in lights.iter().zip(scenarios.iter_mut()) {
                 let mut seed = j;
@@ -109,6 +113,90 @@ impl BakeScene {
                 }
             }
         }
+    }
+
+    /// Offline comparison at supplied world-space probe positions. The first four
+    /// coefficients use the production CPU bake's rays, weights and summation order.
+    /// Evaluate RGB irradiance with [1, x, y, z, xy, yz, xz, x²-y², 3z²-1] for
+    /// a unit surface normal (x,y,z). The result already includes the cosine integral.
+    /// Optional ray output contains little-endian f32 triples in this order:
+    /// all world-space directions, then incident RGB radiance at each position
+    /// in input order and, within each position, the same direction order.
+    pub fn probe_sh_reference(
+        &self,
+        positions: &[Vec3],
+        light: crate::Lighting,
+        samples: u32,
+        mut ray_output: Option<&mut dyn std::io::Write>,
+    ) -> Result<Vec<[Vec3; 9]>, Box<dyn std::error::Error>> {
+        light.validate(self)?;
+        if samples == 0 || positions.iter().any(|&p| !crate::finite(p)) {
+            return Err(BakeError("invalid probe reference position or sample count").into());
+        }
+        fn write_triple(output: &mut dyn std::io::Write, v: Vec3) -> std::io::Result<()> {
+            for component in v {
+                output.write_all(&component.to_le_bytes())?;
+            }
+            Ok(())
+        }
+        let capture = ray_output.is_some();
+        if let Some(output) = &mut ray_output {
+            for j in 0..samples {
+                write_triple(*output, probe_ray(j, samples))?;
+            }
+        }
+        let workers = std::thread::available_parallelism().map_or(1, usize::from);
+        // With a dump, keep at most 16 MiB of pending ray data or one probe.
+        let batch_size = if capture {
+            (16 * 1024 * 1024 / size_of::<Vec3>() / samples as usize).max(1)
+        } else {
+            positions.len().max(1)
+        };
+        let mut result = vec![[[0.; 3]; 9]; positions.len()];
+        for (batch, out) in positions
+            .chunks(batch_size)
+            .zip(result.chunks_mut(batch_size))
+        {
+            let chunk = batch.len().div_ceil(workers);
+            std::thread::scope(|scope| -> Result<(), Box<dyn std::error::Error>> {
+                let mut jobs = Vec::new();
+                for (positions, coefficients) in batch.chunks(chunk).zip(out.chunks_mut(chunk)) {
+                    jobs.push(scope.spawn(move || {
+                        let mut radiances = Vec::new();
+                        if capture {
+                            radiances.try_reserve_exact(positions.len() * samples as usize)?;
+                        }
+                        for (&position, sh) in positions.iter().zip(coefficients) {
+                            for j in 0..samples {
+                                let dir = probe_ray(j, samples);
+                                let mut seed = j;
+                                let radiance = self.incoming(position, dir, light, &mut seed);
+                                if capture {
+                                    radiances.push(radiance);
+                                }
+                                let basis = quadratic_sh(dir);
+                                for (coefficient, weight) in sh.iter_mut().zip(basis) {
+                                    for (channel, l) in radiance.into_iter().enumerate() {
+                                        coefficient[channel] += l * (PI / samples as f32) * weight;
+                                    }
+                                }
+                            }
+                        }
+                        Ok::<_, std::collections::TryReserveError>(radiances)
+                    }));
+                }
+                for job in jobs {
+                    let radiances = job.join().expect("probe worker panicked")?;
+                    if let Some(output) = &mut ray_output {
+                        for v in radiances {
+                            write_triple(*output, v)?;
+                        }
+                    }
+                }
+                Ok(())
+            })?;
+        }
+        Ok(result)
     }
 
     fn intersects_geometry(&self, p: Vec3, size: f32) -> bool {
@@ -472,6 +560,81 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ray_dump_matches_the_projected_transport_and_input_order() {
+        let scene = BakeScene::new(
+            vec![crate::Triangle {
+                positions: [[-2., 0., -2.], [0., 0., 2.], [2., 0., -2.]],
+                material: 0,
+                uv: [[0.; 2]; 3],
+            }],
+            vec![crate::Material {
+                diffuse: [0.; 3],
+                emissive_nits: [1., 2., 3.],
+                ..Default::default()
+            }],
+            vec![],
+        )
+        .unwrap();
+        let light = Lighting {
+            sun: crate::Sun::OFF,
+            environment: None,
+            sky_rgb_nits: [0.01; 3],
+        };
+        let positions = [[0., 0.3, 0.], [42., 3., 1.]];
+        let samples = 31;
+        let mut raw = Vec::new();
+        let sh = scene
+            .probe_sh_reference(&positions, light, samples, Some(&mut raw))
+            .unwrap();
+        assert_eq!(
+            sh,
+            scene
+                .probe_sh_reference(&positions, light, samples, None)
+                .unwrap()
+        );
+        assert_ne!(sh[0][0], sh[1][0]);
+        let triples: Vec<Vec3> = raw
+            .as_chunks::<12>()
+            .0
+            .iter()
+            .map(|bytes| {
+                std::array::from_fn(|i| {
+                    f32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap())
+                })
+            })
+            .collect();
+        assert_eq!(raw.len(), (positions.len() + 1) * samples as usize * 12);
+        for j in 0..samples {
+            let dir = probe_ray(j, samples);
+            assert_eq!(triples[j as usize], dir);
+            for (i, p) in positions.iter().enumerate() {
+                let mut seed = j;
+                assert_eq!(
+                    triples[(i + 1) * samples as usize + j as usize],
+                    scene.incoming(*p, dir, light, &mut seed)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn quadratic_projection_recovers_rotated_legendre_kernel() {
+        for ray in 0..17 {
+            let dir = probe_ray(ray, 17);
+            for receiver in 0..19 {
+                let n @ [x, y, z] = probe_ray(receiver, 19);
+                let basis = [x * y, y * z, x * z, x * x - y * y, 3. * z * z - 1.];
+                let fitted: f32 = quadratic_sh(dir)[4..]
+                    .iter()
+                    .zip(basis)
+                    .map(|(a, b)| a * b)
+                    .sum();
+                let dot = crate::dot(dir, n);
+                assert!((fitted - 0.625 * (3. * dot * dot - 1.)).abs() < 1e-6);
+            }
+        }
+    }
     #[test]
     fn sky_scenarios_share_a_leaf_and_survive_serialization() {
         let scene = BakeScene::new(vec![], vec![], vec![]).unwrap();

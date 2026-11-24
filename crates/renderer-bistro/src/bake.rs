@@ -252,6 +252,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut max_probes = None;
     let mut reference = None;
     let mut diffuse_reference = None;
+    let mut probe_sh_reference = None;
+    let mut probe_ray_output = None;
     let mut ibl_manifest = None;
     let mut look = Look::LumberyardDay;
     let mut day_only = false;
@@ -266,6 +268,15 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut estimate = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--probe-ray-output" => {
+                probe_ray_output =
+                    Some(PathBuf::from(args.next().ok_or("missing ray output path")?));
+            }
+            "--probe-sh-reference" => {
+                probe_sh_reference = Some(PathBuf::from(
+                    args.next().ok_or("missing probe positions file")?,
+                ));
+            }
             "--diffuse-reference" => {
                 diffuse_reference = Some(PathBuf::from(
                     args.next().ok_or("missing diffuse receiver file")?,
@@ -344,10 +355,13 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--probe-sh l1|l2] [--samples N] [--backend auto|vulkan|vulkan-rt|vulkan-software|d3d12|cpu] [--estimate] [--benchmark-seed N --day-only] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json [--reflection-format bc6h|rgba32f] | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--probe-sh l1|l2] [--samples N] [--backend auto|vulkan|vulkan-rt|vulkan-software|d3d12|cpu] [--estimate] [--benchmark-seed N --day-only] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json [--reflection-format bc6h|rgba32f] | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json | --probe-sh-reference POSITIONS.json [--probe-ray-output FILE]]"
                 );
                 println!(
                     "Placement options: --placement-method floor|remedy --max-probes N (1..32) [--repair-placement (daylight quality report on stdout)]"
+                );
+                println!(
+                    "--probe-sh-reference also accepts --probe-ray-output FILE: little-endian f32 triples; one direction per sample, then one RGB radiance per probe and sample."
                 );
                 return Ok(());
             }
@@ -360,6 +374,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             || endpoints_only
             || reference.is_some()
             || diffuse_reference.is_some()
+            || probe_sh_reference.is_some()
             || layout.is_some()
             || placement_spacing.is_some())
     {
@@ -373,18 +388,26 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     if day_only && endpoints_only {
         return Err("choose either day-only or endpoints-only".into());
     }
-    if (reference.is_some() || diffuse_reference.is_some())
+    let reference_count = [&reference, &diffuse_reference, &probe_sh_reference]
+        .into_iter()
+        .filter(|path| path.is_some())
+        .count();
+    if probe_ray_output.is_some() && probe_sh_reference.is_none() {
+        return Err("--probe-ray-output requires --probe-sh-reference".into());
+    }
+    if reference_count > 0
         && (layout.is_some()
-            || (reference.is_some() && diffuse_reference.is_some())
+            || reference_count > 1
+            || estimate
             || endpoints_only
             || ibl_manifest.is_none()
-            || reference.is_some()
+            || (reference.is_some() || probe_sh_reference.is_some())
                 && !matches!(
                     settings.backend,
                     renderer_bake::BakeBackend::Auto | renderer_bake::BakeBackend::Cpu
                 ))
     {
-        return Err("lighting references require daylight, an IBL manifest and no probe layout; specular references require CPU".into());
+        return Err("lighting references require daylight, an IBL manifest and no probe layout; specular and probe SH references require CPU".into());
     }
 
     if reflection_format.is_some() && layout.is_none() {
@@ -398,9 +421,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         (Some(path), false) => Scene::load(&path, false)?,
         _ => return Err("select --manifest or --fixture".into()),
     };
-    if placement_spacing.is_some()
-        && (layout.is_some() || reference.is_some() || diffuse_reference.is_some() || estimate)
-    {
+    if placement_spacing.is_some() && (layout.is_some() || reference_count > 0 || estimate) {
         return Err("choose one reflection layout, reference, estimate or bake operation".into());
     }
     fn write_layout(
@@ -438,10 +459,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         write_layout(output, import(&scene)?.place_reflection_probes(settings)?)?;
         return Ok(());
     }
-    let surface_bake = placement.is_none()
-        && reference.is_none()
-        && diffuse_reference.is_none()
-        && layout.is_none();
+    let surface_bake = placement.is_none() && reference_count == 0 && layout.is_none();
     let receivers = if surface_bake {
         receivers(&scene)?
     } else {
@@ -480,7 +498,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             || layout.is_some()
             || benchmark.is_some()
             || reference.is_some()
-            || diffuse_reference.is_some())
+            || diffuse_reference.is_some()
+            || probe_sh_reference.is_some())
     {
         return Err("output already exists".into());
     }
@@ -561,6 +580,54 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             })
         );
         return Ok(());
+    }
+    if let Some(path) = probe_sh_reference {
+        let positions: Vec<[f32; 3]> = serde_json::from_slice(&std::fs::read(path)?)?;
+        #[derive(serde::Serialize)]
+        struct Projection {
+            identity: String,
+            samples: u32,
+            coefficients: Vec<[[f32; 3]; 9]>,
+        }
+        let mut rays = probe_ray_output
+            .as_ref()
+            .map(std::fs::File::create_new)
+            .transpose()?
+            .map(std::io::BufWriter::new);
+        let mut created_json = false;
+        let result = (|| -> Result<(), Error> {
+            let mut file = std::io::BufWriter::new(std::fs::File::create_new(&output)?);
+            created_json = true;
+            let coefficients = bake.probe_sh_reference(
+                &positions,
+                lights[0],
+                settings.rays_per_probe,
+                rays.as_mut().map(|file| file as &mut dyn Write),
+            )?;
+            if let Some(file) = &mut rays {
+                file.flush()?;
+            }
+            serde_json::to_writer(
+                &mut file,
+                &Projection {
+                    identity,
+                    samples: settings.rays_per_probe,
+                    coefficients,
+                },
+            )?;
+            file.flush()?;
+            Ok(())
+        })();
+        drop(rays);
+        if result.is_err() {
+            if created_json {
+                let _ = std::fs::remove_file(&output);
+            }
+            if let Some(path) = probe_ray_output {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        return result;
     }
     if let Some(path) = diffuse_reference {
         #[derive(serde::Deserialize)]
