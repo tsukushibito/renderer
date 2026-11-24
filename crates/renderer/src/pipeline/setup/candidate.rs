@@ -219,7 +219,7 @@ impl AssetCandidate {
         }
         for &handle in &self.materials {
             if let MaterialInstance::Pbr(material) = materials.get(handle)?
-                && let Some(id) = material.uploaded_by
+                && let Some(id) = material.uploaded_by()
                 && transfers.pending.contains(&id)
             {
                 return Ok(Some(id));

@@ -105,7 +105,6 @@ pub struct MaterialHandle(u64);
 #[derive(Clone, Debug)]
 pub struct PbrMaterial {
     source: PbrSource,
-    pub(crate) uploaded_by: Option<renderer_core::runtime::FrameId>,
     textures: MaterialTextures<Option<MaterialTexture>>,
     samplers: MaterialSamplers,
     alpha: AlphaMode,
@@ -113,11 +112,20 @@ pub struct PbrMaterial {
 #[derive(Clone, Debug)]
 enum PbrSource {
     Inline([u8; crate::passes::pbr::MATERIAL_BYTES]),
-    Imported(Arc<renderer_core::graph::ImportBuffer>),
+    Imported {
+        buffer: Arc<renderer_core::graph::ImportBuffer>,
+        uploaded_by: Option<renderer_core::runtime::FrameId>,
+    },
 }
 impl PbrMaterial {
     pub(crate) fn is_resident(&self) -> bool {
-        matches!(self.source, PbrSource::Imported(_))
+        matches!(self.source, PbrSource::Imported { .. })
+    }
+    pub(crate) fn uploaded_by(&self) -> Option<renderer_core::runtime::FrameId> {
+        match self.source {
+            PbrSource::Inline(_) => None,
+            PbrSource::Imported { uploaded_by, .. } => uploaded_by,
+        }
     }
     pub(crate) fn coverage_image(&self) -> Option<&ImportImage> {
         self.textures
@@ -155,7 +163,6 @@ impl PbrMaterial {
         }
         Ok(Self {
             source,
-            uploaded_by: None,
             alpha,
             textures,
             samplers,
@@ -169,7 +176,10 @@ impl PbrMaterial {
         samplers: MaterialSamplers,
     ) -> Result<Self, GraphError> {
         Self::from_source(
-            PbrSource::Imported(Arc::new(uniform.snapshot()?.clone())),
+            PbrSource::Imported {
+                buffer: Arc::new(uniform.snapshot()?.clone()),
+                uploaded_by: None,
+            },
             uniform.alpha_mode(),
             MaterialTextures {
                 base_color: Some(textures.base_color.into()),
@@ -189,8 +199,8 @@ impl PbrMaterial {
     ) -> Result<pbr::GraphMaterial, GraphError> {
         let uniform = match &self.source {
             PbrSource::Inline(bytes) => MaterialUniform::append(graph, name, bytes, self.alpha)?,
-            PbrSource::Imported(snapshot) => {
-                MaterialUniform::import_snapshot(graph, name, snapshot, self.alpha)?
+            PbrSource::Imported { buffer, .. } => {
+                MaterialUniform::import_snapshot(graph, name, buffer, self.alpha)?
             }
         };
         let mut import =

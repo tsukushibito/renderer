@@ -20,7 +20,7 @@ impl MaterialCheckpoint {
             let entry = &materials.entries[&handle];
             match entry.as_ref() {
                 MaterialInstance::Pbr(p) => {
-                    if let PbrSource::Imported(buffer) = &p.source {
+                    if let PbrSource::Imported { buffer, .. } = &p.source {
                         runtime.refresh_buffer(buffer.key())?;
                     }
                     for image in [
@@ -187,8 +187,10 @@ impl Materials {
             let mut material = old.clone();
             let snapshot = Arc::new(resident.snapshot()?.clone());
             let lease = Arc::downgrade(&snapshot);
-            material.source = PbrSource::Imported(snapshot);
-            material.uploaded_by = Some(submission.id());
+            material.source = PbrSource::Imported {
+                buffer: snapshot,
+                uploaded_by: Some(submission.id()),
+            };
             let revision = Arc::new(MaterialInstance::Pbr(material));
             self.owned_uniforms.push((lease, resident));
             replacements.insert(key, (original, revision));
