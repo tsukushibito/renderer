@@ -25,6 +25,8 @@ pub struct WorkingSet<'a> {
     pub resources: &'a [ResourceClass],
     pub raster: &'a [RasterPipelineRequest],
     pub compute: &'a [ManagedProgram],
+    /// Distinct sampler policies required by these passes or material bindings.
+    pub samplers: &'a [crate::program::SamplerDescriptor],
 }
 
 /// The prepared runtime resource that prevented an operation.
