@@ -129,7 +129,7 @@ fn cook_equipment(id: AssetId, path: &Path, cache: &mut Cache<'_>) -> Result<Equ
 fn cook(source: &Path, output: &Path, cache_dir: &Path) -> Result<Report, Error> {
     let mut sources = BTreeMap::new();
     discover(source, &mut sources)?;
-    let mut cache = Cache::new(cache_dir, output);
+    let mut cache = Cache::new(cache_dir, output)?;
     let mut assets = BTreeMap::new();
     for (id, path) in sources {
         let asset = cook_equipment(id, &path, &mut cache)
@@ -169,4 +169,73 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     }
     std::process::ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Sandbox(PathBuf);
+    impl Sandbox {
+        fn new() -> Result<Self, Error> {
+            let mut bytes = [0u8; 16];
+            getrandom::fill(&mut bytes).map_err(|e| format!("creating test directory: {e}"))?;
+            let path = std::env::temp_dir().join(format!(
+                "asset-cook-test-{:032x}",
+                u128::from_le_bytes(bytes)
+            ));
+            fs::create_dir(&path)?;
+            Ok(Self(path))
+        }
+    }
+    impl Drop for Sandbox {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn simultaneous_imports_keep_one_id() -> Result<(), Error> {
+        let tmp = Sandbox::new()?;
+        let path = tmp.0.join("armor.gltf");
+        fs::write(&path, b"{}")?;
+        std::thread::scope(|scope| {
+            let gate = std::sync::Arc::new(std::sync::Barrier::new(4));
+            let workers: Vec<_> = (0..4)
+                .map(|_| {
+                    let gate = gate.clone();
+                    let file = &path;
+                    scope.spawn(move || {
+                        gate.wait();
+                        import(file).unwrap()
+                    })
+                })
+                .collect();
+            let ids: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+            assert!(ids.iter().all(|id| *id == ids[0]));
+        });
+        assert_eq!(read_sidecar(&sidecar(&path))?.asset_id, import(&path)?);
+        Ok(())
+    }
+
+    #[test]
+    fn repairs_damaged_cache_and_redelivers_from_verified_cache() -> Result<(), Error> {
+        let tmp = Sandbox::new()?;
+        let dir = tmp.0.join("cache");
+        let dist = tmp.0.join("dist");
+        let id = AssetId::from_u128(1);
+        let bake = || Ok(b"expected".to_vec());
+        let convert = |cache: &mut Cache<'_>| cache.convert(id, "mesh", "", b"input", bake);
+        let reference = convert(&mut Cache::new(&dir, &dist)?)?;
+        let object = Path::new("objects").join(reference.hash.to_string());
+        fs::write(dir.join(&object), b"corrupt!")?;
+        assert_eq!(convert(&mut Cache::new(&dir, &dist)?)?, reference);
+        assert_eq!(fs::read(dir.join(&object))?, b"expected");
+        fs::write(dist.join(&object), b"corrupt!")?;
+        Cache::new(&dir, &dist)?.convert(id, "mesh", "", b"input", || {
+            panic!("valid cached output must be reused")
+        })?;
+        assert_eq!(fs::read(dist.join(object))?, b"expected");
+        Ok(())
+    }
 }
