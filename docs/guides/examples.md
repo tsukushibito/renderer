@@ -24,6 +24,26 @@ cargo run --locked --release -p survivor --no-default-features -- --headless --s
 
 終盤直行では実験体 500 体を活動させます。初回の計測条件と受入の範囲は[ゲームの制作計画](../design/survivor-game.md)にまとめています。
 
+### 配置・プロパティ・クリップを編集する
+
+Windows で次をリポジトリのルートから実行します。画面を使う場合は Tk を含む Python 3 が必要です。
+
+```powershell
+cargo build --release --locked -p survivor --bins
+python tools/editor/scene.py assets/survivor/arena.json --inspector target/release/survivor-inspector.exe gui --game target/release/survivor.exe --catalog assets/survivor/characters/catalog.json
+```
+
+左で配置 ID を選ぶと、右に登録型と原型、各項目の最終値・原型値・出典が表示されます。上面図のドラッグで移動し、項目をダブルクリックして数値・配列などを JSON で編集します。適用時にはゲームの読込規則でも検査し、成功した変更を開いているファイルへ保存します。「Use prefab value」は個体の上書きを取り除きます。「Play」で保存済みシーンをゲーム本体で起動し、「Inspect state」で指定 tick の状態を確認します。GUI 起動時に `--replay 記録.json` を追加すると同じ入力が両方に渡ります。「Preview clip」ではモデルとクリップを選び、ゲームと同じサンプルを形状プレビューで再生できます。
+
+CLI でも同じ操作と検査を利用できます。例は一時シーンを編集します。
+
+```powershell
+Copy-Item assets/survivor/arena.json build/arena-edit.json
+python tools/editor/scene.py build/arena-edit.json --inspector target/release/survivor-inspector.exe move bench-west -4 0 0
+python tools/editor/scene.py build/arena-edit.json --inspector target/release/survivor-inspector.exe set bench-west half_extent "[1.5,1.0]"
+python tools/editor/scene.py build/arena-edit.json --inspector target/release/survivor-inspector.exe reset bench-west half_extent
+```
+
 <a id="bistro-baked-lighting"></a>
 
 ## ライトマップと照度プローブを使う

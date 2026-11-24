@@ -55,6 +55,8 @@ class Editor:
         self.table.bind("<Double-1>", lambda _: self.edit_value())
         ttk.Button(right, text="Edit value", command=self.edit_value).pack(fill="x", pady=(5, 2))
         ttk.Button(right, text="Use prefab value", command=self.reset_value).pack(fill="x")
+        ttk.Button(right, text="Edit prefab default", command=self.edit_default).pack(fill="x")
+        ttk.Button(right, text="Place instance", command=self.place).pack(fill="x")
         self.status = tk.StringVar()
         ttk.Label(window, textvariable=self.status, anchor="w", padding=5).pack(fill="x")
         self.refresh()
@@ -87,8 +89,9 @@ class Editor:
             self.items.see(self.keys.index(key))
             e, p = self.entities[key], self.placements[key]
             self.title.config(text=f"{e['kind']}  ·  {p['prefab']}")
-            self.table.insert("", "end", iid="@translation", text="translation",
-                              values=(json.dumps(p.get("translation", [0, 0, 0])), "", "local"))
+            for field in ("translation", "rotation", "scale"):
+                self.table.insert("", "end", iid="@" + field, text=field,
+                                  values=(json.dumps(p[field]), "", "local"))
             defaults = self.doc.view["document"]["prefabs"][p["prefab"]]["fields"]
             for name in e["registered_fields"]:
                 source = "override" if name in p.get("overrides", {}) else p["prefab"]
@@ -110,7 +113,11 @@ class Editor:
         for key, e in self.entities.items():
             x, _, z = e["world"]
             dims = e["fields"].get("half_extent")
-            dx, dz = dims if isinstance(dims, list) and len(dims) == 2 else (0.4, 0.4)
+            dx, dz = 0.4, 0.4
+            if isinstance(dims, list) and len(dims) == 2:
+                u, v = e["axis_x"], e["axis_z"]
+                dx = abs(dims[0] * u[0]) + abs(dims[1] * v[0])
+                dz = abs(dims[0] * u[2]) + abs(dims[1] * v[2])
             boxes.append((key, x, z, dx, dz))
         ex = max([2] + [abs(x) + dx for _, x, _, dx, _ in boxes])
         ez = max([2] + [abs(z) + dz for _, _, z, _, dz in boxes])
@@ -140,10 +147,7 @@ class Editor:
         self.drag = None
         if abs(x-event.x) + abs(y-event.y) < 4:
             return
-        point = self.placements[key].get("translation", [0, 0, 0]).copy()
-        point[0] += (event.x-x)/scale
-        point[2] += (event.y-y)/scale
-        self.commit({"op": "move", "id": key, "translation": point})
+        self.commit({"op": "translate_world", "id": key, "delta": [(event.x-x)/scale, 0, (event.y-y)/scale]})
 
     def commit(self, edit):
         try:
@@ -159,8 +163,8 @@ class Editor:
             return
         field = entries[0]
         p = self.placements[self.selected]
-        if field == "@translation":
-            original = p.get("translation", [0, 0, 0])
+        if field.startswith("@"):
+            original = p[field[1:]]
         else:
             original = self.entities[self.selected]["fields"].get(field)
         value = simpledialog.askstring("Edit value", f"{self.selected} / {field}",
@@ -172,8 +176,10 @@ class Editor:
         except ValueError as err:
             self.error(err)
             return
-        if field == "@translation":
-            self.commit({"op":"move", "id":self.selected, "translation":parsed})
+        if field.startswith("@"):
+            name = field[1:]
+            op = {"translation":"move", "rotation":"rotate", "scale":"scale"}[name]
+            self.commit({"op":op, "id":self.selected, name:parsed})
         else:
             self.commit({"op":"set", "id":self.selected, "field":field, "value":parsed})
 
@@ -181,6 +187,40 @@ class Editor:
         selected = self.table.selection()
         if selected and self.selected and selected[0] in self.placements[self.selected].get("overrides", {}):
             self.commit({"op":"reset", "id":self.selected, "field":selected[0]})
+
+    def edit_default(self):
+        selected = self.table.selection()
+        if not self.selected or not selected or selected[0].startswith("@"):
+            return
+        name = selected[0]
+        prefab = self.placements[self.selected]["prefab"]
+        default = self.doc.view["document"]["prefabs"][prefab]["fields"].get(name)
+        value = simpledialog.askstring("Edit prefab", f"{prefab} / {name}",
+                                       initialvalue=json.dumps(default), parent=self.window)
+        if value is not None:
+            try:
+                self.commit({"op":"set_default", "prefab":prefab, "field":name, "value":json.loads(value)})
+            except ValueError as err:
+                self.error(err)
+
+    def place(self):
+        prefab = simpledialog.askstring("Place instance", "Prefab ID",
+                                      initialvalue=self.placements[self.selected]["prefab"] if self.selected else "",
+                                      parent=self.window)
+        if not prefab:
+            return
+        key = simpledialog.askstring("Place instance", "New placement ID", parent=self.window)
+        if not key:
+            return
+        point = simpledialog.askstring("Place instance", "Position [X, Y, Z] in metres",
+                                       initialvalue="[0, 0, 0]", parent=self.window)
+        if point:
+            try:
+                self.commit({"op":"place", "prefab":prefab, "id":key, "translation":json.loads(point)})
+                if key in self.placements:
+                    self.choose(key)
+            except ValueError as err:
+                self.error(err)
 
     def run(self, args):
         if self.job:

@@ -19,6 +19,22 @@ def execute(inspector, document, edit):
     return json.loads(result.stdout)
 
 
+def apply_changes(source, previous, updated):
+    """Keep implicit defaults and the source's key order for unchanged objects."""
+    if previous == updated:
+        return source
+    if isinstance(previous, dict) and isinstance(updated, dict) and isinstance(source, dict):
+        result = {k: v for k, v in source.items() if k in updated}
+        for key, value in updated.items():
+            if key not in previous or previous[key] != value:
+                result[key] = apply_changes(source.get(key), previous.get(key), value)
+        return result
+    if isinstance(previous, list) and isinstance(updated, list) and isinstance(source, list):
+        if len(previous) == len(source) and len(updated) >= len(previous):
+            return [apply_changes(s, p, n) for s, p, n in zip(source, previous, updated)] + updated[len(previous):]
+    return updated
+
+
 class Document:
     def __init__(self, path, inspector):
         self.path = path
@@ -32,7 +48,8 @@ class Document:
 
     def edit(self, operation):
         candidate = execute(self.inspector, self.view["document"], operation)
-        content = (json.dumps(candidate["document"], indent=2, ensure_ascii=False) + "\n").encode()
+        updated = apply_changes(json.loads(self.original), self.view["document"], candidate["document"])
+        content = (json.dumps(updated, indent=2, ensure_ascii=False) + "\n").encode()
         # A short exclusive edit lock serializes compare-and-replace among editors.
         lock = self.path.with_name(self.path.name + ".edit-lock")
         try:
@@ -67,13 +84,17 @@ def main():
     gui.add_argument("--game", required=True, type=Path)
     gui.add_argument("--replay", type=Path)
     gui.add_argument("--catalog", type=Path, help="cooked character catalog for clip preview")
-    for op in ("move", "place", "set", "set-default", "reset"):
+    for op in ("move", "place", "rotate", "scale", "set", "set-default", "reset"):
         cmd = commands.add_parser(op)
         cmd.add_argument("prefab" if op == "set-default" else "id")
         if op == "place":
             cmd.add_argument("prefab")
         if op in ("move", "place"):
             cmd.add_argument("translation", type=float, nargs=3, metavar="METRES")
+        elif op == "rotate":
+            cmd.add_argument("rotation", type=float, nargs=4, metavar="QUAT")
+        elif op == "scale":
+            cmd.add_argument("scale", type=float, nargs=3, metavar="FACTOR")
         else:
             cmd.add_argument("field")
             if op != "reset":

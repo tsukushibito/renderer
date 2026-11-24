@@ -46,7 +46,7 @@ def show_clip(parent, inspector, catalog, model, clip):
         try:
             if key not in cache:
                 proc = subprocess.run([inspector.resolve(), "clip", catalog.resolve(), key[0],
-                                       key[1], str(sample)], capture_output=True, text=True,
+                                       key[1], str(sample), str(entries[key[0]]["clips"][key[1]]["hz"])], capture_output=True, text=True,
                                       encoding="utf-8")
                 if proc.returncode:
                     raise ValueError(proc.stderr.strip())
