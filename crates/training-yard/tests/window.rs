@@ -149,6 +149,34 @@ fn present_before_and_after_suspension_and_resize() -> PipelineResult<()> {
             assert!(Instant::now() < deadline, "presentation timed out");
         }
         assert!(streaming_ready, "window starved the stream reservation");
+        assert!(view.take_graph_profile().is_none());
+        assert!(view.take_presentation_profile().is_none());
+        view.set_profiling(true)?;
+        loop {
+            events.pump_app_events(Some(Duration::from_millis(1)), &mut host);
+            if matches!(
+                view.draw(|f| {
+                    f.draw_scene(SceneInput::new(&meshes, &materials, &[]), 1.)?;
+                    Ok(())
+                })?,
+                PresentOutcome::Presented { .. }
+            ) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "profiled presentation timed out");
+        }
+        assert!(view.wait_idle(Duration::from_secs(5))?);
+        assert!(matches!(
+            view.take_graph_profile().unwrap().gpu,
+            renderer_core::GpuTiming::Available { .. }
+        ));
+        assert!(matches!(
+            view.take_presentation_profile().unwrap().gpu,
+            renderer_core::GpuTiming::Available { .. }
+        ));
+        assert!(view.take_graph_profile().is_none());
+        assert!(view.take_presentation_profile().is_none());
+        view.set_profiling(false)?;
         drop(lighting);
         validation::check_validation(view.into_runtime()?)?;
     }
