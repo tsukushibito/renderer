@@ -114,7 +114,7 @@ pub struct Game {
     next_id: u64,
     reload: u8,
     invulnerability: u8,
-    at_marker: bool,
+    scene: sashiko::scene::World<authoring::RuleContext>,
     nav: Navigation,
 }
 
@@ -123,6 +123,7 @@ impl Game {
 
     pub fn new(arena: Arena, scenario: Scenario, seed: u64) -> Self {
         let nav = Navigation::new(&arena);
+        let scene = authoring::game_world(&arena);
         let mut game = Self {
             player: arena.player_spawn,
             arena,
@@ -144,7 +145,7 @@ impl Game {
             next_id: 0,
             reload: 0,
             invulnerability: 0,
-            at_marker: false,
+            scene,
             nav,
             contacts: 0,
             marker_entries: 0,
@@ -227,9 +228,14 @@ impl Game {
                 .slide(self.player, movement, 4.5 / TICK_HZ as f32, PLAYER_RADIUS);
         self.player = pos;
         events.contact = contact;
-        let reached = distance_squared(self.player, self.arena.marker) < 0.65 * 0.65;
-        events.reached_marker = reached && !self.at_marker;
-        self.at_marker = reached;
+
+        let mut rules = authoring::RuleContext {
+            player: self.player,
+            marker: self.arena.marker,
+            entered_marker: false,
+        };
+        self.scene.fixed_update(&mut rules);
+        events.reached_marker = rules.entered_marker;
         self.move_enemies(&mut events);
         self.contacts += u64::from(events.contact);
         self.marker_entries += u64::from(events.reached_marker);

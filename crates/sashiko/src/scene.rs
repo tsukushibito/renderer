@@ -2,6 +2,7 @@
 use glam::{Affine3A, Quat, Vec3};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
+use std::sync::Arc;
 use std::{
     any::Any,
     collections::{BTreeMap, HashMap, VecDeque},
@@ -46,17 +47,25 @@ pub struct Scene {
 
 type Component = Box<dyn Any + Send + Sync>;
 type FieldCheck = dyn Fn(&Fields) -> Result<Component, String> + Send + Sync;
-struct RegisteredType {
+type Tick<C> = Arc<dyn Fn(&mut Entity, &mut C) + Send + Sync>;
+struct RegisteredType<C> {
+    update: Option<Tick<C>>,
     fields: &'static [&'static str],
     validate: Box<FieldCheck>,
 }
 
 /// Editor and loader share the same registered type and semantic validation.
-#[derive(Default)]
-pub struct Registry {
-    types: BTreeMap<&'static str, RegisteredType>,
+pub struct Registry<C = ()> {
+    types: BTreeMap<&'static str, RegisteredType<C>>,
 }
-impl Registry {
+impl<C> Default for Registry<C> {
+    fn default() -> Self {
+        Self {
+            types: BTreeMap::new(),
+        }
+    }
+}
+impl<C: 'static> Registry<C> {
     pub fn register<T: DeserializeOwned + Send + Sync + 'static>(
         &mut self,
         name: &'static str,
@@ -69,6 +78,7 @@ impl Registry {
         self.types.insert(
             name,
             RegisteredType {
+                update: None,
                 fields,
                 validate: Box::new(move |data| {
                     if let Some(extra) = data.keys().find(|key| !fields.contains(&key.as_str())) {
@@ -84,6 +94,30 @@ impl Registry {
         Ok(())
     }
 
+    /// Register authored fields and an executable game rule together. The
+    /// callback receives the runtime component and a game-owned tick context.
+    pub fn register_behavior<T: DeserializeOwned + Send + Sync + 'static>(
+        &mut self,
+        name: &'static str,
+        fields: &'static [&'static str],
+        check: fn(&T) -> Result<(), String>,
+        tick: fn(&mut T, EntityId, &mut C),
+    ) -> Result<(), String> {
+        self.register(name, fields, check)?;
+        self.types.get_mut(name).expect("registered here").update =
+            Some(Arc::new(move |entity, ctx| {
+                let component = entity
+                    .component
+                    .downcast_mut::<T>()
+                    .expect("registered decoder");
+                tick(component, entity.id, ctx);
+            }));
+        Ok(())
+    }
+
+    pub fn has_behavior(&self, kind: &str) -> bool {
+        self.types.get(kind).is_some_and(|t| t.update.is_some())
+    }
     pub fn fields(&self, kind: &str) -> Option<&'static [&'static str]> {
         self.types.get(kind).map(|ty| ty.fields)
     }
@@ -112,6 +146,7 @@ pub struct Entity {
     world: Affine3A,
     component: Component,
     pub world_translation: [f32; 3],
+    /// Initial resolved editor properties. Runtime changes live in the typed component.
     pub fields: Fields,
 }
 
@@ -132,11 +167,22 @@ impl Entity {
     }
 }
 
-#[derive(Default)]
-pub struct World {
+pub struct World<C = ()> {
+    behaviors: BTreeMap<EntityId, Tick<C>>,
     entities: BTreeMap<EntityId, Entity>,
     by_placement: HashMap<String, EntityId>,
     pose_changes: Vec<(EntityId, Affine3A)>,
+}
+
+impl<C> Default for World<C> {
+    fn default() -> Self {
+        Self {
+            behaviors: BTreeMap::new(),
+            entities: BTreeMap::new(),
+            by_placement: HashMap::new(),
+            pose_changes: Vec::new(),
+        }
+    }
 }
 
 fn identity_rotation() -> [f32; 4] {
@@ -170,7 +216,15 @@ fn compose(parent: Affine3A, local: Affine3A) -> Result<Affine3A, String> {
     }
 }
 
-impl World {
+impl<C: 'static> World<C> {
+    /// Run registered behaviors once, in deterministic spawn order. Queue
+    /// structural changes in the game's context and apply them after this tick.
+    pub fn fixed_update(&mut self, context: &mut C) {
+        for (id, tick) in &self.behaviors {
+            tick(self.entities.get_mut(id).expect("live behavior"), context);
+        }
+    }
+
     pub fn entities(&self) -> impl Iterator<Item = &Entity> {
         self.entities.values()
     }
@@ -187,7 +241,7 @@ impl World {
         &mut self,
         placement: &Placement,
         prefabs: &BTreeMap<String, Prefab>,
-        registry: &Registry,
+        registry: &Registry<C>,
     ) -> Result<EntityId, String> {
         if placement.id.is_empty() || self.by_placement.contains_key(&placement.id) {
             return Err(format!("duplicate or empty placement {:?}", placement.id));
@@ -221,6 +275,9 @@ impl World {
             NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
                 .map_err(|_| "entity IDs exhausted")?,
         );
+        if let Some(tick) = &registry.types[prefab.kind.as_str()].update {
+            self.behaviors.insert(id, Arc::clone(tick));
+        }
         self.by_placement.insert(placement.id.clone(), id);
         self.entities.insert(
             id,
@@ -290,6 +347,7 @@ impl World {
         self.entities.retain(|id, entity| {
             if *id == root || entity.parent.is_some_and(|p| removed.contains(&p)) {
                 removed.insert(*id);
+                self.behaviors.remove(id);
                 self.by_placement.remove(&entity.placement_id);
                 false
             } else {
@@ -301,7 +359,7 @@ impl World {
 }
 
 impl Scene {
-    pub fn instantiate(&self, registry: &Registry) -> Result<World, String> {
+    pub fn instantiate<C: 'static>(&self, registry: &Registry<C>) -> Result<World<C>, String> {
         if self.schema_version != 1 {
             return Err(format!("unsupported scene version {}", self.schema_version));
         }
