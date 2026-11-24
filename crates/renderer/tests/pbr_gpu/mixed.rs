@@ -172,7 +172,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
     );
     drop((pending, plan));
     let mut masked = brick(AlphaMode::Mask, 1.);
-    masked.textures.base_color = Some(cyan.clone());
+    masked.textures.base_color = Some(cyan.clone().into());
     materials.update_pbr(floor, masked)?;
     let swatch = materials.create_custom(
         &textured,
@@ -421,7 +421,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             let updated = submission.export_image(image)?;
             assert_ne!(updated.revision(), cyan.revision());
             let mut masked = brick(AlphaMode::Mask, 1.);
-            masked.textures.base_color = Some(updated);
+            masked.textures.base_color = Some(updated.into());
             materials.update_pbr(floor, masked)?;
         }
         drop(

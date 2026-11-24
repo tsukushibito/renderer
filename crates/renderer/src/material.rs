@@ -3,7 +3,7 @@
 mod definition;
 mod residency;
 use crate::pbr::{self, DefaultViews, MaterialUniform};
-pub use crate::pbr::{MaterialFactors, MaterialTextures};
+pub use crate::pbr::{MaterialFactors, MaterialSamplers, MaterialTextures};
 pub use definition::{CustomMaterial, MaterialDefinition, Parameter, Value};
 use renderer_core::graph::{Graph, GraphError, ImageView, ImportImage};
 use renderer_core::program::SamplerDescriptor;
@@ -25,10 +25,55 @@ pub enum AlphaMode {
     Blend,
 }
 
+/// Registered image and the mip levels that this material can sample.
+/// The loader keeps the registration owner until the last using graph is submitted.
+#[derive(Clone, Debug)]
+pub struct MaterialTexture {
+    image: ImportImage,
+    mips: std::ops::Range<u32>,
+}
+
+impl MaterialTexture {
+    pub fn new(image: ImportImage, mips: std::ops::Range<u32>) -> Result<Self, GraphError> {
+        let map = Self { image, mips };
+        map.validate()?;
+        Ok(map)
+    }
+
+    fn validate(&self) -> Result<(), GraphError> {
+        definition::check_texture(&self.image)?;
+        if self.mips.is_empty()
+            || self.mips.end > self.image.desc().mip_levels
+            || !self
+                .mips
+                .clone()
+                .all(|level| self.image.is_mip_initialized(level))
+        {
+            return Err(GraphError::invalid_input(
+                "material requires an initialized mip range",
+            ));
+        }
+        Ok(())
+    }
+
+    fn view(&self, graph: &mut Graph) -> Result<ImageView, GraphError> {
+        let image = graph.import_image("material texture", &self.image)?;
+        graph.sampled_image_view(image, self.mips.start, self.mips.end - self.mips.start)
+    }
+}
+
+impl From<ImportImage> for MaterialTexture {
+    fn from(image: ImportImage) -> Self {
+        let mips = 0..image.desc().mip_levels;
+        Self { image, mips }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PbrParams {
     pub factors: MaterialFactors,
-    pub textures: MaterialTextures<Option<ImportImage>>,
+    pub textures: MaterialTextures<Option<MaterialTexture>>,
+    pub samplers: MaterialSamplers,
 }
 
 impl PbrParams {
@@ -60,7 +105,8 @@ pub struct MaterialHandle(u64);
 #[derive(Clone, Debug)]
 pub struct PbrMaterial {
     source: PbrSource,
-    textures: MaterialTextures<Option<ImportImage>>,
+    textures: MaterialTextures<Option<MaterialTexture>>,
+    samplers: MaterialSamplers,
     alpha: AlphaMode,
 }
 #[derive(Clone, Debug)]
@@ -77,6 +123,7 @@ impl PbrMaterial {
             .base_color
             .as_ref()
             .filter(|_| self.alpha == AlphaMode::Mask)
+            .map(|map| &map.image)
     }
 
     fn new(params: PbrParams) -> Result<Self, GraphError> {
@@ -85,12 +132,14 @@ impl PbrMaterial {
             PbrSource::Inline(encoded),
             params.factors.alpha_mode,
             params.textures,
+            params.samplers,
         )
     }
     fn from_source(
         source: PbrSource,
         alpha: AlphaMode,
-        textures: MaterialTextures<Option<ImportImage>>,
+        textures: MaterialTextures<Option<MaterialTexture>>,
+        samplers: MaterialSamplers,
     ) -> Result<Self, GraphError> {
         for texture in [
             &textures.base_color,
@@ -101,12 +150,13 @@ impl PbrMaterial {
         .into_iter()
         .flatten()
         {
-            definition::check_texture(texture)?
+            texture.validate()?
         }
         Ok(Self {
             source,
             alpha,
             textures,
+            samplers,
         })
     }
     /// Keep a snapshot of an accepted resident uniform and its four texture maps.
@@ -114,16 +164,18 @@ impl PbrMaterial {
     pub fn resident(
         uniform: &pbr::ResidentMaterialUniform,
         textures: MaterialTextures<ImportImage>,
+        samplers: MaterialSamplers,
     ) -> Result<Self, GraphError> {
         Self::from_source(
             PbrSource::Imported(Arc::new(uniform.snapshot()?.clone())),
             uniform.alpha_mode(),
             MaterialTextures {
-                base_color: Some(textures.base_color),
-                normal: Some(textures.normal),
-                orm: Some(textures.orm),
-                emissive: Some(textures.emissive),
+                base_color: Some(textures.base_color.into()),
+                normal: Some(textures.normal.into()),
+                orm: Some(textures.orm.into()),
+                emissive: Some(textures.emissive.into()),
             },
+            samplers,
         )
     }
     /// Import this revision in a graph. Defaults are needed only for omitted maps.
@@ -139,12 +191,8 @@ impl PbrMaterial {
                 MaterialUniform::import_snapshot(graph, name, snapshot, self.alpha)?
             }
         };
-        let mut import = |image: &Option<ImportImage>| {
-            image
-                .as_ref()
-                .map(|image| texture_view(graph, image))
-                .transpose()
-        };
+        let mut import =
+            |image: &Option<MaterialTexture>| image.as_ref().map(|map| map.view(graph)).transpose();
         let textures = MaterialTextures {
             base_color: import(&self.textures.base_color)?,
             normal: import(&self.textures.normal)?,
@@ -167,7 +215,7 @@ impl PbrMaterial {
                 .ok_or_else(|| GraphError::invalid_input("missing material texture defaults"))?
                 .material_textures(other)?,
         };
-        Ok(pbr::GraphMaterial::new(uniform, textures))
+        Ok(pbr::GraphMaterial::new(uniform, textures).with_samplers(self.samplers))
     }
 }
 pub(crate) fn texture_view(

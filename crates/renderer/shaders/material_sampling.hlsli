@@ -39,6 +39,9 @@ Texture2D<float4> normal_image : register(t1, space1);
 Texture2D<float4> orm_image : register(t2, space1);
 Texture2D<float4> emissive_image : register(t3, space1);
 SamplerState material_sampler : register(s4, space1);
+SamplerState normal_sampler : register(s5, space1);
+SamplerState orm_sampler : register(s6, space1);
+SamplerState emissive_sampler : register(s7, space1);
 
 struct MaterialSample {
     Surface surface;
@@ -62,7 +65,7 @@ MaterialSample sample_material(
     MaterialSample result;
     result.surface.base_color = base.rgb;
     result.output_alpha = alpha_mode == 2u ? alpha : 1.0;
-    float3 orm = orm_image.SampleGrad(material_sampler, texcoord, dx, dy).rgb;
+    float3 orm = orm_image.SampleGrad(orm_sampler, texcoord, dx, dy).rgb;
     result.surface.metallic = clamp(material.metallic_roughness_occlusion_cutoff.x * orm.b, 0.0, 1.0);
     result.surface.roughness = clamp(material.metallic_roughness_occlusion_cutoff.y * orm.g, 0.0, 1.0);
     result.surface.occlusion = lerp(1.0, orm.r, clamp(material.metallic_roughness_occlusion_cutoff.z, 0.0, 1.0));
@@ -79,7 +82,7 @@ MaterialSample sample_material(
         abs(n.z) < 0.9 ? unit_or(cross(float3(0.0, 0.0, 1.0), n), float3(1.0, 0.0, 0.0))
                       : unit_or(cross(float3(0.0, 1.0, 0.0), n), float3(1.0, 0.0, 0.0)));
     float3 b = cross(n, t) * (world_tangent.w < 0.0 ? -1.0 : 1.0);
-    float3 mapped = normal_image.SampleGrad(material_sampler, texcoord, dx, dy).xyz * 2.0 - 1.0;
+    float3 mapped = normal_image.SampleGrad(normal_sampler, texcoord, dx, dy).xyz * 2.0 - 1.0;
     if (material.flags.z != 0u) {
         if (material.flags.z == 2u) mapped.y = -mapped.y;
         mapped.z = sqrt(saturate(1.0 - dot(mapped.xy, mapped.xy)));
@@ -88,7 +91,7 @@ MaterialSample sample_material(
     n = unit_or(t * mapped.x + b * mapped.y + n * mapped.z, n);
     result.surface.normal = front_facing ? n : -n;
     result.surface.emissive = material.emissive_normal_scale.rgb *
-        emissive_image.SampleGrad(material_sampler, texcoord, dx, dy).rgb;
+        emissive_image.SampleGrad(emissive_sampler, texcoord, dx, dy).rgb;
     return result;
 }
 

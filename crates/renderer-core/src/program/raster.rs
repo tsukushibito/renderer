@@ -14,7 +14,7 @@ pub const MAX_RASTER_PROGRAMS: usize = 64;
 /// Baseline descriptor-set/register-space limit shared by both backends.
 pub const MAX_RASTER_BIND_GROUPS: usize = 4;
 pub const MAX_RASTER_ATTRIBUTES: usize = 16;
-pub const MAX_RASTER_BINDINGS: usize = 22;
+pub const MAX_RASTER_BINDINGS: usize = 25;
 pub const MAX_RASTER_COLOR_ATTACHMENTS: usize = 8;
 
 /// Component layout for one attribute in the single per-vertex stream.

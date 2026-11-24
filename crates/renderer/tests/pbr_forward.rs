@@ -289,7 +289,11 @@ fn standard_techniques_accept_point_lights_and_share_output() {
         .unwrap();
         let mut graph = pool.begin().unwrap();
         let (view, material, draw) = inputs(&recipe(), &mut graph);
-        let materials = [material.with_sampler(SamplerDescriptor::NearestClamp)];
+        let materials = [
+            material.with_samplers(renderer::pbr::MaterialSamplers::uniform(
+                SamplerDescriptor::NearestClamp,
+            )),
+        ];
         let draws = [Draw::WorldSpaceIndexed(draw)];
         let defaults = Defaults::Materials.upload(&mut graph).unwrap();
         let frame = || PbrDrawInput::new(&view, &materials, &draws, &[], &draws, defaults).unwrap();

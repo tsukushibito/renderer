@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 mod binary;
 mod raster;
+mod sampler;
+pub use sampler::{AddressMode, FilterMode, MipFilter, SamplerDescriptor, SamplerError};
 
 #[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
 pub(crate) use raster::MESH as MESH_RASTER_DESCRIPTOR;
@@ -311,30 +313,6 @@ pub struct BindingLayout {
 pub(crate) struct BufferRange {
     pub(crate) offset: u64,
     pub(crate) size: u64,
-}
-
-/// Reviewed normalized-coordinate sampler configurations, without comparison
-/// or anisotropy. Native image/format capabilities are checked before use.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SamplerDescriptor {
-    /// Nearest minification/magnification/mip selection, clamp-to-edge on all
-    /// axes, and LOD zero.
-    NearestClamp,
-    /// Linear minification/magnification and mip interpolation, repeat on all
-    /// axes, and the complete selected View's LOD range.
-    LinearRepeat,
-    /// Linear minification/magnification/mip interpolation, clamp-to-edge on
-    /// every axis, and the complete selected View's LOD range.
-    LinearClamp,
-    /// Linear minification/magnification/mip interpolation, repeat on U and
-    /// clamp-to-edge on V/W, and the complete selected View's LOD range.
-    LinearRepeatUClampV,
-}
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
-impl SamplerDescriptor {
-    pub(crate) const fn is_linear(self) -> bool {
-        !matches!(self, Self::NearestClamp)
-    }
 }
 
 /// A reviewed shader asset. Ordinary builds use checked-in artifacts and need

@@ -203,7 +203,7 @@ pub fn run_on<P: ViewPipeline + 'static>(
     let paint = |color| {
         let mut params = PbrParams::color(color);
         params.factors.double_sided = true;
-        params.textures.base_color = Some(texture.snapshot().clone());
+        params.textures.base_color = Some(texture.snapshot().clone().into());
         params
     };
     if example != Example::TwoViews {
