@@ -4,7 +4,7 @@ use std::num::NonZeroUsize;
 
 use super::{ResourceClass, WorkingSet};
 use crate::graph::{BufferDesc, GraphCapacity, GraphError, ImageDesc};
-use crate::program::{ManagedProgram, RasterPipelineRequest};
+use crate::program::{ManagedProgram, RasterPipelineRequest, SamplerDescriptor};
 
 mod operations;
 pub use operations::RasterPassBudget;
@@ -79,6 +79,7 @@ pub struct Preparation {
     resources: Vec<ResourceClass>,
     raster: Vec<RasterPipelineRequest>,
     compute: Vec<ManagedProgram>,
+    samplers: Vec<SamplerDescriptor>,
     requirements: GraphRequirements,
 }
 
@@ -89,6 +90,7 @@ impl Preparation {
             resources: Vec::new(),
             raster: Vec::new(),
             compute: Vec::new(),
+            samplers: Vec::new(),
             requirements: GraphRequirements::default(),
         }
     }
@@ -96,6 +98,13 @@ impl Preparation {
     /// Concurrent frame count used to scale per-frame reservations.
     pub fn frames_in_flight(&self) -> NonZeroUsize {
         self.frames_in_flight
+    }
+
+    /// Prepare a device-wide immutable sampler shared by every concurrent frame.
+    pub fn reserve_sampler(&mut self, sampler: SamplerDescriptor) {
+        if !self.samplers.contains(&sampler) {
+            self.samplers.push(sampler);
+        }
     }
 
     /// Reserve this many buffers per in-flight frame.
@@ -137,6 +146,9 @@ impl Preparation {
                 merge_class(&mut resources, class, checked_add)?;
             }
             self.resources = resources;
+        }
+        for &sampler in working_set.samplers {
+            self.reserve_sampler(sampler);
         }
         for requested in working_set.raster {
             if !self.raster.iter().any(|current| {
@@ -257,6 +269,7 @@ impl Preparation {
             resources: &self.resources,
             raster: &self.raster,
             compute: &self.compute,
+            samplers: &self.samplers,
         }
     }
 
@@ -297,6 +310,7 @@ impl Preparation {
                 resources: &[],
                 raster: &alternative.raster,
                 compute: &alternative.compute,
+                samplers: &alternative.samplers,
             })?;
         }
         self.add_requirements(shared.requirements, shared.working_set())
@@ -406,6 +420,7 @@ mod tests {
                 resources: &globals,
                 raster: &raster,
                 compute: &[],
+                samplers: &[],
             })
             .unwrap();
 
@@ -450,12 +465,21 @@ mod tests {
                             sample_count: samples,
                         }],
                         compute: &encoder,
+                        samplers: &[SamplerDescriptor::NearestClamp],
                     },
                 )
                 .unwrap();
         }
+        second.reserve_sampler(SamplerDescriptor::LinearRepeat);
         second.reserve_buffer(other, 1).unwrap();
         aggregate.add_alternatives(&[&first, &second]).unwrap();
+        assert_eq!(
+            aggregate.working_set().samplers,
+            &[
+                SamplerDescriptor::NearestClamp,
+                SamplerDescriptor::LinearRepeat
+            ]
+        );
 
         let set = aggregate.working_set();
         assert!(matches!(set.resources, [
@@ -515,6 +539,7 @@ mod tests {
                         resources: &failed,
                         raster: &raster,
                         compute: &[],
+                        samplers: &[],
                     },
                 )
                 .is_err()
@@ -534,6 +559,7 @@ mod tests {
                     resources: &failed[..1],
                     raster: &raster,
                     compute: &[],
+                    samplers: &[],
                 },
             )
             .unwrap();
@@ -556,6 +582,7 @@ mod tests {
                         resources: &failed[..1],
                         raster: &unread_program,
                         compute: &[],
+                        samplers: &[],
                     },
                 )
                 .is_err()
