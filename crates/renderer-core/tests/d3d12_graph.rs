@@ -344,6 +344,12 @@ fn run_shared_graph(strict_validation: bool) {
     assert_eq!(vulkan_info.device_id, d3d12_info.device_id);
     let vulkan_monitor = vulkan.validation_monitor();
     let d3d12_monitor = d3d12.validation_monitor();
+    vulkan
+        .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+        .unwrap();
+    d3d12
+        .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+        .unwrap();
 
     let (_graph_pool, plan, expected) = shared_buffer_graph();
     vulkan

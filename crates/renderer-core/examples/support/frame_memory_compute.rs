@@ -7,6 +7,8 @@ use super::{custom_raster_fixture, standard_fixture};
 use renderer_core::graph::BufferDesc;
 use renderer_core::graph::{CompiledGraph, Graph, GraphPool, PassHandle};
 use renderer_core::measurement::{NativeEvent, RustEvent, Snapshot};
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+use renderer_core::program::SamplerDescriptor;
 use std::time::Duration;
 
 const IN_FLIGHT: usize = 3;
@@ -378,6 +380,9 @@ fn vulkan_workload(baseline: bool, workload: Workload) {
                 .collect::<Vec<_>>(),
         )
         .unwrap();
+    runtime
+        .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+        .unwrap();
     match workload {
         Workload::Compute => {
             runtime
@@ -508,6 +513,9 @@ fn d3d12_workload(baseline: bool, workload: Workload) {
             count: count * IN_FLIGHT,
         })
         .collect::<Vec<_>>();
+    runtime
+        .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+        .unwrap();
     match workload {
         Workload::Compute => runtime
             .prepare_graph_working_set(None, &image_classes, &[], &fixture::programs())

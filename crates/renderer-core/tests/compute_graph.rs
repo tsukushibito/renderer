@@ -428,7 +428,13 @@ mod native {
         assert_eq!(vk_info.vendor_id, dx_info.vendor_id);
         assert_eq!(vk_info.device_id, dx_info.device_id);
         let vk_monitor = vulkan.validation_monitor();
+        vulkan
+            .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+            .unwrap();
         let dx_monitor = d3d12.validation_monitor();
+        d3d12
+            .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+            .unwrap();
         vulkan
             .prepare_working_set(
                 FrameCapacity {
@@ -1104,6 +1110,9 @@ mod native {
         )
         .expect("Vulkan hardware and requested validation");
         let monitor = vulkan.validation_monitor();
+        vulkan
+            .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+            .unwrap();
         let mut classes = vec![ResourceClass::Buffer {
             desc: BufferDesc {
                 size: BINDING_BUFFER_BYTES,
@@ -1171,6 +1180,9 @@ mod native {
             Some(d3d12.device_info().luid)
         );
         let dx_monitor = d3d12.validation_monitor();
+        d3d12
+            .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+            .unwrap();
 
         // Submit both content versions before waiting, then return the newer
         // result first. Its resources can be reused while the older result is held.
