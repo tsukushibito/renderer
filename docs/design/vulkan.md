@@ -297,7 +297,8 @@ Examplesの画像変換は、各8×8のlocal sizeと型付きRGBA8 storage image
 `Graph::dispatch`で実行する。端数のinvocationはshader内で除外し、実Deviceのdispatch・descriptor上限を確認する。
 等価な画像転送は`copy_image`を使う。表示のためのfullscreen描画は[Windows Presentation](#windows-presentation)を参照する。
 
-pipeline・layout・samplerは明示準備し、成功した不変のProgramをruntimeで保持する。
+pipeline・layoutはProgramごとに明示準備し、成功した不変のProgramをruntimeで保持する。
+samplerは利用するdescriptorを明示準備し、同じDevice上のProgram間で共有する。
 Computeは指定したProgram集合を準備する。Rasterの初期既定meshは1× RGBA8とD32の組がある場合に準備する。
 RasterのD32 depth対応を含む形式・ABI上限を、その種類のnative作成前に検査する。
 通常frame中に新しい種類を遅延作成しない。種類や容量の追加は、既存consumerを返却した準備境界で行う。
@@ -361,7 +362,8 @@ Uniformの実Device alignment/range上限は記録前のnative適合境界で保
 索引はbinding容量に対応する旧bool配列から、二つのdepth variantとnative layout／set結果を持つ
 `RasterBindingEntry`配列へ変わる。その`size_of`×binding上限を各Workへ予約する交換条件があり、
 draw別のset複製・更新とDevice適合の再検査を減らすために採用した。全域的なcacheや通常frameでの増設は行わない。
-Program、pool/layout、View、samplerと画像/bufferはWork/leaseの所有へ含め、cancelまたは実GPU完了後だけ再利用する。
+Program、pool/layout、Viewと画像/bufferをWork/leaseが保持し、cancelまたは実GPU完了後だけ再利用する。
+不変のsamplerはWorkが参照するDeviceで保持し、Deviceの破棄まで同じhandleを利用する。
 
 `RasterProgramDescriptor`の取込は埋め込み・ロード済みの両方で明示したunsafe境界であり、binaryの有効性だけでなく
 全許容定数・入力に対する範囲安全、宣言外アクセス／storage副作用の不在を呼出側が保証する。
@@ -494,8 +496,10 @@ root bufferに対応するraw／structured ABIを使い、typed buffer、push co
 生成条件とRust側ABIは固定ツールの反射結果に照合する。パイプラインの準備・完了後回収とABIの事前照合は
 [VulkanガイドのShader・ABIとPipelineの方針](../guides/vulkan-best-practices.md#shaderspir-vcpugpu-abi)に従う。
 
-`NearestClamp`、`LinearRepeat`、`LinearClamp`、`LinearRepeatUClampV`をProgramのsampler設定へ対応づける。
-compareやanisotropyは使わず、実Deviceの生存sampler数をnative作成前に予約し、失敗時または破棄後に返す。
+`SamplerDescriptor` のU/V、min/mag、mipを独立にVkSamplerへ写す。mipを使わずmin/magが異なる場合、
+nearest mipと最大LOD 0.25を指定する。縮小時にもminFilterを選べ、参照レベルはViewの先頭に保たれる。
+Deviceごとに要求されたdescriptorだけを作成し、実Deviceの生存sampler数をnative作成前に予約する。
+一括準備の失敗時は今回追加したhandleを破棄して予約を返し、成功済みのhandleは実行中のWorkと共有する。
 Rasterのtrusted `sampling_pairs` は実際の画像とsamplerの組を示し、linear samplingの能力をその組に対して確認する。
 不変binding集合はsubmit内で一度確認し、作業領域とdescriptor枠を実行枠の再利用時に返す。
 Computeのformat適合には既存の保守的な条件を使う。

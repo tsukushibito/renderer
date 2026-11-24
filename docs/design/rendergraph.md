@@ -360,10 +360,13 @@ D3D12でmip 0のBC画像の幅または高さが4の倍数でない場合は、�
 は引数順の所有者を返し、各所有者は独立して解放できる。入力長や宣言容量のエラーでは
 失敗した画像の宣言を取り消し、投入失敗では予約した解放枠を全て返す。
 linear filteringの実format能力は作成・準備境界で確認する。
-`NearestClamp`はnearest min/mag/mip、clamp、LOD0、`LinearRepeat`はlinear min/mag/mip、
-repeat、選択View内のLOD範囲を使う。`LinearClamp`は全軸clamp、`LinearRepeatUClampV`はUだけrepeatとし、
-いずれもlinear min/mag/mipと選択View内のLOD範囲を使う。Graphのsampler operandに従ってnative設定を選び、
-比較・anisotropy samplerや一般的な任意設定へは広げない。
+`SamplerDescriptor` はU/Vごとにrepeat、clamp-to-edge、mirrored-repeatを選び、拡大・縮小それぞれの
+nearest/linearと、mipの不使用・最近傍選択・線形補間を表す。mipを使わない場合は選択Viewの先頭レベルだけを読む。
+`from_gltf` は指定値を厳密に変換し、省略したwrapをrepeat、拡大・縮小・mipをlinearへ正規化する。
+`NearestClamp`、`LinearRepeat`、`LinearClamp`、`LinearRepeatUClampV` は同じ型の定数である。
+利用する値を `Preparation::reserve_sampler` で集約し、`WorkingSet::samplers` としてDeviceの作成・再準備へ渡す。
+ロード済みDeviceには `Runtime::prepare_samplers` で追加できる。Device内では同値の要求を共有し、
+未準備の値を使うsubmitはエラーを返す。比較とanisotropyはこの2D samplerの対象外とする。
 trusted Rasterの`sampling_pairs`は、shaderが使う画像とsamplerの全組み合わせを宣言する。
 実samplerがlinearな組の画像だけにlinear-filter能力を要求し、Load/texelFetch専用画像は組を持たない。
 Programを差し替える場合はこの保証も再確立する。同じ不変RasterBindingsの能力照合はsubmit内で一度とし、

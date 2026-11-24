@@ -2089,8 +2089,8 @@ globalな準備数で、execution数を自動で掛けない。登録済み資�
 空のworking setを、登録資源の将来のdeleteまで含む恒久的なpool禁止としては扱わない。
 登録資源のkey・内容revision・初期化範囲・provenanceとnative資源を保持する。
 再準備後のGraphには、既存の`ImportBuffer`と`ImportImage`をそのまま渡せる。
-各execution leaseは物理資源を共有registryから借り、専用のRTV/DSVとdraw別SRVの枠、
-および不変nearest/clamp・linear/repeat sampler descriptorを所有する。Graphのsampler operandに従って選び、
+各execution leaseは物理資源を共有registryから借り、専用のRTV/DSVとdraw別SRVの枠を所有する。
+samplerはDeviceのshader-visible heapに明示準備する。Graphのsampler operandが指定する不変のslotを使い、
 新classにない登録画像のdescriptor枠も補う。
 Rasterとattachment操作は[共通の対応範囲](rendergraph.md#対応範囲と処理の境界)に従い、
 MRT、1×／4×、color resolveを扱う。複数layerとmulti-mip画像のattachment/storage利用は拒否する。
