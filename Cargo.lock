@@ -1605,6 +1605,7 @@ name = "sashiko"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "glam",
  "hound",
  "renderer",
  "renderer-asset",
