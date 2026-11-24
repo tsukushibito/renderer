@@ -1,3 +1,5 @@
+mod profile;
+
 use clap::{Arg, ArgAction, Command, value_parser};
 use std::{error::Error, fs, path::PathBuf};
 use survivor::{Arena, Game, Input, Scenario, benchmark_input};
@@ -28,7 +30,7 @@ fn arguments() -> Command {
             .long(name)
             .value_parser(value_parser!(PathBuf))
     };
-    Command::new("survivor")
+    profile::Player::arguments(Command::new("survivor"))
         .about("Research facility survivor. Move with WASD, choose an upgrade with 1/2/3.")
         .arg(
             flag("headless")
@@ -82,14 +84,12 @@ fn arguments() -> Command {
         .arg(
             Arg::new("width")
                 .long("width")
-                .value_parser(value_parser!(u32).range(1..))
-                .default_value("1920"),
+                .value_parser(value_parser!(u32).range(1..)),
         )
         .arg(
             Arg::new("height")
                 .long("height")
-                .value_parser(value_parser!(u32).range(1..))
-                .default_value("1080"),
+                .value_parser(value_parser!(u32).range(1..)),
         )
         .arg(
             path("metrics")
@@ -105,11 +105,29 @@ fn arguments() -> Command {
         .arg(flag("alternate-model").conflicts_with("headless"))
 }
 
+fn packaged_arena() -> Result<Arena, Box<dyn Error>> {
+    let executable = std::env::current_exe()?;
+    let root = executable
+        .parent()
+        .ok_or("executable has no parent directory")?;
+    if root.join("sashiko-package.json").try_exists()? {
+        let path = root.join("assets/survivor/arena.json");
+        let data = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        return Ok(Arena::from_json(&data)?);
+    }
+    Ok(Arena::default())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = arguments().get_matches();
+    let mut profile = profile::Player::load(&args)?;
+    if args.get_flag("profile-status") {
+        println!("{}", serde_json::to_string(&profile.prefs)?);
+        return Ok(());
+    }
     let arena = match args.get_one::<PathBuf>("arena") {
         Some(path) => Arena::from_json(&fs::read_to_string(path)?)?,
-        None => Arena::default(),
+        None => packaged_arena()?,
     };
     let scenario = match args.get_one::<String>("scenario").map(String::as_str) {
         Some("endgame") => Scenario::Endgame,
@@ -134,11 +152,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let input = replay
                 .as_ref()
                 .map_or_else(|| benchmark_input(&game), |inputs| inputs[tick]);
-            game.step(input);
+            let events = game.step(input);
+            profile.observe(events.kills)?;
         }
         game
     } else {
-        play(game, replay, &args)?
+        play(game, replay, &args, &mut profile)?
     };
     println!("{}", serde_json::to_string(&game.snapshot())?);
     Ok(())
@@ -153,6 +172,7 @@ fn play(
     game: Game,
     replay: Option<Vec<Input>>,
     args: &clap::ArgMatches,
+    profile: &mut profile::Player,
 ) -> Result<Game, Box<dyn Error>> {
     use renderer::core::runtime::RuntimeConfig;
     let default_api = if cfg!(feature = "vulkan") {
@@ -175,18 +195,21 @@ fn play(
         window::Options {
             config,
             replay,
-            extent: [
-                *args.get_one("width").unwrap(),
-                *args.get_one("height").unwrap(),
-            ],
+            extent: [profile.prefs.width, profile.prefs.height],
+            volume: profile.prefs.volume,
             frames: args.get_one("frames").copied(),
             warmup: args.get_one("warmup").copied().unwrap_or(0),
             record: args.get_one("record").cloned(),
             metrics: args.get_one("metrics").cloned(),
             capture: args.get_one("capture").cloned(),
             gpu_profile: args.get_flag("gpu-profile"),
-            alternate_model: args.get_flag("alternate-model"),
+            alternate_model: args.get_flag("alternate-model")
+                || (profile.prefs.alternate_suit_unlocked
+                    && !["record", "replay", "frames"]
+                        .iter()
+                        .any(|key| args.contains_id(key))),
         },
+        profile,
     )
 }
 
@@ -195,6 +218,11 @@ fn play(
     feature = "presentation",
     any(feature = "vulkan", feature = "d3d12")
 )))]
-fn play(_: Game, _: Option<Vec<Input>>, _: &clap::ArgMatches) -> Result<Game, Box<dyn Error>> {
+fn play(
+    _: Game,
+    _: Option<Vec<Input>>,
+    _: &clap::ArgMatches,
+    _: &mut profile::Player,
+) -> Result<Game, Box<dyn Error>> {
     Err("use --headless or enable presentation and a graphics backend on Windows".into())
 }
