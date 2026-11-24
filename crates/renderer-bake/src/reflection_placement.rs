@@ -1,10 +1,24 @@
 use crate::{BakeError, BakeScene, ReflectionProbeDesc, Vec3};
 use renderer::pbr::ReflectionProbes;
 
+mod remedy;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReflectionPlacementMethod {
+    /// Find horizontal supports in vertical columns.
+    #[default]
+    Floor,
+    /// Rank empty voxels by newly covered, visible surface area and distance.
+    Remedy,
+}
+
 /// Offline placement on a Y-up scene in metres.
 #[derive(Clone, Copy, Debug)]
 pub struct ReflectionPlacementSettings {
-    /// Maximum spacing between horizontal sampling columns.
+    pub method: ReflectionPlacementMethod,
+    /// Atlas budget. Floor reports overflow; Remedy selects up to this many.
+    pub max_probes: usize,
+    /// Floor column spacing or Remedy voxel width in metres.
     pub spacing: f32,
     /// Height of the capture above an upward-facing support surface.
     pub capture_height: f32,
@@ -18,6 +32,8 @@ pub struct ReflectionPlacementSettings {
 impl Default for ReflectionPlacementSettings {
     fn default() -> Self {
         Self {
+            method: ReflectionPlacementMethod::Floor,
+            max_probes: ReflectionProbes::MAX_COUNT,
             spacing: 8.,
             capture_height: 1.5,
             blend_distance: 0.5,
@@ -27,9 +43,9 @@ impl Default for ReflectionPlacementSettings {
 }
 
 impl BakeScene {
-    /// Suggest editable box-projected probes above floors, including stacked floors.
+    /// Suggest editable box-projected probes using static scene geometry.
     /// Uses the bake BVH and material alpha tests. Empty or unsupported areas yield
-    /// an empty list. Exceeding the atlas capacity returns an error with no partial layout.
+    /// an empty list. All placement and visibility work happens offline.
     pub fn place_reflection_probes(
         &self,
         settings: ReflectionPlacementSettings,
@@ -39,10 +55,19 @@ impl BakeScene {
             capture_height,
             blend_distance,
             bounds,
+            method,
+            max_probes,
         } = settings;
-        if ![spacing, capture_height, blend_distance]
+        if !(1..=ReflectionProbes::MAX_COUNT).contains(&max_probes) {
+            return Err(BakeError(
+                "reflection probe budget must be between 1 and 32",
+            ));
+        }
+        if ![spacing, blend_distance]
             .into_iter()
             .all(|v| v.is_normal() && v > 0.)
+            || (method == ReflectionPlacementMethod::Floor
+                && !(capture_height.is_normal() && capture_height > 0.))
         {
             return Err(BakeError(
                 "reflection placement distances must be positive and finite",
@@ -56,6 +81,9 @@ impl BakeScene {
         let Some(root) = self.bvh.0.first() else {
             return Ok(Vec::new());
         };
+        if method == ReflectionPlacementMethod::Remedy {
+            return remedy::place(self, settings, root.lo, root.hi);
+        }
         let (lo, hi) = bounds.unwrap_or((root.lo, root.hi));
         // Grid arithmetic uses f64 so dimensions are checked before integer conversion.
         let spans = [0, 2].map(|i| f64::from(hi[i]) - f64::from(lo[i]));
@@ -134,7 +162,7 @@ impl BakeScene {
                 if let Some(probe) =
                     self.fit_reflection_box(position, floor, ceiling, step, settings)?
                 {
-                    if probes.len() == ReflectionProbes::MAX_COUNT {
+                    if probes.len() == settings.max_probes {
                         return Err(BakeError(
                             "reflection probe atlas capacity exceeded; increase spacing or restrict bounds",
                         ));
@@ -304,6 +332,67 @@ mod tests {
             .unwrap();
         assert_eq!(probes.len(), 1);
         assert_eq!(probes[0].position, [0., 1.5, 0.]);
+    }
+
+    #[test]
+    fn remedy_covers_both_levels_of_a_free_standing_shelf_within_budget() {
+        let mut triangles = floor(0.).to_vec();
+        triangles.extend(floor(4.));
+        let scene = BakeScene::new(triangles, vec![Material::default()], vec![]).unwrap();
+        let settings = ReflectionPlacementSettings {
+            spacing: 1.,
+            method: ReflectionPlacementMethod::Remedy,
+            max_probes: 2,
+            ..Default::default()
+        };
+        let probes = scene.place_reflection_probes(settings).unwrap();
+        assert_eq!(probes.len(), 2);
+        assert!(probes.iter().any(|p| p.position[1] > 4. && p.min[1] < 4.));
+        assert!(
+            probes
+                .iter()
+                .any(|p| (0. ..4.).contains(&p.position[1]) && p.min[1] < 0.)
+        );
+        assert_eq!(probes, scene.place_reflection_probes(settings).unwrap());
+        let with_budget = |max_probes| {
+            scene.place_reflection_probes(ReflectionPlacementSettings {
+                max_probes,
+                ..settings
+            })
+        };
+        assert_eq!(with_budget(1).unwrap(), probes[..1]);
+        assert!(with_budget(0).is_err());
+        assert!(with_budget(ReflectionProbes::MAX_COUNT + 1).is_err());
+        let empty = BakeScene::new(vec![], vec![], vec![]).unwrap();
+        assert!(empty.place_reflection_probes(settings).unwrap().is_empty());
+    }
+
+    #[test]
+    fn remedy_fits_boxes_against_a_freestanding_thin_wall_without_floor_support() {
+        let corners = [[0., 0., -3.], [0., 6., -3.], [0., 6., 3.], [0., 0., 3.]];
+        let mut tris = quad(corners, 0).to_vec();
+        let mut back = corners.map(|[_, y, z]| [-0.05, y, z]);
+        back.reverse();
+        tris.extend(quad(back, 0));
+        let scene = BakeScene::new(tris, vec![Material::default()], vec![]).unwrap();
+        let probes = scene
+            .place_reflection_probes(ReflectionPlacementSettings {
+                method: ReflectionPlacementMethod::Remedy,
+                spacing: 1.,
+                max_probes: 4,
+                bounds: Some(([-3., 1., -2.], [3., 5., 2.])),
+                ..Default::default()
+            })
+            .unwrap();
+        for sign in [-1., 1.] {
+            let p = probes.iter().find(|p| p.position[0] * sign > 0.).unwrap();
+            let beyond_wall = if sign < 0. {
+                p.max[0] + 0.05
+            } else {
+                -p.min[0]
+            };
+            assert!(beyond_wall > 0. && beyond_wall <= 0.126);
+        }
     }
 
     #[test]

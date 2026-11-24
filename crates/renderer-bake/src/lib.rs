@@ -48,7 +48,7 @@ mod reflection_reference;
 mod reflections;
 
 pub use probes::ProbeSettings;
-pub use reflection_placement::ReflectionPlacementSettings;
+pub use reflection_placement::{ReflectionPlacementMethod, ReflectionPlacementSettings};
 pub use reflection_reference::{ReflectionReceiver, ReflectionReference};
 pub use renderer::pbr::{PointLight, RectLight, ReflectionProbeDesc, Sun};
 mod transport;

@@ -49,6 +49,7 @@ let boxes = scene.place_reflection_probes(ReflectionPlacementSettings {
     capture_height: 1.5,
     blend_distance: 0.5,
     bounds: None,
+    ..Default::default()
 })?;
 // 必要に応じて位置・箱を編集し、空なら局所反射のベイクを省略する。
 if !boxes.is_empty() {
@@ -64,7 +65,17 @@ bistro-bake --manifest SCENE/manifest.json --place-reflection-probes 8 --output 
 bistro-bake --manifest SCENE/manifest.json --reflection-probes layout.json --day-only --output reflections.bin
 ```
 
-水平な床や屋根は候補になります。屋内だけを対象にする場合は探索範囲で高さを絞ってください。細い路地、斜めの壁、出入口では位置と箱の重なりを確認してください。32 個を超える場合はエラーになるため、間隔を広げるか範囲を絞ります。
+既定の `floor` は水平な床や屋根から一定の高さに配置します。屋内に絞るには Rust API の `bounds` で高さを指定します。候補が予算を超えた場合は間隔を広げるか、探索範囲を絞ります。
+
+面の向きや階の高さを事前に指定せず、個数を制限する場合は `remedy` を使えます。例えば次のコマンドは、一辺 4 m のボクセルから最大 18 個を選びます。
+
+```text
+bistro-bake --manifest SCENE/manifest.json --place-reflection-probes 4 --placement-method remedy --max-probes 18 --output layout.json
+```
+
+Rust API では `method: ReflectionPlacementMethod::Remedy` と `max_probes` を設定します。三角形をボクセル境界で切り、向き別に面積と重心を集計します。面に隣接する空ボクセルの中心がキャプチャ候補です。候補から見える近傍の面について、面積、距離、影響ボックス内のフェードから重みを求め、すでに選んだプローブからの改善が最大の候補を順に採用します。個数予算の既定値と上限は 32 です。
+
+配置は静的ジオメトリで決まり、カメラ、材質の反射率、部位名を入力に使いません。アルファマスクの可視性はレイで判定しますが、テクスチャに穴がある面もボクセルを占有します。細い通路や小さな張り出しを解像したい場合はボクセルを小さくします。軸方向の 6 本のレイで合わせた箱は、斜めの壁や出入口では実際の空間をまたぐことがあります。ベイク前に JSON で位置と箱を調整できます。
 
 ### Bistro で試す
 

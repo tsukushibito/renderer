@@ -198,6 +198,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     }
     let mut layout = None;
     let mut placement_spacing = None;
+    let mut placement_method = None;
+    let mut max_probes = None;
     let mut reference = None;
     let mut diffuse_reference = None;
     let mut ibl_manifest = None;
@@ -240,6 +242,17 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
                         .parse()?,
                 );
             }
+            "--placement-method" => {
+                use renderer_bake::ReflectionPlacementMethod;
+                placement_method = Some(match args.next().as_deref() {
+                    Some("floor") => ReflectionPlacementMethod::Floor,
+                    Some("remedy") => ReflectionPlacementMethod::Remedy,
+                    _ => return Err("expected placement method floor or remedy".into()),
+                });
+            }
+            "--max-probes" => {
+                max_probes = Some(args.next().ok_or("missing probe budget")?.parse()?)
+            }
             "--manifest" => manifest = Some(PathBuf::from(args.next().ok_or("missing manifest")?)),
             "--fixture" => fixture = true,
             "--output" => output = Some(PathBuf::from(args.next().ok_or("missing output")?)),
@@ -265,10 +278,16 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
                 println!(
                     "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
                 );
+                println!(
+                    "Placement options: --placement-method floor|remedy --max-probes N (1..32)"
+                );
                 return Ok(());
             }
             _ => return Err(format!("unknown bake option {arg}").into()),
         }
+    }
+    if placement_spacing.is_none() && (placement_method.is_some() || max_probes.is_some()) {
+        return Err("placement options require --place-reflection-probes".into());
     }
     if day_only && endpoints_only {
         return Err("choose either day-only or endpoints-only".into());
@@ -301,6 +320,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         let probes = import(&scene)?.place_reflection_probes(
             renderer_bake::ReflectionPlacementSettings {
                 spacing,
+                method: placement_method.unwrap_or_default(),
+                max_probes: max_probes.unwrap_or(renderer::pbr::ReflectionProbes::MAX_COUNT),
                 ..Default::default()
             },
         )?;
