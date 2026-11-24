@@ -1146,6 +1146,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "renderer-asset"
+version = "0.1.0"
+dependencies = [
+ "renderer",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "renderer-bake"
 version = "0.1.0"
 dependencies = [
