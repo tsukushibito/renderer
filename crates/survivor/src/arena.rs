@@ -15,6 +15,8 @@ pub struct Arena {
     pub player_spawn: [f32; 2],
     pub marker: [f32; 2],
     pub obstacles: Vec<Obstacle>,
+    #[serde(default = "crate::authoring::default_subjects")]
+    pub subjects: Vec<crate::authoring::SubjectType>,
 }
 
 impl Default for Arena {
@@ -25,7 +27,8 @@ impl Default for Arena {
 
 impl Arena {
     pub fn from_json(source: &str) -> Result<Self, String> {
-        let a: Self = serde_json::from_str(source).map_err(|e| e.to_string())?;
+        let a = crate::authoring::decode_arena(source)?;
+        crate::authoring::validate_subjects(&a.subjects)?;
         if !a
             .half_extent
             .into_iter()
