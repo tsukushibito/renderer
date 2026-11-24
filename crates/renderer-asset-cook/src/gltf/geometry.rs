@@ -47,10 +47,7 @@ fn hash_accessor(hash: &mut Sha256, accessor: Accessor<'_>, buffers: &[Vec<u8>])
     let size = accessor.size();
     let start = view.offset() + accessor.offset();
     hash.update(accessor.data_type().as_gl_enum().to_le_bytes());
-    hash.update([
-        accessor.normalized().into(),
-        accessor.dimensions().multiplicity() as u8,
-    ]);
+    hash.update([accessor.normalized().into(), accessor.dimensions() as u8]);
     hash.update((accessor.count() as u64).to_le_bytes());
     let stride = view.stride().unwrap_or(size);
     for i in 0..accessor.count() {

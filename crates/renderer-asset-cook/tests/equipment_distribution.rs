@@ -13,6 +13,21 @@ type Result<T = ()> = std::result::Result<T, Box<dyn Error>>;
 struct Project(PathBuf);
 
 #[test]
+fn a_cached_tangent_vector_does_not_accept_matrix_input() -> Result {
+    let project = Project::new()?;
+    project.report()?;
+    let path = project.0.join("source/narrow.gltf");
+    let mut document: Value = serde_json::from_slice(&fs::read(&path)?)?;
+    let tangent = document["meshes"][0]["primitives"][0]["attributes"]["TANGENT"]
+        .as_u64()
+        .unwrap() as usize;
+    document["accessors"][tangent]["type"] = Value::String("MAT2".into());
+    fs::write(path, serde_json::to_vec(&document)?)?;
+    assert!(!project.cook()?.status.success());
+    Ok(())
+}
+
+#[test]
 fn moved_equipment_can_share_dependencies_from_its_parent_directory() -> Result {
     let project = Project::new()?;
     let before = project.report()?;
