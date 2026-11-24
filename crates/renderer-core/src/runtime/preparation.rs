@@ -363,15 +363,17 @@ impl Runtime {
     ) -> Result<Self, ExecutionError> {
         limits.validate()?;
         let classes = D3D12Classes::new(working_set.resources)?;
+        let mut runtime = crate::d3d12::D3D12Runtime::from_queue(
+            queue,
+            limits.d3d12_config(config),
+            &classes.buffers,
+            &classes.images,
+            working_set.raster,
+            working_set.compute,
+        )?;
+        runtime.prepare_samplers(working_set.samplers)?;
         Self::with_inner(
-            RuntimeInner::D3D12(crate::d3d12::D3D12Runtime::from_queue(
-                queue,
-                limits.d3d12_config(config),
-                &classes.buffers,
-                &classes.images,
-                working_set.raster,
-                working_set.compute,
-            )?),
+            RuntimeInner::D3D12(runtime),
             limits,
             RuntimeConfig::D3D12(config),
         )
@@ -397,6 +399,7 @@ impl Runtime {
             #[cfg(all(feature = "d3d12", windows))]
             RuntimeInner::D3D12(ref mut runtime) => {
                 let classes = D3D12Classes::new(working_set.resources)?;
+                runtime.prepare_samplers(working_set.samplers)?;
                 Ok(runtime.prepare_graph_working_set(
                     Some(&classes.buffers),
                     &classes.images,
@@ -446,6 +449,7 @@ impl Runtime {
             #[cfg(all(feature = "d3d12", windows))]
             (RuntimeInner::D3D12(runtime), RuntimeConfig::D3D12(settings)) => {
                 let classes = D3D12Classes::new(set.resources)?;
+                runtime.prepare_samplers(set.samplers)?;
                 runtime.prepare_graph_with_capacity(
                     limits.d3d12_config(settings).capacity,
                     Some(&classes.buffers),
@@ -491,13 +495,15 @@ pub(super) fn new_d3d12(
     set: WorkingSet<'_>,
 ) -> Result<crate::d3d12::D3D12Runtime, ExecutionError> {
     let classes = D3D12Classes::new(set.resources)?;
-    Ok(crate::d3d12::D3D12Runtime::new_with_working_set(
+    let mut runtime = crate::d3d12::D3D12Runtime::new_with_working_set(
         limits.d3d12_config(settings),
         &classes.buffers,
         &classes.images,
         set.raster,
         set.compute,
-    )?)
+    )?;
+    runtime.prepare_samplers(set.samplers)?;
+    Ok(runtime)
 }
 
 #[cfg(all(feature = "d3d12", windows))]
