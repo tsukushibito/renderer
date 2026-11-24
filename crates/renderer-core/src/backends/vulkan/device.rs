@@ -1,6 +1,8 @@
 //! Single-queue Device bootstrap. Command submission is a later ownership step.
 
 use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+use crate::program::SamplerDescriptor;
+use std::sync::OnceLock;
 
 use std::error::Error;
 use std::fmt;
@@ -448,6 +450,10 @@ pub(super) struct VulkanDevice {
     queue_lock: Arc<Mutex<()>>,
     state: AtomicU8,
     samplers: SamplerCount,
+    // Each immutable descriptor is published once, then retained by all work
+    // through its Device owner. Reads on the recording path are lock-free.
+    sampler_cache: [OnceLock<vk::Sampler>; SamplerDescriptor::COUNT],
+    sampler_prepare: Mutex<()>,
 }
 
 /// Count successful create calls conservatively, without relying on optional
@@ -492,10 +498,68 @@ pub(super) enum DeviceState {
 }
 
 impl VulkanDevice {
+    pub(super) fn prepare_samplers(
+        &self,
+        descriptors: &[SamplerDescriptor],
+    ) -> Result<(), super::error::RuntimeError> {
+        self.ensure_active()
+            .map_err(super::error::RuntimeError::device_unavailable)?;
+        let _guard = self
+            .sampler_prepare
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut staged = [vk::Sampler::null(); SamplerDescriptor::COUNT];
+        for &desc in descriptors {
+            let index = desc.index();
+            if self.sampler_cache[index].get().is_some() || staged[index] != vk::Sampler::null() {
+                continue;
+            }
+            // SAFETY: The typed descriptor maps to feature-free sampler state.
+            // The private staged array owns successful allocations until publication.
+            match unsafe { self.create_sampler(&super::managed::sampler_info(desc)) } {
+                Ok(handle) => staged[index] = handle,
+                Err(error) => {
+                    for handle in staged {
+                        // SAFETY: These unpublished samplers have no command buffer users.
+                        unsafe { self.destroy_sampler(handle) };
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        for (slot, handle) in self.sampler_cache.iter().zip(staged) {
+            if handle != vk::Sampler::null() {
+                slot.set(handle)
+                    .expect("sampler preparation holds the exclusive writer lock");
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn sampler(
+        &self,
+        desc: SamplerDescriptor,
+    ) -> Result<vk::Sampler, super::error::RuntimeError> {
+        self.sampler_cache[desc.index()]
+            .get()
+            .copied()
+            .ok_or_else(|| {
+                super::error::RuntimeError::capacity_with(
+                    "prepare the sampler configuration before using it",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Samplers,
+                        CapacityRecovery::Prepare,
+                        None,
+                        None,
+                    ),
+                )
+            })
+    }
+
     /// # Safety
     /// The caller supplies valid sampler creation inputs for this active Device
     /// and immediately owns success until the matching helper destroys it.
-    pub(super) unsafe fn create_sampler(
+    unsafe fn create_sampler(
         &self,
         info: &vk::SamplerCreateInfo<'_>,
     ) -> Result<vk::Sampler, super::error::RuntimeError> {
@@ -504,7 +568,7 @@ impl VulkanDevice {
                 "Device sampler allocation limit exhausted",
                 RuntimeCapacityError::new(
                     RuntimeCapacityKind::Samplers,
-                    CapacityRecovery::ReleaseOwners,
+                    CapacityRecovery::Reconfigure,
                     Some(u64::from(self.sampler_limit)),
                     Some(u64::from(self.sampler_limit) + 1),
                 ),
@@ -533,7 +597,7 @@ impl VulkanDevice {
     /// # Safety
     /// A non-null handle was created by this Device's helper and is exclusively
     /// destroyed once, after all recorded/native uses retire or are canceled.
-    pub(super) unsafe fn destroy_sampler(&self, sampler: vk::Sampler) {
+    unsafe fn destroy_sampler(&self, sampler: vk::Sampler) {
         if sampler != vk::Sampler::null() {
             #[cfg(feature = "memory-profiling")]
             crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
@@ -956,6 +1020,8 @@ impl VulkanDevice {
             queue_lock: Arc::new(Mutex::new(())),
             state: AtomicU8::new(DeviceState::Active as u8),
             samplers: SamplerCount::default(),
+            sampler_cache: std::array::from_fn(|_| OnceLock::new()),
+            sampler_prepare: Mutex::new(()),
         };
         // SAFETY: Exactly one queue was requested from this family with index 0.
         // It is owned by the Device and requires no separate destruction.
@@ -998,6 +1064,13 @@ impl VulkanDevice {
 
 impl Drop for VulkanDevice {
     fn drop(&mut self) {
+        for slot in &self.sampler_cache {
+            if let Some(&handle) = slot.get() {
+                // SAFETY: Recorded and pending work and every descriptor arena
+                // retain the Device; final exclusive drop follows all such uses.
+                unsafe { self.destroy_sampler(handle) };
+            }
+        }
         if !self.owns_device {
             return;
         }
@@ -1022,6 +1095,57 @@ mod tests {
     use super::super::diagnostics::Diagnostics;
     use super::*;
     use ash::vk::Handle;
+
+    #[test]
+    #[ignore = "requires a hardware Vulkan device"]
+    fn sampler_batch_rolls_back_on_capacity_and_reuses_existing_handles() {
+        use super::super::instance::ValidationMode;
+        use crate::program::{AddressMode, FilterMode, MipFilter};
+        let diagnostics = Diagnostics::new();
+        let mode = if cfg!(feature = "vulkan-diagnostics") {
+            ValidationMode::Required
+        } else {
+            ValidationMode::Disabled
+        };
+        let instance = VulkanInstance::with_validation(diagnostics.clone(), mode).unwrap();
+        let mut device = VulkanDevice::new(instance).unwrap();
+        assert_ne!(device.device_type(), vk::PhysicalDeviceType::CPU);
+        device.sampler_limit = 1;
+        let custom = SamplerDescriptor {
+            wrap_u: AddressMode::MirroredRepeat,
+            wrap_v: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Nearest,
+            min_filter: FilterMode::Linear,
+            mip_filter: MipFilter::None,
+        };
+        let other = SamplerDescriptor::LinearRepeat;
+        assert_eq!(
+            device
+                .sampler(custom)
+                .unwrap_err()
+                .capacity()
+                .unwrap()
+                .recovery,
+            CapacityRecovery::Prepare
+        );
+        let error = device.prepare_samplers(&[custom, other]).unwrap_err();
+        assert_eq!(
+            error.capacity().unwrap().recovery,
+            CapacityRecovery::Reconfigure
+        );
+        assert!(device.sampler(custom).is_err());
+        device.prepare_samplers(&[custom, custom]).unwrap();
+        let sampler = device.sampler(custom).unwrap();
+        device.prepare_samplers(&[custom]).unwrap();
+        assert_eq!(device.sampler(custom).unwrap(), sampler);
+        assert_eq!(device.samplers.0.load(Ordering::Acquire), 1);
+        drop(device);
+        assert!(
+            diagnostics.snapshot().is_clean(),
+            "{:?}",
+            diagnostics.snapshot()
+        );
+    }
 
     #[test]
     fn sampler_capacity_reservations_cover_creation_failure_and_live_owners() {

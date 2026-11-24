@@ -486,6 +486,9 @@ fn vulkan_owned_raster_descriptor_capacity_recovery() {
     runtime
         .prepare_raster_programs(&[ManagedRasterProgram::textured_mesh_hdr()])
         .unwrap();
+    runtime
+        .prepare_samplers(&[SamplerDescriptor::NearestClamp])
+        .unwrap();
     let (too_many, _) = plan(true, [255, 0, 0, 255]);
     assert_eq!(
         runtime.submit(&too_many).err().unwrap().kind(),
@@ -1971,6 +1974,15 @@ fn vulkan_sampled_mip_chain_srgb_linear_repeat() {
         graph.image_view(source, 1, 0).unwrap(),
         graph.image_view(source, 2, 0).unwrap(),
     ];
+    let custom = SamplerDescriptor {
+        wrap_u: crate::program::AddressMode::MirroredRepeat,
+        ..SamplerDescriptor::NearestClamp
+    };
+    let samplers = [
+        SamplerDescriptor::NearestClamp,
+        SamplerDescriptor::LinearRepeat,
+        custom,
+    ];
     let mut reads = Vec::new();
     for (index, view) in views.into_iter().enumerate() {
         let output = graph
@@ -1989,11 +2001,7 @@ fn vulkan_sampled_mip_chain_srgb_linear_repeat() {
                     Binding {
                         group: 0,
                         binding: 1,
-                        resource: BindingResource::Sampler(if index == 1 {
-                            SamplerDescriptor::LinearRepeat
-                        } else {
-                            SamplerDescriptor::NearestClamp
-                        }),
+                        resource: BindingResource::Sampler(samplers[index]),
                     },
                     Binding {
                         group: 1,
@@ -2009,7 +2017,13 @@ fn vulkan_sampled_mip_chain_srgb_linear_repeat() {
             .unwrap();
         reads.push(graph.readback_buffer("bits", output, 0, 64).unwrap());
     }
-    let mut submitted = runtime.submit(&graph.compile().unwrap()).unwrap();
+    let plan = graph.compile().unwrap();
+    runtime.prepare_samplers(&samplers[..2]).unwrap();
+    let missing = runtime.submit(&plan).err().unwrap().capacity().unwrap();
+    assert_eq!(missing.resource, RuntimeCapacityKind::Samplers);
+    assert_eq!(missing.recovery, CapacityRecovery::Prepare);
+    runtime.prepare_samplers(&samplers).unwrap();
+    let mut submitted = runtime.submit(&plan).unwrap();
     let mut result = submitted.wait(WAIT).unwrap().unwrap();
     for (index, read) in reads.into_iter().enumerate() {
         let bytes = result.test_readback(read).unwrap();

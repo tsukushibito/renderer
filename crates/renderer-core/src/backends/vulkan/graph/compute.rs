@@ -175,10 +175,6 @@ pub(super) struct ComputePrograms {
     // Arenas are destroyed before their descriptor layouts and sampler.
     cache: Mutex<Cache>,
     programs: Vec<PreparedProgram>,
-    sampler: vk::Sampler,
-    linear_sampler: vk::Sampler,
-    linear_clamp_sampler: vk::Sampler,
-    linear_u_repeat_sampler: vk::Sampler,
     capacity: usize,
 }
 
@@ -197,10 +193,6 @@ impl ComputePrograms {
                 reuses: 0,
             }),
             programs: Vec::with_capacity(programs.len()),
-            sampler: vk::Sampler::null(),
-            linear_sampler: vk::Sampler::null(),
-            linear_clamp_sampler: vk::Sampler::null(),
-            linear_u_repeat_sampler: vk::Sampler::null(),
             capacity: capacity as usize,
         };
         for managed in programs {
@@ -212,57 +204,6 @@ impl ComputePrograms {
                 managed: managed.clone(),
                 native,
             });
-        }
-        if result.programs.iter().any(|program| {
-            program
-                .managed
-                .bindings()
-                .iter()
-                .any(|slot| slot.kind == BindingType::Sampler)
-        }) {
-            // SAFETY: Core nearest/clamp sampler uses no optional feature. The
-            // Device helper reserves its shared quota and rolls back failures;
-            // success is owned immediately so later arena failures release it.
-            result.sampler = unsafe {
-                result.owner.device.create_sampler(
-                    &vk::SamplerCreateInfo::default()
-                        .mag_filter(vk::Filter::NEAREST)
-                        .min_filter(vk::Filter::NEAREST)
-                        .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .max_lod(0.0),
-                )
-            }?;
-            // SAFETY: Fixed linear repeat sampler has no optional feature.
-            // Operand preparation checks each sampled format's filtering support.
-            result.linear_sampler = unsafe {
-                result
-                    .owner
-                    .device
-                    .create_sampler(&super::super::managed::sampler_info(
-                        crate::program::SamplerDescriptor::LinearRepeat,
-                    ))
-            }?;
-            // SAFETY: Feature-free policies; the result immediately owns each handle.
-            result.linear_clamp_sampler = unsafe {
-                result
-                    .owner
-                    .device
-                    .create_sampler(&super::super::managed::sampler_info(
-                        crate::program::SamplerDescriptor::LinearClamp,
-                    ))?
-            };
-            // SAFETY: Same ownership and feature contract as the other prepared samplers.
-            result.linear_u_repeat_sampler = unsafe {
-                result
-                    .owner
-                    .device
-                    .create_sampler(&super::super::managed::sampler_info(
-                        crate::program::SamplerDescriptor::LinearRepeatUClampV,
-                    ))?
-            };
         }
         for _ in 0..slots {
             let arena = Arena::new(Arc::clone(&result.owner), &result.programs, capacity)?;
@@ -322,22 +263,6 @@ impl Drop for ComputePrograms {
             .unwrap_or_else(|e| e.into_inner())
             .idle
             .clear();
-        // SAFETY: Descriptor arenas are drained first and all pending leases retain this owner.
-        unsafe {
-            self.owner.device.destroy_sampler(self.linear_clamp_sampler);
-            self.owner
-                .device
-                .destroy_sampler(self.linear_u_repeat_sampler);
-        }
-        if self.linear_sampler != vk::Sampler::null() {
-            // SAFETY: Every pending/recorded descriptor lease retains this owner.
-            unsafe { self.owner.device.destroy_sampler(self.linear_sampler) };
-        }
-        if self.sampler != vk::Sampler::null() {
-            // SAFETY: All leases retain this owner until cancellation/retirement.
-            // The matching Device helper releases native ownership and quota.
-            unsafe { self.owner.device.destroy_sampler(self.sampler) };
-        }
     }
 }
 
@@ -434,18 +359,7 @@ impl ComputeLease {
                     write = write.image_info(std::slice::from_ref(&image_info));
                 }
                 BindingOperands::Sampler(desc) => {
-                    image_info.sampler = match desc {
-                        crate::program::SamplerDescriptor::NearestClamp => self.programs.sampler,
-                        crate::program::SamplerDescriptor::LinearRepeat => {
-                            self.programs.linear_sampler
-                        }
-                        crate::program::SamplerDescriptor::LinearClamp => {
-                            self.programs.linear_clamp_sampler
-                        }
-                        crate::program::SamplerDescriptor::LinearRepeatUClampV => {
-                            self.programs.linear_u_repeat_sampler
-                        }
-                    };
+                    image_info.sampler = self.programs.owner.device.sampler(*desc)?;
                     write = write.image_info(std::slice::from_ref(&image_info));
                 }
             }
