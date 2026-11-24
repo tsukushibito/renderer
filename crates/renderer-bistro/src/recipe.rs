@@ -234,6 +234,15 @@ impl Options {
         look: &mut serde_json::Value,
     ) -> Result<(), Error> {
         self.apply_baked_lighting(scene, conditions, env, look)?;
+        // Bind static placements before adding dynamic probe receivers.
+        if let Some(pos) = self.ball {
+            scene.add_inspection_sphere(pos, 0.85, 0.);
+        }
+        if let Some(pos) = self.reflection_spheres {
+            for (dz, roughness) in [(-0.5, 0.08), (0.5, 0.55)] {
+                scene.add_inspection_sphere([pos[0], pos[1], pos[2] + dz], roughness, 1.);
+            }
+        }
         self.lighting_pass
             .apply(scene, env, self.baked_lighting.is_some())?;
         look["lighting_pass"] = serde_json::json!(format!("{:?}", self.lighting_pass));
@@ -304,6 +313,8 @@ impl Options {
                 );
             }
             env.identity["diffuse_scenarios"] = serde_json::json!(volume.scenario_count());
+            env.identity["diffuse_sh_order"] =
+                serde_json::json!(format!("{:?}", volume.sh_order()));
             let mut triangles = 0u64;
             for (id, address) in placements {
                 let p = scene

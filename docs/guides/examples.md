@@ -79,6 +79,8 @@ Rust API では `method: ReflectionPlacementMethod::Remedy` と `max_probes` を
 
 ### Bistro で試す
 
+拡散照度プローブは既定で一次 SH（L1、RGB 4 係数）を使います。二次 SH（L2、RGB 9 係数）でベイクするには、下の `bistro-bake` コマンドに `--probe-sh l2` を追加してください。Rust API ではベイク時に `ProbeSettings { sh_order: ProbeShOrder::L2, ..Default::default() }` を渡します。描画側はアセットから次数を読み取ります。ライトマップのテクセル数と鏡面プローブの設定は独立です。
+
 [Bistro の cook と IBL](development.md#bistro-b3) の後、以下をリポジトリのルートで実行します。
 
 ```powershell

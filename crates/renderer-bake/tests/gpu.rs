@@ -160,7 +160,9 @@ fn compare_keys<const N: usize>(
             (0..probes).any(|probe| {
                 let quadratic = header + probe * (2 + 9 * N) + 2 + key * 9 + 4;
                 words[4 * quadratic..4 * (quadratic + 5)]
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .any(|texel| {
                         texel[..3]
                             .iter()

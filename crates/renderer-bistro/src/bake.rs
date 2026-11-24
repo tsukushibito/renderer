@@ -3,7 +3,9 @@ use crate::{
     Error,
     shared::{asset::Scene, camera::Look},
 };
-use renderer_bake::{BakeScene, Lighting, Material, ProbeSettings, Texture, Triangle};
+use renderer_bake::{
+    BakeScene, Lighting, Material, ProbeSettings, ProbeShOrder, Texture, Triangle,
+};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, io::Write, path::PathBuf};
 
@@ -255,6 +257,13 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             "--output" => output = Some(PathBuf::from(args.next().ok_or("missing output")?)),
             "--spacing" => settings.spacing = args.next().ok_or("missing spacing")?.parse()?,
             "--max-depth" => settings.max_depth = args.next().ok_or("missing depth")?.parse()?,
+            "--probe-sh" => {
+                settings.sh_order = match args.next().as_deref() {
+                    Some("l1") => ProbeShOrder::L1,
+                    Some("l2") => ProbeShOrder::L2,
+                    _ => return Err("--probe-sh expects l1 or l2".into()),
+                }
+            }
             "--backend" => {
                 settings.backend = match args.next().as_deref() {
                     Some("vulkan") => renderer_bake::BakeBackend::Vulkan,
@@ -273,7 +282,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--probe-sh l1|l2] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
                 );
                 println!(
                     "Placement options: --placement-method floor|remedy --max-probes N (1..32)"

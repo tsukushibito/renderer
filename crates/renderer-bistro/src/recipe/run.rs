@@ -527,15 +527,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
                 "B3 full-scene rendering requires --ibl-manifest from tools/bistro/ibl.py",
             )?)?
         };
-    if let Some(pos) = options.ball {
-        scene.add_inspection_sphere(pos, 0.85, 0.);
-    }
     let mut look = options.look.apply(&mut conditions, &mut environment);
-    if let Some(pos) = options.reflection_spheres {
-        for (dz, roughness) in [(-0.5, 0.08), (0.5, 0.55)] {
-            scene.add_inspection_sphere([pos[0], pos[1], pos[2] + dz], roughness, 1.);
-        }
-    }
     options.prepare_lighting(&mut scene, &mut conditions, &mut environment, &mut look)?;
     let environment_identity = environment.identity.clone();
     // Hash the same manifest bytes that Scene::load parsed. A separate read
