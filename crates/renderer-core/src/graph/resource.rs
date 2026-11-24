@@ -312,6 +312,16 @@ impl ImportImage {
             && mip_level < self.desc.mip_levels
             && (self.initialized || self.partial_mips & (1 << mip_level) != 0)
     }
+    /// Whether every mip in a nonempty contiguous range has scheduled contents.
+    pub fn contains_mips(&self, levels: Range<u32>) -> bool {
+        self.desc.array_layers == 1
+            && !levels.is_empty()
+            && levels.end <= self.desc.mip_levels
+            && (self.initialized || {
+                let mask = mip_mask(levels);
+                self.partial_mips & mask == mask
+            })
+    }
     pub(crate) fn initialized(&self) -> bool {
         self.initialized
     }

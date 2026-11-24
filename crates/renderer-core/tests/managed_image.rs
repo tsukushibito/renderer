@@ -189,3 +189,95 @@ fn uploaded_texture_is_available_to_a_batched_submission_before_waiting() {
         validation::check_after_teardown(rt);
     }
 }
+
+#[test]
+#[ignore = "requires a hardware GPU for each selected backend"]
+fn immutable_mip_promotion_preserves_old_image_and_copies_valid_levels() {
+    for config in configurations() {
+        let desc = ImageDesc {
+            mip_levels: 3,
+            ..ImageDesc::rgba8(4, 4)
+        };
+        let mut rt = Runtime::new(
+            config,
+            RuntimeLimits::default(),
+            WorkingSet {
+                resources: &[ResourceClass::Image { desc, count: 2 }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        rt.check_texture_support(desc, true).unwrap();
+        assert_eq!(
+            rt.check_texture_support(
+                ImageDesc {
+                    mip_levels: 8,
+                    ..desc
+                },
+                true
+            )
+            .unwrap_err()
+            .kind(),
+            ExecutionErrorKind::InvalidInput
+        );
+        let mut pool = GraphPool::new(GraphCapacity::default(), 3).unwrap();
+        let wait = Duration::from_secs(20);
+        let (seed, old) = rt
+            .upload_texture_mips(&mut pool, "old", desc, None, 2..3, &[7; 4])
+            .unwrap();
+        assert!(old.snapshot().contains_mips(2..3));
+        assert!(!old.snapshot().contains_mips(1..3));
+        assert!(
+            rt.upload_texture_mips(&mut pool, "bad", desc, Some(&old), 1..2, &[0; 13])
+                .is_err()
+        );
+        let (promote, new) = rt
+            .upload_texture_mips(&mut pool, "new", desc, Some(&old), 1..2, &[8; 16])
+            .unwrap();
+        assert!(!new.snapshot().is_mip_initialized(0));
+        assert!(new.snapshot().contains_mips(1..3));
+        assert_ne!(old.snapshot().key(), new.snapshot().key());
+        assert_eq!(
+            rt.refresh_image(old.snapshot().key()).unwrap(),
+            *old.snapshot()
+        );
+        drop(rt.wait_for_frame(seed, wait).unwrap().unwrap());
+        drop(rt.wait_for_frame(promote, wait).unwrap().unwrap());
+
+        // Read both versions after publication. Copy selected mips to a small
+        // single-level image since ordinary CPU readback takes an entire image.
+        for (owner, mip, expected, extent) in [(&old, 2, 7, 1), (&new, 2, 7, 1), (&new, 1, 8, 2)] {
+            let dst = ImageDesc::rgba8(extent, extent);
+            rt.prepare_working_set(WorkingSet {
+                resources: &[ResourceClass::Image {
+                    desc: dst,
+                    count: 1,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+            let mut graph = pool.begin().unwrap();
+            let source = graph.import_image("texture", owner.snapshot()).unwrap();
+            let tile = graph.image("tile", dst).unwrap();
+            graph
+                .copy_image_region(
+                    "sample mip contents",
+                    source,
+                    renderer_core::graph::ImageRegion::mip(desc, mip).unwrap(),
+                    tile,
+                    0,
+                    [0, 0],
+                )
+                .unwrap();
+            let read = graph.readback_image("pixels", tile).unwrap();
+            let id = rt.submit(&graph.compile().unwrap()).unwrap().id();
+            let mut result = rt.wait_for_frame(id, wait).unwrap().unwrap();
+            let mut bytes = vec![0; (extent * extent * 4) as usize];
+            result.readback_into(read, &mut bytes).unwrap();
+            assert_eq!(bytes, vec![expected; bytes.len()]);
+        }
+        drop((old, new));
+        rt.collect_released_images().unwrap();
+        validation::check_after_teardown(rt);
+    }
+}

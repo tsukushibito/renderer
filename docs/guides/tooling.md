@@ -168,6 +168,21 @@ HDR画像のコピーパスを挟んだGraphをCPUで構築・compileする。
 cargo run --locked -p renderer --no-default-features --example rust_pipeline
 ```
 
+### Cook 済みテクスチャを段階的に読み込む
+
+`Renderer`、`WindowRenderer`、`SceneRenderer` は同じ手順で画像を準備できる。
+最初に `check_texture_support(desc, linear_filtering)` で現在のデバイスが形式と用途を扱えるか確認し、
+`prepare_texture(name, desc, simultaneous)` で同時に保持する画像の数を予約する。旧版を表示しながら
+新版を作る場合は両方を数える。共有する一枚を材質ごとに予約する必要はない。
+
+全レベルを一括で渡すには `upload_texture(name, desc, bytes)`、最初に粗いレベルだけを渡すには
+`upload_texture_mips(name, desc, levels, bytes)` を使う。`levels` は終端を含まない範囲で、
+データはその範囲の mip 番号順にパディングなしで並べる。どちらも `(FrameId, ManagedImage)` を返す。
+`poll_texture_upload(id)` が `true` を返した時点で、その転送完了を回収できたことになる。
+細かいレベルが届いたら `promote_texture(name, &previous, levels, bytes)` に渡す。
+新しい画像は指定範囲以外の有効なレベルを旧版から GPU 上で引き継ぐため、以前のバイト列の再送は不要である。
+現用の画像ハンドルは、新版の準備が終わり材質の参照を更新するまで保持できる。
+
 <a id="scene-materials"></a>
 
 ### エンジンのシーンとカメラから描画する

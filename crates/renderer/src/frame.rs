@@ -11,7 +11,7 @@ use renderer_core::{
     ImageFormat,
     capacity::Preparation,
     graph::{Graph, GraphError, ImageDesc, ImageHandle, LoadOp, PassHandle, SampleCount},
-    runtime::{FrameId, FrameSubmission, Runtime, RuntimeConfig},
+    runtime::{FrameId, FrameSubmission, ManagedImage, Runtime, RuntimeConfig},
 };
 use std::time::Duration;
 
@@ -231,6 +231,73 @@ impl Renderer {
         let mut base = Preparation::new(plan.preparation().frames_in_flight());
         base.add_working_set(plan.preparation().working_set())?;
         Ok(base)
+    }
+
+    /// Check format/extent and filtering on the device used by this renderer.
+    pub fn check_texture_support(
+        &mut self,
+        desc: ImageDesc,
+        linear_filtering: bool,
+    ) -> PipelineResult<()> {
+        self.drawing.check_texture_support(desc, linear_filtering)
+    }
+
+    /// Add a texture reservation at an explicit capacity-change boundary.
+    pub fn prepare_texture(
+        &mut self,
+        name: &str,
+        desc: ImageDesc,
+        simultaneous: usize,
+    ) -> PipelineResult<()> {
+        let extend = |old: &Preparation| -> PipelineResult<Preparation> {
+            let mut next = Preparation::new(old.frames_in_flight());
+            next.add_requirements(old.graph_requirements(), old.working_set())?;
+            crate::pipeline::reserve_texture_upload(&mut next, name, desc, simultaneous)?;
+            Ok(next)
+        };
+        let host = extend(&self.host)?;
+        let working_set = extend(&self.working_set)?;
+        self.drawing.prepare_texture(name, desc, simultaneous)?;
+        self.host = host;
+        self.working_set = working_set;
+        Ok(())
+    }
+
+    /// Upload one complete texture. Retain the returned owner until its last use is submitted.
+    pub fn upload_texture(
+        &mut self,
+        name: &str,
+        desc: ImageDesc,
+        bytes: &[u8],
+    ) -> PipelineResult<(FrameId, ManagedImage)> {
+        self.drawing.upload_texture(name, desc, bytes)
+    }
+
+    /// Upload a contiguous mip range from level-major packed data.
+    pub fn upload_texture_mips(
+        &mut self,
+        name: &str,
+        desc: ImageDesc,
+        levels: std::ops::Range<u32>,
+        bytes: &[u8],
+    ) -> PipelineResult<(FrameId, ManagedImage)> {
+        self.drawing.upload_texture_mips(name, desc, levels, bytes)
+    }
+
+    /// Create a candidate from an existing version and the supplied new mip contents.
+    pub fn promote_texture(
+        &mut self,
+        name: &str,
+        previous: &ManagedImage,
+        levels: std::ops::Range<u32>,
+        bytes: &[u8],
+    ) -> PipelineResult<(FrameId, ManagedImage)> {
+        self.drawing.promote_texture(name, previous, levels, bytes)
+    }
+
+    /// Consume the upload completion without waiting on the GPU.
+    pub fn poll_texture_upload(&mut self, id: FrameId) -> PipelineResult<bool> {
+        self.drawing.poll_texture_upload(id)
     }
 
     /// Upload the static surface pages and the corresponding dynamic probe volume.

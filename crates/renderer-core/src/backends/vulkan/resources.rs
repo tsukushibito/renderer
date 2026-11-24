@@ -156,7 +156,6 @@ pub(super) struct DeviceImage {
     pub(super) image: vk::Image,
     pub(super) view: vk::ImageView,
     /// Full-chain sampled View; aliases `view` only for single-mip images.
-    pub(super) sampled_view: vk::ImageView,
     /// Single-mip Views for levels 1..mip_levels, prepared with the resource.
     mip_views: Vec<vk::ImageView>,
     pub(super) mip_levels: u32,
@@ -183,7 +182,7 @@ pub(super) struct ImageCreation {
     samples: vk::SampleCountFlags,
     usage: vk::ImageUsageFlags,
     aspect: vk::ImageAspectFlags,
-    supports_linear_filtering: bool,
+    pub(super) supports_linear_filtering: bool,
 }
 
 impl ImageCreation {
@@ -307,6 +306,9 @@ impl DeviceImage {
                 )
         }
         .map_err(|result| {
+            if result == vk::Result::ERROR_FORMAT_NOT_SUPPORTED {
+                return RuntimeError::unsupported("unsupported Graph image format and usage");
+            }
             native(
                 owner,
                 "vkGetPhysicalDeviceImageFormatProperties2(Graph)",
@@ -455,7 +457,6 @@ impl DeviceImage {
             owner,
             image,
             view: vk::ImageView::null(),
-            sampled_view: vk::ImageView::null(),
             mip_views: Vec::new(),
             logical_format: creation.logical_format,
             mip_levels: creation.mip_levels,
@@ -467,34 +468,41 @@ impl DeviceImage {
             format: creation.format,
             aspect: creation.aspect,
         };
+        // Single-mip views retain attachment/storage usage. Longer ranges are
+        // sampled-only. Reserve once at preparation and own each view as soon
+        // as creation succeeds so a partial failure releases all prior views.
+        let levels = creation.mip_levels;
+        let count = levels * (levels + 1) / 2;
         result
             .mip_views
-            .try_reserve_exact((creation.mip_levels - 1) as usize)
+            .try_reserve_exact((count - 1) as usize)
             .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?;
         result.view = result.create_view(0, 1, creation.usage)?;
-        for mip in 1..creation.mip_levels {
-            let view = result.create_view(mip, 1, creation.usage)?;
-            result.mip_views.push(view);
+        for count in 1..=levels {
+            for base in u32::from(count == 1)..=levels - count {
+                let usage = if count == 1 {
+                    creation.usage
+                } else {
+                    vk::ImageUsageFlags::SAMPLED
+                };
+                let view = result.create_view(base, count, usage)?;
+                result.mip_views.push(view);
+            }
         }
-        result.sampled_view = if creation.mip_levels == 1 {
-            result.view
-        } else {
-            result.create_view(0, creation.mip_levels, vk::ImageUsageFlags::SAMPLED)?
-        };
         Ok(result)
     }
 
-    /// Native Graph descriptors support a single level or the complete chain.
-    /// Every View is created at preparation, never while recording a frame.
+    /// Constant-time lookup in the rows of all contiguous ranges, sorted by length.
     pub(super) fn view_for_mips(&self, base: u32, count: u32) -> Option<vk::ImageView> {
-        if count == 1 && base < self.mip_levels {
-            return Some(if base == 0 {
-                self.view
-            } else {
-                self.mip_views[(base - 1) as usize]
-            });
+        if count == 0 || base.checked_add(count)? > self.mip_levels {
+            return None;
         }
-        (base == 0 && count == self.mip_levels).then_some(self.sampled_view)
+        let index = (count - 1) * (2 * self.mip_levels + 2 - count) / 2 + base;
+        if index == 0 {
+            Some(self.view)
+        } else {
+            self.mip_views.get((index - 1) as usize).copied()
+        }
     }
 
     fn create_view(
@@ -530,17 +538,6 @@ impl Drop for DeviceImage {
         // SAFETY: Runtime leases retain storage through recording and GPU use.
         // The view is destroyed before its image, then the retained VMA/Device.
         unsafe {
-            if self.sampled_view != vk::ImageView::null() && self.sampled_view != self.view {
-                #[cfg(feature = "memory-profiling")]
-                crate::measurement::record_native(
-                    crate::measurement::NativeEvent::ObjectDestroy,
-                    1,
-                );
-                self.owner
-                    .device
-                    .raw()
-                    .destroy_image_view(self.sampled_view, None);
-            }
             for view in self.mip_views.drain(..) {
                 #[cfg(feature = "memory-profiling")]
                 crate::measurement::record_native(

@@ -58,19 +58,7 @@ pub(super) fn binding_requirements(
                     ));
                 }
             }
-            BindingOperands::ImageView(view) => {
-                let ResourceDesc::Image(desc) = graph.resources[view.image().index].desc else {
-                    unreachable!()
-                };
-                if view.mip_level_count() != 1
-                    && (view.mip_level() != 0 || view.mip_level_count() != desc.mip_levels)
-                {
-                    return Err(D3D12RuntimeError::unsupported(
-                        "Graph sampled Views require one mip or the complete chain",
-                    ));
-                }
-                descriptors += 1;
-            }
+            BindingOperands::ImageView(_) => descriptors += 1,
             BindingOperands::Sampler(_) => {}
         }
     }

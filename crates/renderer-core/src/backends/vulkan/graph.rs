@@ -383,6 +383,20 @@ fn validate_compute_shader_formats(
 }
 
 impl VulkanRuntime {
+    pub(crate) fn check_texture_support(
+        &self,
+        desc: crate::graph::ImageDesc,
+        linear: bool,
+    ) -> Result<(), RuntimeError> {
+        let creation = DeviceImage::prepare(&self.owner, desc)?;
+        if linear && !creation.supports_linear_filtering {
+            return Err(RuntimeError::unsupported(
+                "sampled format lacks linear filtering support",
+            ));
+        }
+        Ok(())
+    }
+
     fn capture_ranges(&self, ranges: &[Range<u64>]) -> Result<ImportRanges, RuntimeError> {
         self.import_ranges
             .lock()

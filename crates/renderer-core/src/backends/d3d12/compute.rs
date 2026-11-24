@@ -117,16 +117,6 @@ pub(super) fn requirements(
                 }
             }
             BindingOperands::ImageView(view) => {
-                let ResourceDesc::Image(desc) = graph.resources[view.image().index].desc else {
-                    unreachable!()
-                };
-                if view.mip_level_count() != 1
-                    && (view.mip_level() != 0 || view.mip_level_count() != desc.mip_levels)
-                {
-                    return Err(D3D12RuntimeError::unsupported(
-                        "Graph sampled Views require one mip or the complete chain",
-                    ));
-                }
                 if layout.kind != BindingType::SampledImage
                     && (view.mip_level() != 0
                         || view.mip_level_count() != 1

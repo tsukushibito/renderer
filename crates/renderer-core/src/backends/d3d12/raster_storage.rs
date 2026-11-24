@@ -433,6 +433,22 @@ impl RasterSrvCache {
     }
 }
 
+pub(super) fn check_image_class(
+    owner: &DeviceOwner,
+    class: D3D12ImageClass,
+) -> Result<(), D3D12RuntimeError> {
+    validate_class(class)?;
+    require_image_format(owner, class.desc)?;
+    if class.desc.mip_levels > 1 {
+        require_format(
+            owner,
+            super::resources::sampled_format(class.desc.format),
+            D3D12_FORMAT_SUPPORT1_MIP,
+        )?;
+    }
+    Ok(())
+}
+
 fn validate_class(class: D3D12ImageClass) -> Result<(), D3D12RuntimeError> {
     if class.count == 0 || class.desc.byte_len().is_none() {
         return Err(D3D12RuntimeError::invalid(
@@ -865,15 +881,7 @@ impl RasterStorage {
         let mut color_count = 0usize;
         let mut depth_count = 0usize;
         for (class, _) in classes.clone() {
-            validate_class(class)?;
-            require_image_format(owner, class.desc)?;
-            if class.desc.mip_levels > 1 {
-                require_format(
-                    owner,
-                    super::resources::sampled_format(class.desc.format),
-                    D3D12_FORMAT_SUPPORT1_MIP,
-                )?;
-            }
+            check_image_class(owner, class)?;
             total = total.checked_add(class.count).ok_or_else(|| {
                 D3D12RuntimeError::capacity_with(
                     "prepared image count overflows",
