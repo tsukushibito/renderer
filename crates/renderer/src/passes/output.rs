@@ -15,6 +15,9 @@ const SDR_COLOR: &str = "sdr";
 const TONE_MAP: &str = "tone_map";
 const WRITE_SDR: &str = "write_sdr";
 
+/// Sampler used by the Neutral tone-mapping pass.
+pub const TONE_MAP_SAMPLER: SamplerDescriptor = SamplerDescriptor::NearestClamp;
+
 /// Encoding written to the RGBA8 UNORM output image.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SdrEncoding {
@@ -55,6 +58,15 @@ impl SdrOutput {
             sample_count: SampleCount::X1,
         }
     }
+
+    /// Sampler used by [`write_sdr`] for this selection.
+    pub const fn sampler(self) -> SamplerDescriptor {
+        if self.fxaa {
+            SamplerDescriptor::LinearClamp
+        } else {
+            SamplerDescriptor::NearestClamp
+        }
+    }
 }
 
 /// The 1× pipeline request used by [`tone_map_neutral`] for any exposure.
@@ -86,7 +98,7 @@ impl Exposure {
 /// image with one mip and the same extent. This writes display-linear RGB in
 /// 0..1 for finite input and alpha 1. Exposure is a positive, normal linear
 /// multiplier at most `f32::MAX / 65536.0`. Prepare
-/// [`tone_map_neutral_pipeline`] before normal frame processing.
+/// [`tone_map_neutral_pipeline`] and [`TONE_MAP_SAMPLER`] before normal frame processing.
 pub fn tone_map_neutral(
     graph: &mut Graph,
     name: &str,
@@ -112,7 +124,7 @@ fn tone_map(
         source,
         color,
         tone_map_neutral_pipeline().program,
-        SamplerDescriptor::NearestClamp,
+        TONE_MAP_SAMPLER,
         RasterConstants::new(&[exposure.0.to_bits()])?,
     )
 }
@@ -122,7 +134,7 @@ fn tone_map(
 /// The source is one 1× color mip. RGBA8 sRGB sources decode on sampling. The
 /// destination is a distinct 1× RGBA8 UNORM image with one mip and the same
 /// extent. Alpha is set to 1. Choose [`SdrEncoding::Linear`] for presentation
-/// through the Renderer and prepare [`SdrOutput::pipeline`] for each selection.
+/// through the Renderer and prepare [`SdrOutput::pipeline`] and [`SdrOutput::sampler`] for each selection.
 pub fn write_sdr(
     graph: &mut Graph,
     name: &str,
@@ -131,18 +143,13 @@ pub fn write_sdr(
     output: SdrOutput,
 ) -> Result<SdrImage, GraphError> {
     let color = output_view(graph, name, source, destination, ImageFormat::Rgba8Unorm)?;
-    let sampler = if output.fxaa {
-        SamplerDescriptor::LinearClamp
-    } else {
-        SamplerDescriptor::NearestClamp
-    };
     append(
         graph,
         name,
         source,
         color,
         output.pipeline().program,
-        sampler,
+        output.sampler(),
         RasterConstants::default(),
     )?;
     Ok(match output.encoding {
@@ -332,7 +339,8 @@ impl PreparedOutput {
             WorkingSet {
                 resources: &resources,
                 raster: &[tone_map, write_sdr],
-                compute: &[],
+                samplers: &[TONE_MAP_SAMPLER, output.sampler()],
+                ..WorkingSet::default()
             },
         )?;
         Ok(Self {
