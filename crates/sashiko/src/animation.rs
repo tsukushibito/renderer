@@ -304,3 +304,30 @@ impl SkinnedModel {
         self.vertices.iter().zip(&self.weights)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn clip_clock_resamples_and_holds_or_loops_without_overflow() {
+        let hz = NonZeroU32::new(60).unwrap();
+        let translated =
+            Transform::new([[1., 0., 0., 1.], [0., 1., 0., 0.], [0., 0., 1., 0.]]).unwrap();
+        let poses = [Transform::IDENTITY, translated];
+        let mut clip = AnimationClip {
+            clip: Clip {
+                first: 0,
+                frames: 2,
+                hz: NonZeroU32::new(30).unwrap(),
+                looping: false,
+            },
+            joints: 1,
+            poses: &poses,
+        };
+        assert_eq!(clip.sample(1, hz), &poses[..1]);
+        assert_eq!(clip.sample(2, hz), &poses[1..]);
+        assert_eq!(clip.sample(u64::MAX, hz), &poses[1..]);
+        clip.clip.looping = true;
+        assert_eq!(clip.sample(4, hz), &poses[..1]);
+    }
+}

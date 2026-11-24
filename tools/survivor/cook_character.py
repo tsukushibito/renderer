@@ -4,6 +4,7 @@ blender -b -t 1 --factory-startup --python-exit-code 1 -P tools/survivor/cook_ch
     -- <source-directory> assets/survivor/characters
 """
 
+import json
 import math
 from pathlib import Path
 import struct
@@ -77,10 +78,10 @@ def geometry(rig, objects):
     return to_game, ordered, indices, joint_names
 
 
-def palettes(target, source, joint_names, to_game):
+def palettes(target, source, joint_names, to_game, action):
     # Retarget by bone name. Keep target bone lengths while applying authored
     # rotations in armature space, plus the source's pelvis bob and sway.
-    clip = next(a for a in bpy.data.actions if a.name.endswith("|Walk_Loop"))
+    clip = next(a for a in bpy.data.actions if a.name.endswith("|" + action))
     source.animation_data.action = clip
     source.animation_data.action_slot = clip.slots[0]
     first, last = clip.frame_range
@@ -124,28 +125,62 @@ def image_bytes(path, width):
     return rgba
 
 
-def cook(src, dest, sex, variant, albedo):
+def cook(src, dest, variant, recipe):
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.fbx(filepath=str(src / f"Superhero_{sex}_FullBody.fbx"))
+    bpy.ops.import_scene.fbx(filepath=str(src / recipe["model"]))
     rig = next(o for o in bpy.context.scene.objects if o.type == "ARMATURE")
     objects = [o for o in bpy.context.scene.objects if o.type == "MESH"]
     to_game, vertices, indices, names = geometry(rig, objects)
-    bpy.ops.import_scene.fbx(filepath=str(src / "UAL1_Standard.fbx"))
+    bpy.ops.import_scene.fbx(filepath=str(src / recipe["animation"]))
     source = next(o for o in bpy.context.scene.objects if o.type == "ARMATURE" and o != rig)
-    frames, poses = palettes(rig, source, names, to_game)
+    poses = bytearray()
+    frames = 0
+    clips = {}
+    for name, settings in recipe["clips"].items():
+        count, matrices = palettes(rig, source, names, to_game, settings["action"])
+        if not count:
+            raise ValueError(f"{variant}/{name}: expected a nonempty clip")
+        clips[name] = {"first": frames, "frames": count, "hz": 60,
+                       "looping": settings["looping"]}
+        frames += count
+        poses.extend(matrices)
+
     dest.mkdir(parents=True, exist_ok=True)
     with (dest / f"{variant}.skin").open("wb") as f:
         f.write(struct.pack("<8s4I", b"SURSKIN1", len(vertices), len(indices), len(names), frames))
         f.writelines(vertices)
         f.write(struct.pack(f"<{len(indices)}I", *indices))
         f.write(poses)
-    atlas = np.concatenate([image_bytes(src / albedo, 224),
+    atlas = np.concatenate([image_bytes(src / recipe["albedo"], 224),
                             image_bytes(src / "T_Eye_Brown.png", 32)], axis=1)
     (dest / f"{variant}.rgba").write_bytes(atlas.tobytes())
-    print(f"{variant}: {len(indices)//3} triangles, {len(names)} joints, {frames} walk ticks")
+    print(f"{variant}: {len(indices)//3} triangles, {len(names)} joints, {frames} sampled frames")
+
+    return {"id": recipe["id"], "skin": f"{variant}.skin", "color": f"{variant}.rgba",
+            "extent": [256, 256], "clips": clips}
 
 
 if __name__ == "__main__":
-    source_dir, dest_dir = [Path(p).resolve() for p in sys.argv[sys.argv.index("--")+1:]]
-    cook(source_dir, dest_dir, "Male", "primary", "T_Superhero_Male_Ligh.png")
-    cook(source_dir, dest_dir, "Female", "alternate", "T_Superhero_Female_Dark_BaseColor.png")
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", type=Path)
+    parser.add_argument("destination", type=Path)
+    parser.add_argument("--recipe", type=Path,
+                        default=Path(__file__).with_name("character-recipes.json"))
+    args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:])
+    recipes = json.loads(args.recipe.read_text(encoding="utf-8"))
+    if not recipes:
+        raise ValueError("no characters in recipe")
+    catalog = {"version": 1, "models": {}}
+    ids = set()
+    for name, recipe in recipes.items():
+        if not name or Path(name).name != name or name in (".", ".."):
+            raise ValueError(f"invalid character name: {name}")
+        if len(recipe["id"]) != 32 or any(c not in "0123456789abcdef" for c in recipe["id"]):
+            raise ValueError(f"{name}: expected a 32 digit lowercase hex ID")
+        if recipe["id"] in ids or not recipe["clips"]:
+            raise ValueError(f"{name}: duplicate ID or missing clips")
+        ids.add(recipe["id"])
+        catalog["models"][name] = cook(args.source.resolve(), args.destination.resolve(), name, recipe)
+    (args.destination / "catalog.json").write_text(json.dumps(catalog, indent=2) + "\n",
+                                                   encoding="utf-8")

@@ -15,6 +15,12 @@
           "frames": 80,
           "hz": 60,
           "looping": true
+        },
+        "jog": {
+          "first": 80,
+          "frames": 56,
+          "hz": 60,
+          "looping": true
         }
       }
     },
@@ -30,6 +36,12 @@
         "walk": {
           "first": 0,
           "frames": 80,
+          "hz": 60,
+          "looping": true
+        },
+        "jog": {
+          "first": 80,
+          "frames": 56,
           "hz": 60,
           "looping": true
         }

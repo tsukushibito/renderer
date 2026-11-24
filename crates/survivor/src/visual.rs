@@ -118,7 +118,9 @@ fn transform(
 impl Visual {
     pub fn new(game: &Game, catalog: &std::path::Path, character: &str) -> PipelineResult<Self> {
         let mut meshes = Meshes::new(MeshCapacity {
-            meshes: 20,
+            meshes: 20usize
+                .checked_add(game.arena.subjects.len())
+                .ok_or("subject mesh capacity overflow")?,
             retired_mesh_versions: 4,
         })?;
         let mut materials = Materials::default();
@@ -132,7 +134,10 @@ impl Visual {
         let cast = Cast::load(
             catalog,
             character,
-            [(None, "walk")],
+            game.arena
+                .subjects
+                .iter()
+                .map(|subject| (subject.model.as_deref(), subject.clip.as_str())),
             &mut meshes,
             &mut materials,
             palette.subject,
@@ -328,7 +333,7 @@ impl Visual {
             if camera::on_screen(view, enemy.pos) {
                 self.visible += 1;
                 let [x, z] = enemy.pos;
-                let actor = &self.cast.actors[self.cast.subjects[0]];
+                let actor = &self.cast.actors[self.cast.subjects[enemy.archetype]];
                 let mut object = RenderObject::new(actor.mesh, actor.material)
                     .with_transform(transform([x, 0., z], [1.; 3], enemy.facing)?);
                 object.pose = Some(actor.poses[(enemy.id % WALK_PHASES as u64) as usize]);
