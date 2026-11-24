@@ -1,5 +1,5 @@
 //! Research hall, animated subjects and gameplay feedback shared by capture and presentation.
-mod camera;
+use sashiko::view::{DrawList, GroundCamera, facing_transform as transform, on_screen};
 mod geometry;
 mod hud;
 mod instruments;
@@ -14,7 +14,7 @@ use renderer::{
     core::runtime::Runtime,
     material::{AlphaMode, MaterialHandle, Materials, PbrParams},
     mesh::{MeshCapacity, MeshHandle, Meshes, SkinPoseId},
-    pbr::{Bounds, LocalLight, PointLight, Sun, Transform},
+    pbr::{Bounds, LocalLight, PointLight, Sun},
     pipeline::{CameraView, PipelineResult, RenderObject, SceneAssets, SceneInput},
 };
 use surfaces::Surfaces;
@@ -82,9 +82,8 @@ pub struct Visual {
     materials: Materials,
     palette: Palette,
     texture_owners: Option<Surfaces>,
-    hall: Vec<RenderObject>,
     prepared: Vec<RenderObject>,
-    objects: Vec<RenderObject>,
+    objects: DrawList,
     hud: Vec<Layer>,
     character: Character,
     base_rgba: &'static [u8],
@@ -101,24 +100,6 @@ pub struct Visual {
     last_step: Option<u64>,
     player_facing: [f32; 2],
     previous_player: [f32; 2],
-}
-
-fn transform(
-    [x, y, z]: [f32; 3],
-    [w, h, d]: [f32; 3],
-    [sin, cos]: [f32; 2],
-) -> PipelineResult<Transform> {
-    // A stationary actor coincident with its target has no movement bearing.
-    let (sin, cos) = if sin == 0. && cos == 0. {
-        (0., 1.)
-    } else {
-        (sin, cos)
-    };
-    Ok(Transform::new([
-        [cos * w, 0., sin * d, x],
-        [0., h, 0., y],
-        [-sin * w, 0., cos * d, z],
-    ])?)
 }
 
 impl Visual {
@@ -199,9 +180,8 @@ impl Visual {
             materials,
             palette,
             texture_owners: None,
-            hall,
             prepared,
-            objects: Vec::with_capacity(maximum),
+            objects: DrawList::new(hall, 6 + 3 * MAX_ENEMIES + MAX_DROPS + MAX_SHOTS)?,
             hud: Vec::with_capacity(256),
             character,
             base_rgba: variant.base_rgba(),
@@ -267,7 +247,13 @@ impl Visual {
                 .clamp(game.player[1] - hz * 0.85, game.player[1] + hz * 0.85)
                 .clamp(-d, d),
         ];
-        camera::tracking(focus, extent)
+        GroundCamera {
+            height: 22.,
+            distance: 34.,
+            pitch_radians: 54f32.to_radians(),
+            depth_range: [0.5, 65.],
+        }
+        .view(renderer::pipeline::ViewId(1), focus, extent)
     }
 
     fn instance(
@@ -281,13 +267,12 @@ impl Visual {
         let mut object =
             RenderObject::new(mesh, material).with_transform(transform(pos, scale, facing)?);
         object.casts_shadow = false;
-        self.objects.push(object);
+        self.objects.push(object)?;
         Ok(())
     }
 
     pub fn sync(&mut self, game: &Game, view: &CameraView) -> PipelineResult<()> {
-        self.objects.clear();
-        self.objects.extend_from_slice(&self.hall);
+        self.objects.begin();
         // Sparse animation phases share the same posed vertex stream across the crowd.
         // Fixed tick controls animation time even when a presentation gets repeated.
         if self.last_step != Some(game.tick) {
@@ -327,18 +312,18 @@ impl Visual {
             .with_transform(transform([px, 0., pz], [1.; 3], self.player_facing)?);
         player.pose = Some(self.poses[0]);
         player.casts_shadow = false;
-        self.objects.push(player);
+        self.objects.push(player)?;
         self.visible = 0;
         self.drawn = 0;
         for enemy in &game.enemies {
-            if camera::on_screen(view, enemy.pos) {
+            if on_screen(view, enemy.pos, 1.9, 0.65) {
                 self.visible += 1;
                 let [x, z] = enemy.pos;
                 let mut object = RenderObject::new(self.body, self.palette.subject)
                     .with_transform(transform([x, 0., z], [1.; 3], enemy.facing)?);
                 object.pose = Some(self.poses[(enemy.id % WALK_PHASES as u64) as usize]);
                 object.casts_shadow = false;
-                self.objects.push(object);
+                self.objects.push(object)?;
                 self.drawn += 1;
                 self.instance(
                     self.disk,
@@ -361,7 +346,7 @@ impl Visual {
             }
         }
         for drop in &game.drops {
-            if camera::on_screen(view, drop.pos) {
+            if on_screen(view, drop.pos, 1.9, 0.65) {
                 self.instance(
                     self.block,
                     self.palette.drop,
@@ -393,7 +378,7 @@ impl Visual {
     }
 
     pub fn scene(&self) -> SceneInput<'_> {
-        SceneInput::new(&self.meshes, &self.materials, &self.objects)
+        SceneInput::new(&self.meshes, &self.materials, self.objects.objects())
             .with_sun(self.sun)
             .with_lights(&self.lights)
             .with_bounds(self.bounds)

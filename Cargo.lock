@@ -1406,6 +1406,7 @@ dependencies = [
 name = "sashiko"
 version = "0.1.0"
 dependencies = [
+ "renderer",
  "renderer-asset",
  "serde",
  "serde_json",
