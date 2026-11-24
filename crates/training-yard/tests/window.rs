@@ -3,6 +3,8 @@
     feature = "presentation",
     any(feature = "vulkan", feature = "d3d12")
 ))]
+#[path = "support/distribution.rs"]
+mod distribution;
 use renderer::WindowRenderer;
 #[path = "../../renderer/examples/support/validation.rs"]
 mod validation;
@@ -157,18 +159,12 @@ fn present_before_and_after_suspension_and_resize() -> PipelineResult<()> {
 #[ignore = "requires a Windows desktop and a real GPU"]
 fn replay_streams_a_new_image_class_during_window_presentation() -> PipelineResult<()> {
     use renderer_asset::{AssetId, Catalog, Digest, ImageBlob};
-    use std::{fs, path::Path, process::Command};
-    let dist = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/equipment/dist");
-    let root = std::env::temp_dir().join(format!("renderer-stream-window-{}", std::process::id()));
-    fs::create_dir_all(root.join("catalogs"))?;
-    fs::create_dir_all(root.join("objects"))?;
-    for object in fs::read_dir(dist.join("objects"))? {
-        let object = object?;
-        fs::copy(object.path(), root.join("objects").join(object.file_name()))?;
-    }
-    let old = fs::read_to_string(dist.join("current"))?;
+    use std::{fs, process::Command};
+    let fixture = distribution::Distribution::cook()?;
+    let root = fixture.root.as_path();
+    let old = fs::read_to_string(root.join("current"))?;
     let mut catalog: Catalog =
-        serde_json::from_slice(&fs::read(dist.join("catalogs").join(old.trim()))?)?;
+        serde_json::from_slice(&fs::read(root.join("catalogs").join(old.trim()))?)?;
     let wide = catalog.assets.get_mut(&AssetId::from_u128(2)).unwrap();
     let image = wide.primitives[0]
         .images
@@ -195,7 +191,7 @@ fn replay_streams_a_new_image_class_during_window_presentation() -> PipelineResu
     let replay = |api: &str| -> PipelineResult<()> {
         let status = Command::new(env!("CARGO_BIN_EXE_training-yard"))
             .args(["--api", api, "--mode", "window"])
-            .env("TRAINING_YARD_ASSETS", &root)
+            .env("TRAINING_YARD_ASSETS", root)
             .status()?;
         assert!(
             status.success(),
@@ -207,6 +203,5 @@ fn replay_streams_a_new_image_class_during_window_presentation() -> PipelineResu
     replay("vulkan")?;
     #[cfg(feature = "d3d12")]
     replay("d3d12")?;
-    fs::remove_dir_all(root)?;
     Ok(())
 }

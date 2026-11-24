@@ -1,16 +1,10 @@
-use renderer_asset::{AssetId, Generation, ObjectStore};
+#[path = "support/project.rs"]
+mod project;
+
+use project::{Project, Result};
+use renderer_asset::{AssetId, Catalog, Generation, ObjectStore};
 use serde_json::Value;
-use std::{
-    error::Error,
-    fs, io,
-    path::{Path, PathBuf},
-    process::{Command, Output},
-    time::{SystemTime, UNIX_EPOCH},
-};
-
-type Result<T = ()> = std::result::Result<T, Box<dyn Error>>;
-
-struct Project(PathBuf);
+use std::{collections::BTreeSet, fs};
 
 #[test]
 fn a_cached_tangent_vector_does_not_accept_matrix_input() -> Result {
@@ -59,89 +53,41 @@ fn moved_equipment_can_share_dependencies_from_its_parent_directory() -> Result 
     Ok(())
 }
 
-impl Project {
-    fn new() -> Result<Self> {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("renderer-armor-{}-{nonce}", std::process::id()));
-        fs::create_dir(&root)?;
-        let project = Self(root);
-        copy_directory(&fixture().join("source"), &project.0.join("source"))?;
-        Ok(project)
-    }
-
-    fn cook(&self) -> io::Result<Output> {
-        Command::new(env!("CARGO_BIN_EXE_renderer-asset-cook"))
-            .args(["cook", "source", "dist", "--cache", "cache"])
-            .current_dir(&self.0)
-            .output()
-    }
-
-    fn report(&self) -> Result<Value> {
-        let output = self.cook()?;
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        Ok(serde_json::from_slice(&output.stdout)?)
-    }
-}
-
-impl Drop for Project {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-fn fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../training-yard/assets/equipment")
-}
-
-fn copy_directory(from: &Path, to: &Path) -> io::Result<()> {
-    fs::create_dir(to)?;
-    for entry in fs::read_dir(from)? {
-        let entry = entry?;
-        let dest = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_directory(&entry.path(), &dest)?;
-        } else {
-            fs::copy(entry.path(), dest)?;
-        }
-    }
-    Ok(())
-}
-
 #[test]
-fn checked_in_package_matches_clean_cook_and_loads_without_sources() -> Result {
+fn clean_cook_matches_reference_generation_and_loads_without_sources() -> Result {
     let project = Project::new()?;
     project.report()?;
     let actual = project.0.join("dist");
-    let expected = fixture().join("dist");
-    assert_eq!(
-        fs::read(actual.join("current"))?,
-        fs::read(expected.join("current"))?
-    );
-    for folder in ["catalogs", "objects"] {
-        let shipped = expected.join(folder);
-        let cooked = actual.join(folder);
-        assert_eq!(
-            fs::read_dir(&cooked)?.count(),
-            fs::read_dir(&shipped)?.count()
-        );
-        for entry in fs::read_dir(shipped)? {
-            let entry = entry?;
-            assert_eq!(
-                fs::read(entry.path())?,
-                fs::read(cooked.join(entry.file_name()))?
-            );
-        }
-    }
-
     fs::remove_dir_all(project.0.join("source"))?;
     fs::remove_dir_all(project.0.join("cache"))?;
     let generation = Generation::open(&actual)?;
+    // The original distribution's catalog digest also commits to every object hash and size.
+    assert_eq!(
+        generation.id().to_string(),
+        "cf05211e283db404a55445283f3a99501925d7da73b536759f3799d64b93095f"
+    );
+    let catalog: Catalog = serde_json::from_slice(&fs::read(
+        actual.join("catalogs").join(generation.id().to_string()),
+    )?)?;
     let store = ObjectStore::new(&actual);
+    let mut expected = BTreeSet::new();
+    for asset in catalog.assets.values() {
+        for primitive in &asset.primitives {
+            for object in [&primitive.mesh, &primitive.material]
+                .into_iter()
+                .chain(primitive.images.iter().flatten())
+            {
+                if expected.insert(object.hash) {
+                    store.load(object)?;
+                }
+            }
+        }
+    }
+    assert_eq!(fs::read_dir(actual.join("catalogs"))?.count(), 1);
+    assert_eq!(
+        fs::read_dir(actual.join("objects"))?.count(),
+        expected.len()
+    );
     let saved = AssetId::from_u128(1);
     let armor = generation.equipment(&saved)?;
     let primitive = &armor.primitives[0];
