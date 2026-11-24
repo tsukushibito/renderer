@@ -1,123 +1,131 @@
-//! Cooked character presentation. The simulation owns the subject's identity and rules.
-
+//! Game asset selection and shared crowd pose slots.
 use renderer::{
-    mesh::{JointWeights, MeshData},
-    pbr::{PbrVertex, Transform},
+    material::{MaterialHandle, Materials},
+    mesh::{MeshHandle, Meshes, SkinPoseId},
     pipeline::PipelineResult,
 };
+use sashiko::animation::{AnimatedModel, CharacterCatalog};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
-const PRIMARY: &[u8] = include_bytes!("../../../assets/survivor/characters/primary.skin");
-const ALTERNATE: &[u8] = include_bytes!("../../../assets/survivor/characters/alternate.skin");
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CharacterVariant {
-    Primary,
-    Alternate,
-}
-
-impl CharacterVariant {
-    /// Tightly packed, top-row-first 256 × 256 sRGB RGBA pixels.
-    pub fn base_rgba(self) -> &'static [u8] {
-        match self {
-            Self::Primary => include_bytes!("../../../assets/survivor/characters/primary.rgba"),
-            Self::Alternate => include_bytes!("../../../assets/survivor/characters/alternate.rgba"),
-        }
+pub(super) fn catalog_path() -> PipelineResult<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let relative = Path::new("assets/survivor/characters/catalog.json");
+    let packaged = exe
+        .parent()
+        .ok_or("executable directory unavailable")?
+        .join(relative);
+    if packaged.try_exists()? {
+        return Ok(packaged);
     }
+    Ok(Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative))
 }
 
-pub struct Character {
-    vertices: Vec<PbrVertex>,
-    weights: Vec<JointWeights>,
-    indices: Vec<u32>,
-    joints: usize,
-    frames: usize,
-    poses: Vec<Transform>,
+pub(super) const WALK_PHASES: usize = 4;
+
+pub(super) struct Actor {
+    pub mesh: MeshHandle,
+    pub poses: [SkinPoseId; WALK_PHASES],
+    pub texture: usize,
+    pub material: MaterialHandle,
+    clip: String,
 }
 
-fn record_bytes<'a>(input: &mut &'a [u8], count: usize, stride: usize) -> PipelineResult<&'a [u8]> {
-    let size = count.checked_mul(stride).ok_or("character size overflow")?;
-    let (records, next) = input.split_at_checked(size).ok_or("short character data")?;
-    *input = next;
-    Ok(records)
+pub(super) struct Cast {
+    pub models: Vec<AnimatedModel>,
+    pub actors: Vec<Actor>,
+    pub subjects: Vec<usize>,
 }
-
-fn floats<const N: usize>(record: &[u8], offset: usize) -> [f32; N] {
-    std::array::from_fn(|i| {
-        let start = offset + i * 4;
-        f32::from_le_bytes(record[start..start + 4].try_into().unwrap())
-    })
-}
-
-impl Character {
-    pub fn load(variant: CharacterVariant) -> PipelineResult<Self> {
-        let input = match variant {
-            CharacterVariant::Primary => PRIMARY,
-            CharacterVariant::Alternate => ALTERNATE,
-        };
-        let mut data = input.strip_prefix(b"SURSKIN1").ok_or("character schema")?;
-        let header = record_bytes(&mut data, 4, 4)?;
-        let [points, elements, joints, frames] = std::array::from_fn(|i| {
-            u32::from_le_bytes(header[i * 4..i * 4 + 4].try_into().unwrap()) as usize
-        });
-        if joints == 0 || frames == 0 {
-            return Err("empty walk clip".into());
+impl Cast {
+    pub fn load<'a>(
+        path: &Path,
+        player: &'a str,
+        subjects: impl IntoIterator<Item = (Option<&'a str>, &'a str)>,
+        meshes: &mut Meshes,
+        materials: &mut Materials,
+        default_subject: MaterialHandle,
+    ) -> PipelineResult<Self> {
+        let catalog = CharacterCatalog::open(path)?;
+        let mut models = Vec::<AnimatedModel>::new();
+        let mut actors = Vec::new();
+        let mut loaded = HashMap::new();
+        let mut actors_by_clip = HashMap::new();
+        let mut subject_indices = Vec::new();
+        for (name, clip) in std::iter::once((Some(player), "walk")).chain(subjects) {
+            let name = name.unwrap_or(player);
+            let id = catalog
+                .id(name)
+                .ok_or_else(|| format!("{}: unknown character {name}", path.display()))?;
+            let actor = if let Some(&index) = actors_by_clip.get(&(id, clip)) {
+                index
+            } else {
+                let (texture, mesh) = if let Some(&loaded) = loaded.get(&id) {
+                    loaded
+                } else {
+                    let model = catalog.load(id)?;
+                    let mesh = meshes.create(model.model.mesh_data()?)?;
+                    let texture = models.len();
+                    models.push(model);
+                    loaded.insert(id, (texture, mesh));
+                    (texture, mesh)
+                };
+                if models[texture].clip(clip).is_none() {
+                    return Err(format!("unknown animation {name}/{clip}").into());
+                }
+                let poses = [
+                    meshes.create_pose(mesh)?,
+                    meshes.create_pose(mesh)?,
+                    meshes.create_pose(mesh)?,
+                    meshes.create_pose(mesh)?,
+                ];
+                let material = if actors.is_empty() {
+                    default_subject
+                } else {
+                    materials.duplicate(default_subject)?
+                };
+                let index = actors.len();
+                actors.push(Actor {
+                    mesh,
+                    poses,
+                    texture,
+                    material,
+                    clip: clip.to_owned(),
+                });
+                actors_by_clip.insert((id, clip), index);
+                index
+            };
+            subject_indices.push(actor);
         }
-        let vertex_bytes = record_bytes(&mut data, points, 72)?;
-        let index_bytes = record_bytes(&mut data, elements, 4)?;
-        let all_joints = frames.checked_mul(joints).ok_or("walk clip overflow")?;
-        let matrices = record_bytes(&mut data, all_joints, 48)?;
-        if !data.is_empty() {
-            return Err("trailing character data".into());
-        }
-        let mut vertices = Vec::with_capacity(points);
-        let mut weights = Vec::with_capacity(points);
-        for v in vertex_bytes.as_chunks::<72>().0 {
-            vertices.push(PbrVertex::new(
-                floats(v, 0),
-                floats(v, 12),
-                floats(v, 24),
-                floats(v, 40),
-            )?);
-            weights.push(JointWeights {
-                joints: std::array::from_fn(|i| u16::from_le_bytes([v[48 + 2 * i], v[49 + 2 * i]])),
-                weights: floats(v, 56),
-            });
-        }
-        let indices = index_bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|x| u32::from_le_bytes(*x))
-            .collect();
-        let mut poses = Vec::with_capacity(all_joints);
-        for matrix in matrices.as_chunks::<48>().0 {
-            poses.push(Transform::new(std::array::from_fn(|i| {
-                floats(matrix, i * 16)
-            }))?);
-        }
+        // The first entry is the player's animation, fixed at actor slot zero.
+        subject_indices.remove(0);
         Ok(Self {
-            vertices,
-            indices,
-            weights,
-            joints,
-            frames,
-            poses,
+            models,
+            actors,
+            subjects: subject_indices,
         })
     }
 
-    pub fn mesh_data(&self) -> PipelineResult<MeshData> {
-        Ok(MeshData::skinned_pbr(
-            &self.vertices,
-            &self.indices,
-            self.joints,
-            &self.weights,
-        )?)
-    }
-
-    /// One loop of the authored walk animation, sampled at the fixed 60 Hz game rate.
-    pub fn palette(&self, tick: u64) -> &[Transform] {
-        let start = (tick % self.frames as u64) as usize * self.joints;
-        &self.poses[start..start + self.joints]
+    pub fn animate(&self, tick: u64, meshes: &mut Meshes) -> PipelineResult<()> {
+        for actor in &self.actors {
+            let clip = self.models[actor.texture]
+                .clip(&actor.clip)
+                .expect("validated at load");
+            for (phase, pose) in actor.poses.iter().enumerate() {
+                let time = tick.wrapping_add(phase as u64 * 13);
+                meshes.set_joint_transforms(
+                    *pose,
+                    clip.sample(
+                        time,
+                        survivor::TICK_HZ.try_into().expect("positive update rate"),
+                    ),
+                )?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -128,26 +136,28 @@ mod tests {
 
     #[test]
     fn both_subject_appearances_play_the_walk_cycle_in_renderer() -> PipelineResult<()> {
-        for variant in [CharacterVariant::Primary, CharacterVariant::Alternate] {
-            let subject = Character::load(variant)?;
+        let catalog = CharacterCatalog::open(&catalog_path()?)?;
+        for variant in catalog.names() {
+            let subject = catalog.load(catalog.id(variant).unwrap())?;
+            let clip = subject.clip("walk").unwrap();
+            let palette_at = |tick| clip.sample(tick, survivor::TICK_HZ.try_into().unwrap());
             let mut meshes = Meshes::new(MeshCapacity {
                 meshes: 1,
                 retired_mesh_versions: 0,
             })?;
-            let mesh = meshes.create(subject.mesh_data()?)?;
+            let mesh = meshes.create(subject.model.mesh_data()?)?;
             let pose = meshes.create_pose(mesh)?;
-            let frames = subject.frames as u64;
+            let frames = clip.frames() as u64;
             for tick in [0, frames / 4, frames / 2, frames - 1] {
-                meshes.set_joint_transforms(pose, subject.palette(tick))?;
+                meshes.set_joint_transforms(pose, palette_at(tick))?;
             }
             // The simulation always puts a subject's origin on the floor.
             // A replacement skin must remain planted throughout the walk.
             for tick in 0..frames {
-                let palette = subject.palette(tick);
+                let palette = palette_at(tick);
                 let sole = subject
-                    .vertices
-                    .iter()
-                    .zip(&subject.weights)
+                    .model
+                    .vertices()
                     .map(|(v, weights)| {
                         weights
                             .joints
@@ -161,11 +171,10 @@ mod tests {
                     .fold(f32::INFINITY, f32::min);
                 assert!(sole.abs() < 0.025, "{variant:?} at tick {tick}: {sole} m");
             }
-            assert_ne!(subject.palette(0), subject.palette(frames / 2));
-            assert_eq!(subject.palette(0), subject.palette(frames));
-            assert_eq!(variant.base_rgba().len(), 256 * 256 * 4);
+            assert_ne!(palette_at(0), palette_at(frames / 2));
+            assert_eq!(palette_at(0), palette_at(frames));
+            assert_eq!(subject.color().0.len(), 256 * 256 * 4);
         }
-        assert_ne!(PRIMARY, ALTERNATE);
         Ok(())
     }
 }

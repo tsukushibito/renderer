@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "models": {
+    "primary": {
+      "id": "00000000000000000000000000000001",
+      "skin": "primary.skin",
+      "color": "primary.rgba",
+      "extent": [
+        256,
+        256
+      ],
+      "clips": {
+        "walk": {
+          "first": 0,
+          "frames": 80,
+          "hz": 60,
+          "looping": true
+        }
+      }
+    },
+    "alternate": {
+      "id": "00000000000000000000000000000002",
+      "skin": "alternate.skin",
+      "color": "alternate.rgba",
+      "extent": [
+        256,
+        256
+      ],
+      "clips": {
+        "walk": {
+          "first": 0,
+          "frames": 80,
+          "hz": 60,
+          "looping": true
+        }
+      }
+    }
+  }
+}

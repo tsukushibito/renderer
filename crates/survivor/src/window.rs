@@ -8,7 +8,7 @@ mod validation {
 }
 use validation::check_validation;
 
-use crate::visual::{CharacterVariant, Visual};
+use crate::visual::Visual;
 use input::{Controls, PLAY_TITLE};
 use metrics::{Measurements, Sample};
 use renderer::{
@@ -40,15 +40,8 @@ pub struct Options {
     pub replay: Option<Vec<Input>>,
     pub record: Option<PathBuf>,
     pub capture: Option<PathBuf>,
-    pub alternate_model: bool,
-}
-
-fn variant(alternate: bool) -> CharacterVariant {
-    if alternate {
-        CharacterVariant::Alternate
-    } else {
-        CharacterVariant::Primary
-    }
+    pub character: String,
+    pub catalog: PathBuf,
 }
 
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -77,7 +70,7 @@ fn draw(frame: &mut Frame<'_>, visual: &mut Visual, game: &Game) -> PipelineResu
 }
 
 fn capture(game: &Game, o: &Options, extent: [u32; 2], path: &Path) -> PipelineResult<()> {
-    let mut visual = Visual::new(game, variant(o.alternate_model))?;
+    let mut visual = Visual::new(game, &o.catalog, &o.character)?;
     let camera = visual.camera(game, extent)?;
     let mut renderer = Renderer::headless(o.config, camera, visual.assets())?;
     visual.prepare_headless(&mut renderer)?;
@@ -135,7 +128,7 @@ pub fn run(mut game: Game, o: Options) -> PipelineResult<Game> {
         )
         .into());
     }
-    let mut visual = Visual::new(&game, variant(o.alternate_model))?;
+    let mut visual = Visual::new(&game, &o.catalog, &o.character)?;
     let camera = visual.camera(&game, extent)?;
     let mut renderer = WindowRenderer::new(window.clone(), o.config, camera, visual.assets())?;
     visual.prepare_window(&mut renderer)?;
