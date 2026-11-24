@@ -204,7 +204,15 @@ float3 incoming(Table t, float3 o, float3 d, uint scenario, uint seed) {
     }
     return val + (trace_ray(t, o, d, 3.402823e38, hit) ? 0 : weight * sky_radiance(t,d,sky,yaw));
 }
-groupshared float3 sums[32][8];
+#ifdef BAKE_L2
+static const uint COEFFICIENTS = 9;
+#else
+static const uint COEFFICIENTS = 4;
+#endif
+// Two scenario slots are always initialized, including the last odd key.
+static const uint TERMS = 2 * COEFFICIENTS;
+static const uint RESPONSE_TEXELS = 2 + TERMS;
+groupshared float3 sums[32][TERMS];
 [numthreads(32, 1, 1)] void main(uint3 group
                                  : SV_GroupID, uint lane
                                  : SV_GroupIndex) {
@@ -219,7 +227,7 @@ groupshared float3 sums[32][8];
     uint count = clamp(number(fetch(t,1).y),1u,16u);
     uint first = min(number(rec.normal.w), count-1u);
     uint scenarios = min(count-first,2u);
-    [unroll] for (uint k = 0; k < 8; k++) sums[lane][k] = 0;
+    [unroll] for (uint k = 0; k < TERMS; k++) sums[lane][k] = 0;
     [loop] for (uint j = lane; j < samples; j += 32) {
         float u = (j + 0.5) / samples, v = reversebits(j) * 2.3283064365386963e-10;
         float z = 1 - 2 * u, r = sqrt(saturate(1 - z * z));
@@ -228,16 +236,24 @@ groupshared float3 sums[32][8];
         float3 d = volume ? float3(r * c, z, r * s) : hemisphere(rec.normal.xyz, u, v);
         [loop] for (uint side = 0; side < scenarios; side++) {
             float3 l = incoming(t, origin, d, first+side, j) * (PI / samples);
-            sums[lane][4 * side] += l;
-            [unroll] for (uint axis = 0; axis < 3; axis++) sums[lane][4 * side + axis + 1] +=
+            uint base = COEFFICIENTS * side;
+            sums[lane][base] += l;
+            [unroll] for (uint axis = 0; axis < 3; axis++) sums[lane][base + axis + 1] +=
                 l * (2 * d[axis]);
+#ifdef BAKE_L2
+            sums[lane][base + 4] += l * (3.75 * d.x * d.y);
+            sums[lane][base + 5] += l * (3.75 * d.y * d.z);
+            sums[lane][base + 6] += l * (3.75 * d.x * d.z);
+            sums[lane][base + 7] += l * (0.9375 * (d.x * d.x - d.y * d.y));
+            sums[lane][base + 8] += l * (0.3125 * (3 * d.z * d.z - 1));
+#endif
         }
     }
     GroupMemoryBarrierWithGroupSync();
-    if (lane < 8) {
+    if (lane < TERMS) {
         float3 total = 0;
         [unroll] for (uint l = 0; l < 32; l++) total += sums[l][lane];
-        result[10 * job + 2 + lane] = float4(total, 0);
+        result[RESPONSE_TEXELS * job + 2 + lane] = float4(total, 0);
     }
     if (lane < 2) {
         float3 distances = rec.p.w;
@@ -250,6 +266,6 @@ groupshared float3 sums[32][8];
                     distances[axis] = hit.dist;
             }
         }
-        result[10 * job + lane] = float4(distances, 0);
+        result[RESPONSE_TEXELS * job + lane] = float4(distances, 0);
     }
 }
