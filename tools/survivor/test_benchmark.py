@@ -12,15 +12,23 @@ class ReportTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / "frames.csv"
 
-    def write(self, active=500, graph="1.25", frames=(121, 122, 123)):
+    def write(self, active=500, graph="1.25", frames=(121, 122, 123), pulse=1):
         fields = ("frame", *benchmark.CPU, *benchmark.COUNTS, *benchmark.GPU,
                   *benchmark.NATIVE_CPU, "tick")
         with self.path.open("w", newline="", encoding="utf-8") as stream:
             writer = csv.writer(stream)
             writer.writerow(fields)
             for index, frame in enumerate(frames):
-                writer.writerow([frame, 8 + index, .2, .4, active, 120, 120, 32, 128,
+                writer.writerow([frame, 8 + index, .2, .4, active, 120, 120, 32, 128, pulse, 5, 2, 1,
                                  graph, ".5" if graph else "", *([graph] * 4), 121 + index])
+
+    def test_overlap_requires_visible_attack_activity(self):
+        self.write()
+        report = benchmark.summarize(self.path, 3, True, "overlap")
+        self.assertEqual(report["shot_and_pulse_frames"], 3)
+        self.write(pulse=0)
+        with self.assertRaisesRegex(ValueError, "overlapping attacks"):
+            benchmark.summarize(self.path, 3, True, "overlap")
 
     def test_measured_segment_and_gpu_intervals(self):
         self.write()
