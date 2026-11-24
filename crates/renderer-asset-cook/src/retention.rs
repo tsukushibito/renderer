@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 
 const FORMAT: &[u8] = b"renderer-asset-store 1\n";
 const LOCK: &str = "transaction.lock";
+// Bound the number of metadata deletions paid by one foreground request while
+// draining history accumulated before cleanup, or after many processes exited.
+const FOREGROUND_PRUNE_LIMIT: usize = 8;
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(ErrorKind::InvalidData, message.into())
@@ -115,9 +118,7 @@ impl StoreGuard {
             root,
             _transaction: transaction,
         };
-        // Inspect every record that could protect data before permitting writes.
-        guard.registrations()?;
-        guard.lease_files()?;
+        guard.prune_metadata(FOREGROUND_PRUNE_LIMIT)?;
         Ok(guard)
     }
 
@@ -385,21 +386,39 @@ impl StoreGuard {
             fs::remove_file(path)?;
             bytes += size;
         }
-        for (record, pin) in self.registrations()? {
-            if pin.is_none() {
-                fs::remove_file(
-                    self.root
-                        .join("registrations")
-                        .join(record.id().to_string()),
-                )?;
-            }
+        self.prune_metadata(usize::MAX)?;
+        Ok(bytes)
+    }
+
+    /// A missing pin and an unlocked lease represent no holder. Validate both
+    /// registries completely before the first unlink, so an unknown record
+    /// prevents all changes. The transaction excludes new lease acquisitions.
+    /// No catalog or object is swept until an explicit GC.
+    fn prune_metadata(&self, limit: usize) -> io::Result<()> {
+        let registrations = self.registrations()?;
+        let leases = self.lease_files()?;
+        for (record, _) in registrations
+            .into_iter()
+            .filter(|(_, pin)| pin.is_none())
+            .take(limit)
+        {
+            fs::remove_file(
+                self.root
+                    .join("registrations")
+                    .join(record.id().to_string()),
+            )?;
         }
-        for (_, path) in self.lease_files()? {
+        let mut removed = 0;
+        for (_, path) in leases {
+            if removed == limit {
+                break;
+            }
             if exclusive(&gate(&path)?)? {
                 fs::remove_file(path)?;
+                removed += 1;
             }
         }
-        Ok(bytes)
+        Ok(())
     }
 
     // Every writer creating a scratch tree or staging payload holds the build
@@ -610,6 +629,58 @@ mod tests {
         fs::remove_dir_all(&git_dir)?;
         assert_eq!(store.gc()?, still_live);
         assert!(fs::read_dir(root.join("registrations"))?.next().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_transactions_retire_history_but_preserve_live_readers_and_payloads()
+    -> io::Result<()> {
+        let tmp = Sandbox::new()?;
+        let root = tmp.0.join("store");
+        let namespace = Digest::of(b"equipment");
+        let store = StoreGuard::lock(&root, namespace)?;
+        let resident_tree = tmp.git_dir("resident")?;
+        let (resident, _) = publish(&root, b"resident")?;
+        store.select(&resident_tree, resident)?;
+        let _reader = store.lease(resident)?;
+        drop(store);
+        for n in 0..20_u8 {
+            let store = StoreGuard::lock(&root, namespace)?;
+            assert_eq!(store.registrations()?.len(), 1);
+            assert_eq!(store.lease_files()?.len(), 1);
+            let tree = tmp.git_dir(&format!("abandoned-{n}"))?;
+            let (generation, _) = publish(&root, &[n])?;
+            store.select(&tree, generation)?;
+            drop(store.lease(generation)?);
+            drop(store);
+            fs::remove_dir_all(tree)?;
+        }
+        let store = StoreGuard::lock(&root, namespace)?;
+        assert_eq!(store.selected(&resident_tree)?, Some(resident));
+        assert_eq!(fs::read_dir(root.join("catalogs"))?.count(), 21);
+        assert_eq!(store.lease_files()?.len(), 1);
+        assert_eq!(store.registrations()?.len(), 1);
+        assert!(store.gc()? > 0);
+        assert_eq!(fs::read_dir(root.join("catalogs"))?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_retention_record_prevents_cleaning_known_abandoned_metadata() -> io::Result<()> {
+        let tmp = Sandbox::new()?;
+        let root = tmp.0.join("store");
+        let namespace = Digest::of(b"equipment");
+        let store = StoreGuard::lock(&root, namespace)?;
+        let tree = tmp.git_dir("abandoned")?;
+        let (id, _) = publish(&root, b"unused")?;
+        store.select(&tree, id)?;
+        drop(store.lease(id)?);
+        drop(store);
+        fs::remove_dir_all(tree)?;
+        fs::write(root.join("leases").join("unknown"), b"unknown")?;
+        assert!(StoreGuard::lock(&root, namespace).is_err());
+        assert_eq!(fs::read_dir(root.join("registrations"))?.count(), 1);
+        assert!(root.join("leases").join(id.to_string()).is_file());
         Ok(())
     }
 
