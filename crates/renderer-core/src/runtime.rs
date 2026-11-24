@@ -91,6 +91,21 @@ enum RuntimeInner {
     )
 )]
 impl Runtime {
+    /// Prepare immutable samplers at an asset or pipeline change boundary. Identical
+    /// descriptors share one device registration until device teardown. Subsequent
+    /// Graphs only select prepared descriptors, including while older work is pending.
+    pub fn prepare_samplers(
+        &mut self,
+        samplers: &[crate::program::SamplerDescriptor],
+    ) -> Result<(), ExecutionError> {
+        match self.inner {
+            #[cfg(feature = "vulkan")]
+            RuntimeInner::Vulkan(ref mut runtime) => Ok(runtime.prepare_samplers(samplers)?),
+            #[cfg(all(feature = "d3d12", windows))]
+            RuntimeInner::D3D12(ref mut runtime) => Ok(runtime.prepare_samplers(samplers)?),
+        }
+    }
+
     /// Current logical capacities. Explicit fitted preparation can raise the
     /// recording limits while preserving the configured queue concurrency.
     pub fn limits(&self) -> RuntimeLimits {
