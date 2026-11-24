@@ -828,6 +828,8 @@ cargo test --locked --workspace --no-default-features --features vulkan
 
 [CI](../../.github/workflows/ci.yml)はWindows／LinuxとCPU／Vulkan featureを確認し、
 別jobで[cargo-deny](tooling.md#cargo-deny)の依存検査を実行します。
+ワークスペースのdoctestはLinuxのCPU構成（Debug、既定feature無効）で1回実行します。現在の3件は、公開APIから `FrameGraph` の非公開フィールドを書き換えるコードがコンパイル時に拒否されることを確認します。
+`docs/guides/` 直下のMarkdownだけを変更したpush・PRでは、HTMLの生成、リンク・画像の検査、Mermaidの再ビルドとChromiumでの描画検証を実行します。ほかのファイルが差分に含まれる場合や比較元を取得できない場合は、Rustとasset-toolsの検証も実行します。
 Windowsではbackendを選ばない`presentation`単独と、`vulkan,presentation`／`d3d12,presentation`／二API表示でも、全targetをClippyで型検査し、CPU試験を実行します。
 LinuxのVulkanとWindowsの二API表示では、BistroとPBRをパッケージ単独でも確認します。Cargoが有効にする依存featureは、ワークスペース全体を対象にしたときと異なるためです。
 Windowsでは、VulkanまたはD3D12を有効にした全6構成でrelease試験を通常試験と並列に実行します。Vulkan単独とVulkan＋D3D12ではTracy有効時の試験も独立して実行し、Vulkan＋D3D12ではその出荷構成と開発構成を並列に検証します。Rust検証ジョブはバックエンドと試験の組み合わせごとにCargo依存のキャッシュを再利用します。
