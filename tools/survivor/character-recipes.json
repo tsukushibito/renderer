@@ -1,0 +1,34 @@
+{
+  "primary": {
+    "id": "00000000000000000000000000000001",
+    "model": "Superhero_Male_FullBody.fbx",
+    "animation": "UAL1_Standard.fbx",
+    "albedo": "T_Superhero_Male_Ligh.png",
+    "clips": {
+      "walk": {
+        "action": "Walk_Loop",
+        "looping": true
+      },
+      "jog": {
+        "action": "Jog_Fwd_Loop",
+        "looping": true
+      }
+    }
+  },
+  "alternate": {
+    "id": "00000000000000000000000000000002",
+    "model": "Superhero_Female_FullBody.fbx",
+    "animation": "UAL1_Standard.fbx",
+    "albedo": "T_Superhero_Female_Dark_BaseColor.png",
+    "clips": {
+      "walk": {
+        "action": "Walk_Loop",
+        "looping": true
+      },
+      "jog": {
+        "action": "Jog_Fwd_Loop",
+        "looping": true
+      }
+    }
+  }
+}
