@@ -27,8 +27,13 @@ fn prepared_recipes_fit_their_declaration_budget_in_a_shared_graph() {
         0,
     )
     .unwrap();
+    assert!(preparation.working_set().samplers.is_empty());
     let output =
         PreparedOutput::prepare(&mut preparation, [4, 3], SdrOutput::display(true)).unwrap();
+    let samplers = preparation.working_set().samplers;
+    assert_eq!(samplers.len(), 2);
+    assert!(samplers.contains(&SamplerDescriptor::NearestClamp));
+    assert!(samplers.contains(&SamplerDescriptor::LinearClamp));
     preparation
         .add_graph_requirements(GraphRequirements {
             passes: 1,
