@@ -13,6 +13,8 @@ pub struct Arena {
     #[serde(default = "crate::authoring::default_subjects")]
     pub subjects: Vec<crate::authoring::SubjectType>,
     #[serde(skip)]
+    pub(crate) view: Option<crate::authoring::LabView>,
+    #[serde(skip)]
     pub(crate) authored_scene: Option<std::sync::Arc<sashiko::scene::Scene>>,
 }
 
@@ -46,6 +48,16 @@ impl Arena {
         Ok(a)
     }
 
+    /// Prepare camera and lighting once when opening a view. Legacy layouts
+    /// derive the authored lighting rig from their own floor dimensions.
+    pub fn prepare_view(&self) -> Result<std::borrow::Cow<'_, crate::authoring::LabView>, String> {
+        match &self.view {
+            Some(view) => Ok(std::borrow::Cow::Borrowed(view)),
+            None => Ok(std::borrow::Cow::Owned(crate::authoring::LabView::legacy(
+                self.half_extent,
+            )?)),
+        }
+    }
     pub fn floor(&self) -> Floor<'_> {
         Floor {
             half_extent: self.half_extent,

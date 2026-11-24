@@ -1,8 +1,109 @@
 //! Orthographic framing and extraction of objects positioned on the XZ plane.
+use crate::scene::Registry;
+pub use renderer::pbr::PointLight;
 use renderer::{
     pbr::{Projection, Transform, ViewInput},
     pipeline::{CameraView, PipelineResult, RenderObject, ViewId},
 };
+use serde::{Deserialize, Serialize};
+
+/// Scene components shared by game rendering, the inspector and offline validation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PointLamp {
+    pub range: f32,
+    pub tint: [f32; 3],
+    pub candela: f32,
+}
+impl PointLamp {
+    pub fn at(self, position: [f32; 3]) -> Result<PointLight, String> {
+        PointLight::from_candela(position, self.range, self.tint, self.candela)
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrackingCamera {
+    pub height: f32,
+    pub distance: f32,
+    pub pitch_degrees: f32,
+    pub depth_range: [f32; 2],
+    /// Fraction of target movement relative to the camera's placed anchor.
+    pub follow: f32,
+    /// Maximum displacement of the target from the frame center, in half-extents.
+    pub screen_margin: f32,
+}
+impl TrackingCamera {
+    fn rig(self) -> GroundCamera {
+        GroundCamera {
+            height: self.height,
+            distance: self.distance,
+            pitch_radians: self.pitch_degrees.to_radians(),
+            depth_range: self.depth_range,
+        }
+    }
+    fn validate(&self) -> Result<(), String> {
+        if !(0.0..=1.0).contains(&self.follow) || !(0.0..=1.0).contains(&self.screen_margin) {
+            return Err("follow and screen_margin must be in [0,1]".into());
+        }
+        self.rig()
+            .view(ViewId(0), [0.; 2], [1, 1])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn follow_view(
+        self,
+        id: ViewId,
+        anchor: [f32; 2],
+        target: [f32; 2],
+        bounds: [f32; 2],
+        extent: [u32; 2],
+    ) -> PipelineResult<CameraView> {
+        if extent.contains(&0)
+            || !target.into_iter().chain(anchor).all(f32::is_finite)
+            || !bounds.into_iter().all(|v| v >= 0. && v.is_finite())
+        {
+            return Err("camera needs a nonempty viewport and finite ground bounds".into());
+        }
+        let rig = self.rig();
+        let half = self.height * 0.5;
+        let limits = [
+            half * extent[0] as f32 / extent[1] as f32,
+            half / rig.pitch_radians.sin(),
+        ];
+        let mut focus = anchor;
+        for i in 0..2 {
+            let margin = limits[i] * self.screen_margin;
+            if !margin.is_finite() || margin < 0. || !self.follow.is_finite() {
+                return Err("invalid ground camera framing".into());
+            }
+            focus[i] = (anchor[i] + (target[i] - anchor[i]) * self.follow)
+                .clamp(target[i] - margin, target[i] + margin)
+                .clamp(-bounds[i], bounds[i]);
+        }
+        rig.view(id, focus, extent)
+    }
+}
+
+pub fn register_components<C: 'static>(registry: &mut Registry<C>) -> Result<(), String> {
+    registry.register::<PointLamp>("PointLight", &["range", "tint", "candela"], |lamp| {
+        lamp.at([0.; 3]).map(|_| ())
+    })?;
+    registry.register(
+        "GroundCamera",
+        &[
+            "height",
+            "distance",
+            "pitch_degrees",
+            "depth_range",
+            "follow",
+            "screen_margin",
+        ],
+        TrackingCamera::validate,
+    )
+}
 
 /// Camera looks toward negative Z from above the ground. Height and distance are metres.
 #[derive(Clone, Copy, Debug)]

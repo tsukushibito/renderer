@@ -1,6 +1,7 @@
 //! Research hall components registered with the shared scene authoring API.
 use crate::{Arena, Obstacle};
 use sashiko::scene::{EntityId, Registry, Scene, World};
+use sashiko::view::{PointLamp, PointLight, TrackingCamera};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -114,6 +115,7 @@ impl Marker {
 
 pub fn registry() -> Registry<RuleContext> {
     let mut types = Registry::default();
+    sashiko::view::register_components(&mut types).expect("standard view types");
     for name in ["Room", "Bench"] {
         types
             .register(name, &["half_extent"], Extent::validate)
@@ -135,6 +137,47 @@ pub fn registry() -> Registry<RuleContext> {
     types
 }
 
+#[derive(Clone, Debug)]
+pub struct LabView {
+    pub camera: TrackingCamera,
+    pub anchor: [f32; 2],
+    pub point_lights: Vec<PointLight>,
+}
+impl LabView {
+    fn read(world: &World<RuleContext>) -> Result<Self, String> {
+        let mut camera = None;
+        let mut point_lights = Vec::new();
+        for e in world.entities() {
+            if let Some(lamp) = e.component::<PointLamp>() {
+                point_lights.push(lamp.at(e.world_translation)?);
+            }
+            if let Some(rig) = e.component::<TrackingCamera>() {
+                let [x, _, z] = e.world_translation;
+                single(&mut camera, (*rig, [x, z]), "GroundCamera")?;
+            }
+        }
+        let (camera, anchor) = camera.ok_or("place one GroundCamera for the research hall")?;
+        Ok(Self {
+            camera,
+            anchor,
+            point_lights,
+        })
+    }
+    pub(crate) fn legacy(extent: [f32; 2]) -> Result<Self, String> {
+        // Older flat layouts and version-one scenes predate authored views.
+        // Instantiate today's bundled rig with the old room's dimensions.
+        let mut scene: Scene =
+            serde_json::from_str(include_str!("../../../assets/survivor/arena.json"))
+                .map_err(|e| e.to_string())?;
+        let room = scene
+            .placements
+            .iter_mut()
+            .find(|p| p.id == "room")
+            .ok_or("bundled scene has no room placement")?;
+        room.scale = [extent[0], 1., extent[1]];
+        Self::read(&scene.instantiate(&registry())?)
+    }
+}
 pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
     if data.get("schema_version").is_none() {
         return serde_json::from_value(data).map_err(|e| e.to_string());
@@ -142,6 +185,11 @@ pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
     let scene: Scene = serde_json::from_value(data).map_err(|e| e.to_string())?;
     let types = registry();
     let world = scene.instantiate(&types)?;
+    let authored_view = scene
+        .prefabs
+        .values()
+        .any(|p| matches!(p.kind.as_str(), "PointLight" | "GroundCamera"));
+    let view = authored_view.then(|| LabView::read(&world)).transpose()?;
     let mut extent = None;
     let mut spawn = None;
     let mut marker = None;
@@ -149,6 +197,9 @@ pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
     let mut subjects = Vec::new();
     for e in world.entities() {
         let [x, y, z] = e.world_translation;
+        if e.kind == "PointLight" {
+            continue;
+        }
         if y != 0. {
             return Err(format!(
                 "{}: research hall placements must be on the XZ plane",
@@ -175,6 +226,7 @@ pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
             Ok([edge_x[0].abs(), edge_z[2].abs()])
         };
         match e.kind.as_str() {
+            "GroundCamera" => {}
             "Room" => {
                 if pos != [0., 0.] {
                     return Err(format!(
@@ -205,6 +257,7 @@ pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
         marker: marker.ok_or("missing Marker")?,
         obstacles,
         subjects,
+        view,
         authored_scene: Some(std::sync::Arc::new(scene)),
     })
 }
@@ -248,6 +301,67 @@ mod tests {
     use super::*;
     use crate::{Game, Input, Scenario};
     use serde_json::json;
+
+    #[test]
+    fn inspector_light_override_reaches_prepared_render_inputs() {
+        use sashiko::authoring::{Edit, inspect};
+        let scene: Scene =
+            serde_json::from_str(include_str!("../../../assets/survivor/arena.json")).unwrap();
+        let inspect_edit = |edit| {
+            inspect(scene.clone(), &registry(), edit, |s| {
+                Arena::from_json(s).map(|_| ())
+            })
+        };
+        assert!(
+            inspect_edit(Edit::Set {
+                id: "lamp-nw".into(),
+                field: "candela".into(),
+                value: json!(-1)
+            })
+            .is_err()
+        );
+        let edited = inspect_edit(Edit::Set {
+            id: "lamp-nw".into(),
+            field: "candela".into(),
+            value: json!(0),
+        })
+        .unwrap();
+        let arena = Arena::from_value(edited["document"].clone()).unwrap();
+        let view = arena.prepare_view().unwrap();
+        assert_eq!(view.point_lights.len(), 4);
+        assert_eq!(
+            view.point_lights[0].position(),
+            [-0.55 * 18., 4.5, -0.52 * 14.]
+        );
+        assert_eq!(view.point_lights[0].rgb_candela(), [0.; 3]);
+        assert!(view.point_lights[1].rgb_candela()[0] > 0.);
+        let edited = inspect_edit(Edit::Set {
+            id: "camera".into(),
+            field: "height".into(),
+            value: json!(32),
+        })
+        .unwrap();
+        let arena = Arena::from_value(edited["document"].clone()).unwrap();
+        assert_eq!(arena.prepare_view().unwrap().camera.height, 32.);
+        let old: Arena = Arena::from_json(
+            r#"{"half_extent":[9,7],"player_spawn":[0,6],"marker":[0,3],"obstacles":[]}"#,
+        )
+        .unwrap();
+        let old_view = old.prepare_view().unwrap();
+        assert_eq!(old_view.camera.height, 22.);
+        assert_eq!(
+            old_view.point_lights[0].position(),
+            [-0.55 * 9., 4.5, -0.52 * 7.]
+        );
+        let default_arena = Arena::default();
+        let baseline = default_arena.prepare_view().unwrap();
+        assert_eq!(
+            baseline.point_lights[0].rgb_candela(),
+            PointLight::from_candela([0.; 3], 14., [0.69, 0.84, 1.], 72.)
+                .unwrap()
+                .rgb_candela()
+        );
+    }
 
     #[test]
     fn another_subject_uses_authored_movement_without_new_game_code() {

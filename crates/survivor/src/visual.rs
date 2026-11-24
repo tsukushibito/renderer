@@ -1,5 +1,5 @@
 //! Research hall, animated subjects and gameplay feedback shared by capture and presentation.
-use sashiko::view::{DrawList, GroundCamera, facing_transform as transform, on_screen};
+use sashiko::view::{DrawList, facing_transform as transform, on_screen};
 mod geometry;
 mod hud;
 mod instruments;
@@ -13,7 +13,7 @@ use renderer::{
     core::runtime::Runtime,
     material::{AlphaMode, MaterialHandle, Materials, PbrParams},
     mesh::{MeshCapacity, MeshHandle, Meshes},
-    pbr::{Bounds, LocalLight, PointLight, Sun},
+    pbr::{Bounds, LocalLight, Sun},
     pipeline::{CameraView, PipelineResult, RenderObject, SceneAssets, SceneInput},
 };
 use surfaces::Surfaces;
@@ -86,6 +86,8 @@ pub struct Visual {
     block: MeshHandle,
     ring: MeshHandle,
     disk: MeshHandle,
+    tracking: sashiko::view::TrackingCamera,
+    camera_anchor: [f32; 2],
     lights: Vec<LocalLight>,
     sun: Sun,
     bounds: Bounds,
@@ -181,19 +183,8 @@ impl Visual {
                 36.,
             )?,
         )];
-        for (x, z, tint, power) in [
-            (-0.55, -0.52, [0.69, 0.84, 1.], 72.),
-            (0.52, -0.45, [1., 0.72, 0.48], 67.),
-            (0.0, 0.18, [0.67, 0.90, 1.], 80.),
-            (-0.53, 0.65, [0.52, 0.79, 1.], 52.),
-        ] {
-            lights.push(LocalLight::Point(PointLight::from_candela(
-                [x * w, 4.5, z * d],
-                14.,
-                tint,
-                power,
-            )?));
-        }
+        let view = game.arena.prepare_view()?;
+        lights.extend(view.point_lights.iter().copied().map(LocalLight::Point));
         Ok(Self {
             meshes,
             materials,
@@ -207,6 +198,8 @@ impl Visual {
             ring,
             disk,
             lights,
+            tracking: view.camera,
+            camera_anchor: view.anchor,
             sun: Sun::from_lux([-0.44, 0.84, 0.32], [0.87, 0.94, 1.], 2.8)?,
             bounds: Bounds::new([-w - 4., -1., -d - 4.], [w + 4., 6., d + 4.])?,
             visible: 0,
@@ -251,27 +244,13 @@ impl Visual {
     }
 
     pub fn camera(&self, game: &Game, extent: [u32; 2]) -> PipelineResult<CameraView> {
-        let [w, d] = game.arena.half_extent;
-        // Keep the player in frame at the boundary while retaining the visual
-        // landmark of the service wall as long as the viewport permits.
-        let focus = game.player.map(|v| v * 0.70);
-        let hx = 11. * extent[0] as f32 / extent[1].max(1) as f32;
-        let hz = 11. / 54f32.to_radians().sin();
-        let focus = [
-            focus[0]
-                .clamp(game.player[0] - hx * 0.85, game.player[0] + hx * 0.85)
-                .clamp(-w, w),
-            focus[1]
-                .clamp(game.player[1] - hz * 0.85, game.player[1] + hz * 0.85)
-                .clamp(-d, d),
-        ];
-        GroundCamera {
-            height: 22.,
-            distance: 34.,
-            pitch_radians: 54f32.to_radians(),
-            depth_range: [0.5, 65.],
-        }
-        .view(renderer::pipeline::ViewId(1), focus, extent)
+        self.tracking.follow_view(
+            renderer::pipeline::ViewId(1),
+            self.camera_anchor,
+            game.player,
+            game.arena.half_extent,
+            extent,
+        )
     }
 
     fn instance(
