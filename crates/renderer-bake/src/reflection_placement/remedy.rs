@@ -22,6 +22,8 @@ struct Grid {
 struct Patch {
     area: f64,
     centroid: Point,
+    blocked: u8,
+    face: usize,
 }
 
 impl Grid {
@@ -77,7 +79,10 @@ impl Grid {
             let id = &mut self.cells.entry(cell).or_insert([EMPTY; 6])[face];
             if *id == EMPTY {
                 *id = self.patches.len() as u32;
-                self.patches.push(Patch::default());
+                self.patches.push(Patch {
+                    face,
+                    ..Patch::default()
+                });
             }
             let patch = &mut self.patches[*id as usize];
             patch.area += surface_area;
@@ -175,6 +180,7 @@ fn clip(vertices: &[Point], out: &mut Vec<Point>, axis: usize, plane: f64, sign:
 
 struct Candidate {
     probe: ReflectionProbeDesc,
+    blocked: u8,
     coverage: Vec<(u32, f64)>,
 }
 
@@ -183,6 +189,7 @@ fn candidate(
     grid: &Grid,
     cell: Cell,
     settings: ReflectionPlacementSettings,
+    occupied: bool,
 ) -> Result<Option<Candidate>, BakeError> {
     let position = grid.world(cell.map(|i| f64::from(i) + 0.5));
     if settings
@@ -201,20 +208,38 @@ fn candidate(
         max: position,
         blend_distance: settings.blend_distance,
     };
+    let mut blocked = 0u8;
     for axis in 0..3 {
         for sign in [-1., 1.] {
             let mut dir = [0.; 3];
             dir[axis] = sign;
-            let extent = scene
-                .trace(position, dir, reach)
-                .map_or(reach, |h| h.distance)
-                + pad;
+            let hit = scene.trace(position, dir, reach);
+            if occupied
+                && hit
+                    .as_ref()
+                    .is_some_and(|h| h.backface || h.distance < settings.spacing * 0.1)
+            {
+                return Ok(None);
+            }
+            if hit.is_some() {
+                blocked |= 1 << (axis * 2 + usize::from(sign > 0.));
+            }
+            let extent = hit.map_or(reach, |h| h.distance) + pad;
             if sign < 0. {
                 probe.min[axis] -= extent;
             } else {
                 probe.max[axis] += extent;
             }
         }
+    }
+    // Occupied voxels can still contain empty space inside a narrow passage.
+    // Only keep their centers where opposed surfaces bound a clear span.
+    let paired = blocked & (blocked >> 1) & 0b01_01_01;
+    if occupied && paired.count_ones() < 2 {
+        return Ok(None);
+    }
+    if occupied {
+        probe.blend_distance = pad;
     }
     probe
         .validate()
@@ -259,7 +284,64 @@ fn candidate(
             }
         }
     }
-    Ok((!coverage.is_empty()).then_some(Candidate { probe, coverage }))
+    Ok((!coverage.is_empty()).then_some(Candidate {
+        probe,
+        blocked,
+        coverage,
+    }))
+}
+
+// Trace the five outward/tangential axial directions once per patch. All
+// candidate comparisons reuse this signature and the existing box-fit rays.
+fn classify_patches(scene: &BakeScene, grid: &mut Grid, spacing: f32) {
+    let reach = spacing * RADIUS as f32;
+    for index in 0..grid.patches.len() {
+        let patch = &grid.patches[index];
+        let face = patch.face;
+        let mut origin = grid.world(patch.centroid);
+        origin[face / 2] += if face % 2 == 1 { 1. } else { -1. } * spacing * 0.02;
+        let mut blocked = 0;
+        for direction in 0..6 {
+            if direction == (face ^ 1) {
+                continue;
+            }
+            let mut ray = [0.; 3];
+            ray[direction / 2] = if direction % 2 == 1 { 1. } else { -1. };
+            if scene.trace(origin, ray, reach).is_some() {
+                blocked |= 1 << direction;
+            }
+        }
+        grid.patches[index].blocked = blocked;
+    }
+}
+
+fn append_candidates(
+    scene: &BakeScene,
+    grid: &Grid,
+    settings: ReflectionPlacementSettings,
+    cells: Vec<Cell>,
+    occupied: bool,
+    candidates: &mut Vec<Candidate>,
+) -> Result<(), BakeError> {
+    let mut edges: usize = candidates.iter().map(|c| c.coverage.len()).sum();
+    for cell in cells {
+        if let Some(c) = candidate(scene, grid, cell, settings, occupied)? {
+            edges += c.coverage.len();
+            if edges > 4_194_304 {
+                return Err(BakeError(
+                    "Remedy visibility budget exceeded; increase spacing or restrict bounds",
+                ));
+            }
+            candidates.push(c);
+        }
+    }
+    Ok(())
+}
+
+fn mark_covered(covered: &mut [f64], candidate: &Candidate) {
+    for &(id, score) in &candidate.coverage {
+        covered[id as usize] = covered[id as usize].max(score);
+    }
 }
 
 pub(super) fn place(
@@ -285,21 +367,12 @@ pub(super) fn place(
     neighbors.sort_unstable();
     neighbors.dedup();
     let mut candidates = Vec::new();
-    let mut edges = 0;
-    for cell in neighbors {
-        if let Some(c) = candidate(scene, &grid, cell, settings)? {
-            edges += c.coverage.len();
-            if edges > 4_194_304 {
-                return Err(BakeError(
-                    "Remedy visibility budget exceeded; increase spacing or restrict bounds",
-                ));
-            }
-            candidates.push(c);
-        }
-    }
+    append_candidates(scene, &grid, settings, neighbors, false, &mut candidates)?;
     let mut covered = vec![0f64; grid.patches.len()];
-    let mut probes = Vec::new();
-    while probes.len() < settings.max_probes {
+    let mut selected: Vec<usize> = Vec::new();
+    let mut first_gain = 0.;
+    let mut refined = false;
+    while selected.len() < settings.max_probes {
         let mut best = None;
         let mut gain = 0.;
         for (index, c) in candidates.iter().enumerate() {
@@ -313,12 +386,35 @@ pub(super) fn place(
                 gain = extra;
             }
         }
-        let Some(index) = best else { break };
-        let c = &candidates[index];
-        for &(id, score) in &c.coverage {
-            covered[id as usize] = covered[id as usize].max(score);
+        if selected.is_empty() {
+            first_gain = gain;
         }
-        probes.push(c.probe);
+        // Broad, distinct regions retain priority while the next capture
+        // delivers at least half the first capture's area-weighted gain.
+        if !refined && (best.is_none() || gain < first_gain * 0.5) {
+            let mut occupied: Vec<_> = grid.cells.keys().copied().collect();
+            occupied.sort_unstable();
+            append_candidates(scene, &grid, settings, occupied, true, &mut candidates)?;
+            classify_patches(scene, &mut grid, settings.spacing);
+            for c in &mut candidates {
+                for (id, score) in &mut c.coverage {
+                    let patch = &grid.patches[*id as usize];
+                    let outward = 0b11_11_11 ^ (1 << (patch.face ^ 1));
+                    let mismatch = ((patch.blocked ^ c.blocked) & outward).count_ones();
+                    *score *= (1. + f64::from(patch.blocked.count_ones()))
+                        / (1. + f64::from(mismatch)).powi(2);
+                }
+            }
+            covered.fill(0.);
+            for &index in &selected {
+                mark_covered(&mut covered, &candidates[index]);
+            }
+            refined = true;
+            continue;
+        }
+        let Some(index) = best else { break };
+        mark_covered(&mut covered, &candidates[index]);
+        selected.push(index);
     }
-    Ok(probes)
+    Ok(selected.into_iter().map(|i| candidates[i].probe).collect())
 }
