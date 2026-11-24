@@ -6,6 +6,7 @@
 
 # 現在の設計
 
+- [3D 見下ろし型ローグライトサバイバーの制作計画](design/survivor-game.md)
 - [RenderGraph の詳細な契約](design/rendergraph.md)
 - [Vulkan の実行基盤](design/vulkan.md)
 - [実装方針と今後の計画](design/implementation-policy.md)
