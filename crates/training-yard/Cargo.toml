@@ -7,19 +7,22 @@ rust-version.workspace = true
 
 [features]
 default = ["graphics"]
-graphics = ["dep:renderer", "dep:renderer-asset"]
-presentation = ["graphics", "renderer/presentation", "dep:winit"]
+graphics = ["dep:renderer", "dep:renderer-asset", "dep:serde", "dep:serde_json"]
+presentation = ["graphics", "renderer/presentation", "dep:winit", "dep:windows-sys"]
 vulkan = ["renderer-core/vulkan", "renderer?/vulkan"]
 d3d12 = ["renderer-core/d3d12", "renderer?/d3d12"]
 development-validation = ["renderer-core/development-validation", "renderer?/development-validation"]
 memory-profiling = ["renderer-core/memory-profiling", "renderer?/memory-profiling", "renderer-asset?/metrics"]
 
 [dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 renderer-asset = { version = "0.1.0", path = "../renderer-asset", optional = true }
 renderer = { version = "0.1.0", path = "../renderer", optional = true }
 renderer-core = { version = "0.1.0", path = "../renderer-core" }
 
 [target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", optional = true, features = ["Win32_Storage_FileSystem", "Win32_System_Threading"] }
 winit = { version = "0.30", optional = true, default-features = false, features = ["rwh_06"] }
 
 [[test]]

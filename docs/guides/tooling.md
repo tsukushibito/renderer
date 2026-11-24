@@ -272,6 +272,16 @@ cargo run --locked -p renderer-asset-cook -- cook source dist --cache .tools/arm
 
 ゲームには `dist` の内容を配布する。`objects/` の成果物と `catalogs/` の索引を先に転送し、最後に `current` を切り替える。ゲームが使用中の世代と復帰先の世代が参照するファイルは保持する。変換キャッシュは制作側に置き、空の状態からも同じ原本と設定で再生成できる。cook の JSON 出力で、各段階の再実行理由、入力・レシピ・成果物のハッシュ、生成量と配布先への新規書込量を確認できる。
 
+訓練場を開発するときは、clone ごとに一度、次のコマンドでプロジェクト指定の cooker をインストールする。セットアップは大型の Git LFS 原本をポインタのまま checkout する設定も行う。同じ clone の linked worktree はこの設定と実行ファイルを共有する。
+
+```powershell
+cargo run --locked --release -p renderer-asset-cook -- setup
+```
+
+以降は任意の worktree で通常どおり訓練場を起動する。ゲームは起動した作業ディレクトリからプロジェクトを見つけ、cooker が選んだ世代を共有ストアから開く。Windows の `--mode interactive` は左の隊員に Narrow を装着し、その worktree の原本と Git インデックスの変更を監視する。`source/paint.png` を保存すると、背景で cook と装備の準備を行い、準備が終わったフレームで新しい色に切り替わる。競合や cook エラーの理由は端末に表示する。
+
+変換器を更新する場合は [プロジェクトの指定版](../../crates/renderer-asset-cook/tool-version) を更新して同じセットアップを実行する。一度インストールした版は、その版を指定する別の worktree でも使用できる。変換器を開発中の worktree だけでローカルビルドを試す場合は、`TRAINING_YARD_COOKER` に実行ファイルの絶対パスを指定する。
+
 訓練場の配布版では、実行ファイルの隣に `assets/equipment/dist` を配置する。別の配布物を試すときは環境変数 `TRAINING_YARD_ASSETS` に `current` のあるディレクトリを指定する。ホストは `Generation::open` で取得した世代を `Yard::set_asset_generation` に渡し、装着先と保存済み ID を指定して `request_equipment` を呼ぶ。更新先を確認するまで、旧世代の装備を描画できる。
 
 訓練場では、装着中・準備中を合わせて異なる装備版を 4 件、装備ごとに最大 4 部位まで扱う。同じ版を装着する隊員はこの枠を共有する。新しく必要なバッファ寸法、画像形式、サンプラーは装備の変更時に `AssetPreparation::replace_asset_reservations` で準備する。画像は mip 一式で最大 4 MiB とし、1 回の更新で 1 枚を投入する。メッシュと材質の転送は更新ごとに合計 128 バイト・1 投入を上限とする。これらは小さい装備で切替を再現する訓練場の設定である。
