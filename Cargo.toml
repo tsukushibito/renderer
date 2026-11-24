@@ -2,6 +2,7 @@
 members = [
     "crates/renderer-core",
     "crates/renderer-bake",
+    "crates/renderer-asset-cook",
     "crates/renderer-bistro",
     "crates/renderer-example-support",
     "crates/renderer",
