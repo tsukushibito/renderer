@@ -295,10 +295,13 @@ impl Equipment {
                     let State::Reading(worker) = std::mem::take(item) else {
                         unreachable!()
                     };
-                    let loaded = worker.join().map_err(|_| "equipment reader panicked")?;
+                    self.cursor = (index + 1) % KINDS.len();
                     if !wanted {
-                        continue;
+                        return Ok(());
                     }
+                    let loaded = worker
+                        .join()
+                        .unwrap_or_else(|_| Err(GraphError::custom("equipment reader panicked")));
                     let loaded = match loaded {
                         Ok(loaded) => loaded,
                         Err(error) => {
@@ -308,7 +311,7 @@ impl Equipment {
                                 }
                             }
                             self.error = Some(error);
-                            continue;
+                            return Ok(());
                         }
                     };
                     *item = State::Decoded(loaded);
