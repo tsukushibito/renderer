@@ -5,6 +5,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+/// A persistent lock file whose operating-system lock is released on process exit.
+pub(super) fn lock(path: &Path) -> io::Result<File> {
+    fs::create_dir_all(
+        path.parent()
+            .ok_or_else(|| io::Error::other("missing lock directory"))?,
+    )?;
+    let file = File::options()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    file.lock()?;
+    Ok(file)
+}
+
 /// All writes happen on the same filesystem as their destination. Closing before
 /// publication also permits replacement on Windows. A reader sees complete bytes.
 struct Staged(PathBuf);

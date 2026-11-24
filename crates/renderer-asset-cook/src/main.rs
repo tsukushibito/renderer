@@ -1,6 +1,10 @@
 //! Offline import, conversion, and atomic catalog publication for static equipment.
 mod cache;
+mod development;
 mod gltf;
+mod inputs;
+mod retention;
+mod setup;
 mod store;
 
 use cache::{Cache, Report};
@@ -154,11 +158,29 @@ fn cook_equipment(
 }
 
 fn cook(source: &Path, output: &Path, cache_dir: &Path) -> Result<Report, Error> {
+    let report = cook_catalog(source, output, cache_dir)?;
+    let document = format!("{}\n", report.generation);
+    let current = output.join("current");
+    if store::read_if_present(&current)?.as_deref() != Some(document.as_bytes()) {
+        store::publish(&current, document.as_bytes())?;
+    }
+    Ok(report)
+}
+
+fn cook_catalog(source: &Path, output: &Path, cache_dir: &Path) -> Result<Report, Error> {
+    cook_into(source, output, cache_dir, BTreeMap::new())
+}
+
+fn cook_into(
+    source: &Path,
+    output: &Path,
+    cache_dir: &Path,
+    mut assets: BTreeMap<AssetId, Equipment>,
+) -> Result<Report, Error> {
     let mut sources = BTreeMap::new();
     let source = source.canonicalize()?;
     discover(&source, &mut sources)?;
     let mut cache = Cache::new(cache_dir, output)?;
-    let mut assets = BTreeMap::new();
     for (id, path) in sources {
         let asset = cook_equipment(id, &path, &source, &mut cache)
             .map_err(|e| format!("cooking {id} ({}): {e}", path.display()))?;
@@ -171,22 +193,22 @@ fn cook(source: &Path, output: &Path, cache_dir: &Path) -> Result<Report, Error>
     if store::read_if_present(&path)?.as_deref() != Some(bytes.as_slice()) {
         store::publish(&path, &bytes)?;
     }
-    let document = format!("{generation}\n");
-    let current = output.join("current");
-    if store::read_if_present(&current)?.as_deref() != Some(document.as_bytes()) {
-        store::publish(&current, document.as_bytes())?;
-    }
     Ok(cache.report(generation))
 }
 
 fn run(args: &[OsString]) -> Result<(), Error> {
     match args {
+        [cmd] if cmd == "setup" => setup::install()?,
+        [cmd, source] if cmd == "dev" => development::serve(Path::new(source))?,
+        [cmd, source] if cmd == "gc" => development::gc(Path::new(source))?,
+        [cmd, source] if cmd == "release" => development::release(Path::new(source), false)?,
+        [cmd, source, opt] if cmd == "release" && opt == "--apply" => development::release(Path::new(source), true)?,
         [cmd, source] if cmd == "import" => println!("{}", import(Path::new(source))?),
         [cmd, source, output, opt, cache] if cmd == "cook" && opt == "--cache" => {
             let report = cook(Path::new(source), Path::new(output), Path::new(cache))?;
             println!("{}", serde_json::to_string(&report)?);
         }
-        _ => return Err("usage: renderer-asset-cook import <source.gltf> | cook <source-directory> <output-directory> --cache <cache-directory>".into()),
+        _ => return Err("usage: renderer-asset-cook setup | dev <source> | release <source> [--apply] | gc <source> | import <source.gltf> | cook <source> <output> --cache <cache>".into()),
     }
     Ok(())
 }

@@ -9,7 +9,7 @@ use std::path::Path;
 pub(super) struct Event {
     asset_id: AssetId,
     stage: &'static str,
-    action: &'static str,
+    pub action: &'static str,
     reason: &'static str,
     input_sha256: Digest,
     recipe_sha256: Digest,
@@ -36,13 +36,17 @@ pub(super) struct Cache<'a> {
 }
 
 impl<'a> Cache<'a> {
-    pub fn new(directory: &'a Path, output: &'a Path) -> Result<Self, Error> {
+    pub fn converter() -> Result<Digest, Error> {
         // The executable includes the selected Rust and native converter code and build flags.
         let mut digest = Sha256::new();
         let mut executable = std::fs::File::open(std::env::current_exe()?)?;
         std::io::copy(&mut executable, &mut digest)?;
+        Ok(format!("{:x}", digest.finalize()).parse()?)
+    }
+
+    pub fn new(directory: &'a Path, output: &'a Path) -> Result<Self, Error> {
         Ok(Self {
-            converter: format!("{:x}", digest.finalize()).parse()?,
+            converter: Self::converter()?,
             directory,
             output,
             recipes: BTreeMap::new(),
@@ -72,6 +76,12 @@ impl<'a> Cache<'a> {
             (*existing, "reused", "shared recipe")
         } else {
             let recipe_path = self.directory.join("recipes").join(key.to_string());
+            let _lock = store::lock(
+                &self
+                    .directory
+                    .join("recipe-locks")
+                    .join(&key.to_string()[..2]),
+            )?;
             let record = store::read_if_present(&recipe_path)?;
             let mut bytes = None;
             if let Some(reference) = record
@@ -93,13 +103,25 @@ impl<'a> Cache<'a> {
             } else {
                 let data = convert()?;
                 let reference = BlobRef::of(&data);
-                store::publish(
+                let object_path = self
+                    .directory
+                    .join("objects")
+                    .join(reference.hash.to_string());
+                // Distinct recipes can produce the same bytes.
+                let _object_lock = store::lock(
                     &self
                         .directory
-                        .join("objects")
-                        .join(reference.hash.to_string()),
-                    &data,
+                        .join("object-locks")
+                        .join(&reference.hash.to_string()[..2]),
                 )?;
+                if store::read_if_present(&object_path)?
+                    .is_none_or(|v| BlobRef::of(&v) != reference)
+                {
+                    store::publish(&object_path, &data)?;
+                    if self.directory == self.output {
+                        self.published_bytes += reference.size;
+                    }
+                }
                 store::publish(&recipe_path, &serde_json::to_vec(&reference)?)?;
                 let reason = if record.is_some() {
                     "invalid cache entry"
@@ -109,7 +131,9 @@ impl<'a> Cache<'a> {
                 (reference, data, "built", reason)
             };
             let path = self.output.join("objects").join(reference.hash.to_string());
-            if store::read_if_present(&path)?.is_none_or(|old| BlobRef::of(&old) != reference) {
+            if self.directory != self.output
+                && store::read_if_present(&path)?.is_none_or(|old| BlobRef::of(&old) != reference)
+            {
                 store::publish(&path, &data)?;
                 self.published_bytes += reference.size;
             }
