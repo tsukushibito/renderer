@@ -184,8 +184,8 @@ mod native {
                         count: 1,
                     },
                 ],
-                raster: &[],
                 compute: &[compute_program()],
+                ..WorkingSet::default()
             },
         )
         .unwrap();

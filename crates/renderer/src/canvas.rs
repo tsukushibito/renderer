@@ -117,7 +117,11 @@ fn program(format: ImageFormat, solid: bool) -> Result<ManagedRasterProgram, Gra
     Ok(unsafe { ManagedRasterProgram::from_trusted_descriptor(descriptor) })
 }
 
+/// Sampler for Canvas image draws. Reserve it when a host supports image layers.
+pub const IMAGE_SAMPLER: SamplerDescriptor = SamplerDescriptor::NearestClamp;
+
 /// Raster programs for images and solid rectangles, for custom host preparation.
+/// Reserve [`IMAGE_SAMPLER`] alongside the image program.
 pub fn programs(format: ImageFormat) -> Result<[ManagedRasterProgram; 2], GraphError> {
     Ok([program(format, false)?, program(format, true)?])
 }
@@ -170,7 +174,7 @@ pub fn record(
                         Binding {
                             group: 0,
                             binding: 1,
-                            resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+                            resource: BindingResource::Sampler(IMAGE_SAMPLER),
                         },
                     ],
                     RasterConstants::new(&words)?,
