@@ -18,6 +18,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 CPU = ("interval_ms", "update_ms", "draw_ms")
 GPU = ("graph_gpu_ms", "present_gpu_ms")
+NATIVE_CPU = ("graph_prepare_ms", "graph_record_ms", "graph_submit_ms", "graph_retire_ms")
 COUNTS = ("active", "visible", "drawn", "shots", "drops")
 
 
@@ -41,22 +42,28 @@ def summarize(csv_path, frames, gpu_profile, scenario):
     if any(b != a + 1 for a, b in zip(frame_ids, frame_ids[1:])):
         raise ValueError(f"{csv_path}: nonconsecutive frame numbers")
     counts = {key: [int(row[key]) for row in rows] for key in COUNTS}
+    workload = hashlib.sha256()
+    for row in rows:
+        # Include the entire measured activity trace, without hardware timings.
+        trace = [int(row[key]) for key in ("tick", *COUNTS)]
+        workload.update((",".join(map(str, trace)) + "\n").encode("ascii"))
     for active, visible, drawn in zip(counts["active"], counts["visible"], counts["drawn"]):
         if not 0 <= drawn <= active or not 0 <= visible <= active:
             raise ValueError(f"{csv_path}: invalid enemy counts")
     if scenario == "endgame" and any(value != 500 for value in counts["active"]):
         raise ValueError(f"{csv_path}: measured segment must sustain 500 live enemies")
     timings = {}
-    for key in (*CPU, *GPU):
-        if key in GPU and not gpu_profile:
+    for key in (*CPU, *GPU, *NATIVE_CPU):
+        if key not in CPU and not gpu_profile:
             if any(row[key].strip() for row in rows):
-                raise ValueError(f"{csv_path}: timestamp populated in an unprofiled run")
+                raise ValueError(f"{csv_path}: native timing populated in an unprofiled run")
             continue
         values = [float(row[key]) for row in rows]
         if any(not math.isfinite(value) or value < 0 for value in values):
             raise ValueError(f"{csv_path}: invalid {key}")
         timings[key] = distribution(values)
-    return {"timings": timings, "counts": {key: distribution(values) for key, values in counts.items()}}
+    return {"timings": timings, "counts": {key: distribution(values) for key, values in counts.items()},
+            "workload_sha256": workload.hexdigest()}
 
 
 class ProcessMemoryCounters(ctypes.Structure):
@@ -118,6 +125,7 @@ def run(args):
     summary_path = output / "summary.json"
     if summary_path.exists():
         raise FileExistsError(f"Choose a new output directory for this experiment: {output}")
+    workloads = {}
     for repetition in range(1, args.repeats + 1):
         for gpu_profile in (False, True):
             for scenario in ("early", "endgame"):
@@ -135,6 +143,9 @@ def run(args):
                 print(stem, flush=True)
                 peak = measured_process(command, output / f"{stem}.log")
                 stats = summarize(csv_path, args.frames, gpu_profile, scenario)
+                digest = stats["workload_sha256"]
+                if digest != workloads.setdefault(scenario, digest):
+                    raise ValueError(f"{stem}: game activity differs from the first {scenario} run")
                 summary["runs"].append({"scenario": scenario, "mode": mode, "repetition": repetition,
                                         "csv": csv_path.name, "command": command,
                                         "sampled_peak_process_working_set_bytes": peak, **stats})
