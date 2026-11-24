@@ -830,7 +830,7 @@ cargo test --locked --workspace --no-default-features --features vulkan
 別jobで[cargo-deny](tooling.md#cargo-deny)の依存検査を実行します。
 Windowsではbackendを選ばない`presentation`単独と、`vulkan,presentation`／`d3d12,presentation`／二API表示でも、全targetをClippyで型検査し、CPU試験を実行します。
 LinuxのVulkanとWindowsの二API表示では、BistroとPBRをパッケージ単独でも確認します。Cargoが有効にする依存featureは、ワークスペース全体を対象にしたときと異なるためです。
-WindowsのVulkan単独・Vulkan＋D3D12・二API表示では、release試験を通常試験と並列に実行します。前二者ではTracy有効時の試験も独立して実行し、Vulkan＋D3D12ではその出荷構成と開発構成を並列に検証します。Rust検証ジョブはバックエンドと試験の組み合わせごとにCargo依存のキャッシュを再利用します。
+Windowsでは、VulkanまたはD3D12を有効にした全6構成でrelease試験を通常試験と並列に実行します。Vulkan単独とVulkan＋D3D12ではTracy有効時の試験も独立して実行し、Vulkan＋D3D12ではその出荷構成と開発構成を並列に検証します。Rust検証ジョブはバックエンドと試験の組み合わせごとにCargo依存のキャッシュを再利用します。
 サンプルのCPU契約は代表構成で実行します。`windowed` の引数・再描画・終了処理、読戻しの容量と画素の判定は、Windowsの二API表示でDebugを1回実行します。実際の表示と最小化からの復帰は実機の `--smoke`・`--verify` で確認します。`frame_loop` の引数・容量・集計はLinux VulkanのReleaseで検証します。CPUのGraph構成例2本はLinuxでDebugのエントリーポイントを実行し、Releaseのテストで生成したパスを照合します。
 各backendは製品／開発検証＋dumpの両構成を確認し、Vulkanはrelease両構成と独立診断featureも確認します。
 これは表示の実GPU受入をCIで実行するという意味ではありません。

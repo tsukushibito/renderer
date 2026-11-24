@@ -146,9 +146,6 @@ jobs:
         backend: [cpu, vulkan]
         include:
           - os: windows-2022
-            backend: vulkan
-            split: true
-          - os: windows-2022
             backend: presentation
           - os: windows-2022
             backend: vulkan,presentation
@@ -156,12 +153,10 @@ jobs:
             backend: d3d12,presentation
           - os: windows-2022
             backend: vulkan,d3d12,presentation
-            split: true
           - os: windows-2022
             backend: d3d12
           - os: windows-2022
             backend: vulkan,d3d12
-            split: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -209,7 +204,7 @@ jobs:
         if: runner.os == 'Windows' && matrix.backend == 'vulkan,d3d12,presentation'
         run: cargo test --locked -p renderer-core --example windowed --no-default-features --features vulkan,d3d12,presentation
       - name: Check optimized backend execution with and without development validation
-        if: ${{ !matrix.split && (contains(matrix.backend, 'vulkan') || contains(matrix.backend, 'd3d12')) }}
+        if: runner.os == 'Linux' && matrix.backend == 'vulkan'
         shell: pwsh
         run: &release-tests |
           foreach ($features in @($env:BACKEND, "$($env:BACKEND),development-validation,graph-diagnostics")) {
@@ -278,7 +273,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Check optional Tracy instrumentation in shipping and development configurations
-        if: ${{ !matrix.split && (matrix.backend == 'vulkan' || matrix.backend == 'vulkan,d3d12') }}
+        if: runner.os == 'Linux' && matrix.backend == 'vulkan'
         shell: pwsh
         env:
           TRACY_CONFIGS: ${{ matrix.backend }},tracy ${{ matrix.backend }},tracy,development-validation,graph-diagnostics
@@ -300,6 +295,9 @@ jobs:
       matrix:
         include:
           - { backend: vulkan, suite: release }
+          - { backend: d3d12, suite: release }
+          - { backend: "vulkan,presentation", suite: release }
+          - { backend: "d3d12,presentation", suite: release }
           - { backend: "vulkan,d3d12", suite: release }
           - { backend: "vulkan,d3d12,presentation", suite: release }
           - backend: vulkan
