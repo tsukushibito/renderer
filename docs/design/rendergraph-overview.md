@@ -185,7 +185,8 @@ Buffer・ImageView・Samplerを所有します。callerがread/writeやshader st
 | `sampled_float_readback()` | 選択mip/layer全域を保守的にread | Storage先頭64 byte |
 
 全てworkgroupsは`[1,1,1]`です。descriptorの余分なbyteを初期化したことにはしません。
-Samplerは`NearestClamp`または`LinearRepeat`の不変設定を保持し、別の内容資源やread/write accessを作りません。
+SamplerはU/Vのwrap、拡大・縮小filter、mip選択を指定する不変値です。利用する設定をDeviceへ準備すると、
+複数のGraphから共有できます。画像のread/write accessは対応するImageViewから導きます。
 `Rgba8Srgb`の色成分は線形化してからfilterし、normal/ORM等のdata画像はUNORMのままsampleします。
 これらに加え、利用側のレビュー済みCompute descriptorを明示したunsafe境界で取り込めます。
 型付きstorage画像の全域writeは対象extentとdispatchの契約に結び付け、両backendのowned命令へ接続します。
