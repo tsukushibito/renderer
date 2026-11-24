@@ -1,10 +1,13 @@
 //! Offline allocation and rasterization of cooked lightmap UVs. A placement owns
 //! its rectangle(s), even when several placements use identical geometry and UVs.
 use crate::{
-    BakeBackend, BakeError, BakeScene, LightingScenarios, SurfaceSample, Vec3, cross, dot, finite,
-    sub, unit,
+    BakeError, BakeScene, SurfaceBake, SurfaceSample, Vec3, cross, dot, finite, sub, unit,
 };
-use std::{collections::HashSet, error::Error};
+use renderer::pbr::SurfacePageRecord;
+use std::{
+    collections::{BTreeMap, HashSet},
+    error::Error,
+};
 
 /// Measured change-boundary costs for a single daylight bake.
 #[derive(Default)]
@@ -106,6 +109,62 @@ pub struct SurfaceLayout<'a> {
     receivers: &'a [StaticReceiver],
     regions: Vec<(usize, SurfaceRegion)>,
     pages: Vec<[u32; 2]>,
+    gpu_pages: Vec<GpuPageLayout>,
+}
+
+struct PageSamples<const N: usize> {
+    lookup: Vec<usize>,
+    values: Vec<[[f32; 3]; N]>,
+}
+
+struct GpuPageLayout {
+    front: usize,
+    back: usize,
+    charts: Vec<(SurfaceRegion, SurfaceRegion)>,
+}
+
+impl GpuPageLayout {
+    /// GPU table addresses are f32 texels containing exact integer words.
+    /// RGB irradiance follows the table, with one RGBA texel per lighting key.
+    fn begin_image<const N: usize>(
+        &self,
+        pages: &[[u32; 2]],
+    ) -> Result<([u32; 2], Vec<u8>), Box<dyn Error>> {
+        let header = 1 + self.charts.len() * 2;
+        if header > 1 << 24 {
+            return Err("lightmap chart table exceeds exact float range".into());
+        }
+        let [fw, fh] = pages[self.front];
+        let [bw, bh] = pages[self.back];
+        let back_offset = if self.front == self.back { 0 } else { fw * fh };
+        let pixels = if self.front == self.back {
+            fw * fh
+        } else {
+            back_offset + bw * bh
+        };
+        let texels = header + pixels as usize * N;
+        let width = texels.min((texels.isqrt() + 1).next_power_of_two().clamp(1, 16384));
+        let height = texels.div_ceil(width);
+        if height > 16384 {
+            return Err("lightmap exceeds the maximum cooked image dimensions".into());
+        }
+        let mut image = Vec::new();
+        image.try_reserve_exact(width * height * 16)?;
+        let mut write = |words: [u32; 4]| {
+            image.extend(words.into_iter().flat_map(|v| (v as f32).to_le_bytes()));
+        };
+        write([self.charts.len() as u32, N as u32, header as u32, 0]);
+        for (front, back) in &self.charts {
+            write([
+                front.origin[1] * fw + front.origin[0],
+                fw,
+                back_offset + back.origin[1] * bw + back.origin[0],
+                bw,
+            ]);
+            write([front.extent[0], front.extent[1], 0, 0]);
+        }
+        Ok(([width as u32, height as u32], image))
+    }
 }
 
 impl<'a> SurfaceLayout<'a> {
@@ -213,7 +272,32 @@ impl<'a> SurfaceLayout<'a> {
             pages[page][0] = pages[page][0].max(x);
             pages[page][1] = pages[page][1].max(y + h);
         }
+        // Both sides of each placement were emitted together. Dedicated back
+        // pages are published with their front in a single sampleable image.
+        let mut groups = BTreeMap::new();
+        for sides in regions.chunk_by(|a, b| a.0 == b.0) {
+            let front = sides[0].1;
+            let back = sides.last().expect("nonempty chart group").1;
+            groups
+                .entry((front.page, back.page))
+                .or_insert_with(Vec::new)
+                .push((front, back));
+        }
+        let gpu_pages = groups
+            .into_iter()
+            .map(|((front, back), mut charts)| {
+                charts.sort_unstable_by_key(|(f, _)| f.placement);
+                GpuPageLayout {
+                    front,
+                    back,
+                    charts,
+                }
+            })
+            .collect();
+        // Index regions by physical page so subset baking visits only selected geometry.
+        regions.sort_by_key(|(_, r)| r.page);
         let layout = Self {
+            gpu_pages,
             receivers,
             regions,
             pages,
@@ -243,222 +327,170 @@ impl<'a> SurfaceLayout<'a> {
         self.regions.iter().map(|&(_, region)| region)
     }
 
-    /// Write a versioned surface-lighting asset followed by its probe volume.
-    /// Returns the number of traced surface samples per page. Use a temporary
-    /// output and publish it after success when replacing an existing asset.
-    pub fn bake_to<const N: usize>(
-        &self,
-        scene: &BakeScene,
-        scenarios: impl LightingScenarios<N>,
-        settings: crate::ProbeSettings,
-        rays_per_texel: u32,
-        mut writer: impl std::io::Write,
-    ) -> Result<Vec<usize>, Box<dyn Error>> {
-        self.write_asset(
-            scene,
-            scenarios,
-            settings,
-            rays_per_texel,
-            &mut writer,
-            None,
-        )
+    /// Number of independently uploadable images. Dedicated front/back rectangles
+    /// share one image so shading a placement never requires a second page.
+    pub fn gpu_page_count(&self) -> usize {
+        self.gpu_pages.len()
     }
 
-    /// Measure a stratified daylight bake. The writer is scratch storage only.
+    /// Bake the selected GPU pages in request order, using the prepared
+    /// transport for every page. Unselected pages incur no raster or trace work.
+    pub fn bake_gpu_pages<const N: usize>(
+        &self,
+        bake: SurfaceBake<'_, N>,
+        selected: &[usize],
+        write: impl FnMut(usize, SurfacePageRecord, Vec<u8>) -> Result<(), Box<dyn Error>>,
+    ) -> Result<(), Box<dyn Error>> {
+        self.write_gpu_pages(bake, selected, None, write)
+    }
+
+    /// Measure the same raster, transport, packing and write path as a full bake.
+    /// The output is benchmark scratch; only the sampled receivers contain valid light.
     pub fn benchmark_to(
         &self,
         scene: &BakeScene,
         light: crate::Lighting,
         settings: crate::ProbeSettings,
-        scratch: impl std::io::Write,
+        mut scratch: impl std::io::Write,
         seed: u64,
     ) -> Result<BakeBenchmark, Box<dyn Error>> {
-        let mut pages = BakeBenchmark::default();
-        self.write_asset(
-            scene,
-            [light],
-            settings,
-            settings.rays_per_probe,
-            scratch,
-            Some((seed, &mut pages)),
+        let start = std::time::Instant::now();
+        let mut bake =
+            scene.prepare_surface_bake([light], settings.backend, settings.rays_per_probe)?;
+        bake.transport.enable_timing()?;
+        let mut benchmark = BakeBenchmark {
+            transport_setup: start.elapsed(),
+            ..Default::default()
+        };
+        let selected: Vec<_> = (0..self.gpu_page_count()).collect();
+        self.write_gpu_pages(
+            bake,
+            &selected,
+            Some((seed, &mut benchmark)),
+            |_, _, image| Ok(scratch.write_all(&image)?),
         )?;
-        Ok(pages)
+        let start = std::time::Instant::now();
+        scene.bake_probes([light], settings)?.write(scratch)?;
+        benchmark.probes = start.elapsed();
+        Ok(benchmark)
     }
 
-    fn write_asset<const N: usize>(
+    fn write_gpu_pages<const N: usize>(
         &self,
-        scene: &BakeScene,
-        scenarios: impl LightingScenarios<N>,
-        settings: crate::ProbeSettings,
-        rays_per_texel: u32,
-        mut writer: impl std::io::Write,
+        mut bake: SurfaceBake<'_, N>,
+        selected: &[usize],
         mut benchmark: Option<(u64, &mut BakeBenchmark)>,
-    ) -> Result<Vec<usize>, Box<dyn Error>> {
-        let lights = scene.lighting(scenarios)?;
-        writer.write_all(renderer::pbr::SurfaceLightmaps::MAGIC)?;
-        for n in [N, self.pages().len(), self.regions().count()] {
-            writer.write_all(&u32::try_from(n)?.to_le_bytes())?;
-        }
-        for extent in self.pages() {
-            for v in extent {
-                writer.write_all(&v.to_le_bytes())?;
-            }
-        }
-        for r in self.regions() {
-            for v in [
-                r.placement,
-                u32::try_from(r.page)?,
-                u32::from(r.back),
-                r.origin[0],
-                r.origin[1],
-                r.extent[0],
-                r.extent[1],
-            ] {
-                writer.write_all(&v.to_le_bytes())?;
-            }
-        }
-        let mut counts = Vec::with_capacity(self.pages.len());
-        let timed = benchmark.is_some();
-        let mut write_pages = std::time::Duration::ZERO;
-        self.bake_pages(
-            scene,
-            lights,
-            settings.backend,
-            rays_per_texel,
-            benchmark.as_mut().map(|(seed, b)| (*seed, &mut **b)),
-            |_, data, samples| {
-                let start = timed.then(std::time::Instant::now);
-                for pixel in data {
-                    for color in pixel {
-                        for v in color {
-                            writer.write_all(&v.to_le_bytes())?;
-                        }
-                    }
-                }
-                if let Some(start) = start {
-                    write_pages += start.elapsed();
-                }
-                counts.push(samples);
-                Ok(())
-            },
-        )?;
-        let start = timed.then(std::time::Instant::now);
-        scene.bake_probes(lights, settings)?.write(writer)?;
-        if let (Some(start), Some((_, b))) = (start, benchmark) {
-            b.write_pages = write_pages;
-            b.probes = start.elapsed();
-        }
-
-        Ok(counts)
-    }
-    /// Invoke the sink once per completed page. Padding copies its closest
-    /// covered receiver, so no transport rays are spent on chart gutters.
-    pub fn bake<const N: usize>(
-        &self,
-        scene: &BakeScene,
-        scenarios: impl LightingScenarios<N>,
-        backend: BakeBackend,
-        rays: u32,
-        write_page: impl FnMut(usize, &[[[f32; 3]; N]], usize) -> Result<(), Box<dyn Error>>,
+        mut write: impl FnMut(usize, SurfacePageRecord, Vec<u8>) -> Result<(), Box<dyn Error>>,
     ) -> Result<(), Box<dyn Error>> {
-        self.bake_pages(scene, scenarios, backend, rays, None, write_page)
-    }
-
-    fn bake_pages<const N: usize>(
-        &self,
-        scene: &BakeScene,
-        scenarios: impl LightingScenarios<N>,
-        backend: BakeBackend,
-        rays: u32,
-        mut benchmark: Option<(u64, &mut BakeBenchmark)>,
-        mut write_page: impl FnMut(usize, &[[[f32; 3]; N]], usize) -> Result<(), Box<dyn Error>>,
-    ) -> Result<(), Box<dyn Error>> {
-        let lights = scene.lighting(scenarios)?;
-        if rays == 0
-            || self
-                .receivers
-                .iter()
-                .any(|r| r.material >= scene.materials.len())
-        {
-            return Err("invalid lightmap material or ray count".into());
-        }
-        if self.pages.is_empty() {
-            return Ok(());
-        }
-        let setup = benchmark.as_ref().map(|_| std::time::Instant::now());
-        let mut transport = crate::lightmaps::SurfaceTransport::new(scene, lights, backend, rays)?;
-        if let (Some(t), Some((_, b))) = (setup, benchmark.as_mut()) {
-            transport.enable_timing()?;
-            b.transport_setup = t.elapsed();
-        }
-        for (page, &[width, height]) in self.pages.iter().enumerate() {
-            let raster = benchmark.as_ref().map(|_| std::time::Instant::now());
-            let mut lookup = vec![usize::MAX; (width * height) as usize];
-            let mut jobs = Vec::new();
-            for &(i, r) in self.regions.iter().filter(|(_, r)| r.page == page) {
-                rasterize(scene, &self.receivers[i], r, width, &mut lookup, &mut jobs)?;
+        let mut seen = HashSet::with_capacity(selected.len());
+        for &index in selected {
+            if index >= self.gpu_page_count() || !seen.insert(index) {
+                return Err(format!("invalid or repeated lightmap GPU page {index}").into());
             }
-            let mut values = Vec::with_capacity(jobs.len());
-            // Keep SH readback scratch bounded independently of the page size.
-            if let Some((seed, pages)) = &mut benchmark {
-                let mut state = *seed ^ (page as u64 + 1).wrapping_mul(0x9e3779b97f4a7c15);
-                let raster = raster.expect("benchmark timer").elapsed();
-                let mut ranges = Vec::new();
-                let mut selected = Vec::new();
-                let strata = jobs.len().div_ceil(64 * 512);
-                for i in 0..strata {
-                    let lo = i * jobs.len() / strata;
-                    let hi = (i + 1) * jobs.len() / strata;
-                    let count = (hi - lo).min(512);
-                    state = state
-                        .wrapping_mul(6364136223846793005)
-                        .wrapping_add(1442695040888963407);
-                    let begin = lo + ((state >> 32) as usize) % (hi - lo - count + 1);
-                    ranges.push(begin..begin + count);
-                    selected.extend_from_slice(&jobs[begin..begin + count]);
-                }
-                // Match the full bake's native dispatch occupancy, even for disjoint strata.
-                let mut sampled = Vec::with_capacity(selected.len());
-                let start = std::time::Instant::now();
-                for chunk in selected.chunks(8192) {
-                    transport.trace(chunk, &mut sampled)?;
-                }
-                let elapsed = start.elapsed();
-                let native = transport.take_timing();
-                values.resize(jobs.len(), [[0.; 3]; N]);
-                let mut offset = 0;
-                for r in ranges {
-                    let end = offset + r.len();
-                    values[r].copy_from_slice(&sampled[offset..end]);
-                    offset = end;
-                }
-                pages.pages.push(BakePageTiming {
-                    raster,
-                    receivers: jobs.len(),
-                    elapsed,
-                    gpu: (!native.missing_gpu).then_some(native.gpu),
-                    host_wait: native.wait,
-                    host_transfer: native.transfer,
-                    irradiance: sampled.into_iter().map(|v| v[0]).collect(),
-                });
-            } else {
-                for chunk in jobs.chunks(8192) {
-                    transport.trace(chunk, &mut values)?;
-                }
-            }
-            let pixels: Vec<_> = lookup
-                .into_iter()
-                .map(|i| {
-                    if i == usize::MAX {
-                        [[0.; 3]; N]
+        }
+        for &index in selected {
+            let gpu = &self.gpu_pages[index];
+            let (extent, mut image) = gpu.begin_image::<N>(&self.pages)?;
+            for page in gpu.front..=gpu.back {
+                let PageSamples { lookup, values } =
+                    self.trace_page(&mut bake, page, &mut benchmark)?;
+                let start = benchmark.as_ref().map(|_| std::time::Instant::now());
+                for index in lookup {
+                    let colors = if index == usize::MAX {
+                        &[[0.; 3]; N]
                     } else {
-                        values[i]
+                        &values[index]
+                    };
+                    for &[r, g, b] in colors {
+                        image.extend([r, g, b, 0.].into_iter().flat_map(f32::to_le_bytes));
                     }
-                })
-                .collect();
-            write_page(page, &pixels, jobs.len())?;
+                }
+                if let (Some(start), Some((_, b))) = (start, benchmark.as_mut()) {
+                    b.write_pages += start.elapsed();
+                }
+            }
+            let start = benchmark.as_ref().map(|_| std::time::Instant::now());
+            image.resize(extent[0] as usize * extent[1] as usize * 16, 0);
+            let placements = gpu.charts.iter().map(|(f, _)| f.placement).collect();
+            let record = SurfacePageRecord::from_texels(N, extent, placements, &image)?;
+            write(index, record, image)?;
+            if let (Some(start), Some((_, b))) = (start, benchmark.as_mut()) {
+                b.write_pages += start.elapsed();
+            }
         }
-        transport.finish()
+        bake.finish()
+    }
+
+    fn trace_page<const N: usize>(
+        &self,
+        bake: &mut SurfaceBake<'_, N>,
+        page: usize,
+        benchmark: &mut Option<(u64, &mut BakeBenchmark)>,
+    ) -> Result<PageSamples<N>, Box<dyn Error>> {
+        let [width, height] = self.pages[page];
+        let raster = benchmark.as_ref().map(|_| std::time::Instant::now());
+        let mut lookup = vec![usize::MAX; (width * height) as usize];
+        let mut jobs = Vec::new();
+        let first = self.regions.partition_point(|(_, r)| r.page < page);
+        for &(i, r) in self.regions[first..]
+            .iter()
+            .take_while(|(_, r)| r.page == page)
+        {
+            let scene = bake.scene();
+            if self.receivers[i].material >= scene.materials.len() {
+                return Err(format!("unknown bake material on placement {}", r.placement).into());
+            }
+            rasterize(scene, &self.receivers[i], r, width, &mut lookup, &mut jobs)?;
+        }
+        let mut values = Vec::with_capacity(jobs.len());
+        // Keep SH readback scratch bounded independently of the page size.
+        if let Some((seed, pages)) = benchmark {
+            let mut state = *seed ^ (page as u64 + 1).wrapping_mul(0x9e3779b97f4a7c15);
+            let raster = raster.expect("benchmark timer").elapsed();
+            let mut ranges = Vec::new();
+            let mut selected = Vec::new();
+            let strata = jobs.len().div_ceil(64 * 512);
+            for i in 0..strata {
+                let lo = i * jobs.len() / strata;
+                let hi = (i + 1) * jobs.len() / strata;
+                let count = (hi - lo).min(512);
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let begin = lo + ((state >> 32) as usize) % (hi - lo - count + 1);
+                ranges.push(begin..begin + count);
+                selected.extend_from_slice(&jobs[begin..begin + count]);
+            }
+            // Match the full bake's native dispatch occupancy, even for disjoint strata.
+            let mut sampled = Vec::with_capacity(selected.len());
+            let start = std::time::Instant::now();
+            for chunk in selected.chunks(8192) {
+                bake.transport.trace(chunk, &mut sampled)?;
+            }
+            let elapsed = start.elapsed();
+            let native = bake.transport.take_timing();
+            values.resize(jobs.len(), [[0.; 3]; N]);
+            let mut offset = 0;
+            for r in ranges {
+                let end = offset + r.len();
+                values[r].copy_from_slice(&sampled[offset..end]);
+                offset = end;
+            }
+            pages.pages.push(BakePageTiming {
+                raster,
+                receivers: jobs.len(),
+                elapsed,
+                gpu: (!native.missing_gpu).then_some(native.gpu),
+                host_wait: native.wait,
+                host_transfer: native.transfer,
+                irradiance: sampled.into_iter().map(|v| v[0]).collect(),
+            });
+        } else {
+            for chunk in jobs.chunks(8192) {
+                bake.transport.trace(chunk, &mut values)?;
+            }
+        }
+        Ok(PageSamples { lookup, values })
     }
 }
 
@@ -658,6 +690,77 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn selected_gpu_page_keeps_both_sides_and_skips_other_receivers() {
+        let receiver = |placement: u32, double_sided: bool| StaticReceiver {
+            placement,
+            material: 0,
+            extent: [6, 6],
+            double_sided,
+            vertices: [[0., 0.], [1., 0.], [0., 1.]]
+                .map(|uv| LightmapVertex {
+                    position: [uv[0], uv[1], 0.],
+                    normal: [0., 0., 1.],
+                    material_uv: uv,
+                    lightmap_uv: uv,
+                })
+                .to_vec(),
+            indices: vec![0, 1, 2],
+        };
+        let scene =
+            BakeScene::new(Vec::new(), vec![crate::Material::default()], Vec::new()).unwrap();
+        let prepare = || {
+            scene
+                .prepare_surface_bake(
+                    crate::Lighting::uniform_sky([1.; 3]),
+                    crate::BakeBackend::Cpu,
+                    4,
+                )
+                .unwrap()
+        };
+        let mut receivers = [receiver(7, true), receiver(8, false)];
+        // Collapsed UVs on a nondegenerate triangle fail rasterization. The
+        // unselected chart must never be rasterized or traced.
+        receivers[1]
+            .vertices
+            .iter_mut()
+            .for_each(|v| v.lightmap_uv = [0.; 2]);
+        let layout = SurfaceLayout::new(&receivers, 8, None).unwrap();
+        assert_eq!(layout.pages().len(), 3);
+        assert_eq!(layout.gpu_page_count(), 2);
+        let mut pages = Vec::new();
+        layout
+            .bake_gpu_pages(prepare(), &[0], |index, _, bytes| {
+                assert_eq!(index, 0);
+                pages.push(bytes);
+                Ok(())
+            })
+            .unwrap();
+        let words: Vec<_> = pages[0]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect();
+        assert_eq!(
+            &words[..12],
+            &[1., 1., 3., 0., 9., 8., 73., 8., 6., 6., 0., 0.]
+        );
+        assert!(words[12..].iter().any(|x| *x > 0.));
+        assert!(
+            layout
+                .bake_gpu_pages(prepare(), &[1], |_, _, _| Ok(()))
+                .is_err()
+        );
+        assert!(
+            layout
+                .bake_gpu_pages(prepare(), &[0, 0], |_, _, _| panic!(
+                    "selection checked before writes"
+                ))
+                .is_err()
+        );
     }
 
     #[test]
