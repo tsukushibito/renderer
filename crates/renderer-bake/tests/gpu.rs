@@ -187,3 +187,108 @@ fn vulkan_matches_cpu() {
 fn d3d12_matches_cpu() {
     compare(BakeBackend::D3D12);
 }
+
+fn check_visibility(backend: BakeBackend) {
+    use renderer_bake::{SurfaceSample, Texture};
+    let receiver = SurfaceSample {
+        position: [0.; 3],
+        normal: [0., 1., 0.],
+    };
+    let settings = ProbeSettings {
+        backend,
+        rays_per_probe: 1,
+        ..Default::default()
+    };
+    // The single hemisphere ray passes through (-0.5,0.5,0) and (-1,1,0).
+    let tri = |x: f32, y: f32, r: f32, material| Triangle {
+        positions: [[x - r, y, -r], [x + r, y, -r], [x, y, r]],
+        uv: [[0.; 2]; 3],
+        material,
+    };
+    let lighting = Lighting {
+        sun: renderer::pbr::Sun::from_lux([0., 1., 0.], [1.; 3], 0.).unwrap(),
+        sky_rgb_nits: [0.; 3],
+        environment: None,
+    };
+    let emitter = |rgb| Material {
+        diffuse: [0.; 3],
+        emissive_nits: rgb,
+        ..Default::default()
+    };
+    for alpha in [0., 1.] {
+        let texture = || Texture::new(1, 1, vec![[1., 1., 1., alpha]]).unwrap();
+        let mask = Material {
+            base_texture: Some(0),
+            alpha_cutoff: Some(0.5),
+            ..emitter([0., 1., 0.])
+        };
+        let scene = BakeScene::new(
+            vec![tri(-2., 2., 2., 0), tri(-0.5, 0.5, 0.25, 1)],
+            vec![emitter([1., 0., 0.]), mask],
+            vec![texture()],
+        )
+        .unwrap();
+        let got = scene
+            .sample_surface_irradiance(&[receiver], lighting, settings)
+            .unwrap()[0];
+        let pi = std::f32::consts::PI;
+        let expected = if alpha == 0. {
+            [pi, 0., 0.]
+        } else {
+            [0., pi, 0.]
+        };
+        assert!(
+            got.iter()
+                .zip(expected)
+                .all(|(a, b)| (a - b).abs() < 0.0005),
+            "{got:?}"
+        );
+        // The small caster misses the incoming ray, but can block the point light.
+        for (height, blocked) in [(0.5, alpha == 1.), (-0.5, false)] {
+            let mut scene = BakeScene::new(
+                vec![tri(-1., 1., 0.4, 0), tri(-1., height, 0.15, 1)],
+                vec![
+                    Material {
+                        diffuse: [1.; 3],
+                        ..Default::default()
+                    },
+                    Material {
+                        emissive_nits: [0.; 3],
+                        ..mask
+                    },
+                ],
+                vec![texture()],
+            )
+            .unwrap();
+            scene.set_point_lights(vec![
+                renderer_bake::PointLight::from_candela([-1., 0., 0.], 8., [1.; 3], 1.).unwrap(),
+            ]);
+            let expected = scene.bake_irradiance(&[receiver], lighting, 1).unwrap()[0];
+            let got = scene
+                .sample_surface_irradiance(&[receiver], lighting, settings)
+                .unwrap()[0];
+            assert_eq!(expected[0] < 0.0005, blocked);
+            assert!(
+                got.iter()
+                    .zip(expected)
+                    .all(|(a, b)| (a - b).abs() < 0.0005),
+                "{got:?} {expected:?}"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "vulkan")]
+#[test]
+#[ignore = "requires Vulkan ray queries and a Vulkan compute device"]
+fn vulkan_visibility_masks_and_distances() {
+    check_visibility(BakeBackend::VulkanRayQuery);
+    check_visibility(BakeBackend::VulkanSoftware);
+}
+
+#[cfg(all(windows, feature = "d3d12"))]
+#[test]
+#[ignore = "requires D3D12"]
+fn d3d12_visibility_masks_and_distances() {
+    check_visibility(BakeBackend::D3D12);
+}

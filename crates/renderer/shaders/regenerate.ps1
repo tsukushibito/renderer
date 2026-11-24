@@ -103,7 +103,7 @@ try {
         'pbr.vert', 'pbr.frag', 'toon.frag', 'canvas.frag', 'canvas_fill.frag', 'shadow.vert', 'shadow.frag', 'bloom_extract_downsample.comp',
         'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp',
         'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag',
-        'bake_transport.comp', 'bake_transport_l2.comp', 'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag',
+        'bake_transport.comp', 'bake_transport_l2.comp', 'bake_surface.comp', 'bake_surface_rt.comp', 'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag',
         'frustum_visibility.comp', 'pbr_instancing.vert',
         'pbr_transformed.vert', 'pbr_transformed_small.vert',
         'gbuffer_transformed.vert', 'gbuffer_transformed_small.vert',
@@ -117,6 +117,8 @@ try {
         $shaderSource = $name
         $defines = @()
         switch -CaseSensitive ($name) {
+            'bake_surface_rt.comp' { $shaderSource = 'bake_transport.comp'; $defines = @('BAKE_SURFACE=1','BAKE_RAY_QUERY=1') }
+            'bake_surface.comp' { $shaderSource = 'bake_transport.comp'; $defines = @('BAKE_SURFACE=1') }
             'bake_transport_l2.comp' { $shaderSource = 'bake_transport.comp'; $defines = @('BAKE_L2=1') }
             'bloom_extract_downsample.comp' { $shaderSource = 'bloom_downsample.comp'; $defines = @('BLOOM_EXTRACT=1') }
             'pbr_all_lights.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=1') }
@@ -149,18 +151,23 @@ try {
             'comp' { 'cs_6_0' }
             default { throw "Unexpected shader stage: $stage" }
         }
+        if ($name -ceq 'bake_surface_rt.comp') { $profile = 'cs_6_5' }
         $arguments = @($lock.dxc_arguments) + @('-T', $profile)
         foreach ($define in $defines) { $arguments += @('-D', $define) }
         $arguments += $source
         $vulkanArguments = $arguments + $spirvArgs
+        if ($name -ceq 'bake_surface_rt.comp') {
+            $vulkanArguments = $arguments + @('-spirv','-fspv-target-env=vulkan1.2','-fspv-extension=SPV_KHR_ray_query','-fvk-use-dx-layout')
+        }
         $checkClip = $name -cin @('pbr.vert', 'gbuffer.vert')
         if ($checkClip) {
             $assembly = Join-Path $temporaryRoot ($name + '.spvasm')
             $vulkanArguments += @('-Fc', $assembly)
         }
         $null = Run $dxc ($vulkanArguments + @('-Fo', $spirv))
-        if ([BitConverter]::ToUInt32([IO.File]::ReadAllBytes($spirv), 4) -ne 0x00010300) {
-            throw "Unexpected SPIR-V version for $name; expected 1.3"
+        $version = if ($name -ceq 'bake_surface_rt.comp') { 0x00010500 } else { 0x00010300 }
+        if ([BitConverter]::ToUInt32([IO.File]::ReadAllBytes($spirv), 4) -ne $version) {
+            throw "Unexpected SPIR-V version for $name; expected $version"
         }
         $null = Run $validator @('--target-env', 'vulkan1.3', $spirv)
         $null = Run $dxc ($arguments + @('-Fo', $dxil))
@@ -182,6 +189,10 @@ try {
         $jsonPath = Join-Path $temporaryRoot ($name + '.spirv-reflection.json')
         Write-Text $jsonPath $spirvReflection
         $hashes = [ordered]@{ source = $shaderSource; source_utf8_lf = Hash $source; defines = $defines }
+        if ($name -ceq 'bake_surface_rt.comp') {
+            $hashes['profile'] = $profile
+            $hashes['spirv_target'] = 'vulkan1.2'
+        }
         foreach ($extension in @('.spv', '.dxil', '.reflection.txt', '.spirv-reflection.json')) {
             $generated = Join-Path $temporaryRoot ($name + $extension)
             $target = if ($extension -ceq '.spv') {

@@ -12,8 +12,11 @@ use std::{error::Error, time::Duration};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const RECEIVER_BYTES: u64 = 32;
 // Each dispatch processes up to two scenarios and six visibility distances.
-const fn response_bytes(order: ProbeShOrder) -> u64 {
-    (2 + 2 * order.coefficient_count()) as u64 * 16
+const fn response_bytes(order: Option<ProbeShOrder>) -> u64 {
+    match order {
+        None => 32,
+        Some(order) => (2 + 2 * order.coefficient_count()) as u64 * 16,
+    }
 }
 const WAIT: Duration = Duration::from_secs(120);
 const fn slot(binding: u32, kind: BindingType, min_size: u64) -> BindingLayout {
@@ -50,41 +53,52 @@ const fn descriptor<const RESPONSE_BYTES: u64>(
         shaders,
     }
 }
-const L1_PROGRAM: ComputeProgramDescriptor = descriptor::<{ response_bytes(ProbeShOrder::L1) }>(
+const L1_PROGRAM: ComputeProgramDescriptor = descriptor::<{ response_bytes(Some(ProbeShOrder::L1)) }>(
     renderer::core::program::embedded_shader_binaries!(
         include_bytes!("../../renderer/shaders/bake_transport.comp.spv"),
         include_bytes!("../../renderer/shaders/dxil/bake_transport.comp.dxil")
     ),
 );
-const L2_PROGRAM: ComputeProgramDescriptor = descriptor::<{ response_bytes(ProbeShOrder::L2) }>(
+const L2_PROGRAM: ComputeProgramDescriptor = descriptor::<{ response_bytes(Some(ProbeShOrder::L2)) }>(
     renderer::core::program::embedded_shader_binaries!(
         include_bytes!("../../renderer/shaders/bake_transport_l2.comp.spv"),
         include_bytes!("../../renderer/shaders/dxil/bake_transport_l2.comp.dxil")
     ),
 );
+const SURFACE_PROGRAM: ComputeProgramDescriptor =
+    descriptor::<32>(renderer::core::program::embedded_shader_binaries!(
+        include_bytes!("../../renderer/shaders/bake_surface.comp.spv"),
+        include_bytes!("../../renderer/shaders/dxil/bake_surface.comp.dxil")
+    ));
 #[allow(unsafe_code)]
-fn program(order: ProbeShOrder) -> ManagedProgram {
+fn program(order: Option<ProbeShOrder>) -> ManagedProgram {
     // SAFETY: one 32-thread group reads its own 32-byte receiver and writes
-    // ten (L1) or twenty (L2) vec4s within its fixed-stride response.
+    // two (surface), ten (L1) or twenty (L2) vec4s within its fixed-stride response.
     // All image reads are clamped to the complete view.
     // Miss traversal advances monotonically and leaf and sample loops are bounded.
     unsafe {
         ManagedProgram::from_trusted_descriptor(match order {
-            ProbeShOrder::L1 => &L1_PROGRAM,
-            ProbeShOrder::L2 => &L2_PROGRAM,
+            None => &SURFACE_PROGRAM,
+            Some(ProbeShOrder::L1) => &L1_PROGRAM,
+            Some(ProbeShOrder::L2) => &L2_PROGRAM,
         })
     }
 }
 fn texel(rgb: [f32; 3], w: f32) -> [f32; 4] {
     [rgb[0], rgb[1], rgb[2], w]
 }
-fn pack<const N: usize>(
+pub(super) fn pack<const N: usize>(
     scene: &BakeScene,
     lights: [Lighting; N],
     samples: u32,
+    ray_geometry: Option<&[usize]>,
 ) -> Result<(ImageDesc, Vec<u8>)> {
     let counts = [
-        scene.bvh.0.len(),
+        if ray_geometry.is_some() {
+            0
+        } else {
+            scene.bvh.0.len()
+        },
         scene.triangles.len(),
         scene.materials.len(),
         scene.textures.len(),
@@ -119,7 +133,15 @@ fn pack<const N: usize>(
             bytes.extend_from_slice(&x.to_le_bytes());
         }
     };
-    push(counts.map(|n| n as f32));
+    let mut header = counts.map(|n| n as f32);
+    if let Some(order) = ray_geometry {
+        header[0] = order.partition_point(|&i| {
+            scene.materials[scene.triangles[i].material]
+                .alpha_cutoff
+                .is_none()
+        }) as f32;
+    }
+    push(header);
     push([
         samples as f32,
         N as f32,
@@ -148,12 +170,13 @@ fn pack<const N: usize>(
         push(texel(point.position(), point.range()));
         push(texel(point.rgb_candela(), 0.));
     }
-    for n in &scene.bvh.0 {
+    for n in scene.bvh.0.iter().take(counts[0]) {
         push(texel(n.lo, n.start as f32));
         push(texel(n.hi, n.count as f32));
         push([n.escape as f32, 0., 0., 0.]);
     }
-    for t in &scene.triangles {
+    for i in 0..scene.triangles.len() {
+        let t = &scene.triangles[ray_geometry.map_or(i, |order| order[i])];
         for (p, uv) in t.positions.into_iter().zip(t.uv) {
             push(texel(p, uv[0]));
         }
@@ -189,6 +212,7 @@ fn pack<const N: usize>(
 }
 /// A single transport scene upload serves all surface pages for these scenarios.
 pub(super) struct Transport<const N: usize> {
+    timing: Option<crate::lightmaps::DispatchTiming>,
     runtime: Runtime,
     pool: GraphPool,
     image: renderer::core::runtime::ManagedImage,
@@ -196,7 +220,7 @@ pub(super) struct Transport<const N: usize> {
     input: BufferDesc,
     output: BufferDesc,
     batch: usize,
-    sh_order: ProbeShOrder,
+    sh_order: Option<ProbeShOrder>,
 }
 
 impl<const N: usize> Transport<N> {
@@ -205,8 +229,12 @@ impl<const N: usize> Transport<N> {
         scene: &BakeScene,
         lights: [Lighting; N],
         samples: u32,
-        sh_order: ProbeShOrder,
+        sh_order: Option<ProbeShOrder>,
     ) -> Result<Option<Self>> {
+        let choice = match choice {
+            BakeBackend::VulkanSoftware | BakeBackend::VulkanRayQuery => BakeBackend::Vulkan,
+            other => other,
+        };
         if choice == BakeBackend::Cpu {
             return Ok(None);
         }
@@ -217,7 +245,7 @@ impl<const N: usize> Transport<N> {
                 Err("GPU supports at most 4096 rays per receiver".into())
             };
         }
-        let (desc, pixels) = match pack(scene, lights, samples) {
+        let (desc, pixels) = match pack(scene, lights, samples, None) {
             Ok(ok) => ok,
             Err(_) if choice == BakeBackend::Auto => return Ok(None),
             Err(e) => return Err(e),
@@ -309,6 +337,7 @@ impl<const N: usize> Transport<N> {
         rt.wait_for_frame(uploaded, WAIT)?
             .ok_or("bake upload timed out")?;
         Ok(Some(Self {
+            timing: None,
             runtime: rt,
             pool,
             image,
@@ -319,8 +348,17 @@ impl<const N: usize> Transport<N> {
             sh_order,
         }))
     }
+    pub(super) fn enable_timing(&mut self) -> Result<()> {
+        self.runtime.set_profiling(true)?;
+        self.timing = Some(Default::default());
+        Ok(())
+    }
+    pub(super) fn take_timing(&mut self) -> crate::lightmaps::DispatchTiming {
+        self.timing.replace(Default::default()).unwrap_or_default()
+    }
     pub(super) fn trace(&mut self, jobs: &[SurfaceSample], limit: f32) -> Result<Vec<[f32; 4]>> {
         let Self {
+            timing,
             runtime: rt,
             pool,
             image,
@@ -331,9 +369,10 @@ impl<const N: usize> Transport<N> {
             sh_order,
         } = self;
         let (input, output, batch) = (*input, *output, *batch);
-        let coefficients = sh_order.coefficient_count();
+        let coefficients = sh_order.map_or(1, ProbeShOrder::coefficient_count);
+        let header = if sh_order.is_some() { 2 } else { 0 };
         let response_bytes = response_bytes(*sh_order);
-        let stride = 2 + N * coefficients;
+        let stride = header + N * coefficients;
         let mut result = vec![[0.; 4]; jobs.len() * stride];
         for (chunk, dst) in jobs.chunks(batch).zip(result.chunks_mut(batch * stride)) {
             for first in (0..N).step_by(2) {
@@ -342,6 +381,7 @@ impl<const N: usize> Transport<N> {
                 let scene = g.image_view(scene, 0, 0)?;
                 let receivers = g.buffer("receivers", input)?;
                 let responses = g.buffer("irradiance", output)?;
+                let host = timing.as_ref().map(|_| std::time::Instant::now());
                 let bytes = chunk
                     .iter()
                     .flat_map(|s| {
@@ -352,6 +392,9 @@ impl<const N: usize> Transport<N> {
                     .flat_map(f32::to_le_bytes)
                     .collect::<Vec<_>>();
                 g.upload_buffer("upload bake receivers", receivers, 0, &bytes)?;
+                if let (Some(t), Some(start)) = (timing.as_mut(), host) {
+                    t.transfer += start.elapsed();
+                }
                 let result_size = chunk.len() as u64 * response_bytes;
                 let buffer = |binding, buffer, size| Binding {
                     group: 0,
@@ -378,11 +421,26 @@ impl<const N: usize> Transport<N> {
                 )?;
                 let readback = g.readback_buffer("baked samples", responses, 0, result_size)?;
                 let receipt = rt.submit(&g.compile()?)?;
+                let waiting = timing.as_ref().map(|_| std::time::Instant::now());
                 let mut completed = rt
                     .wait_for_frame(receipt.id(), WAIT)?
                     .ok_or("bake dispatch timed out")?;
+                if let (Some(t), Some(start)) = (timing.as_mut(), waiting) {
+                    t.wait += start.elapsed();
+                    if let Some(renderer::core::GpuTiming::Available { elapsed, .. }) =
+                        completed.metrics().map(|m| m.gpu)
+                    {
+                        t.gpu += elapsed;
+                    } else {
+                        t.missing_gpu = true;
+                    }
+                }
+                let host = timing.as_ref().map(|_| std::time::Instant::now());
                 let mut bytes = vec![0; result_size as usize];
                 completed.readback_into(readback, &mut bytes)?;
+                if let (Some(t), Some(start)) = (timing.as_mut(), host) {
+                    t.transfer += start.elapsed();
+                }
                 for (raw, record) in bytes
                     .chunks_exact(response_bytes as usize)
                     .zip(dst.chunks_exact_mut(stride))
@@ -393,14 +451,14 @@ impl<const N: usize> Transport<N> {
                             f32::from_le_bytes(w[i * 4..i * 4 + 4].try_into().unwrap())
                         })
                     };
-                    if first == 0 {
+                    if header != 0 && first == 0 {
                         record[0] = decode(&source[0]);
                         record[1] = decode(&source[1]);
                     }
                     let count = coefficients * (N - first).min(2);
-                    for (target, word) in record[2 + first * coefficients..]
+                    for (target, word) in record[header + first * coefficients..]
                         .iter_mut()
-                        .zip(&source[2..2 + count])
+                        .zip(&source[header..header + count])
                     {
                         *target = decode(word);
                     }
@@ -447,7 +505,7 @@ pub(super) fn integrate<const N: usize>(
     if jobs.is_empty() {
         return Ok(Some(Vec::new()));
     }
-    let Some(mut gpu) = Transport::prepare(choice, scene, lights, samples, sh_order)? else {
+    let Some(mut gpu) = Transport::prepare(choice, scene, lights, samples, Some(sh_order))? else {
         return Ok(None);
     };
     let result = gpu.trace(jobs, limit)?;

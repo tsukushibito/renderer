@@ -889,6 +889,21 @@ impl VulkanRuntime {
         Self::new_with_validation(config, super::instance::ValidationMode::default())
     }
 
+    /// Open a dedicated compute runtime with acceleration structures, buffer addresses
+    /// and inline ray queries enabled. No supported adapter returns None.
+    pub fn try_new_ray_query(
+        config: RuntimeConfig,
+        validation: super::instance::ValidationMode,
+    ) -> Result<Option<Self>, RuntimeError> {
+        Self::validate_config(config)?;
+        let diagnostics = Diagnostics::new();
+        let instance = VulkanInstance::with_validation(diagnostics.clone(), validation)?;
+        let Some(device) = VulkanDevice::try_ray_queries(instance)? else {
+            return Ok(None);
+        };
+        Self::from_device(config, diagnostics, device).map(Some)
+    }
+
     /// Create Renderer-owned VMA, execution and staging resources on an existing
     /// device. The host configures native validation and observes its own callback.
     /// The Renderer monitor does not receive host validation messages.

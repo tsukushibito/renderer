@@ -1,6 +1,11 @@
 // One group integrates a world-space receiver. Scene records are immutable
 // RGBA32F texels. All indirect loads are clamped to the actual view extent.
+#ifdef BAKE_RAY_QUERY
+StructuredBuffer<float4> scene : register(t0);
+RaytracingAccelerationStructure world : register(t3);
+#else
 Texture2D<float4> scene : register(t0);
+#endif
 struct Receiver {
     float4 p;
     float4 normal;
@@ -20,12 +25,21 @@ uint number(float v) {
 }
 float4 fetch(Table t, uint i) {
     i = min(i, t.last);
+#ifdef BAKE_RAY_QUERY
+    return scene[i];
+#else
     return scene.Load(int3(i % t.width, i / t.width, 0));
+#endif
 }
 Table table() {
     Table t;
     uint h;
+#ifdef BAKE_RAY_QUERY
     scene.GetDimensions(t.width, h);
+    h = 1;
+#else
+    scene.GetDimensions(t.width, h);
+#endif
     t.last = t.width * h - 1;
     float4 counts = fetch(t, 0);
     t.nodes = number(counts.x);
@@ -34,7 +48,11 @@ Table table() {
     t.point_base = t.rect_base + 4 * t.rect_count;
     t.point_count = min(number(fetch(t,1).w), t.last / 2u);
     t.node_base = t.point_base + 2 * t.point_count;
+#ifdef BAKE_RAY_QUERY
+    t.tris = t.node_base;
+#else
     t.tris = t.node_base + 3 * t.nodes;
+#endif
     t.mats = t.tris + 4 * number(counts.y);
     t.tex = t.mats + 3 * number(counts.z);
     t.texels = t.tex + number(counts.w);
@@ -61,7 +79,54 @@ struct Hit {
     float dist;
     float3 n, diffuse, emission;
 };
-bool trace_ray(Table t, float3 o, float3 d, float limit, out Hit hit) {
+#ifdef BAKE_RAY_QUERY
+// Geometry 0 is opaque, geometry 1 uses the same filtered alpha test as transport.
+uint rt_triangle(Table t, uint geometry, uint primitive) {
+    return t.tris + 4 * (primitive + (geometry == 0 ? 0 : t.nodes));
+}
+float2 rt_uv(float4 a, float4 b, float4 c, float4 m, float2 bary) {
+    float3 w = float3(1 - bary.x - bary.y, bary);
+    return float2(dot(w, float3(a.w, b.w, c.w)), dot(w, m.xyz));
+}
+bool trace_ray(Table t, float3 origin, float3 direction, float limit, bool occlusion, out Hit hit) {
+    hit = (Hit)0;
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = direction;
+    // Match the software path's strictly positive intersection distance.
+    ray.TMin = asfloat(0x00800000);
+    ray.TMax = limit;
+    RayQuery<RAY_FLAG_NONE> query;
+    query.TraceRayInline(world, occlusion ? RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH : RAY_FLAG_NONE, 255, ray);
+    while (query.Proceed()) {
+        if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+            uint at = rt_triangle(t, query.CandidateGeometryIndex(), query.CandidatePrimitiveIndex());
+            float4 m = fetch(t, at + 3);
+            uint mat = t.mats + 3 * number(m.w);
+            float2 uv = rt_uv(fetch(t, at), fetch(t, at + 1), fetch(t, at + 2), m, query.CandidateTriangleBarycentrics());
+            if (fetch(t, mat + 2).x * texture_color(t, fetch(t, mat).w, uv).a >= fetch(t, mat + 1).w)
+                query.CommitNonOpaqueTriangleHit();
+        }
+    }
+    if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+        return false;
+    if (occlusion)
+        return true;
+    uint at = rt_triangle(t, query.CommittedGeometryIndex(), query.CommittedPrimitiveIndex());
+    float4 a = fetch(t, at), b = fetch(t, at + 1), c = fetch(t, at + 2), m = fetch(t, at + 3);
+    float2 uv = rt_uv(a, b, c, m, query.CommittedTriangleBarycentrics());
+    uint mat = t.mats + 3 * number(m.w);
+    float4 albedo = fetch(t, mat), props = fetch(t, mat + 2), emission = fetch(t, mat + 1);
+    float3 normal = cross(b.xyz - a.xyz, c.xyz - a.xyz);
+    hit.n = normalize(normal) * sign(-dot(normal, direction));
+    hit.dist = query.CommittedRayT();
+    hit.diffuse = albedo.rgb * saturate(texture_color(t, albedo.w, uv).rgb) *
+                  (1 - props.y * saturate(texture_color(t, props.z, uv).b));
+    hit.emission = emission.rgb * texture_color(t, props.w, uv).rgb;
+    return true;
+}
+#else
+bool trace_ray(Table t, float3 o, float3 d, float limit, bool occlusion, out Hit hit) {
     hit = (Hit)0;
     bool found = false;
     uint i = 0;
@@ -95,13 +160,18 @@ bool trace_ray(Table t, float3 o, float3 d, float limit, out Hit hit) {
                 continue;
             float4 uvmat = fetch(t, tri + 3);
             uint mat = t.mats + 3 * number(uvmat.w);
-            float4 albedo = fetch(t, mat), emission = fetch(t, mat + 1);
+            float4 emission = fetch(t, mat + 1);
+            if (occlusion && emission.w < 0)
+                return true;
+            float4 albedo = fetch(t, mat);
             float3 bary = float3(1.0 - u - v, u, v);
             float2 uv = float2(dot(bary, float3(v0.w, v1.w, v2.w)), dot(bary, uvmat.xyz));
             float4 properties = fetch(t, mat + 2);
             float4 color = texture_color(t, albedo.w, uv);
             if (properties.x * color.a < emission.w)
                 continue;
+            if (occlusion)
+                return true;
             limit = dist;
             found = true;
             hit.dist = dist;
@@ -113,6 +183,7 @@ bool trace_ray(Table t, float3 o, float3 d, float limit, out Hit hit) {
     }
     return found;
 }
+#endif
 float random(inout uint seed) {
     seed = seed * 747796405u + 2891336453u;
     uint bits = ((seed >> ((seed >> 28) + 4)) ^ seed) * 277803737u;
@@ -149,7 +220,7 @@ float3 local_illuminance(Table t, float3 o, float3 n, uint seed) {
         float3 l = d2 > 1e-20 ? delta/dist : n;
         float cosine = max(dot(n,l),0);
         Hit blocker;
-        if (cosine > 0 && !trace_ray(t,o,l,dist,blocker)) {
+        if (cosine > 0 && !trace_ray(t,o,l,dist,true,blocker)) {
             float window = 1-radial*radial;
             sum += fetch(t,base+1).rgb * (cosine*window*window/max(d2,0.01));
         }
@@ -173,7 +244,7 @@ float3 local_illuminance(Table t, float3 o, float3 n, uint seed) {
         float3 l = delta/dist;
         float cosine = max(dot(l,n),0)*max(dot(-l,normalize(cross(u.xyz,v))),0);
         Hit blocker;
-        if (cosine > 0 && !trace_ray(t,o,l,dist,blocker)) {
+        if (cosine > 0 && !trace_ray(t,o,l,dist,true,blocker)) {
             float window = 1-radial*radial;
             sum += fetch(t,base+3).rgb*(u.w*cosine/d2*window*window);
         }
@@ -189,12 +260,12 @@ float3 incoming(Table t, float3 o, float3 d, uint scenario, uint seed) {
     float3 val = 0, weight = 1;
     Hit hit;
     [loop] for (uint bounce = 0; bounce < 2; bounce++) {
-        if (!trace_ray(t, o, d, 3.402823e38, hit))
+        if (!trace_ray(t, o, d, 3.402823e38, false, hit))
             return val + weight * sky_radiance(t,d,sky,yaw);
         o = offset_ray(o + d * hit.dist, hit.n);
         float cosine = max(dot(hit.n, light), 0);
         Hit blocker;
-        if (cosine > 0 && trace_ray(t, o, light, 3.402823e38, blocker))
+        if (cosine > 0 && trace_ray(t, o, light, 3.402823e38, true, blocker))
             cosine = 0;
         val += weight * (hit.emission + hit.diffuse * (sun * cosine + local_illuminance(t,o,hit.n,seed ^ 0x9e3779b9u)) / PI);
         weight *= hit.diffuse;
@@ -202,16 +273,24 @@ float3 incoming(Table t, float3 o, float3 d, uint scenario, uint seed) {
         float v = random(seed);
         d = hemisphere(hit.n, u, v);
     }
-    return val + (trace_ray(t, o, d, 3.402823e38, hit) ? 0 : weight * sky_radiance(t,d,sky,yaw));
+    return val + (trace_ray(t, o, d, 3.402823e38, true, hit) ? 0 : weight * sky_radiance(t,d,sky,yaw));
 }
-#ifdef BAKE_L2
+#ifdef BAKE_SURFACE
+static const uint COEFFICIENTS = 1;
+#elif defined(BAKE_L2)
 static const uint COEFFICIENTS = 9;
 #else
 static const uint COEFFICIENTS = 4;
 #endif
 // Two scenario slots are always initialized, including the last odd key.
 static const uint TERMS = 2 * COEFFICIENTS;
+#ifdef BAKE_SURFACE
+static const uint RESPONSE_TEXELS = TERMS;
+static const uint RESPONSE_OFFSET = 0;
+#else
 static const uint RESPONSE_TEXELS = 2 + TERMS;
+static const uint RESPONSE_OFFSET = 2;
+#endif
 groupshared float3 sums[32][TERMS];
 [numthreads(32, 1, 1)] void main(uint3 group
                                  : SV_GroupID, uint lane
@@ -220,7 +299,11 @@ groupshared float3 sums[32][TERMS];
     uint job = group.x;
     Receiver rec = jobs[job];
     float3 origin = rec.p.xyz;
+#ifdef BAKE_SURFACE
+    bool volume = false;
+#else
     bool volume = all(rec.normal.xyz == 0.0);
+#endif
     if (!volume)
         origin = offset_ray(origin, rec.normal.xyz);
     uint samples = clamp(number(fetch(t, 1).x), 1u, 4096u);
@@ -238,8 +321,10 @@ groupshared float3 sums[32][TERMS];
             float3 l = incoming(t, origin, d, first+side, j) * (PI / samples);
             uint base = COEFFICIENTS * side;
             sums[lane][base] += l;
+#ifndef BAKE_SURFACE
             [unroll] for (uint axis = 0; axis < 3; axis++) sums[lane][base + axis + 1] +=
                 l * (2 * d[axis]);
+#endif
 #ifdef BAKE_L2
             sums[lane][base + 4] += l * (3.75 * d.x * d.y);
             sums[lane][base + 5] += l * (3.75 * d.y * d.z);
@@ -253,8 +338,9 @@ groupshared float3 sums[32][TERMS];
     if (lane < TERMS) {
         float3 total = 0;
         [unroll] for (uint l = 0; l < 32; l++) total += sums[l][lane];
-        result[RESPONSE_TEXELS * job + 2 + lane] = float4(total, 0);
+        result[RESPONSE_TEXELS * job + RESPONSE_OFFSET + lane] = float4(total, 0);
     }
+#ifndef BAKE_SURFACE
     if (lane < 2) {
         float3 distances = rec.p.w;
         if (volume && first == 0u) {
@@ -262,10 +348,11 @@ groupshared float3 sums[32][TERMS];
                 float3 d = 0;
                 d[axis] = lane == 0 ? -1 : 1;
                 Hit hit;
-                if (trace_ray(t, origin, d, rec.p.w, hit))
+                if (trace_ray(t, origin, d, rec.p.w, false, hit))
                     distances[axis] = hit.dist;
             }
         }
         result[RESPONSE_TEXELS * job + lane] = float4(distances, 0);
     }
+#endif
 }

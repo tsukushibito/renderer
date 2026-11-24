@@ -3,6 +3,8 @@
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 mod gpu;
+#[cfg(feature = "vulkan")]
+mod ray_query;
 
 /// Automatic selection tries available GPU backends and falls back to CPU at
 /// device preparation. Explicit selections propagate setup and execution errors.
@@ -12,6 +14,10 @@ pub enum BakeBackend {
     Auto,
     Cpu,
     Vulkan,
+    /// Require hardware traversal for static surfaces.
+    VulkanRayQuery,
+    /// Force portable compute traversal on Vulkan.
+    VulkanSoftware,
     D3D12,
 }
 
@@ -42,7 +48,9 @@ impl BakeBackend {
 mod bvh;
 mod lightmaps;
 mod surface_pages;
-pub use surface_pages::{LightmapVertex, StaticReceiver, SurfaceLayout, SurfaceRegion};
+pub use surface_pages::{
+    BakePageTiming, LightmapVertex, StaticReceiver, SurfaceLayout, SurfaceRegion,
+};
 mod probes;
 mod reflection_placement;
 mod reflection_reference;

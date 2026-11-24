@@ -98,6 +98,10 @@ Indexed Indirect Drawでは、照会で対応した場合に `multiDrawIndirect`
 初期化で取得した不変な`VkPhysicalDeviceLimits`をDevice所有者に保持し、画像/Program作成でも再利用する。
 実際のformat/type/usage/extentの対応確認とnative作成失敗は別に処理する。
 
+オフラインの静的照度ベイクでは専用 Device を用意し、`VK_KHR_acceleration_structure`、`VK_KHR_ray_query`、`VK_KHR_deferred_host_operations` と buffer device address・acceleration structure・ray query の各 feature を確認して有効にする。コンピュートシェーダーから 1 個の TLAS と BLAS を参照する。BLAS 内の不透明面とアルファマスク面は別 geometry とし、マスク面の候補交点で材質テクスチャと cutoff を評価する。影レイは最初の遮蔽物、反射レイは最近接交点を使う。非対応機では Compute BVH を選択できる。
+
+ベイク用バッファは Device を保持する VMA allocator が所有する。ビルド用 scratch のサイズと整列を Device から取得し、ビルド後の依存関係を barrier で表す。キューをロックして submit し、fence の完了後に readback の invalidate、入力の再利用、資源の破棄を行う。タイムスタンプの有効ビットと period は対象キューと Device の値を使う。単一キューの同期投入で Bistro の目標を達成したため、複数バッチの非同期投入は採用していない。[Khronos の Ray Query サンプル](https://docs.vulkan.org/samples/latest/samples/extensions/ray_queries/README.html)
+
 適合候補は専用GPU、内蔵GPU、仮想GPU、その他、CPU型の順で自動選択し、同順位は列挙順とする。
 CPU型も最後の候補として利用できるが、その選択をログに残す。
 実GPU受入試験はCPU型の成功で代替しない。

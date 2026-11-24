@@ -251,6 +251,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     let mut output = None;
     let mut settings = ProbeSettings::default();
     let mut texel_budget = None;
+    let wall_start = std::time::Instant::now();
+    let mut benchmark = None;
     let mut estimate = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -310,12 +312,17 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--backend" => {
                 settings.backend = match args.next().as_deref() {
+                    Some("vulkan-rt") => renderer_bake::BakeBackend::VulkanRayQuery,
+                    Some("vulkan-software") => renderer_bake::BakeBackend::VulkanSoftware,
                     Some("vulkan") => renderer_bake::BakeBackend::Vulkan,
                     Some("d3d12") => renderer_bake::BakeBackend::D3D12,
                     Some("cpu") => renderer_bake::BakeBackend::Cpu,
                     Some("auto") => renderer_bake::BakeBackend::Auto,
                     _ => return Err("unknown bake backend".into()),
                 }
+            }
+            "--benchmark-seed" => {
+                benchmark = Some(args.next().ok_or("missing seed")?.parse::<u64>()?)
             }
             "--estimate" => estimate = true,
             "--lightmap-texels" => {
@@ -326,7 +333,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--probe-sh l1|l2] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json [--reflection-format bc6h|rgba32f] | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--probe-sh l1|l2] [--samples N] [--backend auto|vulkan|vulkan-rt|vulkan-software|d3d12|cpu] [--estimate] [--benchmark-seed N --day-only] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json [--reflection-format bc6h|rgba32f] | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
                 );
                 println!(
                     "Placement options: --placement-method floor|remedy --max-probes N (1..32)"
@@ -335,6 +342,17 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             _ => return Err(format!("unknown bake option {arg}").into()),
         }
+    }
+    if benchmark.is_some()
+        && (!day_only
+            || estimate
+            || endpoints_only
+            || reference.is_some()
+            || diffuse_reference.is_some()
+            || layout.is_some()
+            || placement_spacing.is_some())
+    {
+        return Err("benchmark requires a daylight surface bake".into());
     }
     if placement_spacing.is_none() && (placement_method.is_some() || max_probes.is_some()) {
         return Err("placement options require --place-reflection-probes".into());
@@ -347,12 +365,13 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             || (reference.is_some() && diffuse_reference.is_some())
             || endpoints_only
             || ibl_manifest.is_none()
-            || !matches!(
-                settings.backend,
-                renderer_bake::BakeBackend::Auto | renderer_bake::BakeBackend::Cpu
-            ))
+            || reference.is_some()
+                && !matches!(
+                    settings.backend,
+                    renderer_bake::BakeBackend::Auto | renderer_bake::BakeBackend::Cpu
+                ))
     {
-        return Err("lighting references require the CPU daylight path, an IBL manifest and no probe layout".into());
+        return Err("lighting references require daylight, an IBL manifest and no probe layout; specular references require CPU".into());
     }
 
     if reflection_format.is_some() && layout.is_none() {
@@ -437,7 +456,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             .ok_or("missing scene identity")?
             .to_string()
     };
+    let import_start = std::time::Instant::now();
     let mut bake = import(&scene)?;
+    let import_elapsed = import_start.elapsed();
     let mut identity = crate::shared::camera::bake_identity(&identity, look);
     let scenarios = look.scenarios();
     let sky_strength = if look == Look::O3deAtrium {
@@ -497,7 +518,14 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
                 normal: r.normal,
             })
             .collect();
-        let irradiance = bake.bake_irradiance(&samples, lights[0], settings.rays_per_probe)?;
+        let irradiance = if matches!(
+            settings.backend,
+            renderer_bake::BakeBackend::Auto | renderer_bake::BakeBackend::Cpu
+        ) {
+            bake.bake_irradiance(&samples, lights[0], settings.rays_per_probe)?
+        } else {
+            bake.sample_surface_irradiance(&samples, lights[0], settings)?
+        };
         let mut file = std::io::BufWriter::new(std::fs::File::create_new(output)?);
         serde_json::to_writer(
             &mut file,
@@ -598,6 +626,53 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
     }
     drop(scene);
     let started = std::time::Instant::now();
+    if let Some(seed) = benchmark {
+        // Exercise real output I/O without publishing the partially populated asset.
+        let scratch = output.with_extension(format!("{}.scratch", std::process::id()));
+        let file = std::fs::File::create_new(&scratch)?;
+        let measured = (|| -> Result<_, Error> {
+            let mut writer = std::io::BufWriter::new(file);
+            writer.write_all(identity.as_bytes())?;
+            let pages = surfaces.benchmark_to(&bake, lights[0], settings, &mut writer, seed)?;
+            writer.flush()?;
+            Ok(pages)
+        })();
+        let cleanup = std::fs::remove_file(scratch);
+        let pages = measured?;
+        cleanup?;
+        let elapsed = wall_start.elapsed().as_secs_f64();
+        let mut estimate = elapsed;
+        let mut records = Vec::new();
+        for p in pages.pages {
+            let seconds = p.elapsed.as_secs_f64();
+            if !p.irradiance.is_empty() {
+                estimate += seconds * (p.receivers as f64 / p.irradiance.len() as f64 - 1.);
+            }
+            records.push(serde_json::json!({
+                "receivers": p.receivers, "sampled": p.irradiance.len(),
+                "seconds": seconds, "gpu_seconds": p.gpu.map(|v| v.as_secs_f64()),
+                "host_wait_seconds": p.host_wait.as_secs_f64(),
+                "host_transfer_seconds": p.host_transfer.as_secs_f64(),
+                "raster_seconds": p.raster.as_secs_f64(), "irradiance": p.irradiance,
+            }));
+        }
+        let mut report = std::io::BufWriter::new(std::fs::File::create_new(output)?);
+        serde_json::to_writer(
+            &mut report,
+            &serde_json::json!({
+                "seed": seed, "rays": settings.rays_per_probe, "identity": identity,
+                "elapsed_seconds": elapsed, "estimated_seconds": estimate,
+                "load_layout_seconds": import_start.duration_since(wall_start).as_secs_f64(),
+                "cpu_scene_bvh_seconds": import_elapsed.as_secs_f64(),
+                "transport_setup_seconds": pages.transport_setup.as_secs_f64(),
+                "write_pages_seconds": pages.write_pages.as_secs_f64(),
+                "probe_seconds": pages.probes.as_secs_f64(), "pages": records,
+            }),
+        )?;
+        report.flush()?;
+        eprintln!("Partial bake {elapsed:.2}s; estimated daylight bake {estimate:.2}s");
+        return Ok(());
+    }
     if day_only {
         publish(&output, &identity, &surfaces, &bake, [lights[0]], settings)?;
     } else if endpoints_only {

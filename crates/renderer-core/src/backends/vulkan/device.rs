@@ -348,8 +348,22 @@ fn with_create_info<T>(
     queue_family_index: u32,
     create: impl FnOnce(&vk::DeviceCreateInfo<'_>) -> T,
 ) -> T {
-    with_presentation_create_info(queue_family_index, false, false, false, false, create)
+    with_presentation_create_info(
+        queue_family_index,
+        false,
+        false,
+        false,
+        false,
+        false,
+        create,
+    )
 }
+
+const RAY_EXTENSIONS: [&std::ffi::CStr; 3] = [
+    ash::khr::acceleration_structure::NAME,
+    ash::khr::ray_query::NAME,
+    ash::khr::deferred_host_operations::NAME,
+];
 
 fn with_presentation_create_info<T>(
     queue_family_index: u32,
@@ -357,6 +371,7 @@ fn with_presentation_create_info<T>(
     memory_budget: bool,
     multi_draw_indirect: bool,
     texture_compression_bc: bool,
+    ray_query: bool,
     create: impl FnOnce(&vk::DeviceCreateInfo<'_>) -> T,
 ) -> T {
     let priorities = [1.0];
@@ -370,6 +385,9 @@ fn with_presentation_create_info<T>(
     let features = vk::PhysicalDeviceFeatures::default()
         .multi_draw_indirect(multi_draw_indirect)
         .texture_compression_bc(texture_compression_bc);
+    let mut acceleration =
+        vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default().acceleration_structure(true);
+    let mut queries = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
     let mut maintenance =
         vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default().swapchain_maintenance1(true);
     let mut extensions = Vec::new();
@@ -382,6 +400,10 @@ fn with_presentation_create_info<T>(
     if memory_budget {
         extensions.push(ash::ext::memory_budget::NAME);
     }
+    if ray_query {
+        extensions.extend(RAY_EXTENSIONS);
+        features12.buffer_device_address = vk::TRUE;
+    }
     extensions.sort_unstable();
     extensions.dedup();
     let extension_names = extensions
@@ -393,6 +415,11 @@ fn with_presentation_create_info<T>(
         .enabled_extension_names(&extension_names)
         .push_next(&mut features12)
         .push_next(&mut features13);
+    if ray_query {
+        create_info = create_info
+            .push_next(&mut acceleration)
+            .push_next(&mut queries);
+    }
     if multi_draw_indirect || texture_compression_bc {
         create_info = create_info.enabled_features(&features);
     }
@@ -634,7 +661,7 @@ impl VulkanDevice {
             }
             candidates.push(candidate);
         }
-        Self::create_selected_shared(instance, select_device(candidates)?, true)
+        Self::create_selected_shared(instance, select_device(candidates)?, true, false)
     }
 
     #[cfg(all(feature = "presentation", windows))]
@@ -763,7 +790,50 @@ impl VulkanDevice {
             .expect("Device dispatch initialized")
     }
 
-    fn initialize(instance: VulkanInstance) -> Result<Self, DeviceInitError> {
+    pub(super) fn try_ray_queries(
+        instance: VulkanInstance,
+    ) -> Result<Option<Self>, DeviceInitError> {
+        let raw = instance.raw();
+        let err = |result| DeviceInitError::Vulkan {
+            operation: "inspect ray query adapters",
+            device_name: None,
+            result,
+        };
+        // Keep the normal adapter ranking. An RT-capable secondary adapter must not
+        // silently replace the preferred device used by the software comparison.
+        let selected = Self::select_headless(&instance)?;
+        let physical = selected.physical_device;
+        // SAFETY: The adapter belongs to this live instance.
+        let extensions =
+            unsafe { raw.enumerate_device_extension_properties(physical) }.map_err(err)?;
+        if !RAY_EXTENSIONS.iter().all(|name| {
+            extensions
+                .iter()
+                .any(|e| e.extension_name_as_c_str() == Ok(*name))
+        }) {
+            return Ok(None);
+        }
+        let mut address = vk::PhysicalDeviceVulkan12Features::default();
+        let mut acceleration = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+        let mut queries = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
+        let mut features = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut address)
+            .push_next(&mut acceleration)
+            .push_next(&mut queries);
+        // SAFETY: Selected adapter is Vulkan 1.3, extensions were reported, and the feature chain is live.
+        unsafe {
+            raw.get_physical_device_features2(physical, &mut features);
+        }
+        if address.buffer_device_address != vk::TRUE
+            || acceleration.acceleration_structure != vk::TRUE
+            || queries.ray_query != vk::TRUE
+        {
+            return Ok(None);
+        }
+        Self::create_selected_shared(Arc::new(instance), selected, false, true).map(Some)
+    }
+
+    fn select_headless(instance: &VulkanInstance) -> Result<SelectedDevice, DeviceInitError> {
         // SAFETY: The Instance is live and uniquely owned here. ash handles the
         // enumeration retry/count protocol; physical handles stay within it.
         let physical_devices =
@@ -778,7 +848,11 @@ impl VulkanDevice {
             .into_iter()
             .map(|physical_device| inspect(instance.raw(), physical_device))
             .collect();
-        let selected = select_device(candidates)?;
+        select_device(candidates)
+    }
+
+    fn initialize(instance: VulkanInstance) -> Result<Self, DeviceInitError> {
+        let selected = Self::select_headless(&instance)?;
         Self::create_selected(instance, selected)
     }
 
@@ -786,7 +860,7 @@ impl VulkanDevice {
         instance: VulkanInstance,
         selected: SelectedDevice,
     ) -> Result<Self, DeviceInitError> {
-        Self::create_selected_shared(Arc::new(instance), selected, false)
+        Self::create_selected_shared(Arc::new(instance), selected, false, false)
     }
 
     fn query_limits(
@@ -812,6 +886,7 @@ impl VulkanDevice {
         instance: Arc<VulkanInstance>,
         selected: SelectedDevice,
         presentation: bool,
+        ray_query: bool,
     ) -> Result<Self, DeviceInitError> {
         let (limits, max_buffer_size) = Self::query_limits(&instance, &selected);
         // Optional observation only. Vulkan 1.3 supplies the properties2
@@ -842,6 +917,7 @@ impl VulkanDevice {
             memory_budget_enabled,
             selected.multi_draw_indirect,
             selected.texture_compression_bc,
+            ray_query,
             |create_info| {
                 #[cfg(feature = "memory-profiling")]
                 crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
@@ -1105,6 +1181,7 @@ mod tests {
             false,
             selected.multi_draw_indirect,
             selected.texture_compression_bc,
+            false,
             |info| {
                 assert!(!info.p_enabled_features.is_null());
                 // SAFETY: The helper keeps explicitly selected core features live.
@@ -1166,7 +1243,7 @@ mod tests {
     #[test]
     fn memory_budget_is_optional_and_coexists_with_presentation_extensions() {
         for presentation in [false, true] {
-            with_presentation_create_info(0, presentation, true, false, false, |info| {
+            with_presentation_create_info(0, presentation, true, false, false, false, |info| {
                 // SAFETY: The helper retains the extension pointers and C strings.
                 let pointers = unsafe {
                     std::slice::from_raw_parts(

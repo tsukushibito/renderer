@@ -1149,7 +1149,9 @@ dependencies = [
 name = "renderer-bake"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "renderer",
+ "vk-mem",
 ]
 
 [[package]]

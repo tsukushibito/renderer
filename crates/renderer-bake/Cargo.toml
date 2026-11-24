@@ -7,11 +7,13 @@ publish = false
 description = "Offline diffuse light transport for renderer"
 
 [features]
-vulkan = ["renderer/vulkan"]
+vulkan = ["renderer/vulkan", "dep:ash","dep:vk-mem"]
 d3d12 = ["renderer/d3d12"]
 development-validation = ["renderer/development-validation"]
 
 [dependencies]
+ash = {workspace=true,optional=true}
+vk-mem = {workspace=true,optional=true}
 renderer = { version = "0.1.0", path = "../renderer" }
 
 [lints]

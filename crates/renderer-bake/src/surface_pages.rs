@@ -6,6 +6,25 @@ use crate::{
 };
 use std::{collections::HashSet, error::Error};
 
+/// Measured change-boundary costs for a single daylight bake.
+#[derive(Default)]
+pub struct BakeBenchmark {
+    pub pages: Vec<BakePageTiming>,
+    pub transport_setup: std::time::Duration,
+    pub probes: std::time::Duration,
+    pub write_pages: std::time::Duration,
+}
+/// Samples in deterministic receiver order. GPU and wait durations overlap elapsed time.
+pub struct BakePageTiming {
+    pub raster: std::time::Duration,
+    pub gpu: Option<std::time::Duration>,
+    pub host_wait: std::time::Duration,
+    pub host_transfer: std::time::Duration,
+    pub receivers: usize,
+    pub elapsed: std::time::Duration,
+    pub irradiance: Vec<Vec3>,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct LightmapVertex {
     pub position: Vec3,
@@ -235,6 +254,46 @@ impl<'a> SurfaceLayout<'a> {
         rays_per_texel: u32,
         mut writer: impl std::io::Write,
     ) -> Result<Vec<usize>, Box<dyn Error>> {
+        self.write_asset(
+            scene,
+            scenarios,
+            settings,
+            rays_per_texel,
+            &mut writer,
+            None,
+        )
+    }
+
+    /// Measure a stratified daylight bake. The writer is scratch storage only.
+    pub fn benchmark_to(
+        &self,
+        scene: &BakeScene,
+        light: crate::Lighting,
+        settings: crate::ProbeSettings,
+        scratch: impl std::io::Write,
+        seed: u64,
+    ) -> Result<BakeBenchmark, Box<dyn Error>> {
+        let mut pages = BakeBenchmark::default();
+        self.write_asset(
+            scene,
+            [light],
+            settings,
+            settings.rays_per_probe,
+            scratch,
+            Some((seed, &mut pages)),
+        )?;
+        Ok(pages)
+    }
+
+    fn write_asset<const N: usize>(
+        &self,
+        scene: &BakeScene,
+        scenarios: impl LightingScenarios<N>,
+        settings: crate::ProbeSettings,
+        rays_per_texel: u32,
+        mut writer: impl std::io::Write,
+        mut benchmark: Option<(u64, &mut BakeBenchmark)>,
+    ) -> Result<Vec<usize>, Box<dyn Error>> {
         let lights = scene.lighting(scenarios)?;
         writer.write_all(renderer::pbr::SurfaceLightmaps::MAGIC)?;
         for n in [N, self.pages().len(), self.regions().count()] {
@@ -259,12 +318,16 @@ impl<'a> SurfaceLayout<'a> {
             }
         }
         let mut counts = Vec::with_capacity(self.pages.len());
-        self.bake(
+        let timed = benchmark.is_some();
+        let mut write_pages = std::time::Duration::ZERO;
+        self.bake_pages(
             scene,
             lights,
             settings.backend,
             rays_per_texel,
+            benchmark.as_mut().map(|(seed, b)| (*seed, &mut **b)),
             |_, data, samples| {
+                let start = timed.then(std::time::Instant::now);
                 for pixel in data {
                     for color in pixel {
                         for v in color {
@@ -272,11 +335,20 @@ impl<'a> SurfaceLayout<'a> {
                         }
                     }
                 }
+                if let Some(start) = start {
+                    write_pages += start.elapsed();
+                }
                 counts.push(samples);
                 Ok(())
             },
         )?;
+        let start = timed.then(std::time::Instant::now);
         scene.bake_probes(lights, settings)?.write(writer)?;
+        if let (Some(start), Some((_, b))) = (start, benchmark) {
+            b.write_pages = write_pages;
+            b.probes = start.elapsed();
+        }
+
         Ok(counts)
     }
     /// Invoke the sink once per completed page. Padding copies its closest
@@ -287,6 +359,18 @@ impl<'a> SurfaceLayout<'a> {
         scenarios: impl LightingScenarios<N>,
         backend: BakeBackend,
         rays: u32,
+        write_page: impl FnMut(usize, &[[[f32; 3]; N]], usize) -> Result<(), Box<dyn Error>>,
+    ) -> Result<(), Box<dyn Error>> {
+        self.bake_pages(scene, scenarios, backend, rays, None, write_page)
+    }
+
+    fn bake_pages<const N: usize>(
+        &self,
+        scene: &BakeScene,
+        scenarios: impl LightingScenarios<N>,
+        backend: BakeBackend,
+        rays: u32,
+        mut benchmark: Option<(u64, &mut BakeBenchmark)>,
         mut write_page: impl FnMut(usize, &[[[f32; 3]; N]], usize) -> Result<(), Box<dyn Error>>,
     ) -> Result<(), Box<dyn Error>> {
         let lights = scene.lighting(scenarios)?;
@@ -298,23 +382,17 @@ impl<'a> SurfaceLayout<'a> {
         {
             return Err("invalid lightmap material or ray count".into());
         }
-        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-        let mut gpu = if self.pages.is_empty() {
-            None
-        } else {
-            crate::gpu::Transport::prepare(
-                backend,
-                scene,
-                lights,
-                rays,
-                renderer::pbr::ProbeShOrder::L1,
-            )?
-        };
-        #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
-        if !matches!(backend, BakeBackend::Auto | BakeBackend::Cpu) {
-            return Err("requested GPU backend is not compiled".into());
+        if self.pages.is_empty() {
+            return Ok(());
+        }
+        let setup = benchmark.as_ref().map(|_| std::time::Instant::now());
+        let mut transport = crate::lightmaps::SurfaceTransport::new(scene, lights, backend, rays)?;
+        if let (Some(t), Some((_, b))) = (setup, benchmark.as_mut()) {
+            transport.enable_timing()?;
+            b.transport_setup = t.elapsed();
         }
         for (page, &[width, height]) in self.pages.iter().enumerate() {
+            let raster = benchmark.as_ref().map(|_| std::time::Instant::now());
             let mut lookup = vec![usize::MAX; (width * height) as usize];
             let mut jobs = Vec::new();
             for &(i, r) in self.regions.iter().filter(|(_, r)| r.page == page) {
@@ -322,18 +400,51 @@ impl<'a> SurfaceLayout<'a> {
             }
             let mut values = Vec::with_capacity(jobs.len());
             // Keep SH readback scratch bounded independently of the page size.
-            for chunk in jobs.chunks(8192) {
-                #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-                if let Some(gpu) = &mut gpu {
-                    let raw = gpu.trace(chunk, 0.)?;
-                    values.extend(
-                        raw.chunks_exact(2 + 4 * N).map(|p| {
-                            std::array::from_fn(|i| p[2 + 4 * i][..3].try_into().unwrap())
-                        }),
-                    );
-                    continue;
+            if let Some((seed, pages)) = &mut benchmark {
+                let mut state = *seed ^ (page as u64 + 1).wrapping_mul(0x9e3779b97f4a7c15);
+                let raster = raster.expect("benchmark timer").elapsed();
+                let mut ranges = Vec::new();
+                let mut selected = Vec::new();
+                let strata = jobs.len().div_ceil(64 * 512);
+                for i in 0..strata {
+                    let lo = i * jobs.len() / strata;
+                    let hi = (i + 1) * jobs.len() / strata;
+                    let count = (hi - lo).min(512);
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    let begin = lo + ((state >> 32) as usize) % (hi - lo - count + 1);
+                    ranges.push(begin..begin + count);
+                    selected.extend_from_slice(&jobs[begin..begin + count]);
                 }
-                values.extend(scene.integrate_surface(chunk, lights, rays)?);
+                // Match the full bake's native dispatch occupancy, even for disjoint strata.
+                let mut sampled = Vec::with_capacity(selected.len());
+                let start = std::time::Instant::now();
+                for chunk in selected.chunks(8192) {
+                    transport.trace(chunk, &mut sampled)?;
+                }
+                let elapsed = start.elapsed();
+                let native = transport.take_timing();
+                values.resize(jobs.len(), [[0.; 3]; N]);
+                let mut offset = 0;
+                for r in ranges {
+                    let end = offset + r.len();
+                    values[r].copy_from_slice(&sampled[offset..end]);
+                    offset = end;
+                }
+                pages.pages.push(BakePageTiming {
+                    raster,
+                    receivers: jobs.len(),
+                    elapsed,
+                    gpu: (!native.missing_gpu).then_some(native.gpu),
+                    host_wait: native.wait,
+                    host_transfer: native.transfer,
+                    irradiance: sampled.into_iter().map(|v| v[0]).collect(),
+                });
+            } else {
+                for chunk in jobs.chunks(8192) {
+                    transport.trace(chunk, &mut values)?;
+                }
             }
             let pixels: Vec<_> = lookup
                 .into_iter()
@@ -347,11 +458,7 @@ impl<'a> SurfaceLayout<'a> {
                 .collect();
             write_page(page, &pixels, jobs.len())?;
         }
-        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-        if let Some(gpu) = gpu {
-            gpu.finish()?;
-        }
-        Ok(())
+        transport.finish()
     }
 }
 

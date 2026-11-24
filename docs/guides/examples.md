@@ -88,6 +88,10 @@ cargo run --release -p renderer-bistro --features bake-tool,vulkan --bin bistro-
 cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --baked-lighting .tools/bistro.gi --pipeline forward-plus --white-sphere -14 2.7 0.65 --time-sweep --frames 5 --width 800 --height 450 --output .tools/bistro-gi
 ```
 
+昼の静的ライトマップを短時間で比較するには、通常の `bistro-bake` の manifest・IBL・look に `--day-only --backend vulkan --samples 128 --benchmark-seed 17 --output run-a.json` を加える。各ページを約 32,768 受光点の区画に分け、区画ごとに連続する最大 512 点を抽出する。通常のバッチ幅で積分し、全ページと照度プローブの書き出しは一時ファイルで計測する。出力 JSON に cook・照明の識別子、レイ数、抽出位置を決める seed、ページ別の件数、線形 RGB 照度、経過時間を記録する。比較する両実装で同じ seed を使い、採用候補を seed 43 でも確認する。`estimated_seconds` は、各ページの積分経過時間だけを受光点数で換算した値。GPU タイムスタンプとホストの完了待ちは重なる。どちらも積分経過時間に含まれる。
+
+`--backend vulkan` は対応 GPU で静的ライトマップに Ray Query を使う。`vulkan-rt` はその経路を要求し、`vulkan-software` は従来の Compute BVH を選ぶ。照度プローブは両方とも Vulkan Compute で焼く。`--diffuse-reference` にこれらのバックエンドを指定すると、少数の既知の受光点を同じ実装で評価できる。CPU 高サンプル参照には `--backend cpu` を指定する。
+
 `--fixture` は配布アセットなしでベイクと描画を試せます。`--backend cpu|vulkan|d3d12|auto` はベイクの実行先を選びます。Auto は利用可能な GPU を準備できなければ CPU を使います。`--spacing` と `--max-depth` は照度プローブを調整します。クックは有効な glTF TEXCOORD_1 を再利用し、欠損・重複する場合は xatlas で生成します。クック時の `--texels-per-metre` の既定値は 4、ベイクは 128 rays/受光テクセル、昼・中間・夕方の３条件です。`--estimate` は配置数、面数、ページ数、テクセル数、照度のデータ量を計算して終了します。`--lightmap-texels N` は条件ごとの全ページに対する上限です。超過時は書き出し前に停止します。旧形式の静的ライトマップを使っていたシーンはジオメトリから再クックしてください。`--endpoints-only` で同じ配置に昼と夕方だけを焼いて比較できます。出力には cook と照明プリセットの識別子を保存します。入力を変更したら再ベイクし、新しい出力名を指定してください。
 
 `--scenario-blend 0.5` は中間時刻を固定します。`--time-sweep` のオフスクリーン実行は先頭、中間、末尾を保存します。`--gi-debug sources` はライトマップを橙、プローブを青系で表示し、`irradiance` は拡散照度、`weights` は有効なプローブ重みの合計を表示します。[実機の比較画像](../verification/current.md#bistro-baked-lighting)
