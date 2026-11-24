@@ -7,14 +7,15 @@ rust-version.workspace = true
 
 [features]
 default = ["graphics"]
-graphics = ["dep:renderer"]
+graphics = ["dep:renderer", "dep:renderer-asset"]
 presentation = ["graphics", "renderer/presentation", "dep:winit"]
 vulkan = ["renderer-core/vulkan", "renderer?/vulkan"]
 d3d12 = ["renderer-core/d3d12", "renderer?/d3d12"]
 development-validation = ["renderer-core/development-validation", "renderer?/development-validation"]
-memory-profiling = ["renderer-core/memory-profiling", "renderer?/memory-profiling"]
+memory-profiling = ["renderer-core/memory-profiling", "renderer?/memory-profiling", "renderer-asset?/metrics"]
 
 [dependencies]
+renderer-asset = { path = "../renderer-asset", optional = true }
 renderer = { version = "0.1.0", path = "../renderer", optional = true }
 renderer-core = { version = "0.1.0", path = "../renderer-core" }
 
@@ -32,3 +33,10 @@ required-features = ["graphics"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+serde_json = "1"
+
+[[example]]
+name = "asset_pipeline_perf"
+required-features = ["graphics", "memory-profiling"]
