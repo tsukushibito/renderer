@@ -2,7 +2,7 @@
 mod arena;
 mod combat;
 pub use arena::{Arena, Obstacle};
-use arena::{Navigation, direction, distance_squared, unit_or_zero};
+use sashiko::space::{CrowdNavigation, direction, distance_squared, unit_or_zero};
 use serde::{Deserialize, Serialize};
 pub const TICK_HZ: u32 = 60;
 pub const MAX_ENEMIES: usize = 500;
@@ -113,14 +113,15 @@ pub struct Game {
     reload: u8,
     invulnerability: u8,
     at_marker: bool,
-    nav: Navigation,
+    nav: CrowdNavigation,
 }
 
 impl Game {
     pub const MAX_HP: u32 = 100;
 
     pub fn new(arena: Arena, scenario: Scenario, seed: u64) -> Self {
-        let nav = Navigation::new(&arena);
+        let nav = CrowdNavigation::new(arena.floor(), ENEMY_RADIUS, MAX_ENEMIES)
+            .expect("validated arena");
         let mut game = Self {
             player: arena.player_spawn,
             arena,
@@ -156,7 +157,7 @@ impl Game {
         if scenario == Scenario::Endgame {
             for i in 0..128 {
                 let mut pos = game.random_pos();
-                if !game.arena.open(pos, 0.) {
+                if !game.arena.floor().open(pos, 0.) {
                     let Some(subject) = game.enemies.get(i) else {
                         continue;
                     };
@@ -222,6 +223,7 @@ impl Game {
         let movement = unit_or_zero(input.movement);
         let (pos, contact) =
             self.arena
+                .floor()
                 .slide(self.player, movement, 4.5 / TICK_HZ as f32, PLAYER_RADIUS);
         self.player = pos;
         events.contact = contact;
@@ -254,8 +256,9 @@ impl Game {
         while self.enemies.len() < count {
             let spawn = (0..64).find_map(|_| {
                 let p = self.random_pos();
-                (distance_squared(p, self.player) >= 16. && self.arena.open(p, ENEMY_RADIUS))
-                    .then_some(p)
+                (distance_squared(p, self.player) >= 16.
+                    && self.arena.floor().open(p, ENEMY_RADIUS))
+                .then_some(p)
             });
             let Some(spawn) = spawn else {
                 break;
@@ -276,7 +279,9 @@ impl Game {
     }
 
     fn move_enemies(&mut self, events: &mut Events) {
-        self.nav.update(self.player, &self.enemies);
+        self.nav
+            .update(self.player, &self.enemies, |enemy| enemy.pos)
+            .expect("enemies fit prepared capacity");
         for (index, enemy) in self.enemies.iter_mut().enumerate() {
             let d = distance_squared(self.player, enemy.pos);
             let lunger = enemy.id.is_multiple_of(4);
@@ -300,11 +305,12 @@ impl Game {
                 enemy.windup_left = 30;
                 0.
             } else {
-                enemy.facing = self.nav.steer(index, enemy.pos, self.player);
+                enemy.facing = self.nav.steer(index, 0.6, 1.6).expect("indexed snapshot");
                 if lunger { 1.25 } else { 1.7 }
             };
             enemy.pos = self
                 .arena
+                .floor()
                 .slide(
                     enemy.pos,
                     enemy.facing,
@@ -424,7 +430,11 @@ mod tests {
         let source = r#"{"half_extent":[2,2],"player_spawn":[0,0],"marker":[0,1],"obstacles":[{"center":[1.2,0],"half_extent":[0.7,1.8]}]}"#;
         let mut game = Game::new(Arena::from_json(source).unwrap(), Scenario::Endgame, 506);
         assert!(!game.drops.is_empty());
-        assert!(game.drops.iter().all(|drop| game.arena.open(drop.pos, 0.)));
+        assert!(
+            game.drops
+                .iter()
+                .all(|drop| game.arena.floor().open(drop.pos, 0.))
+        );
         for _ in 0..2 {
             game.step(Input::default());
             assert!(game.enemies.is_empty());

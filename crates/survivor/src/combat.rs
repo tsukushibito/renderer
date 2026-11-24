@@ -42,7 +42,7 @@ impl Game {
                 shot.pos[i] += shot.dir[i] * 13. / TICK_HZ as f32;
             }
             shot.remaining_ticks -= 1;
-            if !self.arena.open(shot.pos, 0.) {
+            if !self.arena.floor().open(shot.pos, 0.) {
                 shot.remaining_ticks = 0;
                 continue;
             }
