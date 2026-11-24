@@ -27,3 +27,42 @@ Sashiko は、少人数のチームと AI が同じシーンを編集し、同�
 `survivor` の基準入力で、初期配置・移動・接触・強化・再挑戦をヘッドレスと実画面で比較する。実験台を動かしたケースでは、移動先・障害物の見た目・群衆の迂回に同じ配置が反映されることを確認する。500 体のシナリオは、可視数、提示間隔、GPU 時間と一緒に評価する。実測条件と未確認の利用例は[検証記録](../verification/current.md)に記す。
 
 `training-yard` はゲームの目的や入力が別でも共通 API が利用できるかを確認する。`renderer-bistro` は独自の RenderGraph を直接構築する利用者として維持する。
+
+## 研究施設で敵を追加して再生する
+
+[研究施設のシーン](../../assets/survivor/arena.json)を作業用にコピーする。原型は `prefabs`、原型を使う配置は `placements` にある。新しい種類を一つ試すには、`placements` 配列に次の要素を追加する。
+
+```json
+{
+  "id": "scout",
+  "prefab": "walker",
+  "overrides": {
+    "copies": 1,
+    "hp": 2,
+    "walk_speed": 2.5,
+    "model": "alternate",
+    "clip": "walk"
+  }
+}
+```
+
+`Subject` の配置は出現する敵の種類を表す。プレイ中は登録した種類の順に、各種類の `copies` 体ずつを繰り返して生成する。上の設定では歩行速度・耐久力・外観が異なる敵が加わる。新しい座標に置く実験台には `Bench` の原型を使い、`translation` をメートル単位の XYZ で与える。親を指定するとその座標は親から見た値になる。研究施設の実験台は床の X・Z 軸に沿った長方形を使う。
+
+別の動きを試すには、[キャラクターカタログ](../../assets/survivor/characters/catalog.json)の対象モデルの `clips` に名前とサンプル範囲・再生速度を登録し、`Subject.clip` からその名前を参照する。たとえば `alternate` の既存歩行をゆっくり再生するクリップは `"slow_walk": {"first": 0, "frames": 80, "hz": 30, "looping": true}` と書ける。カタログのコピーを別ディレクトリに置く場合、`skin`・`color` の相対参照先も用意する。`--character-catalog` でそのカタログを指定して表示する。
+
+ゲーム固有の挙動を加えるときは、ゲームの登録処理に型・編集項目・検査関数・固定更新関数をまとめて渡す。実装例の `Marker` は公開する半径と、再生中だけ保持する進入状態を持つ。プレイヤーが半径内に入った更新でイベントを一度発生させる。[登録と動作](../../crates/survivor/src/authoring.rs)
+
+```rust
+types.register_behavior("Marker", &["radius"], Marker::validate, Marker::update)?;
+```
+
+`radius` を原型の `fields` または配置の `overrides` で編集するとゲームの判定が変わる。同じ登録表をインスペクタとゲーム実行が利用する。新しい型には別の型名を登録し、その型を使う原型と配置をシーンに加える。効果の意味と更新処理はゲームの Rust に置く。
+
+次の例は、作業用シーンで遊んだ入力を記録し、指定 tick まで GPU なしで再生する。最初のコマンドでは 120 tick 以上プレイして終了する。
+
+```powershell
+cargo run --locked --release -p survivor --bin survivor -- --arena my-lab.json --seed 506 --record my-run.json
+cargo run --locked --release -p survivor --bin survivor --no-default-features -- --headless --replay my-run.json --ticks 120
+```
+
+記録には開始シーンの原型・上書き・階層、ゲームルールの版、seed、更新ごとの入力が入る。ヘッドレス再生は記録したシーンからゲームを構築し、終了時に HP、撃破数、目印への到達回数などを JSON で出力する。
