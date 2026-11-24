@@ -365,6 +365,7 @@ impl PreparedScene {
             },
             WorkingSet {
                 raster: &raster,
+                samplers: &[ENVIRONMENT_SAMPLER, SHADOW_SAMPLER],
                 ..Default::default()
             },
         )?;
@@ -906,6 +907,9 @@ impl RasterScene<'_> {
     }
 }
 
+const ENVIRONMENT_SAMPLER: SamplerDescriptor = SamplerDescriptor::LinearRepeatUClampV;
+const SHADOW_SAMPLER: SamplerDescriptor = SamplerDescriptor::NearestClamp;
+
 fn lighting_bindings(
     environment: Environment,
     shadows: [ImageView; CASCADE_COUNT],
@@ -914,7 +918,7 @@ fn lighting_bindings(
         image_binding(2, 0, environment.irradiance),
         image_binding(2, 1, environment.reflection),
         image_binding(2, 2, environment.brdf_lut),
-        sampler_binding(2, 3, SamplerDescriptor::LinearRepeatUClampV),
+        sampler_binding(2, 3, ENVIRONMENT_SAMPLER),
         image_binding(
             2,
             4,
@@ -926,7 +930,7 @@ fn lighting_bindings(
         image_binding(3, 1, shadows[1]),
         image_binding(3, 2, shadows[2]),
         image_binding(3, 3, shadows[3]),
-        sampler_binding(3, 4, SamplerDescriptor::NearestClamp),
+        sampler_binding(3, 4, SHADOW_SAMPLER),
         super::ReflectionProbes::bind_metadata(environment.reflection_metadata),
     ]
 }
