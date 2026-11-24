@@ -20,6 +20,9 @@ use std::{
 
 mod build;
 pub use build::RendererBuild;
+mod candidate;
+pub(crate) use candidate::AssetTarget;
+pub use candidate::{AssetCandidate, AssetPreparation, RetireAssets, UploadBudget};
 
 /// Registries remain engine-owned and are borrowed exclusively only during setup.
 pub struct SceneAssets<'a> {

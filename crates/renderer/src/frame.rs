@@ -70,6 +70,13 @@ pub struct Renderer {
     destination: FrameDestination,
 }
 
+impl crate::pipeline::AssetTarget for Renderer {
+    type Device = Runtime;
+    fn asset_renderer(&mut self) -> &mut SceneRenderer {
+        &mut self.drawing
+    }
+}
+
 impl Renderer {
     fn prepare<'a>(
         camera: CameraView,

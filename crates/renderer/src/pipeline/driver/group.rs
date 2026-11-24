@@ -8,6 +8,8 @@ pub(super) trait Group: Any {
     fn initialize(&mut self, runtime: &mut Runtime) -> PipelineResult<Option<FrameId>>;
     fn release(&mut self, runtime: &mut Runtime) -> PipelineResult<()>;
     fn prepare_scene(&mut self, scene: SceneInput<'_>) -> Result<(), GraphError>;
+    fn stage_scene(&mut self, scene: SceneInput<'_>) -> Result<(), GraphError>;
+    fn publish_scene(&mut self);
     fn remove_pair(
         &mut self,
         mesh: crate::mesh::MeshHandle,
@@ -143,6 +145,12 @@ impl<P: ViewPipeline + 'static> Group for PreparedGroup<P> {
     }
     fn prepare_scene(&mut self, scene: SceneInput<'_>) -> Result<(), GraphError> {
         self.pairs.register(&self.pipeline, scene)
+    }
+    fn stage_scene(&mut self, scene: SceneInput<'_>) -> Result<(), GraphError> {
+        self.pairs.stage(&self.pipeline, scene)
+    }
+    fn publish_scene(&mut self) {
+        self.pairs.publish();
     }
     fn remove_pair(
         &mut self,
