@@ -19,7 +19,6 @@ sha2 = "0.10.9"
 
 [build-dependencies]
 cc = "1"
-sha2 = "0.10.9"
 
 [lints]
 workspace = true
