@@ -187,7 +187,7 @@ fn publish<const N: usize>(
 }
 
 pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, serde::Serialize)]
     #[serde(deny_unknown_fields)]
     struct Placement {
         name: String,
@@ -197,6 +197,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         blend_distance: f32,
     }
     let mut layout = None;
+    let mut placement_spacing = None;
     let mut reference = None;
     let mut diffuse_reference = None;
     let mut ibl_manifest = None;
@@ -232,6 +233,13 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
                     args.next().ok_or("missing reflection layout")?,
                 ))
             }
+            "--place-reflection-probes" => {
+                placement_spacing = Some(
+                    args.next()
+                        .ok_or("missing placement spacing in metres")?
+                        .parse()?,
+                );
+            }
             "--manifest" => manifest = Some(PathBuf::from(args.next().ok_or("missing manifest")?)),
             "--fixture" => fixture = true,
             "--output" => output = Some(PathBuf::from(args.next().ok_or("missing output")?)),
@@ -255,7 +263,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
             }
             "--help" => {
                 println!(
-                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
+                    "bistro-bake (--fixture | --manifest FILE) --output FILE [--look lumberyard-day|o3de-atrium] [--day-only | --endpoints-only] [--ibl-manifest FILE] [--spacing METRES] [--max-depth N] [--samples N] [--backend auto|vulkan|d3d12|cpu] [--estimate] [--lightmap-texels N] [--place-reflection-probes METRES | --reflection-probes LAYOUT.json | --reflection-reference RECEIVERS.json | --diffuse-reference RECEIVERS.json]"
                 );
                 return Ok(());
             }
@@ -283,6 +291,35 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         (Some(path), false) => Scene::load(&path, false)?,
         _ => return Err("select --manifest or --fixture".into()),
     };
+    if let Some(spacing) = placement_spacing {
+        if layout.is_some() || reference.is_some() || diffuse_reference.is_some() || estimate {
+            return Err(
+                "choose one reflection layout, reference, estimate or bake operation".into(),
+            );
+        }
+        let output = output.ok_or("missing --output for generated reflection layout")?;
+        let probes = import(&scene)?.place_reflection_probes(
+            renderer_bake::ReflectionPlacementSettings {
+                spacing,
+                ..Default::default()
+            },
+        )?;
+        let placements: Vec<_> = probes
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| Placement {
+                name: format!("Probe {}", i + 1),
+                position: p.position,
+                min: p.min,
+                max: p.max,
+                blend_distance: p.blend_distance,
+            })
+            .collect();
+        let bytes = serde_json::to_vec_pretty(&placements)?;
+        std::fs::File::create_new(output)?.write_all(&bytes)?;
+        eprintln!("Generated {} reflection probe placements", placements.len());
+        return Ok(());
+    }
     let receivers = if reference.is_none() && diffuse_reference.is_none() && layout.is_none() {
         receivers(&scene)?
     } else {

@@ -39,6 +39,33 @@ let input = SceneInput::new(&meshes, &materials, &objects)
 
 拡散照明には 1～16 条件を渡せます。係数は全区間で 0～1 です。この 3 条件の例では 0.5 が独立してベイクした午後、0.75 が午後と夕方の中間です。キーは等間隔です。鏡面プローブには固定条件または両端の 2 条件を渡します。太陽の方位・色、背景、時計の進行はアプリ側で更新します。ベイクは線形の拡散照度を供給し、直接光の影と鏡面 IBL は通常の描画経路を使います。
 
+### 局所反射プローブの初期配置を生成する
+
+`BakeScene::place_reflection_probes` は Y-up、メートル単位の静的シーンから編集可能な配置候補を返します。探索範囲 `bounds` を指定すると、部屋や階ごとに間隔を変えて試せます。
+
+```rust
+let boxes = scene.place_reflection_probes(ReflectionPlacementSettings {
+    spacing: 8.0,
+    capture_height: 1.5,
+    blend_distance: 0.5,
+    bounds: None,
+})?;
+// 必要に応じて位置・箱を編集し、空なら局所反射のベイクを省略する。
+if !boxes.is_empty() {
+    let reflections = scene.bake_reflection_probes(&boxes, day)?;
+    reflections.write(writer)?;
+}
+```
+
+Bistro と Sponza のクック済みシーンでは、同じ CLI で配置の書き出しとベイクができます。次の例の間隔は 8 m です。生成された JSON を編集してから 2 行目を実行できます。
+
+```text
+bistro-bake --manifest SCENE/manifest.json --place-reflection-probes 8 --output layout.json
+bistro-bake --manifest SCENE/manifest.json --reflection-probes layout.json --day-only --output reflections.bin
+```
+
+水平な床や屋根は候補になります。屋内だけを対象にする場合は探索範囲で高さを絞ってください。細い路地、斜めの壁、出入口では位置と箱の重なりを確認してください。32 個を超える場合はエラーになるため、間隔を広げるか範囲を絞ります。
+
 ### Bistro で試す
 
 [Bistro の cook と IBL](development.md#bistro-b3) の後、以下をリポジトリのルートで実行します。

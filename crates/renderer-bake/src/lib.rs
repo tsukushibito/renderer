@@ -1,4 +1,4 @@
-//! Offline diffuse lighting in linear RGB. Coordinates are world space in metres.
+//! Offline diffuse and specular lighting in linear RGB. Coordinates are world space in metres.
 #![deny(unsafe_code)]
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
@@ -43,10 +43,12 @@ mod lightmaps;
 mod surface_pages;
 pub use surface_pages::{LightmapVertex, StaticReceiver, SurfaceLayout, SurfaceRegion};
 mod probes;
+mod reflection_placement;
 mod reflection_reference;
 mod reflections;
 
 pub use probes::ProbeSettings;
+pub use reflection_placement::ReflectionPlacementSettings;
 pub use reflection_reference::{ReflectionReceiver, ReflectionReference};
 pub use renderer::pbr::{PointLight, RectLight, ReflectionProbeDesc, Sun};
 mod transport;
