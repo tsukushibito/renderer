@@ -1,59 +1,93 @@
-use sashiko::window::{KeyCode, Keyboard};
+use sashiko::{
+    ui::MenuInput,
+    window::{KeyCode, WindowInput},
+};
 use survivor::{Input, Upgrade};
 
 pub(super) const PLAY_TITLE: &str =
     "Sashiko | Containment Lab    WASD move    Auto-fire    Gather samples to upgrade    Esc quit";
 
-#[derive(Default)]
-pub(super) struct Controls {
-    // Horizontal axes match the top-down camera (forward is negative Z).
-    keys: [bool; 4],
-    choice: Option<Upgrade>,
-    restart: bool,
-    menu: sashiko::ui::MenuInput,
-    pub closed: bool,
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Action {
+    Left,
+    Right,
+    Forward,
+    Back,
+    Select(Upgrade),
+    Navigate(i8),
+    Activate,
+    Restart,
 }
 
-impl Controls {
-    pub fn next_input(&mut self) -> Input {
-        let [left, right, forward, back] = self.keys.map(u8::from).map(f32::from);
-        Input {
-            movement: [right - left, back - forward],
-            upgrade: self.choice.take(),
-            menu: std::mem::take(&mut self.menu),
-            restart: std::mem::take(&mut self.restart),
-        }
-    }
+pub(super) type Controls = WindowInput<Action>;
+
+pub(super) fn controls() -> Controls {
+    use Action::*;
+    use KeyCode::{
+        ArrowLeft, ArrowRight, Digit1, Digit2, Digit3, Enter, Escape, KeyA, KeyD, KeyR, KeyS, KeyW,
+    };
+    WindowInput::new(
+        &[
+            (KeyA, Left),
+            (KeyD, Right),
+            (KeyW, Forward),
+            (KeyS, Back),
+            (Digit1, Select(Upgrade::Rapid)),
+            (Digit2, Select(Upgrade::Pierce)),
+            (Digit3, Select(Upgrade::Pulse)),
+            (ArrowLeft, Navigate(-1)),
+            (ArrowRight, Navigate(1)),
+            (Enter, Activate),
+            (Enter, Restart),
+            (KeyR, Restart),
+        ],
+        Escape,
+    )
 }
 
-impl Keyboard for Controls {
-    fn quit_requested(&self) -> bool {
-        self.closed
-    }
-    fn focus_lost(&mut self) {
-        self.menu = Default::default();
-        self.keys.fill(false);
-        self.choice = None;
-        self.restart = false;
-    }
-    fn key(&mut self, code: KeyCode, pressed: bool) {
-        match code {
-            KeyCode::KeyA => self.keys[0] = pressed,
-            KeyCode::KeyD => self.keys[1] = pressed,
-            KeyCode::KeyW => self.keys[2] = pressed,
-            KeyCode::KeyS => self.keys[3] = pressed,
-            KeyCode::Digit1 if pressed => self.choice = Some(Upgrade::Rapid),
-            KeyCode::Digit2 if pressed => self.choice = Some(Upgrade::Pierce),
-            KeyCode::Digit3 if pressed => self.choice = Some(Upgrade::Pulse),
-            KeyCode::ArrowLeft if pressed => self.menu.direction = -1,
-            KeyCode::ArrowRight if pressed => self.menu.direction = 1,
-            KeyCode::Enter if pressed => {
-                self.menu.activate = true;
-                self.restart = true;
-            }
-            KeyCode::KeyR if pressed => self.restart = true,
-            KeyCode::Escape if pressed => self.closed = true,
-            _ => {}
+pub(super) fn next_input(controls: &mut Controls) -> Input {
+    use Action::*;
+    controls.actions.sample(|actions| Input {
+        movement: [actions.axis(Left, Right), actions.axis(Forward, Back)],
+        upgrade: actions.latest_press(|a| if let Select(u) = a { Some(u) } else { None }),
+        restart: actions.pressed(Restart),
+        menu: MenuInput {
+            direction: actions
+                .latest_press(|a| if let Navigate(d) = a { Some(d) } else { None })
+                .unwrap_or(0),
+            activate: actions.pressed(Activate),
+        },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sashiko::window::Keyboard;
+
+    #[test]
+    fn fixed_ticks_preserve_held_motion_and_consume_last_selection_once() {
+        let mut keys = controls();
+        for key in [
+            KeyCode::KeyW,
+            KeyCode::Digit1,
+            KeyCode::Digit3,
+            KeyCode::ArrowLeft,
+            KeyCode::ArrowRight,
+            KeyCode::Enter,
+        ] {
+            keys.key(key, true);
         }
+        keys.key(KeyCode::Enter, false);
+        let tick = next_input(&mut keys);
+        assert_eq!(tick.movement, [0., -1.]);
+        assert_eq!(tick.upgrade, Some(Upgrade::Pulse));
+        assert!(tick.restart && tick.menu.activate);
+        assert_eq!(tick.menu.direction, 1);
+        let after = next_input(&mut keys);
+        assert_eq!(after.movement, [0., -1.]);
+        assert!(!after.restart && !after.menu.activate && after.upgrade.is_none());
+        keys.focus_lost();
+        assert_eq!(next_input(&mut keys).movement, [0., 0.]);
     }
 }
