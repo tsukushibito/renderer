@@ -156,33 +156,40 @@ fn publish<const N: usize>(
     lights: [Lighting; N],
     settings: ProbeSettings,
 ) -> Result<(), Error> {
-    let mut staging = output.as_os_str().to_owned();
-    staging.push(format!(".{}.partial", std::process::id()));
-    let staging = PathBuf::from(staging);
-    let file = std::fs::File::create_new(&staging)?;
-    let result = (|| -> Result<(), Error> {
-        let mut writer = std::io::BufWriter::new(file);
-        writer.write_all(identity.as_bytes())?;
-        let counts = layout.bake_to(
-            scene,
-            lights,
-            settings,
-            settings.rays_per_probe,
-            &mut writer,
-        )?;
-        eprintln!(
-            "{} traced surface samples per scenario",
-            counts.iter().sum::<usize>()
-        );
-        writer.flush()?;
-        drop(writer);
-        std::fs::rename(&staging, output)?;
+    use crate::shared::baked_assets::{LightingPublisher, object_name};
+    use renderer::pbr::SurfaceLightmapIndex;
+
+    let publisher = LightingPublisher::new(output)?;
+    let rays = settings.rays_per_probe;
+    let surface = scene.prepare_surface_bake(lights, settings.backend, rays)?;
+    let surface_execution = surface.execution().clone();
+    let selected: Vec<_> = (0..layout.gpu_page_count()).collect();
+    let mut records = Vec::with_capacity(selected.len());
+    layout.bake_gpu_pages(surface, &selected, |id, record, bytes| {
+        if id != records.len() || publisher.store(&bytes)? != *record.sha256() {
+            return Err("surface page order or SHA-256 mismatch".into());
+        }
+        records.push(record);
         Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(staging);
-    }
-    result
+    })?;
+
+    let prepared = scene.prepare_probe_bake(lights, settings)?;
+    let probe_execution = prepared.execution().clone();
+    let mut probe_bytes = Vec::new();
+    prepared.bake()?.write(&mut probe_bytes)?;
+    let probe_hash = publisher.store(&probe_bytes)?;
+    let index = SurfaceLightmapIndex::new(N, records, probe_hash)?;
+    let index_hash = publisher.store(&index.to_bytes())?;
+    let build = provenance::record(
+        identity,
+        lights,
+        settings,
+        rays,
+        &surface_execution,
+        &probe_execution,
+        &object_name(&index_hash),
+    )?;
+    publisher.publish(identity, &index_hash, build)
 }
 
 fn encode_reflections(
@@ -445,7 +452,13 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         return Ok(());
     }
     let output = output.ok_or("missing --output")?;
-    if output.exists() {
+    // Surface generations can replace an earlier manifest after all dependencies are ready.
+    if output.exists()
+        && (layout.is_some()
+            || benchmark.is_some()
+            || reference.is_some()
+            || diffuse_reference.is_some())
+    {
         return Err("output already exists".into());
     }
     let identity = if fixture {

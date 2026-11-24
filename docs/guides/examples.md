@@ -88,6 +88,8 @@ cargo run --release -p renderer-bistro --features bake-tool,vulkan --bin bistro-
 cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --baked-lighting .tools/bistro.gi --pipeline forward-plus --white-sphere -14 2.7 0.65 --time-sweep --frames 5 --width 800 --height 450 --output .tools/bistro-gi
 ```
 
+`--output .tools/bistro.gi` は世代を示す JSON を書きます。同じディレクトリの `lighting-objects/` に配置索引、GPU 用ライトマップ各ページ、照度プローブが SHA-256 名で入ります。配布・コピー時は `bistro.gi` と `lighting-objects/` を一緒に渡してください。同じ出力先への再ベイクでは成果物の書き込み後に JSON を置き換えます。旧世代の JSON を保存しておけば、その参照先が残っている間は旧版を再度ロードできます。従来の単一ファイルを使っていた場合は別名で再ベイクしてください。
+
 昼の静的ライトマップを短時間で比較するには、通常の `bistro-bake` の manifest・IBL・look に `--day-only --backend vulkan --samples 128 --benchmark-seed 17 --output run-a.json` を加える。各ページを約 32,768 受光点の区画に分け、区画ごとに連続する最大 512 点を抽出する。通常のバッチ幅で積分し、全ページと照度プローブの書き出しは一時ファイルで計測する。出力 JSON に cook・照明の識別子、レイ数、抽出位置を決める seed、ページ別の件数、線形 RGB 照度、経過時間を記録する。比較する両実装で同じ seed を使い、採用候補を seed 43 でも確認する。`estimated_seconds` は、各ページの積分経過時間だけを受光点数で換算した値。GPU タイムスタンプとホストの完了待ちは重なる。どちらも積分経過時間に含まれる。
 
 `--backend vulkan` は対応 GPU で静的ライトマップに Ray Query を使う。`vulkan-rt` はその経路を要求し、`vulkan-software` は従来の Compute BVH を選ぶ。照度プローブは両方とも Vulkan Compute で焼く。`--diffuse-reference` にこれらのバックエンドを指定すると、少数の既知の受光点を同じ実装で評価できる。CPU 高サンプル参照には `--backend cpu` を指定する。

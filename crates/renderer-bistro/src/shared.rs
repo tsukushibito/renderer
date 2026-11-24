@@ -8,6 +8,7 @@
 use crate::Error;
 
 pub(crate) mod asset;
+pub(crate) mod baked_assets;
 pub(crate) mod camera;
 pub(crate) mod deferred;
 pub(crate) mod ibl;
