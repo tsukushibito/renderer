@@ -1,4 +1,5 @@
 //! Interactive and measured runs share the simulation, asset setup, and render path.
+mod audio;
 mod input;
 mod metrics;
 
@@ -158,6 +159,11 @@ pub fn run(mut game: Game, o: Options) -> PipelineResult<Game> {
     let mut clock = last_present;
     let mut accumulator = 0u128;
     let mut current_phase = game.phase;
+    let mut sound = if limit.is_none() {
+        audio::Soundscape::open(1.)
+    } else {
+        None
+    };
     let mut last_extent = extent;
     'frames: while limit.is_none_or(|total| presented < total) {
         events.pump_app_events(Some(Duration::ZERO), &mut controls);
@@ -197,6 +203,9 @@ pub fn run(mut game: Game, o: Options) -> PipelineResult<Game> {
                 controls.next_input()
             };
             game.step(input);
+            if let Some(sound) = &mut sound {
+                sound.update(&game);
+            }
             if let Some(tape) = &mut recorded {
                 tape.push(input);
             }
