@@ -177,4 +177,28 @@ mod tests {
         }
         Ok(())
     }
+    #[test]
+    fn subject_prefabs_share_pose_slots_and_can_override_the_player_model() -> PipelineResult<()> {
+        let mut meshes = Meshes::new(MeshCapacity {
+            meshes: 2,
+            retired_mesh_versions: 0,
+        })?;
+        let mut materials = Materials::default();
+        let material = materials.create_pbr(renderer::material::PbrParams::default())?;
+        let cast = Cast::load(
+            &catalog_path()?,
+            "primary",
+            [
+                (None, "walk"),
+                (Some("alternate"), "jog"),
+                (Some("alternate"), "jog"),
+            ],
+            &mut meshes,
+            &mut materials,
+            material,
+        )?;
+        assert_eq!(cast.subjects, [0, 1, 1]);
+        assert_ne!(cast.actors[0].mesh, cast.actors[1].mesh);
+        cast.animate(20, &mut meshes)
+    }
 }
