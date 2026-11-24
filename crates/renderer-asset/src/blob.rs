@@ -67,7 +67,9 @@ impl MeshBlob {
         let (vertices, indices) = payload.split_at((nv * 48) as usize);
         let mesh = Self {
             vertices: vertices
-                .chunks_exact(48)
+                .as_chunks::<48>()
+                .0
+                .iter()
                 .map(|v| {
                     std::array::from_fn(|i| {
                         f32::from_le_bytes(v[i * 4..i * 4 + 4].try_into().unwrap())
@@ -75,8 +77,10 @@ impl MeshBlob {
                 })
                 .collect(),
             indices: indices
-                .chunks_exact(4)
-                .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&v| u32::from_le_bytes(v))
                 .collect(),
         };
         mesh.check()?;
