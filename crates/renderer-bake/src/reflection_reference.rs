@@ -21,6 +21,8 @@ pub struct ReflectionReference {
     pub from_sky: Vec3,
     /// Identical rays and BRDF with all geometry removed.
     pub unobstructed: Vec3,
+    /// Integrated response to unit incident radiance, for matching a filtered capture.
+    pub unit_response: Vec3,
     /// Counts under the GGX sampling distribution, among above-horizon rays.
     pub sky_rays: u32,
     pub surface_rays: u32,
@@ -62,6 +64,7 @@ impl BakeScene {
         let smith = |x: f32| (a2 + (1. - a2) * x * x).sqrt();
         let mut geometry = [0f64; 3];
         let mut sky = [0f64; 3];
+        let mut response = [0f64; 3];
         let mut open = [0f64; 3];
         let mut result = ReflectionReference::default();
         for j in 0..samples {
@@ -93,6 +96,7 @@ impl BakeScene {
             let schlick = (1. - vh.clamp(0., 1.)).powi(5);
             for k in 0..3 {
                 let weight = f64::from(scale * (s.f0[k] + (1. - s.f0[k]) * schlick));
+                response[k] += weight;
                 acc[k] += weight * f64::from(radiance[k]);
                 open[k] += weight * f64::from(env[k]);
             }
@@ -101,6 +105,7 @@ impl BakeScene {
         result.from_geometry = mean(geometry);
         result.from_sky = mean(sky);
         result.unobstructed = mean(open);
+        result.unit_response = mean(response);
         Ok(result)
     }
 }

@@ -5,31 +5,33 @@ use std::f32::consts::{PI, TAU};
 const W: usize = ReflectionProbes::WIDTH;
 const H: usize = ReflectionProbes::HEIGHT;
 
-fn direction(x: usize, y: usize, height: usize) -> Vec3 {
-    let (s, c) = (TAU * ((x as f32 + 0.5) / W as f32 - 0.5)).sin_cos();
+pub(crate) fn direction(x: usize, y: usize, width: usize, height: usize) -> Vec3 {
+    let (s, c) = (TAU * ((x as f32 + 0.5) / width as f32 - 0.5)).sin_cos();
     let (sin_lat, cos_lat) = (PI * (y as f32 + 0.5) / height as f32).sin_cos();
     [c * sin_lat, cos_lat, s * sin_lat]
 }
 
-fn sample(capture: &[Vec3], ray: Vec3) -> Vec3 {
-    let u = (0.5 + ray[2].atan2(ray[0]) / TAU) * W as f32 - 0.5;
-    let v = (ray[1].clamp(-1., 1.).acos() / PI * H as f32 - 0.5).clamp(0., (H - 1) as f32);
-    let x = (u.floor() as i32).rem_euclid(W as i32) as usize;
+pub(crate) fn sample(capture: &[Vec3], width: usize, ray: Vec3) -> Vec3 {
+    let height = capture.len() / width;
+    let u = (0.5 + ray[2].atan2(ray[0]) / TAU) * width as f32 - 0.5;
+    let v =
+        (ray[1].clamp(-1., 1.).acos() / PI * height as f32 - 0.5).clamp(0., (height - 1) as f32);
+    let x = (u.floor() as i32).rem_euclid(width as i32) as usize;
     let y = v.floor() as usize;
     let mix =
         |a: Vec3, b: Vec3, t: f32| -> Vec3 { std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t) };
     let row = |y: usize| {
         mix(
-            capture[y * W + x],
-            capture[y * W + (x + 1) % W],
+            capture[y * width + x],
+            capture[y * width + (x + 1) % width],
             u - u.floor(),
         )
     };
-    mix(row(y), row((y + 1).min(H - 1)), v - v.floor())
+    mix(row(y), row((y + 1).min(height - 1)), v - v.floor())
 }
 
 // Importance sample GGX with N=V, weighted by N.L for the split-sum radiance term.
-fn filter(capture: &[Vec3], n: Vec3, roughness: f32) -> Vec3 {
+pub(crate) fn filter(capture: &[Vec3], width: usize, n: Vec3, roughness: f32) -> Vec3 {
     let axis = if n[1].abs() < 0.99 {
         [0., 1., 0.]
     } else {
@@ -49,7 +51,7 @@ fn filter(capture: &[Vec3], n: Vec3, roughness: f32) -> Vec3 {
         let ray = std::array::from_fn(|j| 2. * cos * half[j] - n[j]);
         let nl = dot(n, ray);
         if nl > 0. {
-            let incoming = sample(capture, ray);
+            let incoming = sample(capture, width, ray);
             for j in 0..3 {
                 color[j] += incoming[j] * nl;
             }
@@ -59,9 +61,13 @@ fn filter(capture: &[Vec3], n: Vec3, roughness: f32) -> Vec3 {
     color.map(|v| v / weight)
 }
 
-fn parallel_pixels(output: &mut [Vec3], sample: impl Fn(usize) -> Vec3 + Sync) {
+pub(crate) fn parallel_fill<T: Send>(
+    output: &mut [T],
+    min_chunk: usize,
+    sample: impl Fn(usize) -> T + Sync,
+) {
     let workers = std::thread::available_parallelism().map_or(1, usize::from);
-    let chunk = output.len().div_ceil(workers).max(128);
+    let chunk = output.len().div_ceil(workers).max(min_chunk);
     std::thread::scope(|scope| {
         for (i, pixels) in output.chunks_mut(chunk).enumerate() {
             let sample = &sample;
@@ -98,8 +104,8 @@ impl BakeScene {
         let mut filtered = vec![[0.; 3]; W * (H / 2)];
         for p in probes {
             for light in lights {
-                parallel_pixels(&mut capture, |i| {
-                    let ray = direction(i % W, i / W, H);
+                parallel_fill(&mut capture, 128, |i| {
+                    let ray = direction(i % W, i / W, W, H);
                     let mut sum = [0.; 3];
                     for j in 0..8 {
                         let mut seed = i as u32 * 8 + j;
@@ -116,10 +122,11 @@ impl BakeScene {
                         capture.as_slice()
                     } else {
                         let values = &mut filtered[..W * height];
-                        parallel_pixels(values, |i| {
+                        parallel_fill(values, 128, |i| {
                             filter(
                                 &capture,
-                                direction(i % W, i / W, height),
+                                W,
+                                direction(i % W, i / W, W, height),
                                 level as f32 / (ReflectionProbes::LEVELS - 1) as f32,
                             )
                         });
@@ -155,7 +162,7 @@ mod tests {
         let direction_to_emitter = [1., 0., 0.];
         let capture: Vec<_> = (0..W * H)
             .map(|i| {
-                if dot(direction(i % W, i / W, H), direction_to_emitter) > 0.96 {
+                if dot(direction(i % W, i / W, W, H), direction_to_emitter) > 0.96 {
                     [8.; 3]
                 } else {
                     [0.; 3]
@@ -163,10 +170,10 @@ mod tests {
             })
             .collect();
         let off_axis = unit([1., 0.5, 0.]).unwrap();
-        let sharp = filter(&capture, direction_to_emitter, 0.08)[0];
-        let rough = filter(&capture, direction_to_emitter, 0.7)[0];
+        let sharp = filter(&capture, W, direction_to_emitter, 0.08)[0];
+        let rough = filter(&capture, W, direction_to_emitter, 0.7)[0];
         assert!(sharp > 2. * rough);
-        assert!(filter(&capture, off_axis, 0.7)[0] > filter(&capture, off_axis, 0.08)[0]);
+        assert!(filter(&capture, W, off_axis, 0.7)[0] > filter(&capture, W, off_axis, 0.08)[0]);
     }
     #[test]
     fn sky_energy_survives_every_filter_level_and_asset_roundtrip() {

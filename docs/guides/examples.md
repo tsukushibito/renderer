@@ -97,6 +97,14 @@ Rust API では `method: ReflectionPlacementMethod::Remedy` と `max_probes` を
 
 通常の候補を追加する効果が最初の半分を下回るか、通常の候補を使い切り、個数予算に余裕があると、遮蔽を評価して全枠を選び直します。狭い通路では、三角形が通るセルにも、中心に空きがあり対向する面に囲まれた候補を追加します。囲まれたプローブは柱の脇や奥に直接見える面まで影響ボックスを広げます。既存のシーンに反映するには配置JSONを再生成して、そのJSONで反射プローブを再ベイクします。ライトマップは再利用できます。[配置時間と画質の比較](../verification/current.md#remedy-enclosure)
 
+品質チェックと自動修正を使う場合は、配置コマンドに `--repair-placement` を追加し、反射ベイクと同じ照明プリセットと環境を指定してください。次は Sponza の例です。
+
+```powershell
+bistro-bake --manifest SCENE/manifest.json --place-reflection-probes 2 --placement-method remedy --max-probes 22 --look o3de-atrium --ibl-manifest SKY/manifest.json --repair-placement --output layout.json > quality.json
+```
+
+`layout.json` はそのまま `--reflection-probes` に渡せます。標準出力の JSON には、採否と理由（`decision`）、判定用の受光点における当初・候補・採用後の誤差（`before`、`proposed`、`after`）、最大誤差の位置、品質チェックの秒数を記録します。`changed_probe_index` は0始まりです。`NoReceivers` は評価点が得られなかったことを表します。照明は昼の1条件です。Rust では生成した配置を `BakeScene::repair_reflection_placement` に渡します。[評価方法と実測値](../verification/current.md#reflection-placement-repair)
+
 配置は静的ジオメトリで決まり、カメラ、材質の反射率、部位名を入力に使いません。アルファマスクの可視性はレイで判定しますが、テクスチャに穴がある面もボクセルを占有します。細い通路や小さな張り出しを解像したい場合はボクセルを小さくします。軸方向の 6 本のレイで合わせた箱は、斜めの壁や出入口では実際の空間をまたぐことがあります。ベイク前に JSON で位置と箱を調整できます。
 
 ### Bistro で試す
