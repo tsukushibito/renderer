@@ -23,13 +23,14 @@ impl BakeBackend {
         lights: [Lighting; N],
         samples: u32,
         limit: f32,
+        sh_order: ProbeShOrder,
     ) -> Result<Option<Vec<[f32; 4]>>, Box<dyn std::error::Error>> {
         #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
         if self != Self::Cpu {
-            return gpu::integrate(self, scene, jobs, lights, samples, limit);
+            return gpu::integrate(self, scene, jobs, lights, samples, limit, sh_order);
         }
         #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
-        let _ = (scene, jobs, lights, samples, limit);
+        let _ = (scene, jobs, lights, samples, limit, sh_order);
         if matches!(self, Self::Auto | Self::Cpu) {
             Ok(None)
         } else {
@@ -50,7 +51,7 @@ mod reflections;
 pub use probes::ProbeSettings;
 pub use reflection_placement::{ReflectionPlacementMethod, ReflectionPlacementSettings};
 pub use reflection_reference::{ReflectionReceiver, ReflectionReference};
-pub use renderer::pbr::{PointLight, RectLight, ReflectionProbeDesc, Sun};
+pub use renderer::pbr::{PointLight, ProbeShOrder, RectLight, ReflectionProbeDesc, Sun};
 mod transport;
 
 use bvh::Bvh;
