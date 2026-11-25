@@ -5,15 +5,15 @@ use super::{
     pipeline::{Budget, PreparedSet},
 };
 use sashiko_renderer_core::capacity::Preparation;
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use sashiko_renderer_core::runtime::RuntimeConfig;
 use sashiko_renderer_core::{
     graph::{BufferDesc, ImageDesc, PassHandle},
-    runtime::{
-        ExecutionError, FrameCompletion, FrameId, ResourceClass, Runtime, RuntimeConfig,
-        RuntimeLimits, WorkingSet,
-    },
+    runtime::{FrameCompletion, FrameId, ResourceClass, Runtime, RuntimeLimits, WorkingSet},
 };
 use std::num::NonZeroUsize;
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn config(options: &Options, budget: &Budget) -> Result<RuntimeConfig, Error> {
     match options.api.as_str() {
         #[cfg(feature = "vulkan")]
@@ -53,14 +53,13 @@ fn limits(options: &Options, budget: &Budget) -> RuntimeLimits {
     }
 }
 
-fn with_working_set<T>(
+fn prepare_set(
     resource_checks: bool,
     buffers: &[(u64, usize)],
     samplers: &[sashiko_renderer_core::program::SamplerDescriptor],
     images: &[(ImageDesc, usize)],
     prepared: &PreparedSet,
-    prepare: impl FnOnce(WorkingSet<'_>) -> Result<T, ExecutionError>,
-) -> Result<T, Error> {
+) -> Result<Preparation, Error> {
     let resources = buffers
         .iter()
         .map(|&(size, count)| ResourceClass::Buffer {
@@ -94,9 +93,10 @@ fn with_working_set<T>(
             ..WorkingSet::default()
         })?;
     }
-    Ok(prepare(preparation.working_set())?)
+    Ok(preparation)
 }
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn require_hardware(_runtime: &Runtime) -> Result<(), Error> {
     #[cfg(feature = "vulkan")]
     if let Some(runtime) = _runtime.as_vulkan()
@@ -107,17 +107,18 @@ fn require_hardware(_runtime: &Runtime) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(super) fn create(options: &Options, budget: &Budget) -> Result<Runtime, Error> {
     let config = config(options, budget)?;
     let prepared = budget.prepared.as_ref().expect("prepared Bistro pipeline");
-    let runtime = with_working_set(
+    let set = prepare_set(
         options.resource_checks,
         &budget.buffers,
         &budget.samplers,
         &budget.images,
         prepared,
-        |set| Runtime::new(config, limits(options, budget), set),
     )?;
+    let runtime = Runtime::new(config, limits(options, budget), set.working_set())?;
     require_hardware(&runtime)?;
     Ok(runtime)
 }
@@ -131,35 +132,60 @@ pub(super) fn open(
 ) -> Result<(Runtime, sashiko_renderer_core::runtime::WindowPresenter), Error> {
     let config = config(options, budget)?;
     let prepared = budget.prepared.as_ref().expect("prepared Bistro pipeline");
-    let (runtime, presenter) = with_working_set(
+    let set = prepare_set(
         options.resource_checks,
         &budget.buffers,
         &budget.samplers,
         &budget.images,
         prepared,
-        |set| Runtime::for_window(config, limits(options, budget), set, window, presentation),
+    )?;
+    let (runtime, presenter) = Runtime::for_window(
+        config,
+        limits(options, budget),
+        set.working_set(),
+        window,
+        presentation,
     )?;
     require_hardware(&runtime)?;
     Ok((runtime, presenter))
 }
 
-#[cfg(all(windows, feature = "presentation"))]
+#[cfg(any(
+    all(windows, feature = "presentation"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
 pub(super) fn resize(
     runtime: &mut Runtime,
     options: &Options,
     budget: &Budget,
     prepared: &PreparedSet,
 ) -> Result<(), Error> {
-    with_working_set(
+    let preparation = prepare_set(
         options.resource_checks,
         &budget.resized_buffers(prepared),
         &budget.samplers,
         &Budget::frame_images(options, prepared),
         prepared,
-        |set| runtime.prepare_working_set(set),
-    )
+    )?;
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
+    {
+        let width = u64::from(options.width);
+        let readback = ((width * 8).next_multiple_of(256) + (width * 4).next_multiple_of(256) * 2)
+            * u64::from(options.height)
+            + 4096;
+        Ok(runtime.prepare_fitted_working_set(
+            &preparation,
+            budget.upload_bytes as u64,
+            readback,
+        )?)
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")))]
+    {
+        Ok(runtime.prepare_working_set(preparation.working_set())?)
+    }
 }
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(super) fn wait_for(runtime: &mut Runtime, frame: FrameId) -> Result<FrameCompletion, Error> {
     runtime
         .wait_for_frame(frame, super::WAIT)?
@@ -177,6 +203,7 @@ pub(super) fn readback(
     Ok(completed.readback_into(pass, bytes)?)
 }
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(super) fn info(runtime: &Runtime) -> serde_json::Value {
     #[cfg(feature = "vulkan")]
     if let Some(runtime) = runtime.as_vulkan() {
@@ -196,6 +223,7 @@ pub(super) fn info(runtime: &Runtime) -> serde_json::Value {
     unreachable!("Bistro Runtime uses a compiled backend")
 }
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(super) fn memory_snapshot(runtime: &Runtime) -> Result<serde_json::Value, Error> {
     #[cfg(feature = "vulkan")]
     if let Some(runtime) = runtime.as_vulkan() {
@@ -208,6 +236,7 @@ pub(super) fn memory_snapshot(runtime: &Runtime) -> Result<serde_json::Value, Er
     unreachable!("Bistro Runtime uses a compiled backend")
 }
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(super) fn close(runtime: Runtime) -> Result<serde_json::Value, Error> {
     #[cfg(feature = "vulkan")]
     if let Some(native) = runtime.as_vulkan() {
@@ -252,4 +281,46 @@ pub(super) fn close(runtime: Runtime) -> Result<serde_json::Value, Error> {
         );
     }
     unreachable!("Bistro Runtime uses a compiled backend")
+}
+
+pub(super) async fn wait_upload(
+    runtime: &mut Runtime,
+    frame: FrameId,
+) -> Result<FrameCompletion, Error> {
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
+    {
+        Ok(runtime.wait_for_webgpu_frame(frame).await?)
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")))]
+    {
+        wait_for(runtime, frame)
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
+pub(super) async fn canvas_runtime(
+    canvas: &sashiko_renderer_core::webgpu::CanvasTarget,
+    options: &Options,
+    budget: &Budget,
+) -> Result<Runtime, Error> {
+    use sashiko_renderer_core::runtime::WebGpuConfig;
+    let prepared = budget.prepared.as_ref().ok_or("missing prepared scene")?;
+    let preparation = prepare_set(
+        false,
+        &budget.buffers,
+        &budget.samplers,
+        &budget.images,
+        prepared,
+    )?;
+    Ok(Runtime::from_webgpu_device(
+        canvas.device(),
+        canvas.queue(),
+        WebGpuConfig {
+            upload_bytes: budget.upload_bytes as u64,
+            readback_bytes: budget.readback_bytes,
+        },
+        limits(options, budget),
+        preparation.working_set(),
+    )
+    .await?)
 }

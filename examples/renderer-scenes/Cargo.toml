@@ -7,11 +7,15 @@ publish = false
 default-run = "renderer-scenes"
 description = "Reference scene applications for Bistro and Sponza"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [features]
 default = []
 bake-tool = ["dep:sashiko-lighting-bake", "dep:serde", "dep:half"]
-vulkan = ["sashiko-renderer/vulkan", "sashiko-lighting-bake?/vulkan"]
-d3d12 = ["sashiko-renderer/d3d12", "sashiko-lighting-bake?/d3d12"]
+webgpu = ["sashiko-renderer/webgpu", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys", "dep:js-sys"]
+vulkan = ["dep:pollster", "sashiko-renderer/vulkan", "sashiko-lighting-bake?/vulkan"]
+d3d12 = ["dep:pollster", "sashiko-renderer/d3d12", "sashiko-lighting-bake?/d3d12"]
 development-validation = ["sashiko-renderer/development-validation", "sashiko-lighting-bake?/development-validation"]
 vulkan-diagnostics = ["sashiko-renderer/vulkan-diagnostics"]
 d3d12-diagnostics = ["sashiko-renderer/d3d12-diagnostics"]
@@ -24,6 +28,15 @@ tracy = ["sashiko-renderer/tracy", "dep:tracy-client"]
 name = "renderer-scenes-bake"
 path = "src/bin/renderer-scenes-bake.rs"
 required-features = ["bake-tool"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = { version = "0.4", optional = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", optional = true, features = ["Window", "Response", "Url", "Location", "HtmlCanvasElement"] }
 
 [dependencies]
 half = { version = "2.7.1", optional = true }

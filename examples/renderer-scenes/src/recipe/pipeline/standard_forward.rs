@@ -3,13 +3,21 @@
 use super::{Scene, shadow};
 use sashiko_renderer::pbr::{Draw, GraphMaterial, MaterialSamplers};
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
 use super::{
     Built, Error, GraphPool, Options, Resident, SceneImages, SubmissionMode, Workspace,
     caster_revision, finish_frame, import_environment, import_frame, material_visible,
     select_draws, shadow_casters, sun_caster_revision,
 };
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
 use sashiko_renderer::pbr::{self, IndexedDraw, PbrDrawInput, ShadowSource, SunShadows};
 
 use sashiko_renderer::material::{
@@ -27,7 +35,11 @@ pub(super) struct SurfaceTable {
     maps: Vec<([usize; 4], MaterialSamplers)>,
 }
 impl SurfaceTable {
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    #[cfg(any(
+        feature = "vulkan",
+        all(windows, feature = "d3d12"),
+        all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+    ))]
     pub(super) fn new(
         scene: &Scene,
         uniforms: &[ResidentMaterialUniform],
@@ -110,7 +122,11 @@ impl Inputs {
     clippy::too_many_arguments,
     reason = "construct a frame from the same application inputs as the comparison modes"
 )]
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
 pub(super) fn build(
     pool: &mut GraphPool,
     workspace: &mut Workspace,
