@@ -7,7 +7,7 @@
 
 ## クレート再配置後の実行確認
 
-Windows の開発検証構成で、移動後の `renderer-scenes` は Vulkan で Bistro と Sponza の cook をそれぞれ 320×180、予熱 1・計測 2 フレーム描画した。小規模 fixture は標準 PBR と手組み Graph の両方で Vulkan 描画し、標準 PBR は D3D12 でも描画した。各実行の検証レポートは警告・エラーともに 0 件だった。CPU の照明ベイク、装備 cook、訓練場の Vulkan ホストキャプチャ、サンプルゲームのヘッドレス 5 tick を確認した。フルシーンの D3D12 描画と画面表示は今回の移行では再計測していない。
+Windows の開発検証構成で、移動後の `renderer-scenes` は Vulkan で Bistro と Sponza の cook をそれぞれ 320×180、予熱 1・計測 2 フレーム描画した。小規模 fixture は標準 PBR と手組み Graph の両方で Vulkan 描画し、標準 PBR は D3D12 でも描画した。各実行の検証レポートは警告・エラーともに 0 件だった。CPU の照明ベイク、装備 cook、訓練場の Vulkan ホストキャプチャ、サンプルゲームのヘッドレス 5 tick を確認した。固定 SDK で Renderer Core と標準描画パイプラインのシェーダーを再生成し、格納済みの成果物との一致を確認した。フルシーンの D3D12 描画と画面表示は今回の移行では再計測していない。
 
 <a id="game-engine"></a>
 
@@ -770,7 +770,7 @@ ORCA 公式配布の **Bistro_Exterior_1.png** に、スクーター、車止め
 
 日向・日陰の位置関係と店先の明るさが近づいた。暗部の外壁には褐色が残り、右手の路面では建物の影の境界がずれる。材質の原本を保持し、全視点で固定の光を使った。`street-mid` と `material-detail` の白・黒端の画素率は増えなかった（SDR 符号値の加重輝度が 1 以下または 254 以上）。ルートの先頭 2 秒を両設定で撮影した。柵や葉の時間方向の安定性は映像での観察対象で、静止画の輝度指標には含めていない。[実行手順](../guides/examples.md#bistro-daylight)
 
-Vulkan／D3D12 の実 GPU で、街角 1 視点、既存 7 視点、ルート 60 フレームの各 HDR・SDR・深度が既存の `scene` 閾値内だった。既定の `street` は両 API とも変更前の 1280 × 720 キャプチャと 3 面がバイト一致した。Vulkan の街角では `renderer-scenes-graph` と `renderer-scenes` も同じ 3 面がバイト一致した。実行はオフスクリーンの開発検証構成で、警告・エラーは各 0 件。
+Vulkan／D3D12 の実 GPU で、街角 1 視点、既存 7 視点、ルート 60 フレームの各 HDR・SDR・深度が既存の `scene` 閾値内だった。既定の `street` は両 API とも変更前の 1280 × 720 キャプチャと 3 面がバイト一致した。Vulkan の街角では `bistro-graph` と `bistro` も同じ 3 面がバイト一致した。実行はオフスクリーンの開発検証構成で、警告・エラーは各 0 件。
 
 <a id="engine-integration"></a>
 
@@ -839,7 +839,7 @@ Vulkan の descriptor 予約では、同じバインディングを深度付き�
 | 常駐メッシュ | メッシュと材質のスナップショットを保持して描画先を 32×16 から未予約の 23×13 に変更し、HDR 画素を確認した。別の試験では更新を 128 バイトずつ転送し、新しい版が揃うまで旧版を描画できた。 |
 | テクスチャと描画領域 | BC1・BC3・BC5・BC7 を含む画像の末端 mip をシェーダーで読み、BC3 の複数ブロック行はコピー後のバイト列も照合した。部分転送した mip の初期化状態と全 mip 転送時の状態を確認した。viewport と scissor は描画後の画素で有効範囲を照合した。 |
 | ウィンドウと外部画像 | Windows の二つのホスト所有ウィンドウで同じ Runtime の画像を表示した。片方を閉じている間も他方で表示できた。ホスト所有テクスチャを Graph で更新し、使用中の返却拒否、退役後の返却と再登録、返却した画像の値を確認した。 |
-| 照明と合成 | Forward、Forward+、Deferred の不透明・半透明で 257 番目の点光源による画素を単灯の参照と比較した。Forward+ の 129 灯ではタイルごとのマスクも照合した。標準出力のシェーダーは `sashiko-renderer` への移動前後で同じ生成物を使う。 |
+| 照明と合成 | Forward、Forward+、Deferred の不透明・半透明で 257 番目の点光源による画素を単灯の参照と比較した。Forward+ の 129 灯ではタイルごとのマスクも照合した。標準出力のシェーダーは `renderer` への移動前後で同じ生成物を使う。 |
 
 Windows の RTX 3060 で統合版 `7a5d119` と `renderer-jw0` の Bistro 小規模 fixture を比較した。
 Vulkan／D3D12、それぞれ開発検証あり／なしで 6 ケースずつ、計 24 ケースの HDR・SDR・深度・影など 236 キャプチャ
@@ -864,7 +864,7 @@ private 項目を含む rustdoc、HTML ドキュメントのリンク検査も�
 個別プロセスで実行した core の実機・計測受入は開発検証構成 122 件、通常構成 82 件が通過した。
 実ウィンドウの smoke と tour では、標準・独自 Raster の 16 実行、合計 384 フレームについて寸法、描画画素数、画像ダイジェストを照合した。
 開発検証の Vulkan Core／SyncVal と D3D12 Debug Layer／GBV は破棄まで警告・エラー 0 件だった。
-同じ 2 構成で `sashiko-renderer` の実機試験 34 件と Bistro の 11 件、CPU 上での異種ビュー検査、公開例の 19 通りの実行がそれぞれ成功した。
+同じ 2 構成で `renderer` の実機試験 34 件と Bistro の 11 件、CPU 上での異種ビュー検査、公開例の 19 通りの実行がそれぞれ成功した。
 
 ## ビューパイプラインの差し替え
 
@@ -1052,7 +1052,7 @@ Vulkan Core／SyncValとD3D12 Debug Layer／GBVを有効にした構成で、警
 
 両API・両構成で外部材質バンドル、常駐資源の入れ替え・mip診断、表示24フレームとresize・最小化・復帰・再生・未退役フレームを残した終了を確認した。
 Vulkanは128×96のfixture、D3D12厳格は801×601のfixture、D3D12製品は801×601の全量シーンでシャドウを毎フレーム描画する設定を使った。
-単体`sashiko-renderer-core`のBistroも、4構成のfixtureで出力48枚が移行前と一致した。
+単体`renderer-core`のBistroも、4構成のfixtureで出力48枚が移行前と一致した。
 手順は[小さなPBRシーン](../guides/examples.md#pbr-forward-example)と[Bloomの受入](../guides/development.md#bistro-bloom-fixture)を参照する。
 画像照合と計測のログは`.tools/renderer-2l7/`に保存した。
 
@@ -1068,11 +1068,11 @@ Bistro素材を使わない64×48の小シーンで、同じ公開レシピか�
 Vulkan／D3D12それぞれの最適化製品・厳格構成で、SDRとD32は両経路でバイト一致し、
 三角形の内外の画素・深度と、ネイティブ検証が有効な構成での正常な解放も確認した。
 
-WindowsのRTX 3060（610.88）で、`sashiko-renderer`のBistroを移行前`c152abb`と同一API・構成内で比較した。
+WindowsのRTX 3060（610.88）で、`renderer`のBistroを移行前`c152abb`と同一API・構成内で比較した。
 129×97 fixtureでForward系3モード、Deferred、1×／4× MSAA、直接／packed／間接描画、インスタンス、Bloom、FXAAを実行し、
 `full-a3`／`ibl-final`の全量シーンで36フレームの巡回を行った。HDR、SDR、D32、4カスケードと診断画像は
 移行前との364比較、再利用と強制再描画の324比較でバイト一致した。固定視点では全カスケードが5回、巡回では順に3、15、24、32回ヒットした。
-影を無効にした4枚は全画素がクリア値だった。個別にビルドした`sashiko-renderer-core`のBistroのfixtureも従来の48出力と一致した。
+影を無効にした4枚は全画素がクリア値だった。個別にビルドした`renderer-core`のBistroのfixtureも従来の48出力と一致した。
 
 3 warm-upフレーム・同時投入3枠の通常588フレームで、Graph構築から投入・退役・結果返却までを計測した。
 Rust／VMA hostの確保・再確保・解放、Rendererによるネイティブ資源・メモリの作成・破棄、descriptorの確保・解放は0件だった。
@@ -1091,7 +1091,7 @@ Vulkanは128×96のfixture、D3D12厳格は801×601のfixture、D3D12製品は80
 標準Forwardと出力レシピの間に自作copyを挟むCPUサンプルで、同じGraphへの合成と入力切替を確認した。
 CPUテストでは予約の重複・容量不足からの再試行、Bistroの126構成と、透明描画の有無による4× MSAAのresolveを確認した。
 シャドウ画像のimport、書き込み、投入受理後の版の公開は既存のGraphとRuntimeの同期・寿命契約を使う。
-全量描画は`sashiko-renderer`のBistro、Graphの直接利用は`sashiko-renderer-core`のBistroで確認できる。
+全量描画は`renderer`のBistro、Graphの直接利用は`renderer-core`のBistroで確認できる。
 
 WindowsのRTX 3060（610.88）で、Vulkan／D3D12それぞれの最適化製品・厳格構成を実行した。
 129×97 fixtureはForward系3モード、Deferred、対応する1×／4× MSAA、直接／packed／間接描画、個別／インスタンス描画、
@@ -1119,7 +1119,7 @@ D3D12製品版のfixtureは801×601と1601×901で24フレームを表示し、�
 
 ## 移行前のBistroパイプラインの比較基準
 
-`renderer-12t`の`sashiko-renderer`サンプルは、4カスケード、シーン描画、Bloom、トーンマッピング、SDR出力を
+`renderer-12t`の`renderer`サンプルは、4カスケード、シーン描画、Bloom、トーンマッピング、SDR出力を
 一つの準備済みYAMLパイプラインで構築する。キャッシュが有効なカスケードでは、Graphに取り込んだ既存のD32画像を読み、
 生成パスとその描画リストを省く。更新時は永続画像をclearして描画し、投入受理後にその版を次フレームへ渡す。
 この選択はGraph構築時に確定し、既存のGraphによる同期と寿命管理を使用する。
@@ -1150,7 +1150,7 @@ Renderer発行のネイティブ資源・メモリの作成・破棄、descripto
 未完了フレームを残した終了を確認した。D3D12の128×96製品構成は両版で24フレームを表示し、初回の線形表示元が一致した。
 両試行とも終了時の未完了数は0件だった。未完了フレームの終了試験は801×601で行った。
 
-`sashiko-renderer-core`のBistroは公開Rust APIでパスとGraphを構築する。同じGPUのVulkan／D3D12で、
+`renderer-core`のBistroは公開Rust APIでパスとGraphを構築する。同じGPUのVulkan／D3D12で、
 最適化した製品・厳格構成のfixtureと640×480の全量Bistro（street）を実行した。各APIの製品と厳格、
 および構成ごとの両APIの画像比較が受入基準内に収まり、厳格検証は警告・エラー0件だった。
 
@@ -1178,7 +1178,7 @@ YAMLから材質型のProgramを解決し、カスケード・材質資源・カ
 計測区間はGraph構築から結果返却までとした。厳格構成のnative warning/errorとD3D12 corruptionは0件だった。
 別のステージを指すようにbundleとハッシュを改変した試行では、Bistroのレビュー済みバイナリとの照合でフレーム実行前に拒否した。
 
-`sashiko-renderer`の`yaml_pipeline`も同じGPUで、`build`から一つのRasterパスへ二つのProgramと材質別textureを設定した。
+`renderer`の`yaml_pipeline`も同じGPUで、`build`から一つのRasterパスへ二つのProgramと材質別textureを設定した。
 入力順を保った描画が1／2／3件のとき、9×7画像の全画素は順に赤／黄／青になった。
 製品・厳格の両release構成で、4経路×2API×2構成×24回の合計384通常フレームを計測し、
 Rustの確保・再確保・解放、VMAのhostイベント、nativeの作成・破棄とdescriptorの確保・解放は0件だった。
@@ -1245,10 +1245,10 @@ Vulkan Core／SyncVal、D3D12 Debug Layer／GBVのwarningとerrorは全12 runで
 
 ## 配布ビルドと起動時のバックエンド選択
 
-`renderer-6yh`。WindowsのRTX 3060（610.88）で`windowed`と`renderer-scenes`のreleaseビルドを
+`renderer-6yh`。WindowsのRTX 3060（610.88）で`windowed`と`bistro`のreleaseビルドを
 Vulkan専用、D3D12専用、両対応で作成した。EXE中の既知のSPIR-V／DXILを元ファイルの全byte列と照合した。
 
-| releaseビルド | `windowed`のSPIR-V／DXIL | `renderer-scenes`のSPIR-V／DXIL |
+| releaseビルド | `windowed`のSPIR-V／DXIL | `bistro`のSPIR-V／DXIL |
 | --- | --- | --- |
 | Vulkan専用 | 4／0 | 27／0 |
 | D3D12専用 | 0／5 | 0／27 |
@@ -2193,7 +2193,7 @@ Godotのallocation event観測、B4相当の描画と最終表示の受入は未
 ## Bistroの実行用cookと二APIのForward PBR
 
 `renderer-7ft.3.1`／`.3.2`と、実装後レビュー・計測の`renderer-bj6`。
-利用側の`tools/bistro/cook.py`と`renderer-scenes` exampleを公開Graphへ接続した。
+利用側の`tools/bistro/cook.py`と`bistro` exampleを公開Graphへ接続した。
 Model／scene／材質recipeをRenderer本体へ追加せず、同じcook・camera・shader契約をVulkanとD3D12で実行する。
 実行方法は[開発ガイド](../guides/development.md#bistro-pbr)、
 現在の境界は[実装方針](../design/implementation-policy.md#bistro-runtime-cook)を参照する。
@@ -2933,10 +2933,10 @@ Vulkan／VMA一般推奨からの新たな例外は設けていない。
 ## 公開標準パスと標準グラフ
 
 `renderer-abr`で標準パス、Forwardレシピ、snapshotの標準描画ヘルパーを`sashiko_renderer::standard`へ移した。
-組み込みProgramの信頼境界とバイナリ、資源の所有、Graphの解析とnative実行は`sashiko-renderer-core`が担う。
+組み込みProgramの信頼境界とバイナリ、資源の所有、Graphの解析とnative実行は`renderer-core`が担う。
 CPUとVulkanは出力確定を共有し、Graphの置換、互換性のない出力と未初期化の読み取りを引き続き拒否する。
 入力接続のscratchは拡張callbackの前に返し、Vulkanの常駐入力pinは従来どおり投入または取消まで保持する。
-YAMLは独立featureで、既定の型付きRust APIの通常依存は`sashiko-renderer-core`だけである。
+YAMLは独立featureで、既定の型付きRust APIの通常依存は`renderer-core`だけである。
 
 型付きAPI単体14件とworkspace CPU301件が成功した。全feature／全targetのClippy、全featureのRustdoc、fmt、
 固定ツールによるSPIR-V／DXILの再生成照合とABI検証、mdBookとChromiumのMermaid検査も成功した。
@@ -3797,7 +3797,7 @@ B0の設計確認ではRenderer本体・管理下shader・native経路を変更�
 CPU／GPU速度の優位を実測した判断ではない。基盤選定の`.1.3`でもAを維持した。
 一般owned命令は現行Graphへ接続済みで、B2の二API PBR受入も[本書冒頭](#bistro-pbr)へ記録した。
 
-[当時のRust試作](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/sashiko-renderer-core/examples/graph_api_comparison.rs)はGPU非依存のCPU意図を比較した。
+[当時のRust試作](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer-core/examples/graph_api_comparison.rs)はGPU非依存のCPU意図を比較した。
 複数draw、depth-only／color-only、独自Compute、module内の多段Bloom、履歴初回／継続／resize、
 このCPU試作で扱ったMRT／mip Viewを同じ入力で書き、ownerだけを正規化した命令とアクセス用途を照合する。
 短命なdraw slice終了後のAの命令保持、Bのframe借用と不要callback非実行、

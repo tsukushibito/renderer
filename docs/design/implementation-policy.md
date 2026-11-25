@@ -590,8 +590,8 @@ UXの受入条件は、入出力と処理を近くで読めること、同じ資
 
 `renderer-7ft.1.2`の設計対象は利用側から見た契約である。以下は**B1で実証する第一案**であり、
 現行`Graph`の実装済み機能や基盤採用の決定ではない。
-[当時のCPU試作](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/sashiko-renderer-core/examples/graph_api_comparison.rs)は二案を同じ入力で比較する。
-[当時の利用コードと試作本体](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/sashiko-renderer-core/examples/support/graph_api_comparison.rs)の`Study::add`が
+[当時のCPU試作](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer-core/examples/graph_api_comparison.rs)は二案を同じ入力で比較する。
+[当時の利用コードと試作本体](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer-core/examples/support/graph_api_comparison.rs)の`Study::add`が
 両案の呼出し、`scenario`が代表入力、`bloom`が利用側の多段処理である。
 固定effectの選択肢を増やす方式は、独自shaderをGraph本体の変更なしで追加する条件を満たさない。
 
