@@ -13,7 +13,13 @@ use super::{
     program,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use sashiko_renderer::passes::output::{SdrEncoding, SdrOutput, write_sdr};
+use sashiko_renderer::passes::output::write_sdr;
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
+use sashiko_renderer::passes::output::{SdrEncoding, SdrOutput};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use sashiko_renderer_core::{
     capacity::CapacityRecovery,
@@ -25,7 +31,11 @@ use serde_json::{Value, json};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use std::path::Path;
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
 pub(super) const MIP_PROBE_SDR: SdrOutput = SdrOutput {
     encoding: SdrEncoding::Srgb,
     fxaa: false,
@@ -462,8 +472,11 @@ pub(super) fn execute(
         )?;
         resident.materials[material_index].release(backend)?;
         let mut new_owners = Vec::new();
-        resident.materials[material_index] =
-            pipeline::upload_material(backend, &mut new_owners, &changed_material)?;
+        resident.materials[material_index] = pollster::block_on(pipeline::upload_material(
+            backend,
+            &mut new_owners,
+            &changed_material,
+        ))?;
         resident.refresh_surfaces()?;
         require_stale(backend, &stale_buffer)?;
         let pending_memory = backend::memory_snapshot(backend)?;
@@ -518,8 +531,11 @@ pub(super) fn execute(
         resident.images[image_index] =
             upload_texture(backend, &mut upload_pool, desc, &original_texture)?;
         let mut restored_owners = Vec::new();
-        resident.materials[material_index] =
-            pipeline::upload_material(backend, &mut restored_owners, &original_material)?;
+        resident.materials[material_index] = pollster::block_on(pipeline::upload_material(
+            backend,
+            &mut restored_owners,
+            &original_material,
+        ))?;
         resident.refresh_surfaces()?;
         // The current material's original owner is released only at this change
         // boundary. Pending work retained its own immutable provenance as needed.

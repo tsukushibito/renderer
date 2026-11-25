@@ -19,8 +19,14 @@ use sashiko_example_support::clock;
 ))]
 use sashiko_example_support::{window_camera, window_input};
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
 mod backend;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
+mod browser;
 mod lifecycle;
 mod lighting_pass;
 use lighting_pass::LightingPass;
@@ -442,8 +448,8 @@ impl Options {
         Ok(())
     }
 
-    fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, Error> {
-        let mut result = Self {
+    fn defaults() -> Self {
+        Self {
             api: DEFAULT_API.into(),
             manifest: None,
             ibl_manifest: None,
@@ -495,7 +501,11 @@ impl Options {
             #[cfg(feature = "tracy")]
             capture_handshake: false,
             output: PathBuf::from(".tools/bistro-runtime"),
-        };
+        }
+    }
+
+    fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, Error> {
+        let mut result = Self::defaults();
         let mut args = arguments.into_iter();
         let mut selected_view = None;
         let mut specified_size = false;

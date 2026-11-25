@@ -1,13 +1,21 @@
 //! Packed opaque geometry and fixed native indirect command slots.
 
 use super::super::{Error, asset::Scene, camera::Frustum, program, shadow::Bounds};
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
 use super::{upload_buffer, upload_geometry};
 use sashiko_renderer::{
     passes::visibility::{IndexedGeometry, PreparedVisibility, WorldBounds},
     pbr,
 };
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
 use sashiko_renderer_core::graph::GraphPool;
 use sashiko_renderer_core::{
     graph::{
@@ -167,8 +175,12 @@ pub(super) struct Resident {
 }
 
 impl Resident {
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn upload(
+    #[cfg(any(
+        feature = "vulkan",
+        all(windows, feature = "d3d12"),
+        all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+    ))]
+    pub async fn upload(
         backend: &mut sashiko_renderer_core::runtime::Runtime,
         geometry_pool: &mut GraphPool,
         upload_owners: &mut Vec<GraphPool>,
@@ -184,7 +196,8 @@ impl Resident {
             program::VERTEX_BYTES as u32,
             &vertices,
             &indices,
-        )?;
+        )
+        .await?;
         let lightmap_uv = if layout.groups.iter().any(|g| g.page.is_some()) {
             let mut bytes = Vec::with_capacity(layout.vertex_bytes / 48 * 12);
             for draw in layout.groups.iter().flat_map(|g| &g.draws) {
@@ -199,16 +212,12 @@ impl Resident {
                     bytes.resize(bytes.len() + p.vertices.len() / 48 * 12, 0);
                 }
             }
-            Some(upload_buffer(backend, upload_owners, &bytes)?)
+            Some(upload_buffer(backend, upload_owners, &bytes).await?)
         } else {
             None
         };
         let aabbs = if indirect {
-            Some(upload_buffer(
-                backend,
-                upload_owners,
-                &layout.aabbs(bounds)?,
-            )?)
+            Some(upload_buffer(backend, upload_owners, &layout.aabbs(bounds)?).await?)
         } else {
             None
         };

@@ -1,6 +1,10 @@
 //! Public Graph composition and explicit working-set budgets for this consumer.
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
 use super::camera::Frustum;
 use super::{
     Bloom, Error, Options, SubmissionMode, asset::Scene, camera::Camera, ibl, instancing, lighting,
@@ -23,7 +27,11 @@ use sashiko_renderer_core::{
     },
     program::{MAX_RASTER_BINDINGS, ManagedRasterProgram, SamplerDescriptor},
 };
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
 use sashiko_renderer_core::{
     graph::BufferDesc,
     runtime::{ExecutionError, FrameSubmission, Runtime},
@@ -167,12 +175,18 @@ impl Budget {
             })
     }
 
-    #[cfg(all(windows, feature = "presentation"))]
+    #[cfg(any(
+        all(windows, feature = "presentation"),
+        all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+    ))]
     pub fn resized_buffers(&self, prepared: &PreparedSet) -> Vec<(u64, usize)> {
         Self::frame_buffers(prepared).collect()
     }
 
-    #[cfg(all(windows, feature = "presentation"))]
+    #[cfg(any(
+        all(windows, feature = "presentation"),
+        all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+    ))]
     pub fn prepare_frame(
         &self,
         options: &Options,
@@ -564,8 +578,12 @@ pub(super) struct Resident {
     pub upload_owners: Vec<GraphPool>,
 }
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-fn upload_geometry(
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
+async fn upload_geometry(
     backend: &mut Runtime,
     pool: &mut GraphPool,
     stride: u32,
@@ -596,7 +614,7 @@ fn upload_geometry(
         pending.export_buffer(vertex)?,
         pending.export_buffer(index)?,
     );
-    drop(super::backend::wait_for(backend, pending.id())?);
+    drop(super::backend::wait_upload(backend, pending.id()).await?);
     drop((pending, plan, geometry));
     // Native canonical provenance carries scalar index bounds, not CPU bytes.
     // Release this slot's final asset Arc at the explicit load boundary.
@@ -604,8 +622,12 @@ fn upload_geometry(
     Ok(imports)
 }
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-pub(super) fn upload_buffer(
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
+pub(super) async fn upload_buffer(
     backend: &mut Runtime,
     owners: &mut Vec<GraphPool>,
     bytes: &[u8],
@@ -627,10 +649,15 @@ pub(super) fn upload_buffer(
         },
         |buffer, submission| submission.export_buffer(buffer),
     )
+    .await
 }
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-pub(super) fn upload_material(
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
+pub(super) async fn upload_material(
     backend: &mut Runtime,
     owners: &mut Vec<GraphPool>,
     bytes: &[u8; program::MATERIAL_BYTES],
@@ -646,10 +673,15 @@ pub(super) fn upload_material(
         },
         MaterialUniform::accept,
     )
+    .await
 }
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-fn upload_asset<D, T>(
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
+async fn upload_asset<D, T>(
     backend: &mut Runtime,
     owners: &mut Vec<GraphPool>,
     byte_count: usize,
@@ -680,13 +712,29 @@ fn upload_asset<D, T>(
     let plan = graph.compile()?;
     let pending = backend.submit(&plan)?;
     let imported = accept(resource, &pending)?;
-    drop(super::backend::wait_for(backend, pending.id())?);
+    drop(super::backend::wait_upload(backend, pending.id()).await?);
     drop((pending, plan));
     owners.push(pool);
     Ok(imported)
 }
 
 impl Resident {
+    fn rectangle_lights(mode: super::RectLights) -> Option<Box<[pbr::LocalLight]>> {
+        match mode {
+            super::RectLights::Shadowed => Some(Box::new(
+                lighting::sponza_rectangles().map(pbr::LocalLight::shadowed_rect),
+            )),
+            super::RectLights::Unshadowed => Some(Box::new(
+                lighting::sponza_rectangles().map(pbr::LocalLight::Rect),
+            )),
+            super::RectLights::Off => None,
+        }
+    }
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
+    pub(super) fn set_rect_lights(&mut self, mode: super::RectLights) {
+        self.local_lights = Self::rectangle_lights(mode);
+    }
+
     pub fn instance_placements(
         &self,
         scene: &Scene,
@@ -737,6 +785,31 @@ impl Resident {
         environment: &ibl::Environment,
         budget: &Budget,
         camera: &crate::shared::camera::CameraInput,
+    ) -> Result<Self, Error> {
+        pollster::block_on(Self::upload_scene(
+            backend,
+            scene,
+            environment,
+            budget,
+            camera,
+        ))
+    }
+
+    #[cfg(any(
+        feature = "vulkan",
+        all(windows, feature = "d3d12"),
+        all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+    ))]
+    pub async fn upload_scene(
+        backend: &mut Runtime,
+        scene: &Scene,
+        environment: &ibl::Environment,
+        budget: &Budget,
+        camera: &crate::shared::camera::CameraInput,
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
+        lightmaps: Option<&crate::shared::web_assets::WebLightmaps>,
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
+        progress: &js_sys::Function,
     ) -> Result<Self, Error> {
         let mut pool = budget.upload_pool()?;
         let mut geometry_pool = GraphPool::new(
@@ -793,16 +866,16 @@ impl Resident {
                 program::VERTEX_BYTES as u32,
                 primitive_vertices,
                 &decoded,
-            )?;
+            )
+            .await?;
             lightmap_uv.push(if primitive.surface.is_some() {
                 let range = primitive.lightmap.as_ref().unwrap().0.clone();
                 let owner = match shared_uv.entry(range.clone()) {
                     std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-                    std::collections::hash_map::Entry::Vacant(e) => e.insert(upload_buffer(
-                        backend,
-                        &mut upload_owners,
-                        &scene.lightmap_uv[range],
-                    )?),
+                    std::collections::hash_map::Entry::Vacant(e) => e.insert(
+                        upload_buffer(backend, &mut upload_owners, &scene.lightmap_uv[range])
+                            .await?,
+                    ),
                 };
                 Some(owner.clone())
             } else {
@@ -811,6 +884,16 @@ impl Resident {
             vertices.push(vertex);
             indices.push(index_buffer);
             if (index + 1).is_multiple_of(256) {
+                #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
+                super::browser::progress(
+                    progress,
+                    &format!("Geometry {}/{}", index + 1, scene.primitives.len()),
+                )?;
+                #[cfg(not(all(
+                    target_arch = "wasm32",
+                    target_os = "unknown",
+                    feature = "webgpu"
+                )))]
                 eprintln!(
                     "Bistro geometry upload {}/{}",
                     index + 1,
@@ -819,10 +902,8 @@ impl Resident {
             }
         }
         let mut materials = Vec::with_capacity(scene.materials.len());
-        let packed = budget
-            .packed
-            .as_ref()
-            .map(|layout| {
+        let packed = if let Some(layout) = &budget.packed {
+            Some(
                 indirect::Resident::upload(
                     backend,
                     &mut geometry_pool,
@@ -832,18 +913,17 @@ impl Resident {
                     &primitive_bounds,
                     budget.indirect,
                 )
-            })
-            .transpose()?;
+                .await?,
+            )
+        } else {
+            None
+        };
         for material in &scene.materials {
-            materials.push(upload_material(
-                backend,
-                &mut upload_owners,
-                &material.uniform,
-            )?);
+            materials.push(upload_material(backend, &mut upload_owners, &material.uniform).await?);
         }
         let mut initial_uniform = [0; program::CAMERA_BYTES];
         initial_uniform[..128].copy_from_slice(&camera.uniform_bytes());
-        let camera = upload_buffer(backend, &mut upload_owners, &initial_uniform)?;
+        let camera = upload_buffer(backend, &mut upload_owners, &initial_uniform).await?;
         let reflection_metadata = upload_buffer(
             backend,
             &mut upload_owners,
@@ -851,22 +931,17 @@ impl Resident {
                 .reflection_metadata
                 .as_deref()
                 .unwrap_or(&[0; sashiko_renderer::pbr::ReflectionProbes::METADATA_BYTES]),
-        )?;
-        let local_lights: Option<Box<[pbr::LocalLight]>> = match budget.rectangles {
-            Some(super::RectLights::Shadowed) => Some(Box::new(
-                lighting::sponza_rectangles().map(pbr::LocalLight::shadowed_rect),
-            )),
-            Some(super::RectLights::Unshadowed) => Some(Box::new(
-                lighting::sponza_rectangles().map(pbr::LocalLight::Rect),
-            )),
-            Some(super::RectLights::Off) => None,
+        )
+        .await?;
+        let local_lights = match budget.rectangles {
+            Some(mode) => Self::rectangle_lights(mode),
             None => budget
                 .use_light_grid
                 .then(|| Box::from(lighting::preset(budget.fixture).as_slice())),
         };
         let defaults = if let Some(defaults) = budget.defaults {
             let (resources, startup) = defaults.initialize(backend)?;
-            drop(super::backend::wait_for(backend, startup)?);
+            drop(super::backend::wait_upload(backend, startup).await?);
             Some(resources)
         } else {
             None
@@ -875,30 +950,60 @@ impl Resident {
         for (index, image) in scene.images.iter().enumerate() {
             // This is the immutable publication boundary. Read/hash one chain,
             // upload all its subresources, then release CPU pixels before ROI.
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")))]
             let pixels = image.load_bytes()?;
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
+            let pixels = image.load_web_bytes().await?;
             let (frame, texture) =
                 backend.upload_texture(&mut pool, "material texture", image.desc(), &pixels)?;
-            drop(super::backend::wait_for(backend, frame)?);
+            drop(super::backend::wait_upload(backend, frame).await?);
             images.push(texture);
             if (index + 1).is_multiple_of(32) {
+                #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
+                super::browser::progress(
+                    progress,
+                    &format!("Textures {}/{}", index + 1, scene.images.len()),
+                )?;
+                #[cfg(not(all(
+                    target_arch = "wasm32",
+                    target_os = "unknown",
+                    feature = "webgpu"
+                )))]
                 eprintln!("Bistro image upload {}/{}", index + 1, scene.images.len());
             }
         }
-        let mut upload_environment = |image: &ibl::Image| -> Result<ManagedImage, Error> {
-            let (frame, texture) = backend.upload_texture(
-                &mut pool,
-                "environment texture",
-                environment_desc(image),
-                &image.bytes,
-            )?;
-            drop(super::backend::wait_for(backend, frame)?);
-            Ok(texture)
-        };
+        let mut upload_environment =
+            async |image: &ibl::Image, bytes: &[u8]| -> Result<ManagedImage, Error> {
+                let (frame, texture) = backend.upload_texture(
+                    &mut pool,
+                    "environment texture",
+                    environment_desc(image),
+                    bytes,
+                )?;
+                drop(super::backend::wait_upload(backend, frame).await?);
+                Ok(texture)
+            };
         let environment_images = [
-            upload_environment(&environment.diffuse)?,
-            upload_environment(&environment.specular)?,
-            upload_environment(&environment.brdf)?,
+            upload_environment(&environment.diffuse, &environment.diffuse.bytes).await?,
+            upload_environment(&environment.specular, &environment.specular.bytes).await?,
+            upload_environment(&environment.brdf, &environment.brdf.bytes).await?,
         ];
+        let mut lightmap_pages = Vec::with_capacity(environment.lightmaps.len());
+        for image in &environment.lightmaps {
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
+            let bytes = lightmaps
+                .ok_or("missing lightmap source")?
+                .page(lightmap_pages.len())
+                .await?;
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")))]
+            let bytes = &image.bytes;
+            lightmap_pages.push(upload_environment(image, bytes.as_slice()).await?);
+        }
+        let reflection_probes = if let Some(image) = &environment.reflection_probes {
+            Some(upload_environment(image, &image.bytes).await?)
+        } else {
+            None
+        };
         let scene_bounds = primitive_bounds
             .iter()
             .copied()
@@ -920,16 +1025,8 @@ impl Resident {
             surfaces,
             images,
             lightmap_uv,
-            lightmap_pages: environment
-                .lightmaps
-                .iter()
-                .map(&mut upload_environment)
-                .collect::<Result<_, _>>()?,
-            reflection_probes: environment
-                .reflection_probes
-                .as_ref()
-                .map(upload_environment)
-                .transpose()?,
+            lightmap_pages,
+            reflection_probes,
             environment: environment_images,
             environment_mips: [
                 environment.diffuse.mips.len() as u32,
@@ -1075,7 +1172,11 @@ impl Workspace {
         });
     }
 
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    #[cfg(any(
+        feature = "vulkan",
+        all(windows, feature = "d3d12"),
+        all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+    ))]
     pub fn accept_shadow_updates(
         &mut self,
         pending: &FrameSubmission,
@@ -1124,7 +1225,11 @@ impl Workspace {
             .map(|reuse| (reuse.hits, reuse.misses))
     }
 
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    #[cfg(any(
+        feature = "vulkan",
+        all(windows, feature = "d3d12"),
+        all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+    ))]
     pub fn clear_shadow_reuse(&mut self, backend: &mut Runtime) -> Result<(), Error> {
         if let Some(reuse) = &mut self.shadow_reuse {
             reuse.rect_history.clear(backend)?;
@@ -1149,12 +1254,20 @@ pub(super) struct Built {
 }
 
 impl Resident {
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    #[cfg(any(
+        feature = "vulkan",
+        all(windows, feature = "d3d12"),
+        all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+    ))]
     pub(super) fn refresh_surfaces(&mut self) -> Result<(), Error> {
         Ok(self.surfaces.refresh(&self.materials, &self.images)?)
     }
 
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    #[cfg(any(
+        feature = "vulkan",
+        all(windows, feature = "d3d12"),
+        all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+    ))]
     pub fn accept_camera(
         &mut self,
         pending: &FrameSubmission,
@@ -1353,7 +1466,11 @@ struct FrameLights {
     tiles: Option<ImageView>,
 }
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
 fn frame_lights(
     graph: &mut Graph,
     table: Option<&lighting::LightTable>,
@@ -1503,7 +1620,11 @@ fn scene_bindings(
     clippy::too_many_arguments,
     reason = "explicit per-frame inputs share no additional ownership"
 )]
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+#[cfg(any(
+    feature = "vulkan",
+    all(windows, feature = "d3d12"),
+    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
+))]
 pub(super) fn build(
     pool: &mut GraphPool,
     workspace: &mut Workspace,
