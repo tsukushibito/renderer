@@ -115,6 +115,10 @@ def main():
                 hashes = row["hdr_depth_sha256"]
                 if len(hashes) != 6 or expected.setdefault(key, hashes) != hashes:
                     raise ValueError(f"HDR/depth parity failure for {key}/{variant}")
+                if moving:
+                    crossed = row["boundary_hdr_depth_sha256"]
+                    if len(crossed) != 6 or expected.setdefault(key+"/boundary", crossed) != crossed:
+                        raise ValueError(f"clip-plane crossing parity failure for {key}/{variant}")
                 if adapters.setdefault(api, row["adapter"]) != row["adapter"]:
                     raise ValueError(f"adapter changed for {key}/{variant}")
                 row.update(variant=variant, repeat=repeat+1, profile=args.profile)
