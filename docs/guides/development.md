@@ -61,6 +61,9 @@ cargo test --locked --release --target wasm32-unknown-unknown -p sashiko-rendere
 
 WebDriver を使わずにインストール済みのブラウザで実行するには、同じコマンドに
 `$env:NO_HEADLESS = "1"` を設定し、端末に表示された localhost の URL を開く。
+Python の Playwright があれば、`python tools/run_webgpu_tests.py --channel chrome`
+でビルドから実機テストの判定まで自動化できる。Edge は `--channel msedge` を指定する。
+CI は `--software --development-validation` を追加して SwiftShader で同じテストを実行する。
 
 ## 必要なツール
 
