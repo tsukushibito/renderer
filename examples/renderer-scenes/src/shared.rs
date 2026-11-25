@@ -19,3 +19,5 @@ pub(crate) mod program;
 pub(crate) mod shadow;
 #[cfg(feature = "tracy")]
 pub(crate) mod trace;
+#[cfg(all(target_arch = "wasm32", feature = "webgpu"))]
+pub(crate) mod web_assets;

@@ -46,7 +46,16 @@ pub(crate) struct LightingGeneration {
 impl LightingGeneration {
     pub(crate) fn open(path: &Path) -> Result<Self, Error> {
         let bytes = fs::read(path)?;
-        let doc: serde_json::Value = serde_json::from_slice(&bytes)
+        let (identity, index) = Self::decode_manifest(&bytes)?;
+        Ok(Self {
+            dir: objects(path),
+            identity,
+            index,
+        })
+    }
+
+    pub(super) fn decode_manifest(bytes: &[u8]) -> Result<(String, [u8; 32]), Error> {
+        let doc: serde_json::Value = serde_json::from_slice(bytes)
             .map_err(|_| "unrecognized lighting manifest; recook the scene lighting")?;
         if doc["schema"].as_str() != Some(SCHEMA) {
             return Err("unsupported lighting manifest; recook the scene lighting".into());
@@ -60,11 +69,7 @@ impl LightingGeneration {
                 .as_str()
                 .ok_or("missing surface index")?,
         )?;
-        Ok(Self {
-            dir: objects(path),
-            identity: identity.to_owned(),
-            index,
-        })
+        Ok((identity.to_owned(), index))
     }
 
     pub(crate) fn identity(&self) -> &[u8] {
