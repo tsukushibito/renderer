@@ -129,10 +129,9 @@ fn observe_caster(
             .pose
             .map(|id| {
                 input
-                    .poses
-                    .expect("posed geometry was connected")
-                    .stream(id, object.mesh)
-                    .map(|stream| (id, stream.revision))
+                    .meshes
+                    .pose_metadata(id, object.mesh)
+                    .map(|(_, revision)| (id, revision))
             })
             .transpose()?,
         index_range: object.index_range,

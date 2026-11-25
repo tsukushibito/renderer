@@ -18,38 +18,72 @@ impl Track<'_> {
     fn elapsed(self, tick: u64) -> u64 {
         tick - self.start
     }
-    fn event_cursor(self, tick: u64, rate: NonZeroU32) -> (u128, usize) {
-        let clip = self.clip;
-        let frame = clip.frame(self.elapsed(tick), rate);
-        let count = clip.frames as u128;
-        let (cycles, index) = if clip.looping {
+    fn displacement(self, from: u64, to: u64, rate: NonZeroU32) -> DVec3 {
+        self.clip
+            .timeline
+            .displacement(self.elapsed(from), self.elapsed(to), rate)
+    }
+}
+
+impl ClipTimeline {
+    fn event_cursor(&self, tick: u64, rate: NonZeroU32) -> (u128, usize) {
+        let frame = self.frame(tick, rate);
+        let count = self.frames as u128;
+        let (cycles, index) = if self.looping {
             (frame / count, frame % count)
         } else {
             (0, frame.min(count - 1))
         };
         (
             cycles,
-            clip.markers.partition_point(|e| e.frame <= index as usize),
+            self.markers.partition_point(|e| e.frame <= index as usize),
         )
     }
 
-    fn displacement(self, from: u64, to: u64, rate: NonZeroU32) -> DVec3 {
-        let clip = self.clip;
-        if clip.root.is_empty() || from == to {
+    // Markers in (from, to], including any complete loops.
+    fn event_range(&self, from: u64, to: u64, rate: NonZeroU32) -> (usize, u128) {
+        let (first_cycle, first) = self.event_cursor(from, rate);
+        let (last_cycle, last) = self.event_cursor(to, rate);
+        let markers = &self.markers;
+        let cycles = last_cycle - first_cycle;
+        let required = if cycles == 0 {
+            (last - first) as u128
+        } else {
+            (cycles - 1)
+                .saturating_mul(markers.len() as u128)
+                .saturating_add((markers.len() - first) as u128)
+                .saturating_add(last as u128)
+        };
+        (first, required)
+    }
+    /// Visit the markers crossed on this single simulation tick, in asset order.
+    pub fn events_at(&self, tick: u64, rate: NonZeroU32) -> impl Iterator<Item = u32> + '_ {
+        let (first, mut remaining) = self.event_range(tick.saturating_sub(1), tick, rate);
+        let mut markers = self.markers[first..]
+            .iter()
+            .chain(self.markers.iter().cycle());
+        std::iter::from_fn(move || {
+            remaining = remaining.checked_sub(1)?;
+            markers.next().map(|m| m.id)
+        })
+    }
+
+    fn displacement(&self, from: u64, to: u64, rate: NonZeroU32) -> DVec3 {
+        if self.root.is_empty() || from == to {
             return DVec3::ZERO;
         }
-        let end = clip.root[clip.frames];
+        let end = self.root[self.frames];
         let cursor = |tick| {
-            let units = u128::from(self.elapsed(tick)) * u128::from(clip.hz.get());
+            let units = u128::from(tick) * u128::from(self.hz.get());
             let divisor = u128::from(rate.get());
             let frame = units / divisor;
-            if !clip.looping && frame >= clip.frames as u128 {
+            if !self.looping && frame >= self.frames as u128 {
                 return (0, end);
             }
-            let cycles = frame / clip.frames as u128;
-            let index = (frame % clip.frames as u128) as usize;
+            let cycles = frame / self.frames as u128;
+            let index = (frame % self.frames as u128) as usize;
             let t = (units % divisor) as f64 / divisor as f64;
-            (cycles, clip.root[index].lerp(clip.root[index + 1], t))
+            (cycles, self.root[index].lerp(self.root[index + 1], t))
         };
         let (a, p) = cursor(from);
         let (b, q) = cursor(to);
@@ -103,28 +137,23 @@ impl<'a> Playback<'a> {
         if tick < self.tick {
             return Err(Invalid("playback cannot advance backwards"));
         }
-        let (first_cycle, first) = self.active.event_cursor(self.tick, self.rate);
-        let (last_cycle, last) = self.active.event_cursor(tick, self.rate);
-        let markers = &self.active.clip.markers;
-        let cycles = last_cycle - first_cycle;
-        let required = if cycles == 0 {
-            (last - first) as u128
-        } else {
-            (cycles - 1)
-                .saturating_mul(markers.len() as u128)
-                .saturating_add((markers.len() - first) as u128)
-                .saturating_add(last as u128)
-        };
+        let target = self.active;
+        let (first, required) = target.clip.timeline.event_range(
+            target.elapsed(self.tick),
+            target.elapsed(tick),
+            self.rate,
+        );
+        let markers = &target.clip.timeline.markers;
         if required > events.len() as u128 {
             return Err(AnimationError::EventCapacity { required });
         }
-        let target = self.active;
         let mut delta = target.displacement(self.tick, tick, self.rate);
         if let Some(fade) = &self.transition {
             let fade_end = target.start.saturating_add(fade.duration.get()).min(tick);
             // Integrate the displacement on each fixed step. Blending absolute
             // positions would make a walk-to-idle transition slide backwards.
-            if !(target.clip.root.is_empty() && fade.source.clip.root.is_empty()) {
+            if !(target.clip.timeline.root.is_empty() && fade.source.clip.timeline.root.is_empty())
+            {
                 delta = target.displacement(fade_end, tick, self.rate);
                 for step in self.tick..fade_end {
                     let weight = (target.elapsed(step) as f64 + 0.5) / fade.duration.get() as f64;

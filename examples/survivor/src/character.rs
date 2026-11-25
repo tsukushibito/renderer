@@ -5,25 +5,7 @@ use sashiko_renderer::{
     mesh::{MeshHandle, Meshes, SkinPoseId},
     pipeline::PipelineResult,
 };
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
-
-pub fn catalog_path() -> PipelineResult<PathBuf> {
-    let exe = std::env::current_exe()?;
-    let relative = Path::new("assets/survivor/characters/catalog.json");
-    let packaged = exe
-        .parent()
-        .ok_or("executable directory unavailable")?
-        .join(relative);
-    if exe.with_file_name("sashiko-package.json").try_exists()? || packaged.try_exists()? {
-        return Ok(packaged);
-    }
-    Ok(Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(relative))
-}
+use std::{collections::HashMap, path::Path};
 
 pub(super) const WALK_PHASES: usize = 4;
 
@@ -33,20 +15,25 @@ pub(super) struct Actor {
     pub texture: usize,
     pub material: MaterialHandle,
     animation: PhaseAnimation,
+    requested: bool,
 }
 
 pub(super) struct Cast {
     pub catalog_digest: sashiko::asset::Digest,
     pub models: Vec<AnimatedModel>,
     pub actors: Vec<Actor>,
-    pub subjects: Vec<usize>,
+    subjects: Vec<[usize; 2]>,
+    pub player_pose: SkinPoseId,
+    last_player_sample: Option<(bool, u64)>,
+    player_walk: sashiko::animation::PreparedAnimation,
+    player_jog: Option<sashiko::animation::PreparedAnimation>,
 }
 impl Cast {
     pub fn load<'a>(
         path: &Path,
         player: &'a str,
         compute_skin: bool,
-        subjects: impl IntoIterator<Item = (Option<&'a str>, &'a str)>,
+        subjects: impl IntoIterator<Item = (Option<&'a str>, &'a str, bool)>,
         meshes: &mut Meshes,
         materials: &mut Materials,
         default_subject: MaterialHandle,
@@ -57,8 +44,7 @@ impl Cast {
         let mut loaded = HashMap::new();
         let mut actors_by_clip = HashMap::new();
         let mut subject_indices = Vec::new();
-        for (name, clip) in std::iter::once((Some(player), "walk")).chain(subjects) {
-            let name = name.unwrap_or(player);
+        let mut actor_for = |name: &'a str, clip: &'a str| -> PipelineResult<usize> {
             let id = catalog
                 .id(name)
                 .ok_or_else(|| format!("{}: unknown character {name}", path.display()))?;
@@ -99,15 +85,36 @@ impl Cast {
                     texture,
                     material,
                     animation,
+                    requested: false,
                 });
                 actors_by_clip.insert((id, clip), index);
                 index
             };
-            subject_indices.push(actor);
+            Ok(actor)
+        };
+        actor_for(player, "walk")?;
+        for (name, clip, lunges) in subjects {
+            let name = name.unwrap_or(player);
+            let normal = actor_for(name, clip)?;
+            let dash = if lunges && catalog.has_clip(name, "jog") {
+                actor_for(name, "jog")?
+            } else {
+                normal
+            };
+            subject_indices.push([normal, dash]);
         }
-        // The first entry is the player's animation, fixed at actor slot zero.
-        subject_indices.remove(0);
+        let player_pose = meshes.create_pose(actors[0].mesh)?;
+        let model = &models[actors[0].texture];
+        let player_walk = model.prepare_animation("walk")?;
+        let player_jog = model
+            .clip("jog")
+            .map(|_| model.prepare_animation("jog"))
+            .transpose()?;
         Ok(Self {
+            player_pose,
+            last_player_sample: None,
+            player_walk,
+            player_jog,
             catalog_digest: catalog.definition_digest(),
             models,
             actors,
@@ -115,8 +122,44 @@ impl Cast {
         })
     }
 
-    pub fn animate(&mut self, tick: u64, meshes: &mut Meshes) -> PipelineResult<()> {
+    pub fn animate_player(
+        &mut self,
+        state: &crate::Locomotion,
+        meshes: &mut Meshes,
+    ) -> PipelineResult<()> {
+        let sample = (state.jogging(), state.tick());
+        if self.last_player_sample == Some(sample) {
+            return Ok(());
+        }
+        let clip = if state.jogging() {
+            self.player_jog.as_mut().unwrap_or(&mut self.player_walk)
+        } else {
+            &mut self.player_walk
+        };
+        let palette = clip.sample(state.tick(), crate::TICK_HZ.try_into().unwrap())?;
+        meshes.set_joint_transforms(self.player_pose, palette)?;
+        self.last_player_sample = Some(sample);
+        Ok(())
+    }
+
+    pub fn subject_actor(&self, enemy: &crate::Enemy) -> &Actor {
+        &self.actors[self.subjects[enemy.archetype][usize::from(enemy.dashing)]]
+    }
+
+    pub fn animate(
+        &mut self,
+        tick: u64,
+        enemies: &[crate::Enemy],
+        meshes: &mut Meshes,
+    ) -> PipelineResult<()> {
+        for enemy in enemies {
+            let index = self.subjects[enemy.archetype][usize::from(enemy.dashing)];
+            self.actors[index].requested = true;
+        }
         for actor in &mut self.actors {
+            if !std::mem::take(&mut actor.requested) {
+                continue;
+            }
             let ticks = std::array::from_fn(|phase| tick.wrapping_add(phase as u64 * 13));
             let palettes = actor.animation.sample(
                 ticks,
@@ -133,6 +176,7 @@ impl Cast {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog_path;
     use sashiko_renderer::mesh::{MeshCapacity, Meshes};
 
     #[test]
@@ -191,17 +235,18 @@ mod tests {
             "primary",
             true,
             [
-                (None, "walk"),
-                (Some("alternate"), "jog"),
-                (Some("alternate"), "jog"),
+                (None, "walk", true),
+                (Some("alternate"), "jog", false),
+                (Some("alternate"), "jog", false),
             ],
             &mut meshes,
             &mut materials,
             material,
         )?;
-        assert_eq!(cast.subjects, [0, 1, 1]);
-        assert_ne!(cast.actors[0].mesh, cast.actors[1].mesh);
-        cast.animate(20, &mut meshes)
+        assert_eq!(cast.subjects, [[0, 1], [2, 2], [2, 2]]);
+        assert_ne!(cast.actors[0].mesh, cast.actors[2].mesh);
+        let game = crate::Game::new(Default::default(), crate::Scenario::Early, 1);
+        cast.animate(20, &game.enemies, &mut meshes)
     }
     #[test]
     fn transitions_use_the_shared_rig_and_advance_both_clips() -> PipelineResult<()> {
@@ -214,13 +259,13 @@ mod tests {
             let (source, out) = walk.rigged().unwrap();
             let (target, _) = jog.rigged().unwrap();
             let mut player = sashiko::animation::Playback::new(source, rate);
-            player.advance_to(36, &mut [])?;
+            player.advance_to(36, &mut [0; 2])?;
             let before = out.evaluate(&player)?.to_vec();
             player.crossfade(target, 12.try_into().unwrap())?;
             assert_eq!(out.evaluate(&player)?, before);
-            player.advance_to(42, &mut [])?;
+            player.advance_to(42, &mut [0; 2])?;
             assert_ne!(out.evaluate(&player)?, before);
-            player.advance_to(48, &mut [])?;
+            player.advance_to(48, &mut [0; 2])?;
             assert_eq!(out.evaluate(&player)?, jog.sample(12, rate)?);
         }
         Ok(())

@@ -53,6 +53,8 @@ pub struct RenderObject {
     pub transform: Transform,
     pub sort_center: Option<[f32; 3]>,
     pub tint: [f32; 4],
+    /// Set false for a shadow-only mesh LOD in standard camera passes.
+    pub camera_visible: bool,
     pub casts_shadow: bool,
 }
 impl RenderObject {
@@ -65,6 +67,7 @@ impl RenderObject {
             index_range: None,
             transform: Transform::IDENTITY,
             sort_center: None,
+            camera_visible: true,
             casts_shadow: true,
             tint: [1.; 4],
         }
@@ -105,7 +108,7 @@ impl RenderObject {
         self.select_range(meshes.import(graph, self.mesh)?)
     }
 
-    fn select_range(&self, mut mesh: super::Mesh) -> Result<super::Mesh, GraphError> {
+    pub(super) fn select_range(&self, mut mesh: super::Mesh) -> Result<super::Mesh, GraphError> {
         if let Some(range) = self.index_range {
             if range.indices().end > mesh.index_count {
                 return Err(GraphError::invalid_input(
@@ -228,7 +231,7 @@ impl<'a> ReflectionProbeInput<'a> {
 #[derive(Clone, Copy)]
 pub struct SceneInput<'a> {
     pub(super) surfaces: Option<(&'a ResidentBakedLighting, f32)>,
-    pub(super) poses: Option<&'a crate::mesh::FramePoses>,
+    pub(super) poses: Option<&'a std::cell::RefCell<crate::mesh::FramePoses>>,
     pub meshes: &'a Meshes,
     pub materials: &'a Materials,
     pub objects: &'a [RenderObject],
@@ -282,14 +285,22 @@ impl<'a> SceneInput<'a> {
         let Some(id) = object.pose else {
             return object.import_mesh(graph, self.meshes);
         };
-        let posed = self
-            .poses
-            .ok_or_else(|| GraphError::invalid_input("record the scene's poses before drawing"))?
-            .stream(id, object.mesh)?;
+        let posed = self.pose_stream(graph, id, object.mesh)?;
         object.select_range(
             self.meshes
                 .import_geometry(graph, object.mesh, Some(posed))?,
         )
+    }
+    pub(super) fn pose_stream(
+        &self,
+        graph: &mut Graph,
+        id: crate::mesh::SkinPoseId,
+        mesh: MeshHandle,
+    ) -> Result<crate::mesh::PosedStream, GraphError> {
+        self.poses
+            .ok_or_else(|| GraphError::invalid_input("record the scene's poses before drawing"))?
+            .borrow_mut()
+            .record(graph, self.meshes, id, mesh)
     }
     #[must_use]
     pub fn with_sun(mut self, sun: Sun) -> Self {

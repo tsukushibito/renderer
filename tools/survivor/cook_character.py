@@ -168,7 +168,7 @@ def cook(src, dest, variant, recipe):
     print(f"{variant}: {len(indices)//3} triangles, {len(names)} joints, {frames} sampled frames")
 
     return {"id": recipe["id"], "skin": f"{variant}.skin", "color": f"{variant}.rgba",
-            "extent": [256, 256], "clips": clips}
+            "extent": [256, 256], "clips": clips, **({"tracks": recipe["tracks"]} if "tracks" in recipe else {})}
 
 
 if __name__ == "__main__":

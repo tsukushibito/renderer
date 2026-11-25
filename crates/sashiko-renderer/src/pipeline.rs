@@ -362,6 +362,7 @@ impl StandardPipeline {
             lights,
             camera,
             shadow_history,
+            scene,
             rect_target,
         } = frame;
         let render_shadow: [bool; pbr::CASCADE_COUNT] = std::array::from_fn(|i| {
@@ -403,6 +404,17 @@ impl StandardPipeline {
         for s in &mut self.forward.shadow {
             s.clear()
         }
+        let resolve_pose = |graph: &mut Graph, index: usize| -> Result<Draw, GraphError> {
+            let mut draw = draws[index];
+            if let Some(input) = scene
+                && let Some(id) = input.objects[index].pose
+            {
+                draw.mesh.vertices = input
+                    .pose_stream(graph, id, input.objects[index].mesh)?
+                    .vertices;
+            }
+            Ok(draw)
+        };
         for (i, draw) in draws.iter().enumerate() {
             let instance = materials.get(draw.material)?;
             let blend = instance.alpha_mode() == AlphaMode::Blend;
@@ -413,7 +425,7 @@ impl StandardPipeline {
                     MaterialInstance::Unlit(_) => true,
                 };
             let bounds = draw.world_bounds(instance);
-            let visible = bounds.is_none_or(|b| view.visible(b));
+            let visible = draw.camera_visible && bounds.is_none_or(|b| view.visible(b));
             let cascades = std::array::from_fn(|i| {
                 render_shadow[i]
                     && casts_shadow
@@ -431,11 +443,12 @@ impl StandardPipeline {
                 let depth = draw.view_depth(view)?;
                 self.order.push((depth, i, cascades));
             } else {
+                let draw = resolve_pose(graph, i)?;
                 self.record(
                     graph,
                     view,
                     defaults,
-                    draw,
+                    &draw,
                     instance,
                     visible,
                     cascades,
@@ -447,12 +460,12 @@ impl StandardPipeline {
         self.order
             .sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
         for index in 0..self.order.len() {
-            let draw = &draws[self.order[index].1];
+            let draw = resolve_pose(graph, self.order[index].1)?;
             self.record(
                 graph,
                 view,
                 defaults,
-                draw,
+                &draw,
                 materials.get(draw.material)?,
                 true,
                 self.order[index].2,

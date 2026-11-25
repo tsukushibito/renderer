@@ -14,7 +14,7 @@ use std::{
     error::Error,
     num::{NonZeroU32, NonZeroUsize},
     path::Path,
-    time::Duration,
+    time::{Duration, Instant},
 };
 mod validation {
     use super::sashiko_renderer_core;
@@ -109,7 +109,14 @@ fn program(vertex: bool) -> ManagedRasterProgram {
     unsafe { ManagedRasterProgram::from_trusted_descriptor(if vertex { &VERTEX } else { &POSED }) }
 }
 
-fn compare(mut api: RuntimeConfig, vertex: bool, views: usize) -> Result<Vec<u8>> {
+#[derive(Clone, Copy, Debug)]
+struct Crowd {
+    objects: usize,
+    poses: usize,
+    visible: usize,
+}
+
+fn compare(mut api: RuntimeConfig, vertex: bool, views: usize, crowd: Crowd) -> Result<Vec<u8>> {
     let catalog = CharacterCatalog::open(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/survivor/characters/catalog.json"),
@@ -148,25 +155,35 @@ fn compare(mut api: RuntimeConfig, vertex: bool, views: usize) -> Result<Vec<u8>
     let mut prep = Preparation::new(NonZeroUsize::MIN);
     prep.reserve_buffer(size(input.len()), 1)?;
     prep.reserve_buffer(size(indices.len()), 1)?;
-    if vertex {
-        prep.reserve_buffer(size(PALETTE), 1)?;
-    } else {
-        skin.reserve_pose(&mut prep)?;
+    for _ in 0..crowd.poses {
+        if vertex {
+            prep.reserve_buffer(size(PALETTE), 1)?;
+        } else {
+            skin.reserve_pose(&mut prep)?;
+        }
     }
     prep.reserve_transient_image("target", image)?;
     for _ in 0..views {
         prep.reserve_raster_pass("view", SampleCount::X1, |pass| {
             pass.attachment()?;
-            pass.draws(&raster, 1)
+            pass.draws(&raster, crowd.visible)
         })?;
     }
     let setup_bytes = input.len() + indices.len();
     prep.add_graph_requirements(GraphRequirements {
-        upload_bytes: setup_bytes + PALETTE,
+        // The input and index imports remain live alongside every visible palette.
+        resources: 2 + if vertex { crowd.poses } else { 0 },
+        passes: 2 + if vertex { crowd.poses } else { 0 },
+        accesses: 2 + if vertex { crowd.poses } else { 0 },
+        upload_bytes: setup_bytes + if vertex { PALETTE * crowd.poses } else { 0 },
         ..Default::default()
     })?;
     let capacity = prep.graph_capacity(GraphCapacity::default())?;
-    api.fit_preparation(&prep, setup_bytes as u64, u64::from(SIDE * SIDE * 4))?;
+    api.fit_preparation(
+        &prep,
+        setup_bytes.max(PALETTE * crowd.poses) as u64,
+        u64::from(SIDE * SIDE * 4),
+    )?;
     let mut runtime = Runtime::new(
         api,
         RuntimeLimits {
@@ -194,36 +211,62 @@ fn compare(mut api: RuntimeConfig, vertex: bool, views: usize) -> Result<Vec<u8>
     runtime.set_profiling(true)?;
     let mut times = Vec::new();
     let mut pixels = vec![0; (SIDE * SIDE * 4) as usize];
+    let mut frames = Vec::with_capacity(32);
+    let mut streams = vec![None; crowd.poses];
+    let mut draws = Vec::with_capacity(crowd.visible);
     for tick in 0..41 {
+        let start = Instant::now();
+        streams.fill(None);
+        draws.clear();
         let mut graph = pool.begin()?;
         let rest = graph.import_readonly_buffer("bind", &bind)?;
         let indices = graph.import_readonly_buffer("indices", &ib)?;
-        let palette = clip.sample(tick, NonZeroU32::new(60).unwrap());
-        let (vertices, bindings) = if vertex {
-            let mut bytes = [0; PALETTE];
-            for (dest, matrix) in bytes.as_chunks_mut::<96>().0.iter_mut().zip(palette) {
-                *dest = matrix.encode();
+        // Rotate a known visible set; materialize each distinct palette once.
+        for object in 0..crowd.visible {
+            let pose = ((object + tick as usize) % crowd.objects) % crowd.poses;
+            if let Some(draw) = streams[pose] {
+                draws.push(draw);
+                continue;
             }
-            let buffer = graph.buffer("palette", size(PALETTE))?;
-            graph.upload_buffer("palette", buffer, 0, &bytes)?;
-            (
-                rest,
-                Some(graph.raster_bindings(
-                    &raster,
-                    &[Binding {
-                        group: 0,
-                        binding: 0,
-                        resource: BindingResource::Buffer {
-                            buffer,
-                            offset: 0,
-                            size: PALETTE as u64,
-                        },
-                    }],
-                )?),
-            )
-        } else {
-            (skin.add_pose(&mut graph, rest, palette)?, None)
-        };
+            let palette = clip.sample(tick + pose as u64 * 7, NonZeroU32::new(60).unwrap());
+            let (vertices, bindings) = if vertex {
+                let mut bytes = [0; PALETTE];
+                for (dest, matrix) in bytes.as_chunks_mut::<96>().0.iter_mut().zip(palette) {
+                    *dest = matrix.encode();
+                }
+                let buffer = graph.buffer("palette", size(PALETTE))?;
+                graph.upload_buffer("palette", buffer, 0, &bytes)?;
+                (
+                    rest,
+                    Some(graph.raster_bindings(
+                        &raster,
+                        &[Binding {
+                            group: 0,
+                            binding: 0,
+                            resource: BindingResource::Buffer {
+                                buffer,
+                                offset: 0,
+                                size: PALETTE as u64,
+                            },
+                        }],
+                    )?),
+                )
+            } else {
+                (skin.add_pose(&mut graph, rest, palette)?, None)
+            };
+            let draw = RasterDraw {
+                vertices,
+                indices,
+                bindings,
+                first_index: 0,
+                index_count: model.model.indices().len() as u32,
+                instance_count: 1,
+                secondary_vertices: None,
+                parameters: Default::default(),
+            };
+            streams[pose] = Some(draw);
+            draws.push(draw);
+        }
         let target = graph.image("target", image)?;
         for view in 0..views {
             graph.raster(
@@ -241,21 +284,7 @@ fn compare(mut api: RuntimeConfig, vertex: bool, views: usize) -> Result<Vec<u8>
                     color_resolves: &[],
                     depth: None,
                 },
-                |pass| {
-                    pass.draw(
-                        &raster,
-                        [RasterDraw {
-                            vertices,
-                            indices,
-                            bindings,
-                            first_index: 0,
-                            index_count: model.model.indices().len() as u32,
-                            instance_count: 1,
-                            secondary_vertices: None,
-                            parameters: Default::default(),
-                        }],
-                    )
-                },
+                |pass| pass.draw(&raster, draws.iter().copied()),
             )?;
         }
         graph.export_frame_image(target)?;
@@ -279,17 +308,20 @@ fn compare(mut api: RuntimeConfig, vertex: bool, views: usize) -> Result<Vec<u8>
                 return Err("timestamp unavailable".into());
             };
             times.push(elapsed);
+            frames.push(start.elapsed());
         }
     }
     times.sort_unstable();
+    frames.sort_unstable();
     println!(
-        "vertex={vertex} passes={views} median GPU {:?}, resident input {} B, posed cache {} B",
+        "vertex={vertex} passes={views} {crowd:?}, median GPU {:?}, build-to-completion {:?}, resident input {} B, used posed cache {} B",
         times[times.len() / 2],
+        frames[frames.len() / 2],
         input.len(),
         if vertex {
             0
         } else {
-            skin.bind_bytes().len() / 72 * 48
+            skin.bind_bytes().len() / 72 * 48 * crowd.visible.min(crowd.poses)
         }
     );
     for (key, _) in resident {
@@ -300,11 +332,18 @@ fn compare(mut api: RuntimeConfig, vertex: bool, views: usize) -> Result<Vec<u8>
 }
 
 fn check(api: RuntimeConfig) -> Result<()> {
-    for views in [1, 4] {
-        let cs = compare(api, false, views)?;
-        let vs = compare(api, true, views)?;
-        assert!(cs.as_chunks::<4>().0.iter().filter(|p| p[3] != 0).count() > 100);
-        assert!(cs.iter().zip(vs).all(|(a, b)| a.abs_diff(b) <= 1));
+    for (objects, poses, visible) in [(1, 1, 1), (16, 1, 16), (16, 16, 4), (16, 16, 16)] {
+        let crowd = Crowd {
+            objects,
+            poses,
+            visible,
+        };
+        for views in [1, 4] {
+            let cs = compare(api, false, views, crowd)?;
+            let vs = compare(api, true, views, crowd)?;
+            assert!(cs.as_chunks::<4>().0.iter().filter(|p| p[3] != 0).count() > 100);
+            assert!(cs.iter().zip(vs).all(|(a, b)| a.abs_diff(b) <= 1));
+        }
     }
     Ok(())
 }

@@ -43,7 +43,11 @@ impl Rig {
         })
     }
 
-    fn clip(&self, source: AnimationClip<'_>) -> PipelineResult<PoseClip> {
+    fn clip(
+        &self,
+        source: AnimationClip<'_>,
+        timeline: super::ClipTimeline,
+    ) -> PipelineResult<PoseClip> {
         let mut local = Vec::with_capacity(source.poses.len());
         let mut world = vec![DMat4::IDENTITY; source.joints];
         for frame in source.poses.chunks_exact(source.joints) {
@@ -72,13 +76,10 @@ impl Rig {
                 });
             }
         }
-        Ok(PoseClip::new(
+        Ok(PoseClip::from_timeline(
             self.skeleton.clone(),
             local,
-            source.clip.hz,
-            source.clip.looping,
-            vec![],
-            vec![],
+            timeline,
         )?)
     }
 }
@@ -95,7 +96,7 @@ impl AnimatedModel {
             .ok_or_else(|| format!("unknown clip {name}"))?;
         let data = if let Some(rig) = &self.model.skeleton {
             PreparedData::Rigged(Box::new(Rigged {
-                clip: rig.clip(source)?,
+                clip: rig.clip(source, self.timelines[name].clone())?,
                 output: PaletteWorkspace {
                     workspace: PoseWorkspace::all(&rig.skeleton),
                     inverse_bind: rig.inverse_bind.clone(),

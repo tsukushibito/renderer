@@ -85,7 +85,7 @@ impl ViewPipeline for ToonPipeline {
             return Err(GraphError::invalid_input("toon draw capacity exceeded"));
         }
         self.draws.clear();
-        for obj in scene.objects {
+        for obj in scene.objects.iter().filter(|obj| obj.camera_visible) {
             let mesh = scene.import_mesh(g, obj)?;
             let MaterialInstance::Unlit(mat) = scene.materials.get(obj.material)? else {
                 unreachable!("validated material revision")

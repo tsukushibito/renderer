@@ -59,7 +59,7 @@ struct Pipeline {
 /// Each prepared pipeline supplies its own extent, rendering technique and output.
 #[derive(Default)]
 pub struct ViewRenderer {
-    poses: crate::mesh::FramePoses,
+    poses: std::cell::RefCell<crate::mesh::FramePoses>,
     pipelines: HashMap<PipelineId, Pipeline>,
     views: HashMap<ViewId, PipelineId>,
     pending: Vec<ViewId>,
@@ -164,7 +164,7 @@ impl ViewRenderer {
         changed: SceneInput<'_>,
     ) -> Result<(), GraphError> {
         self.pipeline_mut(id)?.group.prepare_scene(changed)?;
-        self.poses.reserve(changed.meshes.pose_count());
+        self.poses.get_mut().reserve(changed.meshes.pose_count());
         Ok(())
     }
     pub(super) fn prepare_all(&mut self, changed: SceneInput<'_>) -> PipelineResult<()> {
@@ -175,7 +175,7 @@ impl ViewRenderer {
         for pipeline in self.pipelines.values_mut() {
             pipeline.group.publish_scene();
         }
-        self.poses.reserve(changed.meshes.pose_count());
+        self.poses.get_mut().reserve(changed.meshes.pose_count());
         Ok(())
     }
     pub(super) fn remove_pairs(
@@ -284,8 +284,8 @@ impl ViewRenderer {
     }
 
     fn start_recording(&mut self, graph: Graph) -> ViewFrame<'_> {
-        self.poses.clear();
         let id = graph.graph_id();
+        self.poses.get_mut().begin(id);
         ViewFrame {
             renderer: self,
             graph: Some(graph),
@@ -389,9 +389,6 @@ impl<'a> ViewFrame<'a> {
             ));
         }
         self.failed = true;
-        self.renderer
-            .poses
-            .record(graph, scene.meshes, scene.objects)?;
         // Reborrow the caller's scene for this recording's shorter lifetime.
         let input = SceneInput {
             poses: Some(&self.renderer.poses),
@@ -436,9 +433,6 @@ impl<'a> ViewFrame<'a> {
         }
         let id = self.renderer.pipeline_for_view(camera.id)?;
         let mut input = scene.resolve(self.id, id)?;
-        self.renderer
-            .poses
-            .record(graph, input.meshes, input.objects)?;
         input.poses = Some(&self.renderer.poses);
         let images = record(
             self.renderer

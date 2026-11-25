@@ -7,7 +7,7 @@ mod instruments;
 mod lab;
 mod surfaces;
 
-pub use crate::character::catalog_path;
+pub use crate::catalog_path;
 use crate::character::{Cast, WALK_PHASES};
 use crate::{Game, MAX_DROPS, MAX_ENEMIES, MAX_SHOTS};
 use sashiko_renderer::{
@@ -157,10 +157,13 @@ impl Visual {
             catalog,
             character,
             characters.compute_skin,
-            game.arena
-                .subjects
-                .iter()
-                .map(|subject| (subject.model.as_deref(), subject.clip.as_str())),
+            game.arena.subjects.iter().map(|subject| {
+                (
+                    subject.model.as_deref(),
+                    subject.clip.as_str(),
+                    subject.lunge.is_some(),
+                )
+            }),
             &mut meshes,
             &mut materials,
             palette.subject,
@@ -176,8 +179,10 @@ impl Visual {
                 prepared.push(obj);
             }
         }
+        let mut player = RenderObject::new(body, palette.player);
+        player.pose = Some(cast.player_pose);
+        prepared.push(player);
         for (mesh, material) in [
-            (body, palette.player),
             (ring, palette.pulse),
             (ring, palette.drop),
             (disk, palette.shadow),
@@ -300,7 +305,10 @@ impl Visual {
         // Sparse animation phases share the same posed vertex stream across the crowd.
         // Fixed tick controls animation time even when a presentation gets repeated.
         if self.last_step != Some(game.tick) {
-            self.cast.animate(game.tick, &mut self.meshes)?;
+            self.cast
+                .animate(game.tick, &game.enemies, &mut self.meshes)?;
+            self.cast
+                .animate_player(&game.locomotion, &mut self.meshes)?;
             let displacement = game.player - self.previous_player;
             let dist = displacement.length();
             if dist > 0.001 {
@@ -330,7 +338,7 @@ impl Visual {
             RenderObject::new(self.cast.actors[0].mesh, self.palette.player).with_transform(
                 placement(Vec3::new(px, 0., pz), Vec3::ONE, self.player_facing)?,
             );
-        player.pose = Some(self.cast.actors[0].poses[0]);
+        player.pose = Some(self.cast.player_pose);
         player.casts_shadow = self.character_shadows;
         self.objects.push(player)?;
         self.visible = 0;
@@ -340,7 +348,7 @@ impl Visual {
             self.visible += usize::from(visible);
             if visible || self.character_shadows {
                 let [x, z] = enemy.pos.to_array();
-                let actor = &self.cast.actors[self.cast.subjects[enemy.archetype]];
+                let actor = self.cast.subject_actor(enemy);
                 let mut object = RenderObject::new(actor.mesh, actor.material)
                     .with_transform(placement(Vec3::new(x, 0., z), Vec3::ONE, enemy.facing)?);
                 object.pose = Some(actor.poses[(enemy.id % WALK_PHASES as u64) as usize]);

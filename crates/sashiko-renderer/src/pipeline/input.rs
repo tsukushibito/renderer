@@ -23,6 +23,7 @@ pub struct Draw {
     pub sort_center: [f32; 3],
     /// Multiplier for the built-in vertex-color material.
     pub tint: [f32; 4],
+    pub camera_visible: bool,
     pub casts_shadow: bool,
 }
 impl Draw {
@@ -89,6 +90,7 @@ impl Draw {
             transform: None,
             sort_center: mesh.bounds.center(),
             tint: [1.; 4],
+            camera_visible: true,
             casts_shadow: true,
         }
     }
@@ -98,6 +100,7 @@ pub struct GeometryDrawInput<'a> {
     pub view: &'a PreparedView,
     pub defaults: DefaultViews,
     pub draws: &'a [Draw],
+    pub(super) scene: Option<super::SceneInput<'a>>,
     pub lights: &'a [LocalLight],
     pub camera: Option<BufferHandle>,
     pub(crate) rect_target: Option<crate::pbr::rect_shadows::Targets<'a>>,
@@ -115,6 +118,7 @@ impl<'a> GeometryDrawInput<'a> {
             view,
             defaults,
             draws,
+            scene: None,
             lights: &[],
             camera: None,
             shadow_history: None,

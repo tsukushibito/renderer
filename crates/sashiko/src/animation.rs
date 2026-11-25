@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 mod rig;
 use rig::Rig;
 pub use rig::{PaletteWorkspace, PhaseAnimation, PreparedAnimation};
-pub use sashiko_animation::Playback;
+pub use sashiko_animation::{ClipTimeline, Playback};
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
@@ -27,6 +27,8 @@ struct ModelEntry {
     color: PathBuf,
     extent: [u32; 2],
     clips: BTreeMap<String, Clip>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    tracks: BTreeMap<String, Tracks>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy)]
@@ -36,6 +38,68 @@ struct Clip {
     frames: usize,
     hz: NonZeroU32,
     looping: bool,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Tracks {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    events: Vec<ClipEvent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    root_translation: Vec<[f64; 3]>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ClipEvent {
+    frame: usize,
+    id: u32,
+}
+
+/// Serializable clip timing and gameplay tracks for simulation and replay.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TimelineAsset {
+    frames: usize,
+    hz: NonZeroU32,
+    looping: bool,
+    tracks: Tracks,
+}
+impl TimelineAsset {
+    pub fn prepare(&self) -> PipelineResult<ClipTimeline> {
+        Ok(ClipTimeline::new(
+            self.frames,
+            self.hz,
+            self.looping,
+            self.tracks
+                .events
+                .iter()
+                .map(|e| sashiko_animation::Marker {
+                    frame: e.frame,
+                    id: e.id,
+                })
+                .collect(),
+            self.tracks
+                .root_translation
+                .iter()
+                .copied()
+                .map(glam::DVec3::from_array)
+                .collect(),
+        )?)
+    }
+}
+impl ModelEntry {
+    fn timeline(&self, name: &str) -> PipelineResult<TimelineAsset> {
+        let clip = self
+            .clips
+            .get(name)
+            .ok_or_else(|| format!("unknown animation clip {name}"))?;
+        Ok(TimelineAsset {
+            frames: clip.frames,
+            hz: clip.hz,
+            looping: clip.looping,
+            tracks: self.tracks.get(name).cloned().unwrap_or_default(),
+        })
+    }
 }
 
 pub struct CharacterCatalog {
@@ -49,8 +113,13 @@ impl CharacterCatalog {
         let path = path
             .canonicalize()
             .map_err(|e| format!("{}: {e}", path.display()))?;
-        let file: CatalogFile = serde_json::from_slice(&fs::read(&path)?)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        Self::parse(&path, &fs::read(&path)?)
+    }
+
+    /// Parse an on-disk or embedded catalog. Relative asset paths resolve beside this file.
+    pub fn parse(path: &Path, bytes: &[u8]) -> PipelineResult<Self> {
+        let file: CatalogFile =
+            serde_json::from_slice(bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         if file.version != 1 {
             return Err(format!(
                 "{}: unsupported character catalog version {}",
@@ -61,6 +130,13 @@ impl CharacterCatalog {
         }
         let mut ids = HashSet::new();
         for (alias, model) in &file.models {
+            if model
+                .tracks
+                .keys()
+                .any(|name| !model.clips.contains_key(name))
+            {
+                return Err(format!("unknown clip in tracks for {alias}").into());
+            }
             if alias.is_empty() || !ids.insert(model.id) {
                 return Err(format!(
                     "{}: invalid model name or duplicate ID for {alias}",
@@ -87,6 +163,20 @@ impl CharacterCatalog {
         self.models.get(name).map(|entry| entry.id)
     }
 
+    pub fn has_clip(&self, model: &str, clip: &str) -> bool {
+        self.models
+            .get(model)
+            .is_some_and(|m| m.clips.contains_key(clip))
+    }
+
+    /// Read simulation timing and markers without loading mesh or texture bytes.
+    pub fn timeline(&self, model: &str, clip: &str) -> PipelineResult<TimelineAsset> {
+        self.models
+            .get(model)
+            .ok_or_else(|| format!("unknown character {model}"))?
+            .timeline(clip)
+    }
+
     pub fn load(&self, id: AssetId) -> PipelineResult<AnimatedModel> {
         let entry = self
             .models
@@ -104,7 +194,7 @@ impl CharacterCatalog {
             let resolved = path
                 .canonicalize()
                 .map_err(|e| format!("{}: {e}", path.display()))?;
-            if !resolved.starts_with(&self.directory) {
+            if !resolved.starts_with(self.directory.canonicalize()?) {
                 return Err(format!("asset outside catalog directory: {}", path.display()).into());
             }
             fs::read(&resolved).map_err(|e| format!("{}: {e}", resolved.display()).into())
@@ -147,6 +237,11 @@ impl CharacterCatalog {
             color: pixels,
             extent: entry.extent,
             clips: entry.clips.clone(),
+            timelines: entry
+                .clips
+                .keys()
+                .map(|name| Ok((name.clone(), entry.timeline(name)?.prepare()?)))
+                .collect::<PipelineResult<_>>()?,
         })
     }
 }
@@ -157,6 +252,7 @@ pub struct AnimatedModel {
     color: Vec<u8>,
     extent: [u32; 2],
     clips: BTreeMap<String, Clip>,
+    timelines: BTreeMap<String, ClipTimeline>,
 }
 
 impl AnimatedModel {
@@ -345,6 +441,34 @@ impl SkinnedModel {
 mod tests {
     use super::*;
     #[test]
+    fn catalog_tracks_reach_headless_and_skeletal_playback() -> PipelineResult<()> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/survivor/characters/catalog.json");
+        let mut data: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+        let model = &mut data["models"]["primary"];
+        model["clips"]["walk"]["frames"] = 2.into();
+        model["tracks"]["walk"] = serde_json::json!({"events":[{"frame":1,"id":7}],"root_translation":[[0,0,0],[0.5,0,0],[1,0,0]]});
+        let catalog = CharacterCatalog::parse(&path, &serde_json::to_vec(&data)?)?;
+        let rate = 60.try_into()?;
+        let timeline = catalog.timeline("primary", "walk")?.prepare()?;
+        let model = catalog.load(catalog.id("primary").unwrap())?;
+        let mut animation = model.prepare_animation("walk")?;
+        let (clip, _) = animation.rigged().unwrap();
+        let mut playback = Playback::new(clip, rate);
+        let mut events = [0; 2];
+        let advanced = playback.advance_to(3, &mut events)?;
+        assert_eq!(advanced.translation.to_array(), [1.5, 0., 0.]);
+        assert_eq!(&events[..advanced.event_count], &[7, 7]);
+        assert_eq!(
+            (1..=3)
+                .flat_map(|t| timeline.events_at(t, rate))
+                .collect::<Vec<_>>(),
+            events
+        );
+        assert_eq!(playback.advance_to(3, &mut events)?.event_count, 0);
+        Ok(())
+    }
+    #[test]
     fn legacy_skin_prepares_direct_palette_playback() -> PipelineResult<()> {
         let bytes = include_bytes!("../../../assets/survivor/characters/primary.skin");
         assert_eq!(&bytes[..8], b"SURSKIN2");
@@ -364,6 +488,7 @@ mod tests {
         )]);
         let model = AnimatedModel {
             model: mesh,
+            timelines: BTreeMap::new(),
             clips,
             content: [Digest::of(&legacy); 2],
             color: vec![],

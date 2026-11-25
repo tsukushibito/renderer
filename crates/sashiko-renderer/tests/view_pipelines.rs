@@ -70,3 +70,7 @@ fn vulkan_setup_lifecycle() -> PipelineResult<()> {
 fn d3d12_setup_lifecycle() -> PipelineResult<()> {
     setup::check(RuntimeConfig::D3D12(Default::default()))
 }
+
+#[cfg(feature = "memory-profiling")]
+#[path = "view_pipelines/skin_visibility.rs"]
+mod skin_visibility;

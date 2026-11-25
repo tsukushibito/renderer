@@ -88,12 +88,16 @@ unsafe extern "C" fn survivor_attach(
         let hwnd = NonZeroIsize::new(hwnd).ok_or("null HWND")?;
         // SAFETY: the caller retains its child and closes this session before destroying it.
         let child = unsafe { HostChild::from_hwnd(hwnd) };
+        let catalog_path = std::path::Path::new(path);
+        let catalog = sashiko::animation::CharacterCatalog::open(catalog_path)?;
+        let locomotion = crate::Locomotion::from_catalog(&catalog, "primary")?;
         s.view = Some(View::new(
             child,
             [width, height],
             &s.app.game,
-            std::path::Path::new(path),
+            catalog_path,
         )?);
+        s.app.game.locomotion.replace_tracks(locomotion);
         Ok(0)
     })
 }

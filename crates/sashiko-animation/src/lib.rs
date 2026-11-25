@@ -96,6 +96,12 @@ pub struct Marker {
 pub struct Clip {
     skeleton: Arc<Skeleton>,
     local: Vec<LocalPose>,
+    timeline: ClipTimeline,
+}
+
+/// Timing and authored tracks can be evaluated without loading skeletal poses.
+#[derive(Clone, Debug)]
+pub struct ClipTimeline {
     frames: usize,
     hz: NonZeroU32,
     looping: bool,
@@ -107,14 +113,23 @@ impl Clip {
     /// starting at zero and including the loop endpoint. Local poses are in-place.
     pub fn new(
         skeleton: Arc<Skeleton>,
-        mut local: Vec<LocalPose>,
+        local: Vec<LocalPose>,
         hz: NonZeroU32,
         looping: bool,
-        mut markers: Vec<Marker>,
+        markers: Vec<Marker>,
         root: Vec<DVec3>,
     ) -> Result<Self, AnimationError> {
-        let joints = skeleton.joint_count();
-        if local.is_empty() || !local.len().is_multiple_of(joints) {
+        let frames = local.len() / skeleton.joint_count();
+        let timeline = ClipTimeline::new(frames, hz, looping, markers, root)?;
+        Self::from_timeline(skeleton, local, timeline)
+    }
+
+    pub fn from_timeline(
+        skeleton: Arc<Skeleton>,
+        mut local: Vec<LocalPose>,
+        timeline: ClipTimeline,
+    ) -> Result<Self, AnimationError> {
+        if timeline.frames.checked_mul(skeleton.joint_count()) != Some(local.len()) {
             return Err(Invalid("incomplete pose frame"));
         }
         for p in &mut local {
@@ -127,40 +142,21 @@ impl Clip {
             }
             p.rotation = p.rotation.normalize();
         }
-        let frames = local.len() / joints;
-        if markers.iter().any(|e| e.frame >= frames) {
-            return Err(Invalid("marker outside clip"));
-        }
-        markers.sort_by_key(|e| e.frame);
-        if !root.is_empty()
-            && (root.len() != frames + 1
-                || root[0] != DVec3::ZERO
-                || root.iter().any(|v| !v.is_finite()))
-        {
-            return Err(Invalid("invalid root translation curve"));
-        }
         Ok(Self {
             skeleton,
             local,
-            frames,
-            hz,
-            looping,
-            markers,
-            root,
+            timeline,
         })
     }
     pub fn skeleton(&self) -> &Arc<Skeleton> {
         &self.skeleton
     }
-    fn frame(&self, tick: u64, rate: NonZeroU32) -> u128 {
-        u128::from(tick) * u128::from(self.hz.get()) / u128::from(rate.get())
-    }
     fn pose(&self, tick: u64, rate: NonZeroU32) -> &[LocalPose] {
-        let n = self.frame(tick, rate);
-        let i = if self.looping {
-            n % self.frames as u128
+        let n = self.timeline.frame(tick, rate);
+        let i = if self.timeline.looping {
+            n % self.timeline.frames as u128
         } else {
-            n.min(self.frames as u128 - 1)
+            n.min(self.timeline.frames as u128 - 1)
         };
         let joints = self.skeleton.joint_count();
         let start = i as usize * joints;
@@ -181,6 +177,40 @@ impl Clip {
         out: &mut PoseWorkspace,
     ) -> Result<(), AnimationError> {
         self.sample_at(tick, rate).evaluate(out)
+    }
+}
+impl ClipTimeline {
+    pub fn new(
+        frames: usize,
+        hz: NonZeroU32,
+        looping: bool,
+        mut markers: Vec<Marker>,
+        root: Vec<DVec3>,
+    ) -> Result<Self, AnimationError> {
+        if frames == 0 {
+            return Err(Invalid("empty clip timeline"));
+        }
+        if markers.iter().any(|e| e.frame >= frames) {
+            return Err(Invalid("marker outside clip"));
+        }
+        markers.sort_by_key(|e| e.frame);
+        if !root.is_empty()
+            && (frames.checked_add(1) != Some(root.len())
+                || root[0] != DVec3::ZERO
+                || root.iter().any(|v| !v.is_finite()))
+        {
+            return Err(Invalid("invalid root translation curve"));
+        }
+        Ok(Self {
+            frames,
+            hz,
+            looping,
+            markers,
+            root,
+        })
+    }
+    fn frame(&self, tick: u64, rate: NonZeroU32) -> u128 {
+        u128::from(tick) * u128::from(self.hz.get()) / u128::from(rate.get())
     }
 }
 

@@ -74,7 +74,7 @@ fn compare_every_joint_origin_palette_and_representative_vertex_to_f64() -> Pipe
             // All source frames, a full transition, then the first target-only tick.
             let fade_start = raw.frames() as u64;
             for tick in 0..=fade_start + 13 {
-                p.advance_to(tick, &mut [])?;
+                p.advance_to(tick, &mut [0; 2])?;
                 if tick == fade_start {
                     p.crossfade(to, 12.try_into()?)?;
                 }

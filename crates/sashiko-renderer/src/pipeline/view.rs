@@ -235,7 +235,11 @@ impl StandardPipeline {
         let prepared = self.prepare_view(camera.camera, input.sun, input.bounds, environment)?;
         self.connected.clear();
         for obj in input.objects {
-            let mesh = input.import_mesh(graph, obj)?;
+            // Classify using the current deformed bounds before requesting vertices.
+            let mut mesh = obj.select_range(input.meshes.import(graph, obj.mesh)?)?;
+            if let Some(id) = obj.pose {
+                mesh.bounds = input.meshes.pose_metadata(id, obj.mesh)?.0;
+            }
             let lightmap = match (obj.placement(), input.surfaces) {
                 (Some(id), Some((baked, _))) if !baked.pages.is_empty() => {
                     match baked.placements.get(&id).copied() {
@@ -259,6 +263,7 @@ impl StandardPipeline {
                 lightmap,
                 transform: (obj.transform != Transform::IDENTITY).then_some(obj.transform),
                 sort_center: obj.sort_center.unwrap_or_else(|| mesh.bounds.center()),
+                camera_visible: obj.camera_visible,
                 casts_shadow: obj.casts_shadow,
                 tint: obj.tint,
                 ..Draw::new(mesh, obj.material)
@@ -294,6 +299,7 @@ impl StandardPipeline {
         frame.rect_target = rect_frame.as_ref().map(|f| f.targets);
         frame.shadow_history = shadow.as_ref();
         frame.lights = input.lights;
+        frame.scene = Some(input);
         let scene = match consume {
             Some(callback) => {
                 self.draw_connected_hdr_with_gbuffer(graph, input.materials, frame, callback)

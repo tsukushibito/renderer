@@ -146,7 +146,12 @@ impl PickPass {
                 *dst = v.to_bits();
             }
             self.draws.clear();
-            for (object, &id) in scene.objects.iter().zip(ids) {
+            for (object, &id) in scene
+                .objects
+                .iter()
+                .zip(ids)
+                .filter(|(object, _)| object.camera_visible)
+            {
                 let stride = scene.meshes.position_stride(object.mesh)?;
                 let mesh = scene.import_mesh(graph, object)?;
                 let model = object.transform.columns();

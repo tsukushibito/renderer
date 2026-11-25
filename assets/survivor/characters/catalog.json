@@ -22,6 +22,32 @@
           "hz": 60,
           "looping": true
         }
+      },
+      "tracks": {
+        "walk": {
+          "events": [
+            {
+              "frame": 20,
+              "id": 1
+            },
+            {
+              "frame": 60,
+              "id": 1
+            }
+          ]
+        },
+        "jog": {
+          "events": [
+            {
+              "frame": 14,
+              "id": 1
+            },
+            {
+              "frame": 42,
+              "id": 1
+            }
+          ]
+        }
       }
     },
     "alternate": {
@@ -44,6 +70,32 @@
           "frames": 56,
           "hz": 60,
           "looping": true
+        }
+      },
+      "tracks": {
+        "walk": {
+          "events": [
+            {
+              "frame": 20,
+              "id": 1
+            },
+            {
+              "frame": 60,
+              "id": 1
+            }
+          ]
+        },
+        "jog": {
+          "events": [
+            {
+              "frame": 14,
+              "id": 1
+            },
+            {
+              "frame": 42,
+              "id": 1
+            }
+          ]
         }
       }
     }

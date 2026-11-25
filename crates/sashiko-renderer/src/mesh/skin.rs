@@ -223,6 +223,19 @@ impl Meshes {
         Ok(pose)
     }
 
+    pub(crate) fn pose_metadata(
+        &self,
+        id: SkinPoseId,
+        mesh: MeshHandle,
+    ) -> Result<(Bounds, u64), GraphError> {
+        let asset = self
+            .assets
+            .get(&mesh)
+            .ok_or_else(|| GraphError::invalid_input("unknown skin mesh"))?;
+        let pose = self.pose(id, mesh, asset.drawable_layout())?;
+        Ok((pose.bounds, pose.revision))
+    }
+
     pub(crate) fn reserve_poses(
         &self,
         prep: &mut Preparation,
@@ -271,12 +284,13 @@ impl Meshes {
 #[derive(Default)]
 pub(crate) struct FramePoses {
     streams: HashMap<SkinPoseId, PosedStream>,
+    graph: u64,
 }
 #[derive(Clone, Copy)]
 pub(crate) struct PosedStream {
     mesh: MeshHandle,
     pub(crate) revision: u64,
-    pub(super) vertices: BufferHandle,
+    pub(crate) vertices: BufferHandle,
     pub(super) bounds: Bounds,
 }
 impl FramePoses {
@@ -285,7 +299,8 @@ impl FramePoses {
         self.streams.reserve(poses);
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub(crate) fn begin(&mut self, graph: u64) {
+        self.graph = graph;
         self.streams.clear();
     }
 
@@ -293,86 +308,71 @@ impl FramePoses {
         &mut self,
         graph: &mut Graph,
         meshes: &Meshes,
-        objects: &[RenderObject],
-    ) -> Result<(), GraphError> {
-        if meshes.poses.is_empty() && self.streams.is_empty() {
-            return Ok(());
-        }
-        for object in objects {
-            let Some(id) = object.pose else { continue };
-            let asset = meshes
-                .assets
-                .get(&object.mesh)
-                .ok_or_else(|| GraphError::invalid_input("unknown skin mesh"))?;
-            let pose = meshes.pose(id, object.mesh, asset.drawable_layout())?;
-            if self
-                .streams
-                .get(&id)
-                .is_some_and(|stream| stream.revision == pose.revision)
-            {
-                continue;
-            }
-            if self.streams.len() == self.streams.capacity() && !self.streams.contains_key(&id) {
-                return Err(GraphError::capacity_error(
-                    GraphCapacityKind::Resources,
-                    self.streams.capacity(),
-                    Some(self.streams.len() + 1),
-                ));
-            }
-            let (vertices, _uploaded) = match &pose.data {
-                PoseData::Compute(palette) => {
-                    let bind = asset
-                        .active
-                        .as_ref()
-                        .and_then(|a| a.buffers[3].as_ref())
-                        .ok_or_else(|| {
-                            GraphError::invalid_input("prepare the compute skin before drawing")
-                        })?;
-                    let bind = graph.import_readonly_buffer("skin bind", bind)?;
-                    let (prepared, _) = pose.skin.compute.as_ref().expect("compute pose");
-                    (
-                        prepared.add_pose(graph, bind, palette)?,
-                        compute::PALETTE_BYTES,
-                    )
-                }
-                PoseData::Cpu { bytes, .. } => {
-                    let vertices = graph.buffer(
-                        STREAM,
-                        BufferDesc {
-                            size: bytes.len() as u64,
-                        },
-                    )?;
-                    graph.upload_buffer(UPLOAD, vertices, 0, bytes)?;
-                    (vertices, bytes.len())
-                }
-            };
-            #[cfg(feature = "memory-profiling")]
-            meshes
-                .recorded_pose_bytes
-                .fetch_add(_uploaded as u64, Ordering::Relaxed);
-            self.streams.insert(
-                id,
-                PosedStream {
-                    mesh: object.mesh,
-                    revision: pose.revision,
-                    vertices,
-                    bounds: pose.bounds,
-                },
-            );
-        }
-        Ok(())
-    }
-
-    pub(crate) fn stream(
-        &self,
         id: SkinPoseId,
         mesh: MeshHandle,
     ) -> Result<PosedStream, GraphError> {
-        self.streams
-            .get(&id)
-            .filter(|stream| stream.mesh == mesh)
-            .copied()
-            .ok_or_else(|| GraphError::invalid_input("pose has not been recorded for this frame"))
+        if self.graph != graph.graph_id() {
+            return Err(GraphError::invalid_input(
+                "pose requested outside the current frame graph",
+            ));
+        }
+        let asset = meshes
+            .assets
+            .get(&mesh)
+            .ok_or_else(|| GraphError::invalid_input("unknown skin mesh"))?;
+        let pose = meshes.pose(id, mesh, asset.drawable_layout())?;
+        if let Some(stream) = self.streams.get(&id)
+            && stream.revision == pose.revision
+            && stream.mesh == mesh
+        {
+            return Ok(*stream);
+        }
+        if self.streams.len() == self.streams.capacity() && !self.streams.contains_key(&id) {
+            return Err(GraphError::capacity_error(
+                GraphCapacityKind::Resources,
+                self.streams.capacity(),
+                Some(self.streams.len() + 1),
+            ));
+        }
+        let (vertices, _uploaded) = match &pose.data {
+            PoseData::Compute(palette) => {
+                let bind = asset
+                    .active
+                    .as_ref()
+                    .and_then(|a| a.buffers[3].as_ref())
+                    .ok_or_else(|| {
+                        GraphError::invalid_input("prepare the compute skin before drawing")
+                    })?;
+                let bind = graph.import_readonly_buffer("skin bind", bind)?;
+                let (prepared, _) = pose.skin.compute.as_ref().expect("compute pose");
+                (
+                    prepared.add_pose(graph, bind, palette)?,
+                    compute::PALETTE_BYTES,
+                )
+            }
+            PoseData::Cpu { bytes, .. } => {
+                let vertices = graph.buffer(
+                    STREAM,
+                    BufferDesc {
+                        size: bytes.len() as u64,
+                    },
+                )?;
+                graph.upload_buffer(UPLOAD, vertices, 0, bytes)?;
+                (vertices, bytes.len())
+            }
+        };
+        #[cfg(feature = "memory-profiling")]
+        meshes
+            .recorded_pose_bytes
+            .fetch_add(_uploaded as u64, Ordering::Relaxed);
+        let stream = PosedStream {
+            mesh,
+            revision: pose.revision,
+            vertices,
+            bounds: pose.bounds,
+        };
+        self.streams.insert(id, stream);
+        Ok(stream)
     }
 }
 

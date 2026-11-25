@@ -15,7 +15,7 @@ use std::{collections::HashMap, sync::Arc};
 use upload::UploadBatch;
 mod skin;
 mod upload;
-pub(crate) use skin::FramePoses;
+pub(crate) use skin::{FramePoses, PosedStream};
 pub use skin::{JointWeights, PreparedComputeSkin, SkinPoseId};
 pub(crate) use upload::MeshCheckpoint;
 pub use upload::MeshUploadProgress;

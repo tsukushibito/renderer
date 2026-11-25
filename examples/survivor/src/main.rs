@@ -20,6 +20,8 @@ struct RunStart {
     rules_version: u32,
     #[serde(default)]
     visual: Option<RecordedVisual>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    locomotion: Option<survivor::LocomotionClips>,
 }
 
 impl RunStart {
@@ -131,9 +133,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             seed,
             rules_version: 1,
             visual: None,
+            locomotion: None,
         })
     };
-    let (initial, mut replay) = if let Some(path) = args.get_one::<PathBuf>("replay") {
+    let (mut initial, mut replay) = if let Some(path) = args.get_one::<PathBuf>("replay") {
         let replay = Replay::<RunStart, Input>::read(fs::File::open(path)?, requested, rate())?;
         let init = replay.initial;
         if init.rules_version != 1 {
@@ -158,6 +161,42 @@ fn main() -> Result<(), Box<dyn Error>> {
         (requested()?, None)
     };
     let mut game = initial.game()?;
+    let explicit = args
+        .get_one::<String>("character")
+        .map(String::as_str)
+        .or_else(|| args.get_flag("alternate-model").then_some("alternate"));
+    let character = if let Some(visual) = &initial.visual {
+        if explicit.is_some_and(|selected| selected != visual.character) {
+            return Err("requested character conflicts with recorded appearance".into());
+        }
+        visual.character.clone()
+    } else {
+        explicit
+            .unwrap_or_else(|| {
+                if profile.prefs.alternate_suit_unlocked
+                    && !["record", "replay", "frames"]
+                        .iter()
+                        .any(|key| args.contains_id(key))
+                {
+                    "alternate"
+                } else {
+                    "primary"
+                }
+            })
+            .to_owned()
+    };
+    let catalog_path = args
+        .get_one::<PathBuf>("character-catalog")
+        .cloned()
+        .map(Ok)
+        .unwrap_or_else(survivor::catalog_path)?;
+    if initial.locomotion.is_none() && !args.get_flag("headless") {
+        let catalog = sashiko::animation::CharacterCatalog::open(&catalog_path)?;
+        initial.locomotion = Some(survivor::LocomotionClips::load(&catalog, &character)?);
+    }
+    if let Some(clips) = &initial.locomotion {
+        game.locomotion = clips.play()?;
+    }
     if let Some(&prefix) = args.get_one::<usize>("replay-from") {
         let inputs = replay.as_mut().expect("replay required by CLI");
         if prefix >= inputs.len() {
@@ -189,7 +228,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?;
         app.game
     } else {
-        play(game, initial, replay, &args, &mut profile)?
+        play(
+            game,
+            initial,
+            replay,
+            &args,
+            &mut profile,
+            character,
+            catalog_path,
+        )?
     };
     println!("{}", serde_json::to_string(&game.snapshot())?);
     Ok(())
@@ -206,6 +253,8 @@ fn play(
     replay: Option<Vec<Input>>,
     args: &clap::ArgMatches,
     profile: &mut profile::Player,
+    character: String,
+    catalog_path: PathBuf,
 ) -> Result<Game, Box<dyn Error>> {
     use sashiko_renderer::core::runtime::RuntimeConfig;
     let default_api = if cfg!(feature = "vulkan") {
@@ -222,30 +271,6 @@ fn play(
         #[cfg(feature = "d3d12")]
         "d3d12" => RuntimeConfig::D3D12(Default::default()),
         _ => return Err("selected backend is unavailable in this build".into()),
-    };
-    let explicit = args
-        .get_one::<String>("character")
-        .map(String::as_str)
-        .or_else(|| args.get_flag("alternate-model").then_some("alternate"));
-    let character = if let Some(visual) = &initial.visual {
-        if explicit.is_some_and(|selected| selected != visual.character) {
-            return Err("requested character conflicts with recorded appearance".into());
-        }
-        visual.character.clone()
-    } else {
-        explicit
-            .unwrap_or_else(|| {
-                if profile.prefs.alternate_suit_unlocked
-                    && !["record", "replay", "frames"]
-                        .iter()
-                        .any(|key| args.contains_id(key))
-                {
-                    "alternate"
-                } else {
-                    "primary"
-                }
-            })
-            .to_owned()
     };
     let requested_shadows = args.get_flag("character-shadows");
     let shadows = if let Some(visual) = &initial.visual {
@@ -278,11 +303,7 @@ fn play(
                     .map_or(shadows, |v| v == "compute"),
                 shadows,
             },
-            catalog: args
-                .get_one::<PathBuf>("character-catalog")
-                .cloned()
-                .map(Ok)
-                .unwrap_or_else(survivor::visual::catalog_path)?,
+            catalog: catalog_path,
         },
         profile,
     )
@@ -299,6 +320,8 @@ fn play(
     _: Option<Vec<Input>>,
     _: &clap::ArgMatches,
     _: &mut profile::Player,
+    _: String,
+    _: PathBuf,
 ) -> Result<Game, Box<dyn Error>> {
     Err("use --headless or enable presentation and a graphics backend on Windows".into())
 }
@@ -317,6 +340,7 @@ mod tests {
             scenario: Scenario::Early,
             rules_version: 1,
             visual: None,
+            locomotion: None,
         };
         let tape = Replay::new(start, rate(), vec![Input::default()]);
         let wire = serde_json::to_vec(&tape).unwrap();

@@ -18,6 +18,8 @@ pub mod authoring;
 ))]
 mod character;
 mod combat;
+mod locomotion;
+pub use locomotion::{Locomotion, LocomotionClips, catalog_path};
 pub mod controls;
 #[cfg(all(
     feature = "embed",
@@ -85,6 +87,8 @@ pub struct Input {
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize)]
 pub struct Events {
+    /// Number of authored foot-contact markers crossed by the player this tick.
+    pub footsteps: usize,
     pub contact: bool,
     pub reached_marker: bool,
     pub died: bool,
@@ -100,6 +104,7 @@ pub struct Enemy {
     pub windup: bool,
     hp: u8,
     windup_left: u8,
+    dashing: bool,
     dash_left: u8,
     recovery: u8,
 }
@@ -135,6 +140,7 @@ pub struct Game {
     pub tick: u64,
     pub phase: Phase,
     pub upgrade_focus: sashiko::ui::Focus,
+    pub locomotion: Locomotion,
     pub player: Vec2,
     pub hp: u32,
     pub xp: u32,
@@ -166,6 +172,7 @@ impl Game {
             .expect("validated arena");
         let scene = authoring::game_world(&arena);
         let mut game = Self {
+            locomotion: Locomotion::default(),
             player: arena.player_spawn,
             arena,
             tick: 0,
@@ -246,7 +253,9 @@ impl Game {
         match self.phase {
             Phase::Defeated => {
                 if input.restart {
+                    let locomotion = self.locomotion.restarted();
                     *self = Self::new(self.arena.clone(), self.scenario, self.seed);
+                    self.locomotion = locomotion;
                     self.tick = tick;
                 }
                 return events;
@@ -275,6 +284,9 @@ impl Game {
             self.arena
                 .floor()
                 .slide(self.player, movement, 4.5 / TICK_HZ as f32, PLAYER_RADIUS);
+        events.footsteps = self
+            .locomotion
+            .advance((pos - self.player).length() * TICK_HZ as f32);
         self.player = pos;
         events.contact = contact;
 
@@ -349,6 +361,7 @@ impl Game {
                 windup: false,
                 hp: self.arena.subjects[archetype].hp,
                 windup_left: 0,
+                dashing: false,
                 dash_left: 0,
                 recovery: (id % 40) as u8,
             });
@@ -363,6 +376,7 @@ impl Game {
             let d = self.player.distance_squared(enemy.pos);
             let subject = &self.arena.subjects[enemy.archetype];
             enemy.recovery = enemy.recovery.saturating_sub(1);
+            enemy.dashing = enemy.windup_left == 0 && enemy.dash_left > 0;
             let speed = if enemy.windup_left > 0 {
                 enemy.windup_left -= 1;
                 if enemy.windup_left == 0 {

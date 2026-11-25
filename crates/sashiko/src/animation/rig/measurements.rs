@@ -80,14 +80,14 @@ fn measure_animation() -> PipelineResult<()> {
                 let mut players = (0..count)
                     .map(|i| {
                         let mut p = Playback::new(clip, rate);
-                        p.advance_to(i * 13, &mut []).unwrap();
+                        p.advance_to(i * 13, &mut [0; 128]).unwrap();
                         p.crossfade(target, 1024.try_into().unwrap()).unwrap();
                         p
                     })
                     .collect::<Vec<_>>();
                 measure(&format!("{label},fade"), |tick| {
                     for (i, p) in players.iter_mut().enumerate() {
-                        p.advance_to(i as u64 * 13 + tick, &mut []).unwrap();
+                        p.advance_to(i as u64 * 13 + tick, &mut [0; 128]).unwrap();
                         p.evaluate_pose(&mut output.workspace).unwrap();
                         black_box(&output.workspace);
                     }
@@ -137,12 +137,12 @@ fn measure_animation() -> PipelineResult<()> {
                 // Give the second run exactly the same progression as the scalar fade.
                 for (i, p) in players.iter_mut().enumerate() {
                     *p = Playback::new(clip, rate);
-                    p.advance_to(i as u64 * 13, &mut []).unwrap();
+                    p.advance_to(i as u64 * 13, &mut [0; 128]).unwrap();
                     p.crossfade(target, 1024.try_into().unwrap()).unwrap();
                 }
                 measure(&format!("{label},batch_fade"), |tick| {
                     for (i, (p, r)) in players.iter_mut().zip(&mut requests).enumerate() {
-                        p.advance_to(i as u64 * 13 + tick, &mut []).unwrap();
+                        p.advance_to(i as u64 * 13 + tick, &mut [0; 128]).unwrap();
                         *r = p.sample();
                     }
                     black_box(batch.evaluate(&requests).unwrap());
