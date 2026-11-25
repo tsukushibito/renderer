@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [features]
+memory-profiling = ["sashiko-renderer/memory-profiling"]
 cli = ["dep:clap"]
 audio-output = ["dep:cpal"]
 presentation = ["dep:winit", "dep:raw-window-handle", "sashiko-renderer/presentation", "dep:windows-sys"]

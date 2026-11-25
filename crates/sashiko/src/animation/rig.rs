@@ -170,3 +170,6 @@ impl PaletteWorkspace {
         Ok(&self.palette)
     }
 }
+
+#[cfg(all(test, feature = "memory-profiling"))]
+mod measurements;
