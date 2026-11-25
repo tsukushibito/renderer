@@ -153,6 +153,14 @@ jobs:
           python -m playwright install chromium --no-shell
       - name: Test the public WebGPU runtime on Chromium with SwiftShader
         run: python -B tools/run_webgpu_tests.py --channel chromium --software --development-validation
+      - name: Build and exercise shared CPU jobs on native and browser workers
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --release -p sashiko-jobs
+          cargo run --locked --release -p sashiko-jobs --example frame_jobs
+          rustup toolchain install nightly-2026-11-15 --profile minimal --component rust-src --target wasm32-unknown-unknown
+          python -B examples/jobs-web/build.py
+          python -B examples/jobs-web/verify.py build/jobs-web
       - name: Run the packaged viewer on Chromium with SwiftShader
         run: python -B tools/renderer-scenes/verify_web.py build/webgpu --channel chromium --software --output build/webgpu-result
       - uses: actions/upload-artifact@v4

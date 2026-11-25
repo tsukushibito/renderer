@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Sashiko CPU jobs</title>
+<h1>Sashiko CPU jobs</h1>
+<label><input id="required" type="checkbox"> Require parallel execution</label>
+<button id="start">Start host</button>
+<button id="run" disabled>Run batch</button>
+<button id="stop" disabled>Stop host</button>
+<label>Input while running <input id="input"></label>
+<output id="status" aria-live="polite">Stopped</output>
+<output id="result"></output>
+<script type="module" src="./page.js"></script>
+</html>

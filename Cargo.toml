@@ -2,6 +2,8 @@
 members = [
     "crates/sashiko",
     "crates/sashiko-animation",
+    "crates/sashiko-jobs",
+    "examples/jobs-web",
     "crates/sashiko-asset",
     "crates/sashiko-renderer-core",
     "crates/sashiko-lighting-bake",

@@ -1,0 +1,23 @@
+[package]
+name = "sashiko-jobs-web-example"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+web-threads = ["sashiko-jobs/web-threads"]
+
+[dependencies]
+sashiko-jobs = { path = "../../crates/sashiko-jobs", version = "0.1.0" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+sashiko-renderer-core = { version = "0.1.0", path = "../../crates/sashiko-renderer-core", features = ["memory-profiling"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
+[lints]
+workspace = true

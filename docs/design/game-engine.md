@@ -11,6 +11,24 @@ Sashiko は、少人数のチームと AI が同じシーンを編集し、同�
 | 独自機能の編集 | Unreal Engine のネイティブ機能と Blueprint の関係を参考に、ゲームの Rust 型も制作者が編集できる形に登録する。効果の寿命と取消は共通の機能にし、ダメージ・勝敗・報酬の定義はゲームが所有する。[Unreal の Gameplay Abilities](https://dev.epicgames.com/documentation/en-us/unreal-engine/using-gameplay-abilities-in-unreal-engine) |
 | 更新順と再現性 | Bevy のシステム登録は Rust からの合成に適するが、相対順に意味がある処理は順序を指定する必要がある。入力を固定ステップで確定し、ゲームが結果を決めた後で表示や音に渡す。表示の再試行で同じ操作を二度適用しない。[Bevy の System ordering](https://docs.rs/bevy/latest/bevy/ecs/system/index.html#system-ordering) |
 
+## 共通 CPU ジョブ
+
+`sashiko-jobs` は独立したライブラリである。ホストが一つの `JobPool` を作り、各サブシステムへ参照を渡す。独立した二つの処理を `join` に渡すと、結果を引数順に受け取れる。`for_each_chunk_mut` は元の開始位置と重ならない可変スライスを渡す。借用の期限は各呼び出しから戻るまでで、結果の格納位置を利用者が決める。コールバックの完了順は任意である。空入力は何もせず、一つのチャンクはその場で処理する。
+
+```rust,ignore
+let pool = JobPool::new(4.try_into()?)?;
+pool.join(
+    || pool.for_each_chunk_mut(&mut poses, batch_size, evaluate_poses),
+    || prepare_background(&scene),
+);
+```
+
+ワーカーは同じプールの子ジョブを実行しながら合流できる。兄弟同士をチャネルで待たせる処理やブロッキング I/O はホストで区別して扱う。小規模な仕事には `JobPool::inline()` を選べる。ネイティブはホストごとに Rayon プールを持つ。Web の並列構成は専用ホスト Worker の Wasm メモリにつき一度起動し、そのインスタンスのグローバル Rayon プールをジョブ専用に使う。他の Rayon 利用処理もこのホストではジョブ内で実行する。
+
+通常のフレームは一つのホストから入り、複数の仕事をその中で分岐させる。準備時に確保する投入スロットがホストのスタック上の処理をワーカーに一時的に貸す。書き込み完了を mutex で確認してから借用を返し、ネイティブの巻き戻しも同期後に伝える。複数の外部スレッドが同時に投入するときと別プールのワーカーから入るときは、進行を保つため Rayon の投入キューを使う。この経路はヒープを使いうる。
+
+将来、依存グラフは実行可能になったノードを同じ実行器に渡し、ノード内では既存の範囲並列を使える。フレームをまたぐ処理は所有データと完了ハンドルの契約を別途定める。現在の利用例と検証手順は[開発ガイド](../guides/development.md#cpu-jobs)に記載する。
+
 ## ゲーム作者との境界
 
 キャラクターの固定 tick、ECS との受け渡し、表示用ポーズの並列評価と GPU 変形の分担は[キャラクターアニメーションの設計方針](animation.md)に従う。

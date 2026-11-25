@@ -5,6 +5,32 @@
 今後の方針は[実装方針](../design/implementation-policy.md)を参照してください。
 現在の実行結果と未確認範囲は[最新の検証結果](../verification/current.md)にまとめます。
 
+<a id="cpu-jobs"></a>
+
+## CPU ジョブを検証する
+
+ネイティブの公開 API、プロセス全体の Rust ヒープ、逐次と 4 ワーカーの p50・p95 は次の手順で確認する。対象の CPU 処理は外部アセットや GPU を使わない。
+
+```sh
+cargo test --locked --release -p sashiko-jobs
+cargo run --locked --release -p sashiko-jobs --example frame_jobs
+```
+
+ブラウザのサンプルは同じ Rust 処理を二通りの Wasm にビルドする。共有メモリ版だけに固定 nightly と atomics 用の標準ライブラリを使う。リポジトリのルートで次を実行する。`wasm-bindgen-cli` は Cargo.lock の版に合わせる。
+
+```sh
+rustup target add wasm32-unknown-unknown
+rustup toolchain install nightly-2026-11-15 --profile minimal --component rust-src --target wasm32-unknown-unknown
+cargo install --locked wasm-bindgen-cli --version 0.2.130
+python -B examples/jobs-web/build.py
+python -m pip install playwright==1.65.0
+python -m playwright install chromium --no-shell
+python -B examples/jobs-web/verify.py build/jobs-web
+python -B examples/jobs-web/serve.py build/jobs-web
+```
+
+ローカル配信時は表示された URL を開き、Start host、Run batch を順に押す。ページの入力欄は計算中も編集できる。Stop host で親 Worker とその子 Worker を終了する。配信先では HTTPS（開発時は localhost）を使い、文書と Worker スクリプトに `Cross-Origin-Opener-Policy: same-origin` と `Cross-Origin-Embedder-Policy: require-corp` を付け、サンプル資産を同一オリジンで配信する。分離ヘッダーを付けない配信では逐次版を選ぶ。「Require parallel execution」を指定すると要件不足を初期化エラーとして表示する。
+
 <a id="graph-review-gates"></a>
 
 ## Graphの容量・保証再利用・出力APIを変更したときの確認
