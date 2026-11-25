@@ -100,6 +100,30 @@ pub struct Graph {
     raster_jobs: Option<Arc<raster::CaptureJobs>>,
     slot: Arc<Slot>,
 }
+
+impl Graph {
+    /// Record this portion using ordinary unsplit raster runs, then restore
+    /// the graph's scheduling policy for subsequent passes.
+    pub fn with_serial_raster<T>(&mut self, record: impl FnOnce(&mut Self) -> T) -> T {
+        struct Restore<'a> {
+            graph: &'a mut Graph,
+            jobs: Option<Arc<raster::CaptureJobs>>,
+            batch: Option<std::num::NonZeroUsize>,
+        }
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                self.graph.raster_jobs = self.jobs.take();
+                self.graph.generated_batch_size = self.batch;
+            }
+        }
+        let restore = Restore {
+            jobs: self.raster_jobs.take(),
+            batch: self.generated_batch_size.take(),
+            graph: self,
+        };
+        record(restore.graph)
+    }
+}
 impl Deref for Graph {
     type Target = GraphStorage;
     fn deref(&self) -> &Self::Target {

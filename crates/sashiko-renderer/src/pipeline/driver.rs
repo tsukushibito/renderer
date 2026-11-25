@@ -3,7 +3,7 @@ mod group;
 use self::group::{Group, PreparedGroup};
 use super::{
     CameraView, FrameScene, PipelineId, PipelineResult, PreparedScene, SceneInput,
-    StandardPipeline, StandardViewOutput, ViewId, ViewImages, ViewPipeline,
+    StandardJobPolicy, StandardPipeline, StandardViewOutput, ViewId, ViewImages, ViewPipeline,
 };
 use crate::passes::output::{PreparedOutput, SdrImage, SdrOutput};
 use sashiko_renderer_core::{
@@ -72,12 +72,12 @@ impl ViewRenderer {
     pub(super) fn set_standard_scene_jobs(
         &mut self,
         jobs: &sashiko_renderer_core::jobs::RendererJobs,
-        min_objects: NonZeroUsize,
+        policy: StandardJobPolicy,
     ) {
         for pipeline in self.pipelines.values_mut() {
             let group = pipeline.group.as_mut() as &mut dyn Any;
             if let Some(standard) = group.downcast_mut::<PreparedGroup<StandardPipeline>>() {
-                standard.set_scene_jobs(jobs.clone(), min_objects);
+                standard.set_scene_jobs(jobs.clone(), policy);
             }
         }
     }

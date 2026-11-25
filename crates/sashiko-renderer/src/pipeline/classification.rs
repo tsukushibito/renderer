@@ -77,6 +77,7 @@ impl Classification {
         view: &PreparedView,
         cascades: bool,
         lights: &[LocalLight],
+        allow_jobs: bool,
     ) -> Result<(), GraphError> {
         #[cfg(feature = "tracy")]
         let _span = tracy_client::Client::running()
@@ -99,7 +100,8 @@ impl Classification {
             },
             cascades,
         };
-        if let Some((team, min)) = &self.jobs
+        if allow_jobs
+            && let Some((team, min)) = &self.jobs
             && draws.len() >= min.get()
             && team.parallelism().get() > 1
         {
@@ -141,6 +143,7 @@ impl StandardPipeline {
     /// Classify views with a shared CPU team when the input reaches `min_objects`.
     /// Disjoint chunks write prepared slots; graph imports and draw order belong to the host.
     pub fn set_scene_jobs(&mut self, jobs: RendererJobs, min_objects: NonZeroUsize) {
+        self.auto_jobs = None;
         self.classification.jobs = Some((jobs, min_objects));
     }
 }
@@ -225,7 +228,7 @@ mod tests {
             RendererJobs::new(JobSystem::new(4.try_into().unwrap()).unwrap()),
             NonZeroUsize::MIN,
         ));
-        reference.run(&draws, &materials, &view, true, &[])?;
+        reference.run(&draws, &materials, &view, true, &[], true)?;
         assert!(reference.results[0].sort_depth.is_some());
         assert!(!reference.results[0].caster);
         assert!(!reference.results[3].camera);
@@ -236,14 +239,14 @@ mod tests {
         materials.remove(draws[63].material)?;
         assert_eq!(
             candidate
-                .run(&draws, &materials, &view, true, &[])
+                .run(&draws, &materials, &view, true, &[], true)
                 .unwrap_err()
                 .message,
             "nonfinite transparent sort center"
         );
         draws[0].sort_center = base.sort_center;
         draws[63] = base;
-        candidate.run(&draws, &materials, &view, true, &[])?;
+        candidate.run(&draws, &materials, &view, true, &[], true)?;
         for (expected, actual) in reference.results.iter().zip(candidate.results.iter()) {
             assert_eq!(expected.camera, actual.camera);
             assert_eq!(expected.cascades, actual.cascades);

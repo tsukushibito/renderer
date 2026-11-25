@@ -741,6 +741,15 @@ mod tests {
                 .unwrap_err();
             assert_eq!(err.resource_name(), Some("sparse"));
             assert_eq!(err.pass_name(), Some("reject"));
+            // A serial-only view may fail. The next view of the same graph
+            // still inherits the pool's worker team and native batch size.
+            let cancelled = graph.with_serial_raster(|graph| {
+                graph.raster("cancelled view", attachments, |pass| {
+                    pass.draw_generated(&program, 9, draw_at)?;
+                    Err(GraphError::invalid_input("cancel view"))
+                })
+            });
+            assert!(cancelled.is_err());
             let pass = graph
                 .raster("retry", attachments, |p| {
                     p.draw_generated(&program, 9, draw_at)

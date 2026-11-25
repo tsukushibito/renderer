@@ -82,13 +82,18 @@ impl RasterPass<'_, '_> {
         if let Some(error) = &self.error {
             return Err(error.clone());
         }
+        // A medium run can still benefit from coalescing its resource reads
+        // when dispatching workers would cost more than it saves.
+        const MIN_INLINE_DRAWS: usize = 384;
         let config = self
             .graph
             .raster_jobs
             .as_ref()
-            .filter(|j| count >= j.minimum.get())
+            .filter(|config| count >= config.minimum.get().min(MIN_INLINE_DRAWS))
             .cloned();
-        let result = if let Some(config) = config {
+        let result = if let Some(config) = &config
+            && count >= config.minimum.get()
+        {
             // Independent graph checkouts or nested producers can share a team.
             // The busy caller keeps its workspace; this checkout can progress inline.
             let chunks = match config.chunks.try_lock() {
@@ -97,10 +102,18 @@ impl RasterPass<'_, '_> {
                 Err(TryLockError::WouldBlock) => None,
             };
             if let Some(mut chunks) = chunks {
-                self.capture_generated(program, count, &draw_at, &config.team, &mut chunks)
+                self.capture_generated(program, count, &draw_at, Some(&config.team), &mut chunks)
             } else {
                 self.capture(program, (0..count).map(draw_at))
             }
+        } else if config.is_some() {
+            self.capture_generated(
+                program,
+                count,
+                &draw_at,
+                None,
+                &mut [Ok(Footprint::default())],
+            )
         } else {
             self.capture(program, (0..count).map(draw_at))
         };
@@ -135,7 +148,7 @@ impl RasterPass<'_, '_> {
         program: &ManagedRasterProgram,
         count: usize,
         draw_at: &(impl Fn(usize) -> D + Sync),
-        team: &RendererJobs,
+        team: Option<&RendererJobs>,
         chunks: &mut [Result<Footprint, GraphError>],
     ) -> Result<(), GraphError> {
         let started = self
@@ -193,7 +206,7 @@ impl RasterPass<'_, '_> {
                 0,
             )
         });
-        team.with(|jobs| {
+        let write_chunks = |jobs: &mut crate::jobs::JobSystem| {
             jobs.scope(|scope| {
                 let mut words = words;
                 for (group, (output, result)) in
@@ -208,7 +221,12 @@ impl RasterPass<'_, '_> {
                     });
                 }
             })
-        });
+        };
+        if let Some(team) = team {
+            team.with(write_chunks);
+        } else {
+            write_chunks(&mut crate::jobs::JobSystem::inline());
+        }
         #[cfg(feature = "tracy")]
         drop(capture_span);
         #[cfg(feature = "tracy")]

@@ -27,6 +27,18 @@ mod input;
 mod view;
 pub use input::{Draw, GeometryDrawInput, Mesh};
 pub use view::{StandardViewOutput, StandardViewState, StandardViewTimings};
+
+#[derive(Clone, Copy)]
+struct StandardJobPolicy {
+    opaque_pbr: bool,
+    updating_shadows: bool,
+}
+
+impl StandardJobPolicy {
+    // Below this candidate count the complete-frame comparisons change sign
+    // across adjacent scene sizes, even for homogeneous opaque draws.
+    const MIN_OBJECTS: usize = 50_000;
+}
 mod scene;
 pub use scene::{
     BakedLightingInput, EnvironmentMaps, MeshIndexRange, ProbeLighting, ReflectionProbeInput,
@@ -154,6 +166,7 @@ pub struct StandardPipeline {
     transform_indices: HashMap<[[u32; 4]; 3], u32>,
     connected: Vec<Draw>,
     classification: classification::Classification,
+    auto_jobs: Option<StandardJobPolicy>,
     timings: Option<StandardViewTimings>,
     order: Vec<(f64, usize, [bool; pbr::CASCADE_COUNT])>,
     forward: ForwardDraws,
@@ -289,6 +302,7 @@ impl StandardPipeline {
             transform_indices: HashMap::with_capacity(limits.max_transforms),
             connected: Vec::with_capacity(max),
             classification: classification::Classification::new(max),
+            auto_jobs: None,
             timings: None,
             order: Vec::with_capacity(max),
             forward: ForwardDraws {
@@ -357,6 +371,7 @@ impl StandardPipeline {
             frame.view,
             self.config.shadows.is_some(),
             frame.lights,
+            true,
         )
     }
 

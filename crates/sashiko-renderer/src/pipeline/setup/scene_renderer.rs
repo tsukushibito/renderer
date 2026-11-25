@@ -53,15 +53,21 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     fn configure_cpu_jobs(&mut self, jobs: &sashiko_renderer_core::jobs::RendererJobs) {
         // Candidate classification and generated visible draws have different costs.
         // Thresholds are in objects per view and draws per contiguous program run.
-        let min_objects = 25_000;
         #[cfg(all(windows, feature = "d3d12"))]
-        let min_objects = if self.runtime().as_d3d12().is_some() {
-            10_000
-        } else {
-            min_objects
-        };
-        self.driver
-            .set_standard_scene_jobs(jobs, NonZeroUsize::new(min_objects).unwrap());
+        let opaque_pbr = self.runtime().as_d3d12().is_some();
+        #[cfg(not(all(windows, feature = "d3d12")))]
+        let opaque_pbr = false;
+        #[cfg(feature = "vulkan")]
+        let updating_shadows = self.runtime().as_vulkan().is_some();
+        #[cfg(not(feature = "vulkan"))]
+        let updating_shadows = false;
+        self.driver.set_standard_scene_jobs(
+            jobs,
+            StandardJobPolicy {
+                opaque_pbr,
+                updating_shadows,
+            },
+        );
         self.pool
             .set_raster_jobs(jobs.clone(), NonZeroUsize::new(6_144).unwrap());
         self.pool

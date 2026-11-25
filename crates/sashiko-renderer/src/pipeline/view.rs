@@ -9,12 +9,14 @@ use std::{
 };
 /// Standard pipeline storage associated with one registered camera.
 pub struct StandardViewState {
+    parallel_next_view: bool,
     history: Option<History>,
     rect_history: Option<super::history::RectangleHistory>,
 }
 impl StandardViewState {
     pub(super) fn new(shadow_capacity: Option<usize>, rectangles: usize, casters: usize) -> Self {
         Self {
+            parallel_next_view: false,
             history: shadow_capacity.map(History::new),
             rect_history: (rectangles > 0)
                 .then(|| super::history::RectangleHistory::new(rectangles, casters)),
@@ -217,6 +219,7 @@ impl StandardPipeline {
         camera: &CameraView,
         input: SceneInput<'_>,
         consume: Option<impl FnOnce(&mut Graph, pbr::GBuffer) -> Result<(), GraphError>>,
+        allow_jobs: bool,
     ) -> Result<StandardViewOutput, GraphError> {
         if input.objects.len() > self.limits.max_draws {
             return Err(GraphError::capacity_error(
@@ -282,40 +285,47 @@ impl StandardPipeline {
                 )
             });
             self.connected.clear();
-            for obj in input.objects {
-                // Classify using the current deformed bounds before requesting vertices.
-                let mut mesh = obj.select_range(input.meshes.import(graph, obj.mesh)?)?;
-                if let Some(id) = obj.pose {
-                    mesh.bounds = input.meshes.pose_metadata(id, obj.mesh)?.0;
-                }
-                let lightmap = match (obj.placement(), input.surfaces) {
-                    (Some(id), Some((baked, _))) if !baked.pages.is_empty() => {
-                        match baked.placements.get(&id).copied() {
-                            Some(address) => {
-                                let uv = input.meshes.import_lightmap_uvs(graph, obj.mesh)?;
-                                let image = crate::material::texture_view(
-                                    graph,
-                                    baked.pages[address.page].snapshot(),
-                                )?;
-                                Some(pbr::DrawLightmap::new(uv, image, address))
-                            }
-                            None if baked.complete => {
-                                return Err(GraphError::invalid_input("unknown baked placement"));
-                            }
-                            None => None,
-                        }
+            // Import once per adjacent run on this graph. Ranges, posed bounds
+            // and baked placements belong to each instance.
+            for run in input.objects.chunk_by(|a, b| a.mesh == b.mesh) {
+                let shared = input.meshes.import(graph, run[0].mesh)?;
+                for obj in run {
+                    // Classify using the current deformed bounds before requesting vertices.
+                    let mut mesh = obj.select_range(shared)?;
+                    if let Some(id) = obj.pose {
+                        mesh.bounds = input.meshes.pose_metadata(id, obj.mesh)?.0;
                     }
-                    _ => None,
-                };
-                self.connected.push(Draw {
-                    lightmap,
-                    transform: (obj.transform != Transform::IDENTITY).then_some(obj.transform),
-                    sort_center: obj.sort_center.unwrap_or_else(|| mesh.bounds.center()),
-                    camera_visible: obj.camera_visible,
-                    casts_shadow: obj.casts_shadow,
-                    tint: obj.tint,
-                    ..Draw::new(mesh, obj.material)
-                });
+                    let lightmap = match (obj.placement(), input.surfaces) {
+                        (Some(id), Some((baked, _))) if !baked.pages.is_empty() => {
+                            match baked.placements.get(&id).copied() {
+                                Some(address) => {
+                                    let uv = input.meshes.import_lightmap_uvs(graph, obj.mesh)?;
+                                    let image = crate::material::texture_view(
+                                        graph,
+                                        baked.pages[address.page].snapshot(),
+                                    )?;
+                                    Some(pbr::DrawLightmap::new(uv, image, address))
+                                }
+                                None if baked.complete => {
+                                    return Err(GraphError::invalid_input(
+                                        "unknown baked placement",
+                                    ));
+                                }
+                                None => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    self.connected.push(Draw {
+                        lightmap,
+                        transform: (obj.transform != Transform::IDENTITY).then_some(obj.transform),
+                        sort_center: obj.sort_center.unwrap_or_else(|| mesh.bounds.center()),
+                        camera_visible: obj.camera_visible,
+                        casts_shadow: obj.casts_shadow,
+                        tint: obj.tint,
+                        ..Draw::new(mesh, obj.material)
+                    });
+                }
             }
         }
         if let Some(timings) = &mut self.timings {
@@ -327,6 +337,7 @@ impl StandardPipeline {
             &prepared,
             self.config.shadows.is_some(),
             input.lights,
+            allow_jobs,
         )?;
         if let Some(timings) = &mut self.timings {
             timings.classify = next_phase();
@@ -455,6 +466,7 @@ impl ViewPipeline for StandardPipeline {
         Ok(view.clear_history(runtime)?)
     }
     fn camera_cut(&mut self, view: &mut StandardViewState) -> PipelineResult<()> {
+        view.parallel_next_view = false;
         if let Some(history) = &mut view.history {
             history.maps.invalidate()?;
         }
@@ -474,7 +486,27 @@ impl StandardPipeline {
         scene: SceneInput<'_>,
         consume: Option<impl FnOnce(&mut Graph, crate::pbr::GBuffer) -> Result<(), GraphError>>,
     ) -> Result<(ViewImages, StandardViewOutput), GraphError> {
-        let update = self.draw_objects(graph, state, camera, scene, consume)?;
+        // Only scheduling uses the previous output of this camera. Each frame
+        // still classifies its actual objects and evaluates current shadow history.
+        let parallel = self.auto_jobs.is_none()
+            || (scene.objects.len() >= StandardJobPolicy::MIN_OBJECTS && state.parallel_next_view);
+        let record =
+            |graph: &mut Graph| self.draw_objects(graph, state, camera, scene, consume, parallel);
+        let update = if parallel {
+            record(graph)
+        } else {
+            graph.with_serial_raster(record)
+        }?;
+        if let Some(policy) = self.auto_jobs {
+            let opaque = self.transparent.is_empty() && self.forward.blend.is_empty();
+            state.parallel_next_view = opaque
+                && update.rect_updates.is_none()
+                && if let Some(reused) = update.reused_shadows() {
+                    policy.updating_shadows && reused.contains(&false)
+                } else {
+                    self.opaque.is_empty() || policy.opaque_pbr
+                };
+        }
         Ok((
             ViewImages {
                 color: update.scene.hdr,

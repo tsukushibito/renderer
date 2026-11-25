@@ -101,7 +101,13 @@ impl ScenePairs {
         graph: u64,
         pipeline: PipelineId,
     ) -> Result<FrameScene<'a>, GraphError> {
-        for obj in scene.objects {
+        // Both registries are immutably borrowed for the binding. Repeated
+        // instances of a pair therefore have the same revisions in this call.
+        for run in scene
+            .objects
+            .chunk_by(|a, b| (a.mesh, a.material) == (b.mesh, b.material))
+        {
+            let obj = &run[0];
             let current = revisions(scene, obj)?;
             if self.registered.get(&(obj.mesh, obj.material)) != Some(&current) {
                 return Err(GraphError::invalid_input(

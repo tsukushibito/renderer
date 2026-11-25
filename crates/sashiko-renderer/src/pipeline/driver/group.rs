@@ -49,9 +49,13 @@ impl PreparedGroup<StandardPipeline> {
     pub(super) fn set_scene_jobs(
         &mut self,
         jobs: sashiko_renderer_core::jobs::RendererJobs,
-        min_objects: NonZeroUsize,
+        policy: StandardJobPolicy,
     ) {
-        self.pipeline.set_scene_jobs(jobs, min_objects);
+        self.pipeline.set_scene_jobs(
+            jobs,
+            NonZeroUsize::new(StandardJobPolicy::MIN_OBJECTS).unwrap(),
+        );
+        self.pipeline.auto_jobs = Some(policy);
     }
     pub(super) fn check_lights(&self, lights: &[crate::pbr::LocalLight]) -> Result<(), GraphError> {
         self.pipeline.limits.check_lights(lights)
