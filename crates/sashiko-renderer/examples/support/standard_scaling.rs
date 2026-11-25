@@ -17,7 +17,7 @@ use sashiko_renderer::{
     unlit_forward::{IDENTITY, Vertex},
 };
 use sashiko_renderer_core::{
-    graph::{ImageDesc, PassHandle},
+    graph::{ImageDesc, PassHandle, RasterBuildMetrics},
     jobs::{JobSystem, RendererJobs},
     profiling::GpuTiming,
     runtime::{FrameId, FrameSubmission, Runtime, RuntimeConfig},
@@ -343,12 +343,16 @@ struct Sample {
     passes: usize,
     shadow_reused: Option<[bool; 4]>,
     scene: Option<StandardViewTimings>,
+    raster: Option<RasterBuildMetrics>,
     times: Option<[Duration; 5]>,
 }
 impl Sample {
     fn report(&self) -> Value {
         let ns = |d: Duration| d.as_nanos() as u64;
         json!({"interval_ns":ns(self.interval),"input_update_ns":ns(self.update),
+            "streaming_capture_ns":self.raster.map(|v| ns(v.streaming_capture)), "generated_capture_ns":self.raster.map(|v|ns(v.generated_capture)),
+            "generated_merge_ns":self.raster.map(|v|ns(v.generated_merge)),"finalize_reads_ns":self.raster.map(|v|ns(v.finalize_reads)),
+            "generated_runs":self.raster.map(|v|v.generated_runs),"generated_draws":self.raster.map(|v|v.generated_draws),
             "mesh_connect_ns":self.scene.map(|v|ns(v.connect_meshes)),"classify_ns":self.scene.map(|v|ns(v.classify)),
             "shadow_history_ns":self.scene.map(|v|ns(v.shadow_history)),"transparent_sort_ns":self.scene.map(|v|ns(v.transparent_sort)),
             "visible_objects": self.scene.map(|v|v.visible_objects),"cascade_casters":self.scene.map(|v|v.cascade_casters),
@@ -407,6 +411,7 @@ fn draw(
     } else {
         frame.graph().export_frame_image(output)?;
     }
+    sample.raster = frame.graph().raster_build_metrics();
     sample.build = start.elapsed();
     let start = Instant::now();
     let frame = frame.compile()?;
@@ -619,6 +624,7 @@ pub fn run() -> PipelineResult<()> {
         )?;
     }
     if o.profile {
+        renderer.parts_mut().1.set_raster_profiling(true);
         renderer.runtime().set_profiling(true)?;
     }
     measure(&mut renderer, &mut scene, &o, o.warmup, &mut output)?;

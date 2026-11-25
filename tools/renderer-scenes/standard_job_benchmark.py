@@ -6,7 +6,6 @@ import itertools
 import json
 import statistics
 import subprocess
-import sys
 from pathlib import Path
 
 from raster_job_benchmark import ROOT, check_device_and_build, host_policy, write_json
@@ -14,7 +13,8 @@ from raster_job_benchmark import ROOT, check_device_and_build, host_policy, writ
 STAGES = {"serial": (), "graph": ("graph",), "scene": ("scene",), "both": ("scene", "graph"),
           "native": ("native",), "scene-graph-native": ("scene", "graph", "native"), "auto": ()}
 WORKLOADS = ("opaque", "textured", "blend", "shadow-static", "shadow-dynamic")
-PHASES = ("build", "bind", "view", "mesh_connect", "classify", "shadow_history", "transparent_sort", "compile", "input_update", "prepare", "record", "submit", "retire", "gpu")
+PHASES = ("build", "bind", "view", "mesh_connect", "classify", "shadow_history", "transparent_sort",
+          "streaming_capture", "generated_capture", "generated_merge", "finalize_reads", "compile", "input_update", "prepare", "record", "submit", "retire", "gpu")
 
 
 def measurements(exe, args, output, policy):
