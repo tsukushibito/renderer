@@ -1,4 +1,5 @@
 //! Image layers in display-linear space. The caller owns layout and hit testing.
+use crate::shader_binaries::packaged_shaders;
 use sashiko_renderer_core::{
     ImageFormat,
     graph::{
@@ -67,10 +68,7 @@ fn program(format: ImageFormat, solid: bool) -> Result<ManagedRasterProgram, Gra
         blend: BlendState::PremultipliedAlpha,
         depth: DepthState::Disabled,
         shaders: fullscreen_triangle_shaders(
-            sashiko_renderer_core::program::embedded_shader_binaries!(
-                include_bytes!("../shaders/canvas.frag.spv"),
-                include_bytes!("../shaders/dxil/canvas.frag.dxil")
-            ),
+            packaged_shaders!(module: "canvas.frag"),
             Some(D3D12InlineConstantBinding {
                 register: 0,
                 space: 0,
@@ -86,10 +84,7 @@ fn program(format: ImageFormat, solid: bool) -> Result<ManagedRasterProgram, Gra
         binding_bytes: &[],
         sampling_pairs: &[],
         shaders: fullscreen_triangle_shaders(
-            sashiko_renderer_core::program::embedded_shader_binaries!(
-                include_bytes!("../shaders/canvas_fill.frag.spv"),
-                include_bytes!("../shaders/dxil/canvas_fill.frag.dxil")
-            ),
+            packaged_shaders!(module: "canvas_fill.frag"),
             Some(D3D12InlineConstantBinding {
                 register: 0,
                 space: 0,

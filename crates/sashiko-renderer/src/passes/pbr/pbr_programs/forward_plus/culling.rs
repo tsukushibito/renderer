@@ -191,10 +191,7 @@ static CULL_PROGRAM: ComputeProgramDescriptor = ComputeProgramDescriptor {
         },
         bytes: &[CULL_CAMERA_BYTES, 0, 0],
     },
-    shaders: packaged_shaders!(
-        include_bytes!("../../../../../shaders/forward_plus.comp.spv"),
-        include_bytes!("../../../../../shaders/dxil/forward_plus.comp.dxil"),
-    ),
+    shaders: packaged_shaders!(module: "forward_plus.comp"),
 };
 
 pub const fn compute_program() -> ManagedProgram {

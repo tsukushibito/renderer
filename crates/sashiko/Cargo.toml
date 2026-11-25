@@ -12,6 +12,7 @@ audio-output = ["dep:cpal"]
 presentation = ["dep:winit", "dep:raw-window-handle", "sashiko-renderer/presentation", "dep:windows-sys"]
 vulkan = ["sashiko-renderer/vulkan"]
 d3d12 = ["sashiko-renderer/d3d12"]
+webgpu = ["sashiko-renderer/webgpu"]
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = { version = "0.6", optional = true }

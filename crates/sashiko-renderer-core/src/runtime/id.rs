@@ -5,7 +5,7 @@ pub struct FrameId {
     serial: u64,
 }
 
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(sashiko_gpu_backend)]
 impl FrameId {
     pub(crate) fn new(owner: u64, serial: u64) -> Self {
         Self { owner, serial }

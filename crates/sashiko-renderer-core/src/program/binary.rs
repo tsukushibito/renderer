@@ -10,6 +10,11 @@ pub(super) enum Stage {
     Compute,
 }
 
+#[cfg(feature = "webgpu")]
+pub(super) fn valid_wgsl(bytes: &[u8], _stage: Stage) -> bool {
+    std::str::from_utf8(bytes).is_ok_and(|source| !source.trim().is_empty())
+}
+
 pub(super) fn valid_spirv(bytes: &[u8], stage: Stage) -> bool {
     // https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
     const MAGIC: u32 = 0x0723_0203;

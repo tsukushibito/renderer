@@ -329,6 +329,8 @@ cargo run --locked -p sashiko-renderer-core --no-default-features --features vul
 cargo run --locked -p sashiko-renderer-core --no-default-features --features d3d12,presentation --example windowed -- --api d3d12
 ```
 
+<a id="webgpu-scenes"></a>
+
 ### Bistro と Sponza を Web ブラウザで開く
 
 Python 3.11 以降を使い、WASM と静的ページをビルドします。ビルド時の `wasm-bindgen` CLI は `Cargo.lock` と同じバージョンを使います。CLI のインストールコマンドはビルドスクリプトにも表示されます。

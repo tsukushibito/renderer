@@ -67,12 +67,34 @@ Vulkan SDK **1.4.341.1**の`glslc`と`spirv-val`を使う。
 通常のCPU試験やCPUだけのCriterion測定にVulkan SDKを要求しない。
 SDKの構成は[固定版のSPIR-V toolchain](https://vulkan.lunarg.com/doc/view/1.4.341.1/windows/spirv_toolchain.html)を参照する。
 
+## WebGPU 用 WGSL の生成と検証
+
+`webgpu` feature は標準 Program に WGSL を組み込む。アプリのビルド時にシェーダー変換は不要。
+再生成には Naga CLI 30.0.0 と Vulkan SDK 1.4.341.1 の `slangc`、`spirv-dis`、`spirv-as` を使う。
+
+```sh
+cargo install naga-cli --version 30.0.0 --locked
+python tools/shaders/webgpu.py
+python tools/shaders/webgpu.py --check
+```
+
+CI の `python tools/shaders/webgpu.py --validate-packaged` は Naga だけで全 WGSL を検証し、
+変換入力と生成物の SHA-256、ネイティブ版と WGSL のステージ・バインディング座標・ワークグループ寸法を照合する。
+頂点シェーダーは固定 SPIR-V から Naga で変換し、
+Vulkan 用射影行列の Y を WebGPU のクリップ空間に合わせる。PBR の fragment などは
+標準 manifest の HLSL と define を使い、Slang で WGSL に変換する。
+ラスターパラメータは group 0・binding 255 の uniform に格納する。
+深度テクスチャの手動比較には、unfilterable-float と nearest sampler を組み合わせる。
+
 <a id="runtime-shader-import"></a>
 
 ## 実行時に外部シェーダーを読み込む
 
 アプリのアセット層で、選んだバックエンドのバイナリと、同じビルドで確認したABIを読み込む。
-Vulkan向けはlittle-endian SPIR-V 1.3以下、D3D12向けはDXIL SM6.0で、entryは`main`を使う。
+Vulkan 向けには little-endian SPIR-V 1.3 以下、D3D12 向けには DXIL SM6.0、
+WebGPU 向けには UTF-8 の WGSL を使う。各ステージの entry は `main`。
+WebGPU 用ラスタープログラムは `ShaderBinaries::webgpu(RasterShaderStages { vertex, fragment }, samplers)`
+で作成する。`samplers` は nearest 専用バインディングの `(group, binding)` 配列。
 次の例は頂点IDで全画面三角形を作り、RGBA8のcolor attachmentへ書くVulkan用のRaster Programを
 読み込む。アプリ側でこの契約を満たすと確認したアセットを渡す。
 

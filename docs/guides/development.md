@@ -46,6 +46,22 @@ foreach ($features in @('vulkan,d3d12,memory-profiling', 'vulkan,d3d12,memory-pr
 build/cookを終えてからGPU受入を実行し、ログ・binary hash・source commit・featureと未実行範囲を保存する。
 構造上の走査回数削減やCPU小負荷の比較を、通常Bistroの速度改善やGPU/FPSの結果へ読み替えない。
 
+## WebGPU のブラウザ実機試験
+
+WebGPU を有効にした Chromium と対応する ChromeDriver を用意し、
+`chromedriver` と Cargo.lock の `wasm-bindgen` に一致するバージョンの
+`wasm-bindgen-test-runner` を PATH に追加する。次の試験はブラウザのデバイスを
+使い、公開 Runtime の完了通知、リソースの世代、読み戻し、深度付きのテクスチャ描画を検査する。
+
+```powershell
+rustup target add wasm32-unknown-unknown
+$env:CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER = "wasm-bindgen-test-runner"
+cargo test --locked --release --target wasm32-unknown-unknown -p sashiko-renderer-core --features webgpu --test webgpu_runtime -- --include-ignored
+```
+
+WebDriver を使わずにインストール済みのブラウザで実行するには、同じコマンドに
+`$env:NO_HEADLESS = "1"` を設定し、端末に表示された localhost の URL を開く。
+
 ## 必要なツール
 
 | 用途 | 必要なもの |

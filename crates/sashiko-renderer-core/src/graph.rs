@@ -47,7 +47,7 @@ mod image_transfer;
 mod indirect;
 mod output;
 mod pass;
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(sashiko_gpu_backend)]
 pub(crate) mod provenance;
 mod ranges;
 mod raster;

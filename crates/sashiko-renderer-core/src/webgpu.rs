@@ -4,7 +4,11 @@ use std::sync::{Arc, Mutex};
 use web_sys::HtmlCanvasElement;
 pub use wgpu;
 use wgpu::{CurrentSurfaceTexture, TextureFormat};
+mod bindings;
+mod compute;
+pub(crate) mod engine;
 mod present;
+mod raster;
 
 /// Presentation target for an existing browser canvas. Create a fresh target after device loss.
 pub struct CanvasTarget {
@@ -60,13 +64,6 @@ impl CanvasTarget {
                 .expect("device failure")
                 .get_or_insert_with(|| format!("WebGPU device lost: {reason:?}: {message}"));
         });
-        let notice = Arc::clone(&failure);
-        device.on_uncaptured_error(Arc::new(move |error| {
-            notice
-                .lock()
-                .expect("device failure")
-                .get_or_insert_with(|| format!("WebGPU error: {error}"));
-        }));
         let mut config = surface
             .get_default_config(&adapter, 1, 1)
             .ok_or("WebGPU canvas has no presentation configuration")?;
@@ -78,7 +75,17 @@ impl CanvasTarget {
             .into_iter()
             .find(|f| matches!(f, TextureFormat::Bgra8Unorm | TextureFormat::Rgba8Unorm))
             .ok_or("WebGPU canvas has no eight-bit SDR format")?;
+        // The Runtime owns the device's uncaptured-error handler. Catch failures
+        // while preparing the display pipeline before exposing this target.
+        let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let display = present::DisplayPass::new(&device, config.format);
+        let errors = [validation.pop().await, internal.pop().await, memory.pop().await];
+        if let Some(error) = errors.into_iter().flatten().next() {
+            device.destroy();
+            return Err(error.to_string());
+        }
         Ok(Self {
             device,
             queue,
@@ -114,8 +121,25 @@ impl CanvasTarget {
         self.device.destroy();
     }
 
-    /// Present a same-device, display-encoded SDR Graph output at its native pixel size.
-    pub fn present_image(&mut self, image: &wgpu::Texture) -> Result<bool, String> {
+    /// Present the current scheduled contents of an exported SDR image. The host can
+    /// release the image owner once the presentation commands have been accepted.
+    pub fn present(
+        &mut self,
+        runtime: &crate::runtime::Runtime,
+        image: &crate::graph::ImportImage,
+    ) -> Result<bool, String> {
+        if runtime.webgpu_device() != Some(&self.device) {
+            return Err("WebGPU canvas and renderer belong to different devices".into());
+        }
+        let texture = runtime.webgpu_texture(image).map_err(|e| e.to_string())?;
+        let submitted = self.present_image(texture)?;
+        if submitted {
+            runtime.mark_webgpu_presented(image).map_err(|e| e.to_string())?;
+        }
+        Ok(submitted)
+    }
+
+    fn present_image(&mut self, image: &wgpu::Texture) -> Result<bool, String> {
         let Some(frame) = self.acquire()? else {
             return Ok(false);
         };
