@@ -4,22 +4,17 @@ use sashiko_jobs::JobSystem;
 use sashiko_renderer_core::graph::{RasterConstants, RasterDraw};
 
 pub(super) struct DrawPreparation {
-    jobs: Option<JobSystem>,
+    jobs: JobSystem,
     packets: Vec<RasterDraw>,
     count: usize,
 }
 
 impl DrawPreparation {
-    pub(super) fn new(workers: usize, draws: usize) -> Result<Self, Box<dyn Error>> {
+    pub(super) fn new(workers: NonZeroUsize, draws: usize) -> Result<Self, Box<dyn Error>> {
         let mut packets = Vec::new();
-        let jobs = if let Some(participants) = NonZeroUsize::new(workers) {
-            packets.try_reserve_exact(draws)?;
-            Some(JobSystem::new(participants)?)
-        } else {
-            None
-        };
+        packets.try_reserve_exact(draws)?;
         Ok(Self {
-            jobs,
+            jobs: JobSystem::new(workers)?,
             packets,
             count: draws,
         })
@@ -32,13 +27,12 @@ impl DrawPreparation {
         parameters: Option<&[RasterConstants]>,
         ranges: &[Range<usize>],
     ) {
-        let Some(jobs) = &mut self.jobs else { return };
         // The first checkout supplies valid Graph-local handles to initialize the
         // reserved storage. Every checkout rewrites them before issuing any draw.
         self.packets.resize(self.count, template);
         let packets = self.packets.as_mut_slice();
         let template = &template;
-        jobs.scope(|scope| {
+        self.jobs.scope(|scope| {
             let mut remaining = packets;
             for range in ranges {
                 let (batch, rest) = remaining.split_at_mut(range.len());
@@ -93,7 +87,8 @@ mod tests {
         let ranges = [0..3, 3..7, 7..9];
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         for workers in [1, 2, 4] {
-            let mut preparation = DrawPreparation::new(workers, 9).unwrap();
+            let mut preparation =
+                DrawPreparation::new(NonZeroUsize::new(workers).unwrap(), 9).unwrap();
             for variant in 0..3 {
                 let mut graph = pool.begin().unwrap();
                 let buffer = BufferDesc { size: 128 };
