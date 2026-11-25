@@ -384,6 +384,8 @@ def main():
             "--enable-unsafe-swiftshader",
             "--use-webgpu-adapter=swiftshader",
         ]
+        if sys.platform == "win32":
+            flags += ["--use-angle=d3d11-warp", "--ignore-gpu-blocklist"]
     try:
         with serve(args.site) as base, sync_playwright() as pw:
             browser = pw.chromium.launch(channel=args.channel, args=flags)

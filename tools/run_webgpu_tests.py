@@ -34,8 +34,12 @@ def run_browser(url, channel, software):
     flags = ["--enable-gpu"]
     if software:
         flags += ["--enable-unsafe-webgpu", "--enable-unsafe-swiftshader", "--use-webgpu-adapter=swiftshader"]
+        if os.name == "nt":
+            # WARP provides ANGLE's compositor device on GPU-less Windows runners.
+            flags += ["--use-angle=d3d11-warp", "--ignore-gpu-blocklist"]
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(channel=channel, args=flags)
+        print(f"Testing {channel} {browser.version}", flush=True)
         page = browser.new_page()
         page.on("pageerror", lambda error: print(f"Browser error: {error}", flush=True))
         page.goto(url)

@@ -63,7 +63,7 @@ WebDriver を使わずにインストール済みのブラウザで実行する�
 `$env:NO_HEADLESS = "1"` を設定し、端末に表示された localhost の URL を開く。
 Python の Playwright があれば、`python tools/run_webgpu_tests.py --channel chrome`
 でビルドから実機テストの判定まで自動化できる。Edge は `--channel msedge` を指定する。
-CI は `--software --development-validation` を追加して SwiftShader で同じテストを実行する。
+Windows の CI は Playwright に固定した Chromium を使い、`--channel chromium --software --development-validation` で同じテストを実行する。GPU を持たないランナーでは ANGLE の画面合成に WARP、WebGPU の描画に SwiftShader を使う。
 
 フルシーンの画像比較には [WebGPU ビューアーと配信用データ](examples.md#webgpu-scenes) を用意する。
 ネイティブの `renderer-scenes` を `vulkan,development-validation` 付きでビルドし、

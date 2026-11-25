@@ -4,7 +4,7 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     process::{Command, Output},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 pub(super) type Result<T = ()> = std::result::Result<T, Box<dyn Error>>;
@@ -13,10 +13,17 @@ pub(super) struct Project(pub(super) PathBuf);
 
 impl Project {
     pub(super) fn new() -> Result<Self> {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("renderer-armor-{}-{nonce}", std::process::id()));
-        fs::create_dir(&root)?;
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let root = loop {
+            let id = NEXT.fetch_add(1, Ordering::Relaxed);
+            let root =
+                std::env::temp_dir().join(format!("renderer-armor-{}-{id}", std::process::id()));
+            match fs::create_dir(&root) {
+                Ok(()) => break root,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        };
         let project = Self(root);
         copy_directory(&fixture().join("source"), &project.0.join("source"))?;
         Ok(project)

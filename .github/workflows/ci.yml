@@ -148,11 +148,13 @@ jobs:
       - name: Build the validation-enabled viewer
         run: python -B tools/renderer-scenes/build_web.py --out build/webgpu --development-validation
       - name: Install browser verification dependencies
-        run: python -m pip install numpy==1.26.4 Pillow==11.1.0 psutil==7.0.0 playwright==1.49.1
-      - name: Test the public WebGPU runtime on Edge with SwiftShader
-        run: python -B tools/run_webgpu_tests.py --channel msedge --software --development-validation
-      - name: Run the packaged viewer on Edge with SwiftShader
-        run: python -B tools/renderer-scenes/verify_web.py build/webgpu --channel msedge --software --output build/webgpu-result
+        run: |
+          python -m pip install numpy==1.26.4 Pillow==11.1.0 psutil==7.0.0 playwright==1.65.0
+          python -m playwright install chromium --no-shell
+      - name: Test the public WebGPU runtime on Chromium with SwiftShader
+        run: python -B tools/run_webgpu_tests.py --channel chromium --software --development-validation
+      - name: Run the packaged viewer on Chromium with SwiftShader
+        run: python -B tools/renderer-scenes/verify_web.py build/webgpu --channel chromium --software --output build/webgpu-result
       - uses: actions/upload-artifact@v4
         if: always()
         with:
