@@ -82,10 +82,6 @@ impl ComputePrograms {
         })
     }
 
-    pub(super) fn clear_bind_groups(&mut self) {
-        self.groups.clear();
-    }
-
     #[allow(
         clippy::too_many_arguments,
         reason = "the Graph stores immutable dispatch operands and the recorder borrows active device resources"

@@ -65,6 +65,22 @@ Python の Playwright があれば、`python tools/run_webgpu_tests.py --channel
 でビルドから実機テストの判定まで自動化できる。Edge は `--channel msedge` を指定する。
 CI は `--software --development-validation` を追加して SwiftShader で同じテストを実行する。
 
+フルシーンの画像比較には [WebGPU ビューアーと配信用データ](examples.md#webgpu-scenes) を用意する。
+ネイティブの `renderer-scenes` を `vulkan,development-validation` 付きでビルドし、
+`tools/renderer-scenes/reference.py` に配信時と同じ入力を指定する。次は両方の基準画像を
+同じディレクトリに作り、Windows のハードウェア GPU で検証する例。
+
+```powershell
+foreach ($scene in "bistro", "sponza") {
+    python -B tools/renderer-scenes/reference.py $scene --binary target/release/renderer-scenes.exe --manifest "$scene/cooked/manifest.json" --ibl-manifest "$scene/ibl/manifest.json" --baked-lighting "$scene/day.gi" --reflection-probes "$scene/day.reflections" --output build/webgpu-references
+}
+foreach ($channel in "chrome", "msedge") {
+    python -B tools/renderer-scenes/verify_web.py build/renderer-scenes-web --scenes bistro sponza --references build/webgpu-references --channel $channel --output "build/webgpu-results/$channel"
+}
+```
+
+各出力先の `result.json` に Canvas と読み戻し画像、Vulkan と SDR・HDR・深度の比較、矩形光の影、ブラウザとアダプター、表示間隔、プロセスツリーのピーク常駐メモリを記録する。Python の画像比較には NumPy、Pillow、psutil、Playwright を使う。
+
 ## 必要なツール
 
 | 用途 | 必要なもの |

@@ -10,4 +10,3 @@ fn vertices(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
 fn display(@builtin(position) pixel: vec4<f32>) -> @location(0) vec4<f32> {
     return vec4<f32>(textureLoad(frame, vec2<i32>(pixel.xy), 0).rgb, 1.0);
 }
-
