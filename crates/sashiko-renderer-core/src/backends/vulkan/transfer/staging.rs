@@ -309,15 +309,10 @@ impl SharedStaging {
             .device
             .ensure_active()
             .map_err(StagingError::DeviceUnavailable)?;
-        // SAFETY: The live owner retains this physical device's Instance. This
-        // immutable property query occurs only when creating the shared buffer.
-        let properties = unsafe {
-            owner
-                .device
-                .instance_raw()
-                .get_physical_device_properties(owner.device.physical_device())
-        };
-        let alignment = properties.limits.non_coherent_atom_size.max(16);
+        let alignment = owner.device.limits().non_coherent_atom_size.max(16);
+        // Preparation sizes describe payload bytes before a physical device is
+        // selected. Both the backing buffer and arena must cover the last atom.
+        let capacity = padded_size(capacity, alignment)?;
         let arena = Arena::new(capacity, alignment, max_ranges)?;
         let factory = VulkanAllocator {
             owner: Arc::clone(&owner),

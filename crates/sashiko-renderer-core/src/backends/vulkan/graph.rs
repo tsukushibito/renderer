@@ -73,6 +73,7 @@ fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeEr
 pub struct RuntimeConfig {
     pub execution_slots: usize,
     pub resource_capacity: usize,
+    /// Requested bytes per staging pool, rounded up once to whole cache atoms.
     pub staging_bytes: u64,
     pub staging_ranges: usize,
     /// Maximum descriptor-bearing operations per Graph. Managed Compute
