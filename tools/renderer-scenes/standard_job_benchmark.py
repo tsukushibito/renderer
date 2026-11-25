@@ -17,7 +17,7 @@ PHASES = ("build", "bind", "view", "mesh_connect", "classify", "shadow_history",
           "streaming_capture", "generated_capture", "generated_merge", "finalize_reads", "compile", "input_update", "prepare", "record", "submit", "retire", "gpu")
 
 
-def measurements(exe, args, output, policy):
+def measurements(exe, serial_exe, args, output, policy):
     groups = list(itertools.product(args.apis, args.objects, args.visible, args.workloads))
     for repeat in range(args.repeats):
         start = repeat % len(args.stages)
@@ -27,7 +27,8 @@ def measurements(exe, args, output, policy):
                 name = f"{key}-{stage}-r{repeat + 1}"
                 folder = output / name
                 folder.mkdir()
-                command = [str(exe), "--api", api, "--objects", str(objects), "--visible", str(visible),
+                binary = serial_exe if stage == "serial" else exe
+                command = [str(binary), "--api", api, "--objects", str(objects), "--visible", str(visible),
                            "--workload", workload, "--warmup", str(args.warmup), "--frames", str(args.frames),
                            "--extent", args.extent, "--participants", str(args.participants),
                            "--report", str(folder / "report.json")]
@@ -59,7 +60,7 @@ def measurements(exe, args, output, policy):
                     raise RuntimeError(f"{name} exited with {code}; see {folder / 'process.log'}")
                 report = json.loads((folder / "report.json").read_text(encoding="utf-8"))
                 expected = dict(api=api, presented=args.present, objects=objects, visible=visible, workload=workload,
-                                profile=args.profile, frames=args.frames, warmup=args.warmup, in_flight=2,
+                                profile=args.profile, frames=args.frames, warmup=args.warmup, in_flight=2, seed=71,
                                 extent=list(map(int, args.extent.split("x"))), native_jobs=args.native or "native" in STAGES[stage],
                                 scene_jobs="scene" in STAGES[stage], graph_jobs="graph" in STAGES[stage],
                                 participants=args.participants, auto=stage == "auto")
@@ -97,6 +98,7 @@ def metrics(report):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", type=Path, required=True)
+    parser.add_argument("--serial-exe", type=Path, help="compatible reference build for the rotated serial runs")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--apis", nargs="+", choices=("vulkan", "d3d12"), default=["vulkan", "d3d12"])
     parser.add_argument("--objects", nargs="+", type=int, default=[50000])
@@ -123,21 +125,29 @@ def main():
         parser.error("--native is a forced setting and cannot be used with auto")
     if args.capture and "serial" not in args.stages:
         parser.error("captures require the serial reference")
+    if args.serial_exe and "serial" not in args.stages:
+        parser.error("--serial-exe requires the serial stage")
     for items in (args.apis, args.objects, args.visible, args.workloads, args.stages):
         if len(set(items)) != len(items):
             parser.error("a comparison condition is repeated")
     exe = args.exe.resolve(strict=True)
+    serial_exe = args.serial_exe.resolve(strict=True) if args.serial_exe else exe
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     policy = host_policy.plan("performance-cores")
     with exe.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    write_json(out / "plan.json", {"exe": str(exe), "sha256": digest, "cpu_policy": policy,
-                                  "options": {k: v for k, v in vars(args).items() if k not in ("exe", "output")}})
+    plan = {"exe": str(exe), "sha256": digest, "cpu_policy": policy,
+            "options": {k: v for k, v in vars(args).items() if k not in ("exe", "serial_exe", "output")}}
+    if args.serial_exe:
+        with serial_exe.open("rb") as stream:
+            plan["serial_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
+        plan["serial_exe"] = str(serial_exe)
+    write_json(out / "plan.json", plan)
     groups = {}
     devices = {}
     captures = {}
-    for key, stage, name, report in measurements(exe, args, out, policy):
+    for key, stage, name, report in measurements(exe, serial_exe, args, out, policy):
         if not args.strict:
             check_device_and_build({"api": report["api"], "name": name}, report, devices)
         elif (report["validation"] != {"clean": True, "strict": True}
@@ -148,6 +158,8 @@ def main():
                 raise ValueError(f"{name}: readback mismatch")
         if args.memory and not (report["memory"] and report["memory"]["allocation_free"]):
             raise ValueError(f"{name}: nonzero or unmeasured memory events: {report['memory']}")
+        if not args.memory and report["memory"] is not None:
+            raise ValueError(f"{name}: memory instrumentation requires --memory")
         groups.setdefault(key, {}).setdefault(stage, []).append({"name": name, **metrics(report)})
     results = {}
     for key, stages in groups.items():

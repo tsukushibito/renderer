@@ -61,7 +61,8 @@ def compact(source):
     expected = len(options["apis"]) * len(options["objects"]) * len(options["visible"]) * len(options["workloads"])
     if len(groups) != expected:
         raise ValueError(f"{source}: expected {expected} independent scene configurations")
-    return {"binary_sha256": plan["sha256"], "cpu_affinity_mask": plan["cpu_policy"]["affinity_mask"],
+    return {"binary_sha256": plan["sha256"], "serial_binary_sha256": plan.get("serial_sha256", plan["sha256"]),
+            "cpu_affinity_mask": plan["cpu_policy"]["affinity_mask"],
             "devices": runs["devices"], "options": options, "groups": groups, "captures": runs.get("captures", {})}
 
 

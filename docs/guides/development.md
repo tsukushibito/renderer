@@ -1781,6 +1781,8 @@ python tools/renderer-scenes/packed_visibility_benchmark.py --exe target/release
 
 `--workloads textured blend shadow-static shadow-dynamic` で、テクスチャ付き複数材質、半透明混在、4カスケードの再利用・更新を選べる。`--capture` はGPU計測後に2フレームを再生し、SDR・HDR・深度と該当する影マップのハッシュを直列経路と突き合わせる。`development-validation` を有効にした別ビルドでは `--strict --capture`、`memory-profiling` ビルドでは `--memory` を使う。各ビルドの実行ファイルは別名で保持する。`scheduler-metrics` ビルドの `--profile` では、シーン・Graph・バックエンドの区間、GPUタイムスタンプ、合流時に実際に待機した時間を調べられる。時間が包含関係にある区間は加算しない。
 
+同一シーンを備えた旧バイナリと比較するには、標準ランナーに `--serial-exe PATH --stages serial auto` を渡す。反復ごとに両実装の実行順を入れ替え、双方の実行物のSHA-256を記録する。
+
 低レベルの `raster_job_benchmark.py` は `--graph-workers 0 1 4` で従来の登録、最終領域への1人の一括登録、4人の一括登録を比べられる。GPUカリングの比較では同じジオメトリと材質順を使い、個別のCPU直接描画に加え、可視の連続範囲をまとめる直接描画、グループ全体を一括描画できる場合の直接描画も含める。[実機の採用結果](../verification/current.md#standard-renderer-jobs)
 
 `frame_loop`は`--draws 0..1024`、`--layout overlap|grid`、`--extent WIDTHxHEIGHT`、

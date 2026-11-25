@@ -707,6 +707,10 @@ CPU で描画コマンドを作れる時点は、その入力が揃った時点�
 
 `RendererJobs` はホストが用意した一つの `JobSystem` を共有する。標準パイプラインはワールド AABB、カメラ可視性、各カスケードの候補、透明物のソートキーをオブジェクトごとの領域に記録する。影履歴の判定と描画宣言はこの結果を共有する。カメラ外の物体も影を落とす可能性があるため、影候補はカメラと独立に判定する。資源インポート、影履歴の更新、最終的な描画順はホストが管理する。並行する別の Graph が同じチームを使っていれば、その呼出元で処理を進める。
 
+Unreal Engineも、パスごとの描画準備と、可視描画数・コア数に応じたパス内の記録を別のジョブにしている。Khronosのサンプルは、独立した記録先をワーカーに渡し、バッチが小さくなると呼び出し費用が増えることを示す。標準Rendererでもシーン分類、Graph登録、ネイティブ記録を個別に切り替え、完了FPSとフレーム間隔のp95で判断する。[Unreal Engine Mesh Drawing Parallelism](https://dev.epicgames.com/documentation/en-us/unreal-engine/mesh-drawing-pipeline-in-unreal-engine)・[Khronos Command Buffer Usage](https://docs.vulkan.org/samples/latest/samples/performance/command_buffer_usage/README.html)
+
+標準ビューに `prepare_jobs` を設定すると、長い同一プログラムの描画列を最大3,125件の均等な連続バッチに分ける。ネイティブ記録には4人以上のチームを使う。Vulkanは対象8バッチかつ計25,000描画、D3D12は16バッチかつ計50,000描画から分担する。短いバッチ（1,563描画未満）はこの判定から除く。D3D12ではbundleで扱えるバインディングを持つ描画が対象となる。記録先は同時実行枠ごとに64バッチ分を準備する。低レベルのAPIではホストが別の予算や粒度を設定できる。[専用シーンの結果と計測環境](../verification/current.md#standard-renderer-jobs)
+
 性能判断には[大量描画の専用シーン](../guides/development.md#raster-draw-scaling)を使う。実描画総数を固定し、単一の重いパス、複数の独立パス、順序依存を付けた同じパス群で比較する。パス内のバッチ分割も独立に変え、準備と合流の短縮が Graph 登録・コンパイル・ネイティブ記録・GPU 完了を含む処理量にどれだけ残るかを測る。各 API のネイティブ記録まで分ける場合は、確定済みの状態遷移・バリアを元の命令位置に保ち、記録先を排他所有して実際の GPU 完了後に再利用する。[CPU 並列記録の設計条件](../guides/rendergraph-best-practices.md#scheduling)
 
 初期化時に `Runtime::prepare_raster_recording(jobs, max_batches)` を呼ぶと、上記の入力生成とは独立にネイティブ記録を分担できる。ジョブは Graph に登録された連続バッチを単位とする。1回の `RasterPass::draw` に全件を渡せば1バッチであり、重いパスでは順序を保った複数の呼び出しで範囲を渡す。ホストを含めた参加人数と、同時提出に備える1実行枠あたりの記録先の数は独立に指定する。

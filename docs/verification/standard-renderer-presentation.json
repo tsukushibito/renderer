@@ -1,0 +1,667 @@
+{
+  "schema": 1,
+  "executable_sha256": "ad3b39e7f30eb7567778d25dc09d5be525b8421f5d9e63d40181b92ae1c95ec2",
+  "devices": {
+    "vulkan": {
+      "api": "vulkan",
+      "device": "NVIDIA GeForce RTX 3060",
+      "driver": 2559967232,
+      "luid": [
+        88,
+        233,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "d3d12": {
+      "api": "d3d12",
+      "device": "NVIDIA GeForce RTX 3060",
+      "driver": 9007199255790656,
+      "luid": [
+        88,
+        233,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "options": {
+    "apis": [
+      "vulkan",
+      "d3d12"
+    ],
+    "objects": [
+      50000
+    ],
+    "visible": [
+      50
+    ],
+    "workloads": [
+      "opaque"
+    ],
+    "stages": [
+      "serial",
+      "native",
+      "both",
+      "scene-graph-native",
+      "auto"
+    ],
+    "participants": 4,
+    "extent": "1920x1080",
+    "native": false,
+    "profile": false,
+    "present": true,
+    "capture": false,
+    "memory": false,
+    "strict": false,
+    "frames": 600,
+    "warmup": 120,
+    "repeats": 3
+  },
+  "affinity_mask": 4095,
+  "measurement": "Completed/accepted frame throughput, including final Graph and presenter drain; physical display scanout not timed.",
+  "groups": {
+    "vulkan-50000-50-opaque": {
+      "serial": {
+        "runs": [
+          {
+            "completed_fps": 81.634798,
+            "interval_p95_ms": 14.03566,
+            "interval_p99_ms": 16.065942,
+            "process_logical_cpus": 0.990671,
+            "host_logical_cpus": 0.990671,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "646a028a7a9aa545ebadd99252e0a181c5e00daddf30488e0a5b21aa3e547fad"
+          },
+          {
+            "completed_fps": 80.655619,
+            "interval_p95_ms": 14.19008,
+            "interval_p99_ms": 16.918242,
+            "process_logical_cpus": 1.006093,
+            "host_logical_cpus": 0.999792,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "3d6424467936ba2c2a68d86b1a8f3ebe2df7b304202483981e1148cec9cbc1e5"
+          },
+          {
+            "completed_fps": 80.899128,
+            "interval_p95_ms": 14.26948,
+            "interval_p99_ms": 15.893096,
+            "process_logical_cpus": 0.99649,
+            "host_logical_cpus": 0.99649,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "0f73a0bf4f4fec33af9dc14f345de58d96ba7cc8321fa806aecfa8316f13cdec"
+          }
+        ],
+        "median": {
+          "completed_fps": 80.89913,
+          "interval_p95_ms": 14.19008,
+          "interval_p99_ms": 16.06594,
+          "process_logical_cpus": 0.99649,
+          "host_logical_cpus": 0.99649
+        }
+      },
+      "native": {
+        "runs": [
+          {
+            "completed_fps": 77.45647,
+            "interval_p95_ms": 16.1561,
+            "interval_p99_ms": 18.594318,
+            "process_logical_cpus": 1.032752,
+            "host_logical_cpus": 0.958119,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "bcb0c90f1b7376ddb876796c376997d74ffd490dee77524151e618bbc6a7cb16"
+          },
+          {
+            "completed_fps": 81.344369,
+            "interval_p95_ms": 13.83674,
+            "interval_p99_ms": 14.82883,
+            "process_logical_cpus": 1.052815,
+            "host_logical_cpus": 0.942662,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "0b8e23b18c9b15b22342529b25f9733ee322895d6b70f2cdc73f5baee9bb0877"
+          },
+          {
+            "completed_fps": 73.569986,
+            "interval_p95_ms": 18.3958,
+            "interval_p99_ms": 21.615876,
+            "process_logical_cpus": 1.044156,
+            "host_logical_cpus": 0.961773,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "6594a8c3ad8f9d1b02e28b99f4e97f768f40418f32e742fbc8a63219985f25cf"
+          }
+        ],
+        "median": {
+          "completed_fps": 77.45647,
+          "interval_p95_ms": 16.1561,
+          "interval_p99_ms": 18.59432,
+          "process_logical_cpus": 1.04416,
+          "host_logical_cpus": 0.95812
+        }
+      },
+      "both": {
+        "runs": [
+          {
+            "completed_fps": 89.215299,
+            "interval_p95_ms": 13.41484,
+            "interval_p99_ms": 15.398344,
+            "process_logical_cpus": 1.173272,
+            "host_logical_cpus": 0.980437,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "5b6ef0ffcabfc96cd070bf79467dc14bd9f24fbbc22ecdbf425ff9333d11e071"
+          },
+          {
+            "completed_fps": 94.222279,
+            "interval_p95_ms": 11.46041,
+            "interval_p99_ms": 12.558246,
+            "process_logical_cpus": 1.204767,
+            "host_logical_cpus": 0.98148,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "938bdc1402eb341a9d677f3dcad1d461863c80b9c8ba751fb2b1ee4f5a533a52"
+          },
+          {
+            "completed_fps": 87.149174,
+            "interval_p95_ms": 14.82368,
+            "interval_p99_ms": 17.518594,
+            "process_logical_cpus": 1.164256,
+            "host_logical_cpus": 0.96227,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "3ee5588d5fc00fb386bb05361541d0fd8fbf0aa7e84cec2c7c4c8240119c2b8c"
+          }
+        ],
+        "median": {
+          "completed_fps": 89.2153,
+          "interval_p95_ms": 13.41484,
+          "interval_p99_ms": 15.39834,
+          "process_logical_cpus": 1.17327,
+          "host_logical_cpus": 0.98044
+        }
+      },
+      "scene-graph-native": {
+        "runs": [
+          {
+            "completed_fps": 96.6108,
+            "interval_p95_ms": 13.19403,
+            "interval_p99_ms": 16.590514,
+            "process_logical_cpus": 1.192538,
+            "host_logical_cpus": 0.92082,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "67a2e679367ff10b09a90cfa3d4df55ad942310047477a771897247cb9304534"
+          },
+          {
+            "completed_fps": 101.348186,
+            "interval_p95_ms": 11.90353,
+            "interval_p99_ms": 14.18882,
+            "process_logical_cpus": 1.23254,
+            "host_logical_cpus": 0.90527,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "9152f41be37b193443170d1d4fdbbf21ffc56bfc4fdca0aff46de7b4e27e77c0"
+          },
+          {
+            "completed_fps": 98.581618,
+            "interval_p95_ms": 12.30038,
+            "interval_p99_ms": 14.583132,
+            "process_logical_cpus": 1.242537,
+            "host_logical_cpus": 0.931903,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "c2261e31483251d46136a22efda4503bba05970e36184c6dadab5fbcf179a8f5"
+          }
+        ],
+        "median": {
+          "completed_fps": 98.58162,
+          "interval_p95_ms": 12.30038,
+          "interval_p99_ms": 14.58313,
+          "process_logical_cpus": 1.23254,
+          "host_logical_cpus": 0.92082
+        }
+      },
+      "auto": {
+        "runs": [
+          {
+            "completed_fps": 100.602112,
+            "interval_p95_ms": 11.41461,
+            "interval_p99_ms": 13.518796,
+            "process_logical_cpus": 1.323021,
+            "host_logical_cpus": 0.888127,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "2ecd87daeb7af85ab0af251b6e99c59fa7267ed35ab6da02155e934b8f3579cb"
+          },
+          {
+            "completed_fps": 98.718504,
+            "interval_p95_ms": 12.64436,
+            "interval_p99_ms": 14.959848,
+            "process_logical_cpus": 1.321387,
+            "host_logical_cpus": 0.928056,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "7634e71e36c76a43a1fe5f751a8c84df9c3769050229efde325043a31484521a"
+          },
+          {
+            "completed_fps": 96.649874,
+            "interval_p95_ms": 13.64893,
+            "interval_p99_ms": 16.179044,
+            "process_logical_cpus": 1.308797,
+            "host_logical_cpus": 0.948878,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "VK_PRESENT_MODE_IMMEDIATE_KHR",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "388cc3e45b9a9efb585be32a75bac75961c17a6139cb117ca259c309f922bb3b"
+          }
+        ],
+        "median": {
+          "completed_fps": 98.7185,
+          "interval_p95_ms": 12.64436,
+          "interval_p99_ms": 14.95985,
+          "process_logical_cpus": 1.32139,
+          "host_logical_cpus": 0.92806
+        }
+      }
+    },
+    "d3d12-50000-50-opaque": {
+      "serial": {
+        "runs": [
+          {
+            "completed_fps": 70.715164,
+            "interval_p95_ms": 16.64212,
+            "interval_p99_ms": 21.58609,
+            "process_logical_cpus": 0.996272,
+            "host_logical_cpus": 0.992589,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "47e2c8dfa8bf44c9faa8d5a605c6dff2930394e5f027ca7079dfa3b4f179edb1"
+          },
+          {
+            "completed_fps": 66.076175,
+            "interval_p95_ms": 23.7001,
+            "interval_p99_ms": 47.92548,
+            "process_logical_cpus": 0.939519,
+            "host_logical_cpus": 0.939519,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "9e43d8b564f5258179e0a9edd74e27303599a8b3ce08a2b88b774466437da160"
+          },
+          {
+            "completed_fps": 73.103951,
+            "interval_p95_ms": 14.92439,
+            "interval_p99_ms": 18.515238,
+            "process_logical_cpus": 0.997563,
+            "host_logical_cpus": 0.997563,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "849ca744ff4ff10da9a642e5381479a02267e018de46323a33f3d5001a976e6f"
+          }
+        ],
+        "median": {
+          "completed_fps": 70.71516,
+          "interval_p95_ms": 16.64212,
+          "interval_p99_ms": 21.58609,
+          "process_logical_cpus": 0.99627,
+          "host_logical_cpus": 0.99259
+        }
+      },
+      "native": {
+        "runs": [
+          {
+            "completed_fps": 69.728227,
+            "interval_p95_ms": 17.12978,
+            "interval_p99_ms": 19.588834,
+            "process_logical_cpus": 1.111292,
+            "host_logical_cpus": 0.982368,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "9258757c812e2882d5f61a559329e522f191b457b7e81d18dc9024f1f6756d69"
+          },
+          {
+            "completed_fps": 73.624888,
+            "interval_p95_ms": 14.65,
+            "interval_p99_ms": 16.106502,
+            "process_logical_cpus": 1.11971,
+            "host_logical_cpus": 0.987416,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "131db04e8631fb82ff05c5928d7ec8711ff3e893d65744c11baa076f5e68fe41"
+          },
+          {
+            "completed_fps": 70.658255,
+            "interval_p95_ms": 16.87947,
+            "interval_p99_ms": 20.922784,
+            "process_logical_cpus": 1.135315,
+            "host_logical_cpus": 0.97891,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "745d1df8518f0eede7c93736ebad8b709098acbe29a3afc1c181fb18de3a17cb"
+          }
+        ],
+        "median": {
+          "completed_fps": 70.65825,
+          "interval_p95_ms": 16.87947,
+          "interval_p99_ms": 19.58883,
+          "process_logical_cpus": 1.11971,
+          "host_logical_cpus": 0.98237
+        }
+      },
+      "both": {
+        "runs": [
+          {
+            "completed_fps": 78.631953,
+            "interval_p95_ms": 15.71539,
+            "interval_p99_ms": 20.043046,
+            "process_logical_cpus": 1.15081,
+            "host_logical_cpus": 0.978803,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "d4d2e6e1fc0293f1457303bd5f505b7e6e933998f036bc82d361b8f722b6c923"
+          },
+          {
+            "completed_fps": 82.094188,
+            "interval_p95_ms": 13.15368,
+            "interval_p99_ms": 14.385774,
+            "process_logical_cpus": 1.184378,
+            "host_logical_cpus": 0.970591,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "351ea3c9de585e6b5e0deee6e913969ad9cd29217f11383e299d3b642701a368"
+          },
+          {
+            "completed_fps": 75.806,
+            "interval_p95_ms": 17.73005,
+            "interval_p99_ms": 21.274606,
+            "process_logical_cpus": 1.208155,
+            "host_logical_cpus": 0.971262,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "328df3a19f8d750b10b5e36c46d0491e6f31a1182bf2a871295ab9069c6e2567"
+          }
+        ],
+        "median": {
+          "completed_fps": 78.63195,
+          "interval_p95_ms": 15.71539,
+          "interval_p99_ms": 20.04305,
+          "process_logical_cpus": 1.18438,
+          "host_logical_cpus": 0.97126
+        }
+      },
+      "scene-graph-native": {
+        "runs": [
+          {
+            "completed_fps": 85.071779,
+            "interval_p95_ms": 12.98114,
+            "interval_p99_ms": 14.521588,
+            "process_logical_cpus": 1.417861,
+            "host_logical_cpus": 0.968133,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "93f7a8a17c5a09379041eb01a5c6e9941b68486c8d4e3dd344a4f7df09e6a45a"
+          },
+          {
+            "completed_fps": 82.563288,
+            "interval_p95_ms": 14.63403,
+            "interval_p99_ms": 17.185188,
+            "process_logical_cpus": 1.2922,
+            "host_logical_cpus": 0.976138,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "6d307bab77052a0822654aa63835f5f5db4c996fd7fbec982746976e074f0261"
+          },
+          {
+            "completed_fps": 83.54276,
+            "interval_p95_ms": 15.10966,
+            "interval_p99_ms": 18.005942,
+            "process_logical_cpus": 1.309705,
+            "host_logical_cpus": 0.981191,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "0bf42931299c64c2b0beb37ad8d2ce619c8ee1bf8c002a0cbed1e3574ec7a9ba"
+          }
+        ],
+        "median": {
+          "completed_fps": 83.54276,
+          "interval_p95_ms": 14.63403,
+          "interval_p99_ms": 17.18519,
+          "process_logical_cpus": 1.3097,
+          "host_logical_cpus": 0.97614
+        }
+      },
+      "auto": {
+        "runs": [
+          {
+            "completed_fps": 81.706341,
+            "interval_p95_ms": 12.726,
+            "interval_p99_ms": 14.472202,
+            "process_logical_cpus": 1.18091,
+            "host_logical_cpus": 0.974517,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "519bce606298d8eeebf703e48964df52f832162cf5a1f5b850138b8b58f0b1da"
+          },
+          {
+            "completed_fps": 80.745842,
+            "interval_p95_ms": 12.81814,
+            "interval_p99_ms": 14.261184,
+            "process_logical_cpus": 1.150206,
+            "host_logical_cpus": 0.97778,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "f3de76c2ddc55eb88f59443fa6f1a0aea2dcc9d25e4ab654bed42ae0d4a9b4b0"
+          },
+          {
+            "completed_fps": 78.237623,
+            "interval_p95_ms": 16.61648,
+            "interval_p99_ms": 19.75428,
+            "process_logical_cpus": 1.155225,
+            "host_logical_cpus": 0.975931,
+            "accepted": 600,
+            "not_ready_retries": 0,
+            "mode": "DXGI Present(0), ALLOW_TEARING",
+            "profile_samples": 0,
+            "monitor": [
+              1920,
+              1080
+            ],
+            "sha256": "889bf326b8b5ea9eb5bb18186e0ca5ad6598fe62d0ba2161dfd3ffea886cbc2a"
+          }
+        ],
+        "median": {
+          "completed_fps": 80.74584,
+          "interval_p95_ms": 12.81814,
+          "interval_p99_ms": 14.4722,
+          "process_logical_cpus": 1.15522,
+          "host_logical_cpus": 0.97593
+        }
+      }
+    }
+  }
+}
