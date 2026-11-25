@@ -164,6 +164,7 @@ pub struct GraphStorage {
     pub(super) bindings: Vec<BindingOperands>,
     pub(super) binding_accesses: Vec<ResourceAccess>,
     pub(super) raster_binding_seen: Vec<bool>,
+    pub(super) raster_binding_access_ranges: Vec<Range<usize>>,
     pub(super) raster_binding_sets: Vec<usize>,
     pub(super) attachments: Vec<AttachmentOperand>,
     pub(super) raster_ranges: Vec<[u64; 2]>,
@@ -214,6 +215,9 @@ impl GraphStorage {
         })?;
         let mut raster_binding_seen = buffer(capacity.bindings, GraphCapacityKind::Bindings)?;
         raster_binding_seen.resize(capacity.bindings, false);
+        let mut raster_binding_access_ranges =
+            buffer(capacity.bindings, GraphCapacityKind::Bindings)?;
+        raster_binding_access_ranges.resize(capacity.bindings, 0..0);
         Ok(Self {
             id: 0,
             resources: buffer(capacity.resources, GraphCapacityKind::Resources)?,
@@ -238,6 +242,7 @@ impl GraphStorage {
             bindings: buffer(capacity.bindings, GraphCapacityKind::Bindings)?,
             binding_accesses: buffer(capacity.bindings, GraphCapacityKind::Bindings)?,
             raster_binding_seen,
+            raster_binding_access_ranges,
             raster_binding_sets: buffer(capacity.bindings, GraphCapacityKind::Bindings)?,
             attachments: buffer(capacity.attachments, GraphCapacityKind::Attachments)?,
             raster_ranges,
@@ -415,6 +420,8 @@ impl Slot {
 /// Prepared Graph slots. Keep the pool alive through normal frame processing;
 /// destroying it and its last plan is an explicit shutdown/change boundary.
 pub struct GraphPool {
+    generated_batch_size: Option<std::num::NonZeroUsize>,
+    raster_jobs: Option<Arc<super::raster::CaptureJobs>>,
     slots: Vec<Arc<Slot>>,
     capacity: GraphCapacity,
 }
@@ -443,9 +450,26 @@ impl GraphPool {
         }
         Ok(Self {
             slots: prepared,
+            generated_batch_size: None,
+            raster_jobs: None,
             capacity,
         })
     }
+    /// Use the supplied team to construct generated indexed runs at or above
+    /// this draw count in future checkouts. This preparation can allocate.
+    pub fn set_raster_jobs(
+        &mut self,
+        jobs: crate::jobs::RendererJobs,
+        min_draws: std::num::NonZeroUsize,
+    ) {
+        self.raster_jobs = Some(Arc::new(super::raster::CaptureJobs::new(jobs, min_draws)));
+    }
+    /// Partition long generated runs into balanced, ordered native recording
+    /// batches in future checkouts. Explicit streaming batches are kept intact.
+    pub fn set_generated_batch_size(&mut self, max_draws: std::num::NonZeroUsize) {
+        self.generated_batch_size = Some(max_draws);
+    }
+
     /// The immutable per-slot limits selected at preparation.
     pub fn capacity(&self) -> GraphCapacity {
         self.capacity
@@ -495,6 +519,8 @@ impl GraphPool {
                 unique.data_mut().reset(super::next_id());
                 return Ok(Graph {
                     slot: Arc::clone(slot),
+                    raster_jobs: self.raster_jobs.clone(),
+                    generated_batch_size: self.generated_batch_size,
                 });
             }
         }

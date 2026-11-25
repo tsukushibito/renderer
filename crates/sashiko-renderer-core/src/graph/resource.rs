@@ -388,6 +388,58 @@ pub(crate) struct Resource {
     pub export_mips: u32,
 }
 
+/// Resource identity, description and diagnostic names shared by independent draw recorders.
+#[derive(Clone, Copy)]
+pub(super) struct BufferLookup<'a> {
+    pub(super) id: u64,
+    pub(super) resources: &'a [Resource],
+    names: &'a [u8],
+}
+
+impl<'a> BufferLookup<'a> {
+    pub(super) fn new(id: u64, resources: &'a [Resource], names: &'a [u8]) -> Self {
+        Self {
+            id,
+            resources,
+            names,
+        }
+    }
+
+    fn name(&self, resource: &Resource) -> &str {
+        std::str::from_utf8(&self.names[resource.name.clone()]).expect("stored Graph name is UTF-8")
+    }
+
+    pub(super) fn invalid(&self, handle: BufferHandle, message: &'static str) -> GraphError {
+        GraphError::invalid_input(message).with_resource(
+            handle.into(),
+            Some(self.name(&self.resources[handle.index])),
+        )
+    }
+
+    pub(super) fn buffer_id(&self, handle: BufferHandle) -> Result<usize, GraphError> {
+        if handle.graph != self.id {
+            return Err(
+                GraphError::new(GraphErrorKind::WrongOwner, "foreign graph buffer handle")
+                    .with_resource(handle.into(), None),
+            );
+        }
+        if !matches!(
+            self.resources.get(handle.index).map(|r| r.desc),
+            Some(ResourceDesc::Buffer(_))
+        ) {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidHandle,
+                "undefined or wrong-kind graph buffer handle",
+            )
+            .with_resource(
+                handle.into(),
+                self.resources.get(handle.index).map(|r| self.name(r)),
+            ));
+        }
+        Ok(handle.index)
+    }
+}
+
 impl Graph {
     /// Whether an earlier pass may write this image before the next declared pass.
     pub fn image_has_pending_write(&self, image: &ImportImage) -> bool {
@@ -817,26 +869,7 @@ impl Graph {
         Ok(())
     }
     pub(super) fn buffer_id(&self, handle: BufferHandle) -> Result<usize, GraphError> {
-        if handle.graph != self.id {
-            return Err(
-                GraphError::new(GraphErrorKind::WrongOwner, "foreign graph buffer handle")
-                    .with_resource(handle.into(), None),
-            );
-        }
-        if !matches!(
-            self.resources.get(handle.index).map(|r| r.desc),
-            Some(ResourceDesc::Buffer(_))
-        ) {
-            return Err(GraphError::new(
-                GraphErrorKind::InvalidHandle,
-                "undefined or wrong-kind graph buffer handle",
-            )
-            .with_resource(
-                handle.into(),
-                self.resources.get(handle.index).map(|r| self.name(&r.name)),
-            ));
-        }
-        Ok(handle.index)
+        BufferLookup::new(self.id, &self.resources, &self.names).buffer_id(handle)
     }
     pub(super) fn image_id(&self, handle: ImageHandle) -> Result<usize, GraphError> {
         if handle.graph != self.id {
