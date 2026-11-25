@@ -121,6 +121,10 @@ jobs:
         run: |
           python -B -m unittest discover -s tools/shaders -p 'test_*.py'
           python -B tools/shaders/verify_pipeline_manifest.py
+      - name: Verify packaged WGSL sources, digests, and modules
+        run: |
+          cargo install --locked naga-cli --version 30.0.0
+          python -B tools/shaders/webgpu.py --validate-packaged
 
   webgpu:
     needs: changes

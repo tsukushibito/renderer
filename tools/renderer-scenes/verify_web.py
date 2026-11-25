@@ -25,7 +25,12 @@ from compare_runtime import FORMATS, compare_pixels, digest, load_capture, valid
 
 @contextmanager
 def serve(site):
-    handler = partial(SimpleHTTPRequestHandler, directory=site.resolve())
+    class Handler(SimpleHTTPRequestHandler):
+        def log_request(self, code="-", size="-"):
+            if isinstance(code, int) and code >= 400:
+                super().log_request(code, size)
+
+    handler = partial(Handler, directory=site.resolve())
     with ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -423,6 +428,9 @@ def main():
                 for plane in FORMATS
             )
         )
+    except Exception as error:
+        result["failure"] = str(error)
+        raise
     finally:
         (args.output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     if not result["passed"]:
