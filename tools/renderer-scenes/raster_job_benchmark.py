@@ -171,7 +171,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--summarize", action="store_true", help="only aggregate reports from an existing run")
     parser.add_argument("--apis", nargs="+", choices=("vulkan", "d3d12"), default=["vulkan", "d3d12"])
-    parser.add_argument("--draws", nargs="+", type=int, choices=(1024, 10000, 50000), default=[50000])
+    parser.add_argument("--draws", nargs="+", type=int, default=[50000], metavar="1..50000")
     parser.add_argument("--words", nargs="+", type=int, choices=(0, 20), default=[0, 20])
     parser.add_argument("--conditions", nargs="+", choices=CONDITIONS, default=list(CONDITIONS))
     parser.add_argument("--workers", nargs="+", type=int, default=[0, 1, 4],
@@ -189,6 +189,8 @@ def main():
         return
     if not args.exe or args.warmup < 0 or args.frames < 3 or args.repeats < 1 or min(args.workers + args.native_workers + args.graph_workers) < 0:
         parser.error("supply --exe, frames >= 3, repeats >= 1 and nonnegative workers and warmup")
+    if any(draws < 1 or draws > 50000 for draws in args.draws):
+        parser.error("draw counts must be in 1..50000")
     for values in (args.apis, args.draws, args.words, args.conditions, args.workers, args.native_workers, args.graph_workers):
         if len(set(values)) != len(values):
             parser.error("repeated values would duplicate a measurement condition")

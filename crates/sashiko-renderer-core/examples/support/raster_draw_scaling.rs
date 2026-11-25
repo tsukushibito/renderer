@@ -157,7 +157,7 @@ impl Options {
             match flag.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "raster_draw_scaling --api <vulkan|d3d12> --draws <1024|10000|50000> --words <0|20> --report <path>\n\
+                        "raster_draw_scaling --api <vulkan|d3d12> --draws <1..=50000> --words <0|20> --report <path>\n\
                          [--passes <1..={MAX_PASSES}>] [--batches-per-pass <positive count>] [--topology <independent|chain>]\n\
                          [--workers <0 for direct, or 1 through available logical CPU count>]\n\
                          [--graph-workers <0 for direct, or scoped capture team size>] [--native-workers <0 for direct, or scoped recording team size>] [--warmup <count>] [--frames <count>] [--profile] [--capture <stem>]"
@@ -195,10 +195,8 @@ impl Options {
         }
         let draws = draws.ok_or("missing --draws")?;
         let words = words.ok_or("missing --words")?;
-        if !matches!(draws, 1_024 | 10_000 | 50_000) || !matches!(words, 0 | 20) {
-            return Err(
-                "supported draw counts are 1024, 10000 and 50000; words must be 0 or 20".into(),
-            );
+        if !(1..=50_000).contains(&draws) || !matches!(words, 0 | 20) {
+            return Err("draws must be in 1..=50000 and words must be 0 or 20".into());
         }
         if frames == 0 && (capture.is_none() || warmup != 0) {
             return Err("zero measured frames require --capture and --warmup 0".into());
