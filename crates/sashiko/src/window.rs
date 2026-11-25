@@ -9,7 +9,7 @@ use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
     event::{ElementState, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::PhysicalKey,
     platform::{pump_events::EventLoopExtPumpEvents, windows::EventLoopBuilderExtWindows},
     window::{Window, WindowId},
@@ -167,63 +167,132 @@ pub trait WindowGame<A> {
 }
 
 impl<A: WindowControls> WindowHost<A> {
-    /// One update batch per accepted frame. A pending frame can be resized or
-    /// redrawn without consuming further inputs. Minimized time is suspended.
+    /// Run the standalone game with one event handler until exit. Retry a
+    /// pending presentation without advancing the game or consuming more input.
     pub fn run<G: WindowGame<A>>(
-        &mut self,
+        self,
         game: &mut G,
         limit: Option<usize>,
         timeout: Duration,
     ) -> Result<(), G::Error> {
-        let size = self.window().inner_size();
-        let mut extent = [size.width, size.height];
-        let mut presented = 0;
-        let mut pending = false;
-        let mut previous_present = Instant::now();
-        let mut clock = previous_present;
-        while limit.is_none_or(|n| presented < n) {
-            self.pump(Duration::ZERO);
-            if self.closed() || self.state.controls.quit_requested() {
-                break;
-            }
-            if let Some(size) = self.take_resize() {
-                extent = size;
-                game.resize(size, pending)?;
-            }
-            if extent.contains(&0) {
-                self.pump(Duration::from_millis(16));
-                clock = Instant::now();
-                continue;
-            }
-            if !pending {
-                let start = Instant::now();
-                game.update(self.input(), start.duration_since(clock))?;
-                clock = start;
-                pending = true;
-            }
-            match game.draw()? {
-                Presentation::Presented(now) => {
-                    game.presented(now.duration_since(previous_present));
-                    previous_present = now;
-                    presented += 1;
-                    pending = false;
-                }
-                Presentation::Resize => {
-                    let size = self.window().inner_size();
-                    self.queue_resize([size.width, size.height]);
-                }
-                Presentation::Retry => std::thread::yield_now(),
-            }
-            if limit.is_some() && pending && previous_present.elapsed() > timeout {
-                return Err(Box::<dyn std::error::Error>::from(format!(
-                    "presentation timed out after {presented} frames"
-                ))
-                .into());
-            }
+        if limit == Some(0) {
+            return Ok(());
         }
-        if limit.is_some_and(|n| presented < n) {
+        let size = self.window().inner_size();
+        let start = Instant::now();
+        let mut play = PlayLoop {
+            state: self.state,
+            game,
+            limit,
+            timeout,
+            extent: [size.width, size.height],
+            presented: 0,
+            pending: false,
+            previous_present: start,
+            clock: start,
+            error: None,
+        };
+        self.events.set_control_flow(ControlFlow::Poll);
+        self.events
+            .run_app(&mut play)
+            .map_err(Box::<dyn std::error::Error>::from)?;
+        if let Some(error) = play.error {
+            return Err(error);
+        }
+        if limit.is_some_and(|n| play.presented < n) {
             return Err(Box::<dyn std::error::Error>::from(format!(
-                "window closed early after {presented} frames"
+                "window closed early after {} frames",
+                play.presented
+            ))
+            .into());
+        }
+        Ok(())
+    }
+}
+
+struct PlayLoop<'a, A, G: WindowGame<A>> {
+    state: State<A>,
+    game: &'a mut G,
+    limit: Option<usize>,
+    timeout: Duration,
+    extent: [u32; 2],
+    presented: usize,
+    pending: bool,
+    previous_present: Instant,
+    clock: Instant,
+    error: Option<G::Error>,
+}
+
+impl<A: WindowControls, G: WindowGame<A>> ApplicationHandler for PlayLoop<'_, A, G> {
+    fn resumed(&mut self, events: &ActiveEventLoop) {
+        self.state.resumed(events);
+    }
+    fn window_event(&mut self, events: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        self.state.window_event(events, id, event);
+    }
+    fn about_to_wait(&mut self, events: &ActiveEventLoop) {
+        if events.exiting() {
+            return;
+        }
+        if let Err(error) = self.step(events) {
+            self.error = Some(error);
+            events.exit();
+        }
+    }
+}
+
+impl<A: WindowControls, G: WindowGame<A>> PlayLoop<'_, A, G> {
+    fn step(&mut self, events: &ActiveEventLoop) -> Result<(), G::Error> {
+        self.state.controls.poll_devices();
+        if self.state.closed || self.state.controls.quit_requested() {
+            events.exit();
+            return Ok(());
+        }
+        if let Some(size) = self.state.resized.take() {
+            if self.extent.contains(&0) {
+                self.clock = Instant::now();
+            }
+            self.extent = size;
+            self.game.resize(size, self.pending)?;
+        }
+        if self.extent.contains(&0) {
+            events.set_control_flow(ControlFlow::wait_duration(Duration::from_millis(16)));
+            return Ok(());
+        }
+        events.set_control_flow(ControlFlow::Poll);
+        if !self.pending {
+            let start = Instant::now();
+            self.game
+                .update(&mut self.state.controls, start.duration_since(self.clock))?;
+            self.clock = start;
+            self.pending = true;
+        }
+        match self.game.draw()? {
+            Presentation::Presented(now) => {
+                self.game
+                    .presented(now.duration_since(self.previous_present));
+                self.previous_present = now;
+                self.presented += 1;
+                self.pending = false;
+                if self.limit == Some(self.presented) {
+                    events.exit();
+                }
+            }
+            Presentation::Resize => {
+                let size = self
+                    .state
+                    .window
+                    .as_ref()
+                    .expect("opened window")
+                    .inner_size();
+                self.state.resized = Some([size.width, size.height]);
+            }
+            Presentation::Retry => std::thread::yield_now(),
+        }
+        if self.limit.is_some() && self.pending && self.previous_present.elapsed() > self.timeout {
+            return Err(Box::<dyn std::error::Error>::from(format!(
+                "presentation timed out after {} frames",
+                self.presented
             ))
             .into());
         }

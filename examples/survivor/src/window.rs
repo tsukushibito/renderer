@@ -1,4 +1,6 @@
 //! Interactive and measured runs share the simulation, asset setup, and render path.
+#[cfg(feature = "memory-profiling")]
+mod allocations;
 mod audio;
 mod input;
 mod memory;
@@ -11,6 +13,8 @@ mod validation {
 use validation::check_validation;
 
 use crate::{RunStart, rate};
+#[cfg(feature = "memory-profiling")]
+use allocations::{Phase as AllocationPhase, mark};
 use input::{Controls, PLAY_TITLE};
 use metrics::{Measurements, Sample};
 use sashiko::{App, app::Replay, window::WindowHost};
@@ -45,7 +49,7 @@ pub struct Options {
 }
 
 #[cfg(feature = "memory-profiling")]
-use sashiko_renderer::core::measurement::{CountingAllocator, Snapshot};
+use sashiko_renderer::core::measurement::CountingAllocator;
 #[cfg(feature = "memory-profiling")]
 #[global_allocator]
 static ALLOCATOR: CountingAllocator<std::alloc::System> =
@@ -103,8 +107,6 @@ struct PlayWindow<'a> {
     fixed: bool,
     update_time: Duration,
     draw_time: Duration,
-    #[cfg(feature = "memory-profiling")]
-    frame_start: Snapshot,
 }
 
 impl PlayWindow<'_> {
@@ -136,9 +138,7 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
     fn update(&mut self, controls: &mut Controls, elapsed: Duration) -> PipelineResult<()> {
         let start = Instant::now();
         #[cfg(feature = "memory-profiling")]
-        {
-            self.frame_start = Snapshot::now();
-        }
+        mark(self.measured, AllocationPhase::Host);
         let ticks = if self.fixed {
             1
         } else {
@@ -174,21 +174,36 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
             self.window.set_title(title(self.current_phase));
         }
         let start = Instant::now();
+        #[cfg(feature = "memory-profiling")]
+        mark(self.measured, AllocationPhase::Game);
         self.sync_camera()?;
+        #[cfg(feature = "memory-profiling")]
+        mark(self.measured, AllocationPhase::Scene);
         self.draw_time = start.elapsed();
         Ok(())
     }
     fn draw(&mut self) -> PipelineResult<sashiko::window::Presentation> {
         use sashiko::window::Presentation;
         let start = Instant::now();
-        let outcome = self
-            .renderer
-            .draw(|frame| self.visual.draw(frame, &self.app.game))?;
+        #[cfg(feature = "memory-profiling")]
+        mark(self.measured, AllocationPhase::Host);
+        let outcome = self.renderer.draw(|frame| {
+            #[cfg(feature = "memory-profiling")]
+            mark(self.measured, AllocationPhase::Backend);
+            self.visual.draw(frame, &self.app.game)?;
+            #[cfg(feature = "memory-profiling")]
+            mark(self.measured, AllocationPhase::Graph);
+            Ok(())
+        })?;
+        #[cfg(feature = "memory-profiling")]
+        mark(self.measured, AllocationPhase::Backend);
         let now = Instant::now();
         self.draw_time += now.duration_since(start);
         if let Some(samples) = self.measured {
             samples.poll(self.renderer);
         }
+        #[cfg(feature = "memory-profiling")]
+        mark(self.measured, AllocationPhase::Metrics);
         Ok(match outcome {
             PresentOutcome::Presented { .. } => Presentation::Presented(now),
             PresentOutcome::RecreateRequired => Presentation::Resize,
@@ -198,11 +213,13 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
     fn presented(&mut self, interval: Duration) {
         if let Some(samples) = self.measured {
             let game = &self.app.game;
+            #[cfg(feature = "memory-profiling")]
+            let memory = samples.allocations.presented();
             samples.push(Sample {
                 #[cfg(feature = "memory-profiling")]
-                pose_bytes: self.visual.take_pose_bytes(),
+                memory,
                 #[cfg(feature = "memory-profiling")]
-                memory: Snapshot::now().since(self.frame_start),
+                pose_bytes: self.visual.take_pose_bytes(),
                 interval,
                 update: self.update_time,
                 draw: self.draw_time,
@@ -242,7 +259,7 @@ pub fn run(
     if limit.is_some() {
         controls.gamepad_slot = None;
     }
-    let mut host = WindowHost::open(PLAY_TITLE, o.extent, controls, TIMEOUT)?;
+    let host = WindowHost::open(PLAY_TITLE, o.extent, controls, TIMEOUT)?;
     let window = host.window();
     let physical = window.inner_size();
     let extent = [physical.width, physical.height];
@@ -305,8 +322,6 @@ pub fn run(
         fixed: limit.is_some(),
         update_time: Duration::ZERO,
         draw_time: Duration::ZERO,
-        #[cfg(feature = "memory-profiling")]
-        frame_start: Snapshot::default(),
     };
     host.run(&mut client, limit, TIMEOUT)?;
     let last_extent = client.last_extent;

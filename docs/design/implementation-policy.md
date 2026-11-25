@@ -403,6 +403,9 @@ record、submit、poll/retire、present、結果のCPU消費/返却までを含�
 
 初期化、明示したwarm-up、ロード、資源追加/削除、resize/設定変更、容量変更、保守的trim、
 異常処理/終了は、それぞれの準備・変更・保守境界として費用を別に記録する。
+
+Windows 単体ゲームの `WindowHost::run` はイベントハンドラーを一度登録し、同じ更新結果で提示を再試行する。Survivor の計測区間は連続する提示通知の間とし、リトライ中の OS イベント処理と前フレームの回収も含める。[終盤500体の確保計測](../verification/current.md#compute-skin)
+
 必要なworking setを予算内で予約し、通常フレームでは配列・作業領域・資源を再利用する。
 全資源を起動時に最大量確保することや、特定のarena/allocator/cacheの採用は要求しない。
 追加資源も既存poolの空きを使える。領域内のslot予約/返却、suballocation、resetは許可するが、

@@ -25,7 +25,11 @@ Windows、GeForce RTX 3060、ドライバー 610.88。ネイティブの release
 
 4位相の転送量は CPU 284,736 B、Compute 49,152 B／フレーム。影ありの準備直後は両 API とも staging 容量 4 MiB。登録バイト数は CPU 3,712,080 B、Compute 3,822,672 B、キャッシュ容量は 19,587,276 B と 19,927,116 B。52 tick 目の影あり画像で CPU と Compute の差は Vulkan 11画素、D3D12 12画素（230,400画素中、最大9/255）。Vulkan の接地影では3画素、最大1/255。
 
-更新開始から提示通知までの40フレームで、Rust の確保と解放が影あり Vulkan の CPU 経路で各12,981回、Compute で各28,456回、D3D12 で各149,823回と177,229回だった。再確保、Renderer のネイティブオブジェクト・資源の作成／破棄、メモリ・記述子の確保／解放は各0回。リセットは Vulkan 280回、D3D12 160回。Rust の値はゲーム、ホスト、計測を含むプロセス全体で、発生箇所の切り分けは `renderer-qo1m` で追跡する。
+影ありの旧ホストでは、更新開始から提示通知までの40フレームで Rust の確保・解放が Vulkan の CPU / Compute 経路で各12,981 / 28,456回、D3D12 で各149,823 / 177,229回あった。提示リトライを含む区間を分けて旧ホストで20フレームずつ再測定すると、4条件の全確保がゲームのコールバック間に集中した。採取したスタックはいずれも winit 0.30.13 の Windows `pump_events` によるイベントハンドラー登録だった。
+
+現在の Windows 単体ゲームは `WindowHost::run` で一つのハンドラーを登録し、OS イベントを処理しながら提示を再試行する。修正後は前回の提示通知から次の通知までを計測し、CPU / Compute、Vulkan / D3D12、GPU タイムスタンプの有無を組み合わせた **8条件 × 40フレームのすべてで Rust の確保・ゼロ初期化確保・再確保・解放が各0回**。VMA のホストコールバックによる確保・再確保・解放、Renderer のネイティブオブジェクト・資源の作成／破棄、メモリ・記述子の確保／解放も各0回。準備済み資源のリセットは別に計数する。52 tick 目に CPU / Compute を両 API で再描画して取得した4枚は、それぞれ修正前の同条件の画像とバイト単位で一致した。メモリ計測機能を外し、開発検証を有効にした release でも、両 API の提示・終了処理が警告・エラー0件で通過した。
+
+実機回帰試験は `cargo test --release --locked -p survivor --features d3d12,memory-profiling --test frame_allocations -- --ignored --test-threads=1`。12フレーム予熱し、影ありの終盤500体を一時プロファイルで提示する。CSV の `game` は固定更新、`scene` はカメラ・ポーズ・描画対象の更新、`graph` はシーンと HUD の Graph 記録、`backend` は残りの描画処理（前フレームの回収、出力、コンパイル、投入、提示）、`metrics` は計測結果回収、`host` は間のイベント処理を含む。これらは区間内のプロセス全体の Rust カウンター差分。別途、新規の永続プロファイルを与えた走行では初撃破の16 tick 目にゲーム更新で18回の確保を観測した。初回解放のディスク保存は定常フレーム試験の対象外とした。
 
 実行例は `cargo run --release --locked -p survivor --features memory-profiling,d3d12 -- --window --backend vulkan --scenario endgame --skinning compute --character-shadows --width 640 --height 360 --warmup 12 --frames 40 --gpu-profile --metrics frames.csv --memory-samples memory.json --capture final.ppm`。CPU 比較は `--skinning cpu`、接地影のみの比較は `--character-shadows` を外す。
 

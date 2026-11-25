@@ -11,7 +11,7 @@ pub(super) struct Sample {
     #[cfg(feature = "memory-profiling")]
     pub pose_bytes: u64,
     #[cfg(feature = "memory-profiling")]
-    pub memory: sashiko_renderer::core::measurement::Snapshot,
+    pub memory: super::allocations::FrameCounts,
     pub interval: Duration,
     pub update: Duration,
     pub draw: Duration,
@@ -28,6 +28,8 @@ pub(super) struct Sample {
 pub(super) struct Measurements {
     samples: Vec<Sample>,
     timings: Option<WindowTimings>,
+    #[cfg(feature = "memory-profiling")]
+    pub(super) allocations: super::allocations::FrameAllocations,
 }
 
 impl Measurements {
@@ -35,6 +37,8 @@ impl Measurements {
         Self {
             samples: Vec::with_capacity(capacity),
             timings: profile.then(|| WindowTimings::new(capacity)),
+            #[cfg(feature = "memory-profiling")]
+            allocations: super::allocations::FrameAllocations::new(),
         }
     }
 
@@ -62,8 +66,14 @@ impl Measurements {
         #[cfg(feature = "memory-profiling")]
         write!(
             csv,
-            ",recorded_pose_bytes,alloc,alloc_zeroed,realloc,free,object_create,object_destroy,resource_create,resource_destroy,memory_allocate,memory_free,descriptor_allocate,descriptor_free,native_reset"
+            ",recorded_pose_bytes,alloc,alloc_zeroed,realloc,free,object_create,object_destroy,resource_create,resource_destroy,memory_allocate,memory_free,descriptor_allocate,descriptor_free,native_reset,vma_host_alloc,vma_host_realloc,vma_host_free"
         )?;
+        #[cfg(feature = "memory-profiling")]
+        for phase in super::allocations::Phase::NAMES {
+            for event in ["alloc", "alloc_zeroed", "realloc", "free"] {
+                write!(csv, ",{phase}_{event}")?;
+            }
+        }
         writeln!(csv)?;
         for (index, sample) in self.samples.iter().enumerate().skip(warmup) {
             write!(
@@ -103,11 +113,20 @@ impl Measurements {
             )?;
             #[cfg(feature = "memory-profiling")]
             {
+                if sample.memory.total.overflowed {
+                    return Err("frame memory counters overflowed".into());
+                }
                 write!(csv, ",{}", sample.pose_bytes)?;
-                for count in sample.memory.rust {
+                for count in sample.memory.total.rust {
                     write!(csv, ",{}", count.calls)?;
                 }
-                for count in sample.memory.native {
+                for count in sample.memory.total.native {
+                    write!(csv, ",{count}")?;
+                }
+                for event in sample.memory.total.vma_host {
+                    write!(csv, ",{}", event.calls)?;
+                }
+                for count in sample.memory.phases.as_flattened() {
                     write!(csv, ",{count}")?;
                 }
             }
