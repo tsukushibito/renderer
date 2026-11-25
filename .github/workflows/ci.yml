@@ -287,7 +287,8 @@ jobs:
         with:
           # Cargo feature lists can contain commas. Hash BACKEND instead of putting it in the key.
           env-vars: BACKEND
-          key: ${{ matrix.suite }}
+          # These lint lanes now also populate release dependencies. Give them writable cache entries.
+          key: ${{ matrix.suite || (runner.os == 'Windows' && (contains(matrix.backend, 'vulkan') || contains(matrix.backend, 'd3d12')) && 'with-release') || '' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Lint all targets in shipping and development configurations
         shell: pwsh
@@ -321,6 +322,19 @@ jobs:
       - name: Run workspace tests on Linux Vulkan with development validation
         if: runner.os == 'Linux' && matrix.backend == 'vulkan'
         run: cargo test --locked --workspace --tests --no-default-features --features vulkan,development-validation,graph-diagnostics
+      - name: Test optimized native backend execution
+        if: runner.os == 'Windows' && (contains(matrix.backend, 'vulkan') || contains(matrix.backend, 'd3d12'))
+        shell: pwsh
+        env:
+          # The single-backend presentation lanes have room for both sets of tests.
+          TEST_MODES: ${{ (matrix.backend == 'vulkan,presentation' || matrix.backend == 'd3d12,presentation') && 'shipping development' || 'shipping' }}
+        run: &native-release-tests |
+          foreach ($mode in $env:TEST_MODES.Split(' ')) {
+            $features = $env:BACKEND
+            if ($mode -eq 'development') { $features += ',development-validation,graph-diagnostics' }
+            cargo test --locked -p sashiko-renderer-core --lib --release --no-default-features --features $features -- backends:: runtime:: presentation:: program::
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Test presentation contracts without a native backend
         if: matrix.backend == 'presentation'
         run: |
@@ -423,13 +437,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check optimized backend execution with and without development validation
         shell: pwsh
-        run: &release-tests |
-          foreach ($development in @($false, $true)) {
-            $features = $env:BACKEND
-            if ($development) { $features += ',development-validation,graph-diagnostics' }
-            cargo test --locked -p sashiko-renderer-core --lib --release --no-default-features --features $features -- backends:: runtime:: presentation:: program::
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+        env:
+          TEST_MODES: shipping development
+        run: *native-release-tests
       - name: Check optional Tracy instrumentation in shipping and development configurations
         shell: pwsh
         env:
@@ -497,12 +507,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { backend: "vulkan,d3d12,presentation", suite: release-shipping }
           - { backend: "vulkan,d3d12,presentation", suite: diagnostics }
           - { backend: vulkan, suite: release }
           - { backend: d3d12, suite: release }
-          - { backend: "vulkan,presentation", suite: release }
-          - { backend: "d3d12,presentation", suite: release }
           - { backend: "vulkan,d3d12", suite: release }
           - backend: vulkan
             suite: tracy
@@ -523,14 +530,12 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
       - *cargo-cache
-      - name: Test optimized shipping and development builds
+      - name: Test optimized backend execution with development validation
         if: matrix.suite == 'release'
         shell: pwsh
-        run: *release-tests
-      - name: Test optimized shipping backend execution
-        if: matrix.suite == 'release-shipping'
-        run: |
-          cargo test --locked -p sashiko-renderer-core --lib --release --no-default-features --features vulkan,d3d12,presentation -- backends:: runtime:: presentation:: program::
+        env:
+          TEST_MODES: development
+        run: *native-release-tests
       - name: Check independent diagnostic features
         if: matrix.suite == 'diagnostics'
         shell: pwsh
