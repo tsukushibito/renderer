@@ -234,5 +234,21 @@ fn dirty_bounds_upload_uses_padded_group_offset_and_preserves_other_commands() {
             .encode_group_bounds(&mut bytes, 1, 2..4, |_| panic!("invalid range"))
             .is_err()
     );
+    assert!(
+        prepared
+            .encode_group_bounds(&mut bytes[1..], 0, 0..1, |_| panic!("invalid length"))
+            .is_err()
+    );
+    assert!(
+        prepared
+            .encode_group_bounds(&mut bytes, 2, 0..1, |_| panic!("unknown group"))
+            .is_err()
+    );
+    assert_eq!(
+        prepared
+            .encode_group_bounds(&mut bytes, 1, 3..3, |_| panic!("empty range"))
+            .unwrap(),
+        67 * 32..67 * 32
+    );
     assert_eq!(bytes, encoded);
 }

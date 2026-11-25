@@ -178,16 +178,15 @@ impl PreparedVisibility {
                 "visibility bounds destination size differs from the prepared layout",
             ));
         }
+        let (mut records, _) = destination.as_chunks_mut::<VISIBILITY_AABB_BYTES>();
         for (group_index, group) in self.groups.iter().enumerate() {
-            let range = self.encode_group_bounds(
-                destination,
-                group_index,
-                0..group.table.command_count() as usize,
-                |i| bounds(group_index, i),
-            )?;
-            let padding = (group.table.padded_count() - group.table.command_count()) as usize
-                * VISIBILITY_AABB_BYTES;
-            destination[range.end..range.end + padding].fill(0);
+            let (this_group, rest) = records.split_at_mut(group.table.padded_count() as usize);
+            let (active, padding) = this_group.split_at_mut(group.table.command_count() as usize);
+            for (index, record) in active.iter_mut().enumerate() {
+                *record = bounds_record(bounds(group_index, index));
+            }
+            padding.fill([0; VISIBILITY_AABB_BYTES]);
+            records = rest;
         }
         Ok(())
     }
@@ -217,21 +216,12 @@ impl PreparedVisibility {
         let base = group.mask_offset as usize / VISIBILITY_MASK_BYTES;
         let bytes = (base + commands.start) * VISIBILITY_AABB_BYTES
             ..(base + commands.end) * VISIBILITY_AABB_BYTES;
-        for (index, record) in
-            commands.zip(destination[bytes.clone()].chunks_exact_mut(VISIBILITY_AABB_BYTES))
-        {
-            let WorldBounds { min, max, enabled } = bounds(index);
-            let words = [
-                min[0].to_bits(),
-                min[1].to_bits(),
-                min[2].to_bits(),
-                u32::from(enabled),
-                max[0].to_bits(),
-                max[1].to_bits(),
-                max[2].to_bits(),
-                0,
-            ];
-            record.copy_from_slice(words.map(u32::to_le_bytes).as_flattened());
+        for (index, record) in commands.zip(
+            destination[bytes.clone()]
+                .as_chunks_mut::<VISIBILITY_AABB_BYTES>()
+                .0,
+        ) {
+            *record = bounds_record(bounds(index));
         }
         Ok(bytes)
     }
@@ -295,6 +285,22 @@ impl PreparedVisibility {
         }
         Ok(VisibilityFrame { mask, arguments })
     }
+}
+
+fn bounds_record(WorldBounds { min, max, enabled }: WorldBounds) -> [u8; VISIBILITY_AABB_BYTES] {
+    let words = [
+        min[0].to_bits(),
+        min[1].to_bits(),
+        min[2].to_bits(),
+        u32::from(enabled),
+        max[0].to_bits(),
+        max[1].to_bits(),
+        max[2].to_bits(),
+        0,
+    ];
+    let mut record = [0; VISIBILITY_AABB_BYTES];
+    record.copy_from_slice(words.map(u32::to_le_bytes).as_flattened());
+    record
 }
 
 fn binding(binding: u32, buffer: BufferHandle, size: u64) -> Binding {
