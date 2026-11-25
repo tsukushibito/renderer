@@ -13,6 +13,8 @@ pub struct FrameSubmission {
 }
 
 enum SubmissionInner {
+    #[cfg(sashiko_webgpu)]
+    WebGpu(crate::webgpu::engine::Submission),
     #[cfg(feature = "vulkan")]
     Vulkan(crate::vulkan::FrameSubmission),
     #[cfg(all(feature = "d3d12", windows))]
@@ -20,7 +22,7 @@ enum SubmissionInner {
 }
 
 #[cfg_attr(
-    not(any(feature = "vulkan", all(feature = "d3d12", windows))),
+    not(sashiko_gpu_backend),
     expect(
         unused_variables,
         reason = "without a backend, the dispatcher has no runtime variants"
@@ -35,6 +37,8 @@ impl FrameSubmission {
 
     pub fn id(&self) -> FrameId {
         match self.inner {
+            #[cfg(sashiko_webgpu)]
+            SubmissionInner::WebGpu(ref submission) => submission.id(),
             #[cfg(feature = "vulkan")]
             SubmissionInner::Vulkan(ref submission) => submission.id(),
             #[cfg(all(feature = "d3d12", windows))]
@@ -45,6 +49,8 @@ impl FrameSubmission {
     /// Identity of the Graph whose work was accepted.
     pub fn graph_id(&self) -> u64 {
         match self.inner {
+            #[cfg(sashiko_webgpu)]
+            SubmissionInner::WebGpu(ref submission) => submission.graph_id(),
             #[cfg(feature = "vulkan")]
             SubmissionInner::Vulkan(ref submission) => submission.graph_id(),
             #[cfg(all(feature = "d3d12", windows))]
@@ -56,6 +62,8 @@ impl FrameSubmission {
     /// Runtime::delete to release the registration when no longer needed.
     pub fn export_buffer(&self, handle: BufferHandle) -> Result<ImportBuffer, ExecutionError> {
         match self.inner {
+            #[cfg(sashiko_webgpu)]
+            SubmissionInner::WebGpu(ref submission) => submission.export_buffer(handle),
             #[cfg(feature = "vulkan")]
             SubmissionInner::Vulkan(ref submission) => {
                 submission.export_buffer(handle).map_err(Into::into)
@@ -71,6 +79,8 @@ impl FrameSubmission {
     /// presentation on this runtime.
     pub fn export_image(&self, handle: ImageHandle) -> Result<ImportImage, ExecutionError> {
         match self.inner {
+            #[cfg(sashiko_webgpu)]
+            SubmissionInner::WebGpu(ref submission) => submission.export_image(handle),
             #[cfg(feature = "vulkan")]
             SubmissionInner::Vulkan(ref submission) => {
                 submission.export_image(handle).map_err(Into::into)
@@ -109,6 +119,8 @@ pub struct FrameCompletion(CompletionInner);
 
 #[allow(clippy::large_enum_variant)] // Keep both native result leases inline.
 enum CompletionInner {
+    #[cfg(sashiko_webgpu)]
+    WebGpu(crate::webgpu::engine::Completion),
     #[cfg(feature = "vulkan")]
     Vulkan(crate::vulkan::FrameCompletion),
     #[cfg(all(feature = "d3d12", windows))]
@@ -116,7 +128,7 @@ enum CompletionInner {
 }
 
 #[cfg_attr(
-    not(any(feature = "vulkan", all(feature = "d3d12", windows))),
+    not(sashiko_gpu_backend),
     expect(
         unused_variables,
         reason = "without a backend, the dispatcher has no runtime variants"
@@ -125,6 +137,8 @@ enum CompletionInner {
 impl FrameCompletion {
     pub fn id(&self) -> FrameId {
         match self.0 {
+            #[cfg(sashiko_webgpu)]
+            CompletionInner::WebGpu(ref completed) => completed.id(),
             #[cfg(feature = "vulkan")]
             CompletionInner::Vulkan(ref completed) => completed.id(),
             #[cfg(all(feature = "d3d12", windows))]
@@ -134,6 +148,8 @@ impl FrameCompletion {
 
     pub fn metrics(&self) -> Option<&SubmissionMetrics> {
         match self.0 {
+            #[cfg(sashiko_webgpu)]
+            CompletionInner::WebGpu(_) => None,
             #[cfg(feature = "vulkan")]
             CompletionInner::Vulkan(ref completed) => completed.result.metrics(),
             #[cfg(all(feature = "d3d12", windows))]
@@ -144,6 +160,8 @@ impl FrameCompletion {
     /// Exact byte length of the unconsumed readback.
     pub fn readback_len(&self, pass: PassHandle) -> Result<usize, ExecutionError> {
         match self.0 {
+            #[cfg(sashiko_webgpu)]
+            CompletionInner::WebGpu(ref completed) => completed.readback_len(pass),
             #[cfg(feature = "vulkan")]
             CompletionInner::Vulkan(ref completed) => {
                 completed.result.readback_len(pass).map_err(Into::into)
@@ -163,6 +181,8 @@ impl FrameCompletion {
         output: &mut [u8],
     ) -> Result<(), ExecutionError> {
         match self.0 {
+            #[cfg(sashiko_webgpu)]
+            CompletionInner::WebGpu(ref mut completed) => completed.readback_into(pass, output),
             #[cfg(feature = "vulkan")]
             CompletionInner::Vulkan(ref mut completed) => completed
                 .result
@@ -188,5 +208,22 @@ impl From<crate::vulkan::FrameCompletion> for FrameCompletion {
 impl From<crate::backends::d3d12::QueuedFrameCompletion> for FrameCompletion {
     fn from(completed: crate::backends::d3d12::QueuedFrameCompletion) -> Self {
         Self(CompletionInner::D3D12(completed))
+    }
+}
+
+#[cfg(sashiko_webgpu)]
+impl From<crate::webgpu::engine::Submission> for FrameSubmission {
+    fn from(value: crate::webgpu::engine::Submission) -> Self {
+        Self {
+            inner: SubmissionInner::WebGpu(value),
+            frame_image: None,
+        }
+    }
+}
+
+#[cfg(sashiko_webgpu)]
+impl From<crate::webgpu::engine::Completion> for FrameCompletion {
+    fn from(value: crate::webgpu::engine::Completion) -> Self {
+        Self(CompletionInner::WebGpu(value))
     }
 }

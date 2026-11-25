@@ -211,7 +211,7 @@ impl ImportBuffer {
     /// Issue an immutable snapshot at a runtime creation/change boundary.
     /// Descriptor and canonical content bounds are checked here once; Graph
     /// construction consumes the frozen guarantee rather than rescanning it.
-    #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+    #[cfg(any(test, sashiko_gpu_backend))]
     pub(crate) fn new(
         key: ResourceKey,
         revision: u64,
@@ -265,7 +265,7 @@ impl ImportImage {
     }
     /// Derive the complete-image content guarantee from canonical runtime
     /// ranges; a caller cannot supply an unverified `initialized` boolean.
-    #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+    #[cfg(any(test, sashiko_gpu_backend))]
     pub(crate) fn new(
         key: ResourceKey,
         revision: u64,
@@ -345,7 +345,7 @@ pub(super) fn mip_ranges(mut mask: u32) -> impl Iterator<Item = Range<u64>> {
     })
 }
 
-#[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(any(test, sashiko_gpu_backend))]
 fn validate_snapshot_ranges(initialized: &[Range<u64>], units: u64) -> Result<bool, GraphError> {
     let mut end = 0;
     let mut complete = true;

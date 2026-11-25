@@ -24,6 +24,11 @@ pub struct ExecutionError(ExecutionCause);
 
 #[derive(Debug)]
 enum ExecutionCause {
+    #[cfg(sashiko_webgpu)]
+    WebGpu {
+        kind: ExecutionErrorKind,
+        message: String,
+    },
     #[cfg(feature = "vulkan")]
     Vulkan(crate::vulkan::RuntimeError),
     #[cfg(all(feature = "d3d12", windows))]
@@ -69,6 +74,8 @@ impl ExecutionError {
                     Native::Native => Kind::Native,
                 }
             }
+            #[cfg(sashiko_webgpu)]
+            ExecutionCause::WebGpu { kind, .. } => *kind,
             ExecutionCause::Local { kind, .. } => *kind,
         }
     }
@@ -80,8 +87,18 @@ impl ExecutionError {
             ExecutionCause::Vulkan(error) => error.capacity(),
             #[cfg(all(feature = "d3d12", windows))]
             ExecutionCause::D3D12(error) => error.capacity(),
+            #[cfg(sashiko_webgpu)]
+            ExecutionCause::WebGpu { .. } => None,
             ExecutionCause::Local { capacity, .. } => *capacity,
         }
+    }
+
+    #[cfg(sashiko_webgpu)]
+    pub(crate) fn webgpu(kind: ExecutionErrorKind, message: impl Into<String>) -> Self {
+        Self(ExecutionCause::WebGpu {
+            kind,
+            message: message.into(),
+        })
     }
 
     pub(crate) fn invalid(message: &'static str) -> Self {
@@ -125,6 +142,8 @@ impl fmt::Display for ExecutionError {
             ExecutionCause::Vulkan(error) => error.fmt(f),
             #[cfg(all(feature = "d3d12", windows))]
             ExecutionCause::D3D12(error) => error.fmt(f),
+            #[cfg(sashiko_webgpu)]
+            ExecutionCause::WebGpu { message, .. } => f.write_str(message),
             ExecutionCause::Local { message, .. } => f.write_str(message),
         }
     }
@@ -137,6 +156,8 @@ impl Error for ExecutionError {
             ExecutionCause::Vulkan(error) => Some(error),
             #[cfg(all(feature = "d3d12", windows))]
             ExecutionCause::D3D12(error) => Some(error),
+            #[cfg(sashiko_webgpu)]
+            ExecutionCause::WebGpu { .. } => None,
             ExecutionCause::Local { .. } => None,
         }
     }

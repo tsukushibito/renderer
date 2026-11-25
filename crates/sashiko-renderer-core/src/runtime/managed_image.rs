@@ -101,7 +101,7 @@ pub(super) struct ImageReleases {
 }
 
 impl ImageReleases {
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    #[cfg(sashiko_gpu_backend)]
     pub(super) fn reserve_capacity(&self, limit: usize) -> Result<(), ExecutionError> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let additional = limit.saturating_sub(state.pending.len());
@@ -117,7 +117,7 @@ impl ImageReleases {
             )
         })
     }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    #[cfg(sashiko_gpu_backend)]
     pub(super) fn set_limit(&self, limit: usize) {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).limit = limit;
     }
@@ -143,7 +143,7 @@ impl ImageReleases {
 }
 
 impl Runtime {
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    #[cfg(sashiko_gpu_backend)]
     pub(super) fn with_inner(
         inner: super::RuntimeInner,
         limits: super::RuntimeLimits,

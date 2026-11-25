@@ -367,7 +367,7 @@ impl GraphStorage {
             parameters
         })
     }
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+    #[cfg(sashiko_gpu_backend)]
     pub(crate) fn raster_bindings(&self, range: &Range<usize>) -> &[BindingOperands] {
         &self.bindings[range.clone()]
     }
@@ -375,11 +375,11 @@ impl GraphStorage {
     pub(crate) fn binding_count(&self) -> usize {
         self.bindings.len()
     }
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+    #[cfg(sashiko_gpu_backend)]
     pub(crate) fn raster_attachments(&self, range: &Range<usize>) -> &[AttachmentOperand] {
         &self.attachments[range.clone()]
     }
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+    #[cfg(sashiko_gpu_backend)]
     pub(crate) fn raster_attachment(&self, index: usize) -> &AttachmentOperand {
         &self.attachments[index]
     }

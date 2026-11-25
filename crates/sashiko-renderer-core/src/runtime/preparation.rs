@@ -1,17 +1,19 @@
 #[cfg(all(windows, feature = "d3d12"))]
 use crate::capacity::ResourceClass;
 use crate::capacity::WorkingSet;
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(sashiko_gpu_backend)]
 use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
 use crate::graph::GraphCapacity;
 
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(sashiko_gpu_backend)]
 use super::RuntimeInner;
 use super::{ExecutionError, Runtime};
 
 /// Selects the GPU backend and its physical preparation limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeConfig {
+    #[cfg(sashiko_webgpu)]
+    WebGpu(WebGpuConfig),
     #[cfg(feature = "vulkan")]
     Vulkan(VulkanConfig),
     #[cfg(all(feature = "d3d12", windows))]
@@ -22,19 +24,23 @@ impl RuntimeConfig {
     /// Raise physical limits for the declared working set. Transfer sizes are per
     /// submission and include texture row/placement padding. The staging pool
     /// on Vulkan is shared by concurrent submissions.
-    #[cfg_attr(
-        not(any(feature = "vulkan", all(windows, feature = "d3d12"))),
-        allow(unused_variables)
-    )]
+    #[cfg_attr(not(sashiko_gpu_backend), allow(unused_variables))]
     pub fn fit_preparation(
         &mut self,
         preparation: &crate::capacity::Preparation,
         upload_bytes: u64,
         readback_bytes: u64,
     ) -> Result<(), crate::graph::GraphError> {
-        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
         let req = preparation.graph_requirements();
         match *self {
+            #[cfg(sashiko_webgpu)]
+            Self::WebGpu(ref mut settings) => {
+                let _ = preparation;
+                settings.upload_bytes = settings.upload_bytes.max(upload_bytes);
+                settings.readback_bytes = settings.readback_bytes.max(readback_bytes);
+                Ok(())
+            }
             #[cfg(feature = "vulkan")]
             Self::Vulkan(ref mut settings) => {
                 let overflow =
@@ -72,6 +78,14 @@ impl RuntimeConfig {
             }
         }
     }
+}
+
+/// WebGPU transfer capacity in bytes per execution and per retained readback.
+#[cfg(sashiko_webgpu)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WebGpuConfig {
+    pub upload_bytes: u64,
+    pub readback_bytes: u64,
 }
 
 /// Initial physical Vulkan limits for ordinary Graph execution.
@@ -238,7 +252,7 @@ impl RuntimeLimits {
 }
 
 #[cfg_attr(
-    not(any(feature = "vulkan", all(feature = "d3d12", windows))),
+    not(sashiko_gpu_backend),
     expect(
         unused_variables,
         reason = "without a backend, the dispatcher has no runtime variants"
@@ -253,7 +267,7 @@ impl Runtime {
         upload: u64,
         readback: u64,
     ) -> Result<(), ExecutionError> {
-        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        #[cfg(sashiko_gpu_backend)]
         {
             let mut required = self.config;
             required
@@ -272,7 +286,7 @@ impl Runtime {
             }
             Ok(())
         }
-        #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
+        #[cfg(not(sashiko_gpu_backend))]
         match self.config {}
     }
 
@@ -284,6 +298,14 @@ impl Runtime {
     ) -> Result<Self, ExecutionError> {
         limits.validate()?;
         match config {
+            #[cfg(sashiko_webgpu)]
+            RuntimeConfig::WebGpu(_) => {
+                let _ = working_set;
+                Err(ExecutionError::webgpu(
+                    super::ExecutionErrorKind::Unsupported,
+                    "create the WebGPU runtime after requesting the browser device with from_webgpu_device",
+                ))
+            }
             #[cfg(feature = "vulkan")]
             RuntimeConfig::Vulkan(settings) => {
                 let runtime = crate::vulkan::VulkanRuntime::new_with_validation(
@@ -299,6 +321,46 @@ impl Runtime {
                 config,
             ),
         }
+    }
+
+    /// Create a runtime on the device and queue acquired by the browser host.
+    /// The caller retains its canvas and drives completion from the event loop.
+    #[cfg(sashiko_webgpu)]
+    pub async fn from_webgpu_device(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        config: WebGpuConfig,
+        limits: RuntimeLimits,
+        working_set: WorkingSet<'_>,
+    ) -> Result<Self, ExecutionError> {
+        limits.validate()?;
+        let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let engine = crate::webgpu::engine::Engine::new(
+            device.clone(),
+            queue.clone(),
+            limits,
+            working_set,
+            config.upload_bytes,
+            config.readback_bytes,
+        );
+        // Pop the entire stack before yielding. Other canvas users can issue
+        // commands on this device while the browser resolves our error scopes.
+        let validation = validation.pop();
+        let internal = internal.pop();
+        let memory = memory.pop();
+        if let Some(error) = validation.await.or(internal.await).or(memory.await) {
+            return Err(ExecutionError::webgpu(
+                super::ExecutionErrorKind::Native,
+                error.to_string(),
+            ));
+        }
+        Self::with_inner(
+            RuntimeInner::WebGpu(engine?),
+            limits,
+            RuntimeConfig::WebGpu(config),
+        )
     }
 
     /// Use a host's existing Vulkan device/queue for ordinary Graph execution.
@@ -392,6 +454,20 @@ impl Runtime {
     ) -> Result<(), ExecutionError> {
         self.collect_released_images()?;
         match self.inner {
+            #[cfg(sashiko_webgpu)]
+            RuntimeInner::WebGpu(ref mut runtime) => {
+                let settings = match self.config {
+                    RuntimeConfig::WebGpu(settings) => settings,
+                    #[cfg(feature = "vulkan")]
+                    _ => unreachable!("runtime owns its backend configuration"),
+                };
+                runtime.prepare(
+                    self.limits,
+                    working_set,
+                    settings.upload_bytes,
+                    settings.readback_bytes,
+                )
+            }
             #[cfg(feature = "vulkan")]
             RuntimeInner::Vulkan(ref mut runtime) => {
                 Ok(runtime.prepare_graph_working_set(None, working_set)?)
@@ -433,10 +509,14 @@ impl Runtime {
             .fit_preparation(preparation, upload_bytes, readback_bytes)
             .map_err(|_| ExecutionError::invalid("backend capacity overflow"))?;
         let set = preparation.working_set();
-        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        #[cfg(sashiko_gpu_backend)]
         self.image_releases
             .reserve_capacity(limits.resource_capacity)?;
         match (&mut self.inner, config) {
+            #[cfg(sashiko_webgpu)]
+            (RuntimeInner::WebGpu(runtime), RuntimeConfig::WebGpu(settings)) => {
+                runtime.prepare(limits, set, settings.upload_bytes, settings.readback_bytes)?;
+            }
             #[cfg(feature = "vulkan")]
             (RuntimeInner::Vulkan(runtime), RuntimeConfig::Vulkan(settings)) => {
                 runtime.grow_graph_working_set(
@@ -458,12 +538,15 @@ impl Runtime {
                     set.compute,
                 )?;
             }
-            #[cfg(all(feature = "vulkan", windows, feature = "d3d12"))]
+            #[cfg(all(
+                feature = "vulkan",
+                any(all(windows, feature = "d3d12"), sashiko_webgpu)
+            ))]
             _ => unreachable!("runtime owns its backend configuration"),
-            #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
+            #[cfg(not(sashiko_gpu_backend))]
             _ => match config {},
         }
-        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        #[cfg(sashiko_gpu_backend)]
         {
             self.image_releases.set_limit(limits.resource_capacity);
             self.config = config;
