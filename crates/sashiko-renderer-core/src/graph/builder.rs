@@ -975,6 +975,11 @@ mod tests {
 
     #[test]
     fn binding_template_capacity_failure_preserves_sets_and_allows_pass_retry() {
+        check_binding_template_retry(false);
+        check_binding_template_retry(true);
+    }
+
+    fn check_binding_template_retry(generated: bool) {
         let mut pool = GraphPool::new(
             GraphCapacity {
                 bindings: 9,
@@ -984,6 +989,14 @@ mod tests {
             1,
         )
         .unwrap();
+        if generated {
+            // One chunk contains all distinct bindings and exercises the
+            // ordered post-join merge's access-capacity failure and retry.
+            pool.set_raster_jobs(
+                crate::jobs::JobSystem::inline().into(),
+                std::num::NonZeroUsize::MIN,
+            );
+        }
         let mut graph = pool.begin().unwrap();
         let mesh = uploaded_draw(&mut graph, "geometry");
         let sets = std::array::from_fn::<_, 3, _>(|_| {
@@ -1013,13 +1026,12 @@ mod tests {
                     depth: None,
                 },
                 |raster| {
-                    raster.draw(
-                        &ManagedRasterProgram::textured_mesh(),
-                        sets.map(|set| RasterDraw {
-                            bindings: Some(set),
+                    raster.draw_generated(&ManagedRasterProgram::textured_mesh(), sets.len(), |i| {
+                        RasterDraw {
+                            bindings: Some(sets[i]),
                             ..mesh
-                        }),
-                    )
+                        }
+                    })
                 },
             )
             .unwrap_err();
@@ -1048,13 +1060,12 @@ mod tests {
                     depth: None,
                 },
                 |raster| {
-                    raster.draw(
-                        &ManagedRasterProgram::textured_mesh(),
-                        [RasterDraw {
+                    raster.draw_generated(&ManagedRasterProgram::textured_mesh(), 2, |_| {
+                        RasterDraw {
                             bindings: Some(sets[0]),
                             ..mesh
-                        }; 2],
-                    )
+                        }
+                    })
                 },
             )
             .unwrap();
