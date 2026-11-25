@@ -31,6 +31,9 @@ pub use profiling::{GpuTiming, PresentationMetrics, SubmissionMetrics};
 pub mod program;
 pub mod runtime;
 
+#[cfg(all(feature = "webgpu", target_arch = "wasm32", target_os = "unknown"))]
+pub mod webgpu;
+
 #[cfg(feature = "presentation")]
 pub mod presentation;
 
