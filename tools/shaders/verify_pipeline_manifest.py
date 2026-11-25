@@ -95,9 +95,16 @@ def verify(root: Path) -> tuple[int, int]:
         for path in shaders.rglob("*")
         if path.is_file() and (path.name.lower().endswith(ASSET_SUFFIXES) or path.is_relative_to(output))
     }
-    if expected.keys() != actual:
-        missing = sorted(expected.keys() - actual)
-        unlisted = sorted(actual - expected.keys())
+    # The WebGPU manifest verifies these modules' digests and resource bindings.
+    # Keep the shared output directory exhaustive for the browser variants too.
+    output_wgsl = {
+        name.removesuffix(".spv") + ".wgsl"
+        for name in expected if name.startswith("output/") and name.endswith(".spv")
+    }
+    inventory = expected.keys() | output_wgsl
+    if inventory != actual:
+        missing = sorted(inventory - actual)
+        unlisted = sorted(actual - inventory)
         raise ValueError(f"Pipeline shader inventory differs: missing={missing}, unlisted={unlisted}")
 
     for name, digest in expected.items():

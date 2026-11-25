@@ -91,6 +91,9 @@ class PipelineShaderManifestTest(unittest.TestCase):
             self.renderer_manifest, json.dumps(glsl).encode()
         )
         self.write_manifest()
+        with self.assertRaisesRegex(ValueError, r"missing=.*sdr_linear\.frag\.wgsl"):
+            verify(self.root)
+        self.write(self.shaders / "output/sdr_linear.frag.wgsl", b"wgsl")
         self.assertEqual(verify(self.root), (2, 1))
         source.write_bytes(b"changed")
         with self.assertRaisesRegex(ValueError, "SHA-256 differs.*sdr.frag"):
