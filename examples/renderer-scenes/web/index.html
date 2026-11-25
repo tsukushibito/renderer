@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sashiko · Scene viewer</title>
+  <link rel="stylesheet" href="./viewer.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Sashiko <span>Scene viewer</span></h1>
+      <div class="controls">
+        <label>Scene
+          <select id="scene"><option value="bistro">Bistro Exterior</option><option value="sponza">Sponza</option></select>
+        </label>
+        <label>Camera <select id="preset" disabled></select></label>
+        <button id="reset" type="button" disabled>Reset camera</button>
+      </div>
+    </header>
+    <p id="status" role="status">Opening scene…</p>
+    <button id="retry" type="button" hidden>Reopen scene</button>
+    <canvas width="960" height="540" aria-label="3D scene" aria-describedby="navigation"></canvas>
+    <footer>
+      <p id="navigation">Drag to look around. Use <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> to move and <kbd>Q</kbd> / <kbd>E</kbd> to descend or rise.</p>
+      <p id="credits"></p>
+    </footer>
+  </main>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
