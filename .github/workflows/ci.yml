@@ -11,7 +11,7 @@ jobs:
   changes:
     runs-on: ubuntu-24.04
     outputs:
-      guides_only: ${{ steps.diff.outputs.guides_only }}
+      docs_only: ${{ steps.diff.outputs.docs_only }}
       browser: ${{ steps.diff.outputs.browser }}
     steps:
       - uses: actions/checkout@v4
@@ -26,18 +26,18 @@ jobs:
         run: |
           # A new branch or unavailable comparison base gets the full check.
           browser=true
-          guides_only=false
+          docs_only=false
           if [[ -n "$BASE" && ! "$BASE" =~ ^0+$ ]]; then
             if git cat-file -e "$BASE^{commit}" || git fetch --no-tags --depth=1 origin "$BASE"; then
               if git diff --quiet "$BASE" HEAD -- docs tools/docs .gitattributes .github/workflows/ci.yml; then
                 browser=false
-              elif [[ $? == 1 ]] && git diff --quiet --no-renames "$BASE" HEAD -- . ':(exclude,glob)docs/guides/*.md'; then
-                guides_only=true
+              elif [[ $? == 1 ]] && git diff --quiet --no-renames "$BASE" HEAD -- . ':(exclude,glob)docs/guides/*.md' ':(exclude)docs/verification/current.md'; then
+                docs_only=true
               fi
             fi
           fi
           echo "browser=$browser" >> "$GITHUB_OUTPUT"
-          echo "guides_only=$guides_only" >> "$GITHUB_OUTPUT"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
 
   documentation:
     needs: changes
@@ -88,7 +88,7 @@ jobs:
 
   asset-tools:
     needs: changes
-    if: needs.changes.outputs.guides_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -128,7 +128,7 @@ jobs:
 
   webgpu:
     needs: changes
-    if: needs.changes.outputs.guides_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -138,11 +138,25 @@ jobs:
         with:
           python-version: "3.11"
       - run: rustup target add wasm32-unknown-unknown
-      - name: Install the matching wasm-bindgen CLI
+      - &install-wasm-bindgen
+        name: Install the matching wasm-bindgen CLI and test runner
         shell: pwsh
         run: |
           $version = python -c "import tomllib; print(next(p['version'] for p in tomllib.load(open('Cargo.lock','rb'))['package'] if p['name']=='wasm-bindgen'))"
-          cargo install --locked wasm-bindgen-cli --version $version
+          $archive = "wasm-bindgen-$version-x86_64-pc-windows-msvc"
+          $url = "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$version/$archive.tar.gz"
+          $download = Join-Path $env:RUNNER_TEMP "$archive.tar.gz"
+          curl.exe --fail --location --retry 3 $url --output $download
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $download).Hash -ne '844d23f1b56097549b936dd2e0d561fadebc1e8c9e985d5068b6b919654104ad') {
+            throw "Update the pinned SHA-256 when changing wasm-bindgen in Cargo.lock"
+          }
+          tar -xzf $download -C $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Join-Path $env:RUNNER_TEMP $archive >> $env:GITHUB_PATH
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check the shipping browser target
         run: cargo check --locked --release --lib -p renderer-scenes --target wasm32-unknown-unknown --features webgpu
       - name: Build the validation-enabled viewer
@@ -153,14 +167,6 @@ jobs:
           python -m playwright install chromium --no-shell
       - name: Test the public WebGPU runtime on Chromium with SwiftShader
         run: python -B tools/run_webgpu_tests.py --channel chromium --software --development-validation
-      - name: Build and exercise shared CPU jobs on native and browser workers
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          cargo test --locked --release -p sashiko-jobs
-          cargo run --locked --release -p sashiko-jobs --example frame_jobs
-          rustup toolchain install nightly-2026-11-15 --profile minimal --component rust-src --target wasm32-unknown-unknown
-          python -B examples/jobs-web/build.py
-          python -B examples/jobs-web/verify.py build/jobs-web
       - name: Run the packaged viewer on Chromium with SwiftShader
         run: python -B tools/renderer-scenes/verify_web.py build/webgpu --channel chromium --software --output build/webgpu-result
       - uses: actions/upload-artifact@v4
@@ -170,9 +176,35 @@ jobs:
           path: build/webgpu-result/
           if-no-files-found: ignore
 
+  browser-jobs:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: rustup target add wasm32-unknown-unknown
+      - *install-wasm-bindgen
+      - name: Install Chromium for the worker tests
+        run: |
+          python -m pip install playwright==1.65.0
+          python -m playwright install chromium --no-shell
+      - name: Build and exercise shared CPU jobs on native and browser workers
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --release -p sashiko-jobs
+          cargo run --locked --release -p sashiko-jobs --example frame_jobs
+          rustup toolchain install nightly-2026-11-15 --profile minimal --component rust-src --target wasm32-unknown-unknown
+          python -B examples/jobs-web/build.py
+          python -B examples/jobs-web/verify.py build/jobs-web
+
   dependencies:
     needs: changes
-    if: needs.changes.outputs.guides_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -193,7 +225,7 @@ jobs:
 
   format:
     needs: changes
-    if: needs.changes.outputs.guides_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -206,7 +238,7 @@ jobs:
 
   check:
     needs: changes
-    if: needs.changes.outputs.guides_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true'
     name: ${{ matrix.os }} / ${{ matrix.backend }}
     runs-on: ${{ matrix.os }}
     env:
@@ -319,11 +351,7 @@ jobs:
           foreach ($development in @($false, $true)) {
             $features = $env:BACKEND
             if ($development) { $features += ',development-validation,graph-diagnostics' }
-            if ($env:BACKEND -eq 'vulkan,d3d12,presentation' -and $development) {
-              cargo test --locked --workspace --release --no-default-features --features $features --tests
-            } else {
-              cargo test --locked -p sashiko-renderer-core --lib --release --no-default-features --features $features -- backends:: runtime:: presentation:: program::
-            }
+            cargo test --locked -p sashiko-renderer-core --lib --release --no-default-features --features $features -- backends:: runtime:: presentation:: program::
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Test optimized Rust pipeline preparation and composition
@@ -374,9 +402,9 @@ jobs:
         if: matrix.backend == 'vulkan,d3d12,presentation'
         run: cargo clippy --locked --workspace --all-targets --no-default-features --features vulkan,d3d12,presentation,memory-profiling -- -D warnings
       - name: Check independent diagnostic features
-        if: matrix.backend == 'vulkan' || contains(matrix.backend, 'd3d12')
+        if: matrix.backend != 'vulkan,d3d12,presentation' && (matrix.backend == 'vulkan' || contains(matrix.backend, 'd3d12'))
         shell: pwsh
-        run: |
+        run: &diagnostic-checks |
           $diagnostics = @('graph-diagnostics', 'development-validation')
           if ($env:BACKEND.Contains('vulkan')) { $diagnostics += 'vulkan-diagnostics' }
           if ($env:BACKEND.Contains('d3d12')) { $diagnostics += 'd3d12-diagnostics' }
@@ -400,19 +428,21 @@ jobs:
 
   windows-backend-tests:
     needs: changes
-    if: needs.changes.outputs.guides_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true'
     name: windows-2022 / ${{ matrix.backend }} / ${{ matrix.suite }}
     runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
         include:
+          - { backend: "vulkan,d3d12,presentation", suite: release }
+          - { backend: "vulkan,d3d12,presentation", suite: release-shipping }
+          - { backend: "vulkan,d3d12,presentation", suite: diagnostics }
           - { backend: vulkan, suite: release }
           - { backend: d3d12, suite: release }
           - { backend: "vulkan,presentation", suite: release }
           - { backend: "d3d12,presentation", suite: release }
           - { backend: "vulkan,d3d12", suite: release }
-          - { backend: "vulkan,d3d12,presentation", suite: release }
           - backend: vulkan
             suite: tracy
             configs: vulkan,tracy vulkan,tracy,development-validation,graph-diagnostics
@@ -433,9 +463,20 @@ jobs:
         run: rustup show active-toolchain
       - *cargo-cache
       - name: Test optimized shipping and development builds
-        if: matrix.suite == 'release'
+        if: matrix.suite == 'release' && matrix.backend != 'vulkan,d3d12,presentation'
         shell: pwsh
         run: *release-tests
+      - name: Test optimized workspace with both native backends and development validation
+        if: matrix.suite == 'release' && matrix.backend == 'vulkan,d3d12,presentation'
+        run: cargo test --locked --workspace --release --no-default-features --features vulkan,d3d12,presentation,development-validation,graph-diagnostics --tests
+      - name: Test optimized shipping backend execution
+        if: matrix.suite == 'release-shipping'
+        run: |
+          cargo test --locked -p sashiko-renderer-core --lib --release --no-default-features --features vulkan,d3d12,presentation -- backends:: runtime:: presentation:: program::
+      - name: Check independent diagnostic features
+        if: matrix.suite == 'diagnostics'
+        shell: pwsh
+        run: *diagnostic-checks
       - name: Test Tracy configuration
         if: matrix.configs
         env:

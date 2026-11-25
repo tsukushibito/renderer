@@ -895,11 +895,12 @@ cargo test --locked --workspace --no-default-features --features vulkan
 [CI](../../.github/workflows/ci.yml)はWindows／LinuxとCPU／Vulkan featureを確認し、
 別jobで[cargo-deny](tooling.md#cargo-deny)の依存検査を実行します。
 ワークスペースのdoctestはLinuxのCPU構成（Debug、既定feature無効）で1回実行します。現在の3件は、公開APIから `FrameGraph` の非公開フィールドを書き換えるコードがコンパイル時に拒否されることを確認します。
-`docs/guides/` 直下のMarkdownだけを変更したpush・PRでは、HTMLの生成、リンク・画像の検査、Mermaidの再ビルドとChromiumでの描画検証を実行します。ほかのファイルが差分に含まれる場合や比較元を取得できない場合は、Rustとasset-toolsの検証も実行します。
+`docs/guides/` 直下のMarkdownと `docs/verification/current.md` のいずれか、またはその両方だけを変更したpush・PRでは、HTMLの生成、リンク・画像の検査、Mermaidの再ビルドとChromiumでの描画検証を実行します。ほかのファイルが差分に含まれる場合や比較元を取得できない場合は、Rustとasset-toolsの検証も実行します。
 ワークスペースの単体・統合テスト一式は、Linux CPU（Debug・開発検証なし）、Linux Vulkan（Debug・開発検証あり）、Windows Vulkan＋D3D12＋presentation（Release・開発検証あり）の3構成で実行します。
 各構成では全targetをClippyで検査します。Windowsの`presentation`単独では、ネイティブbackendを無効にした状態で表示とシェーダープログラムの契約もテストします。
 LinuxのVulkanとWindowsの二API表示では、BistroとPBRをパッケージ単独でも確認します。Cargoが有効にする依存featureは、ワークスペース全体を対象にしたときと異なるためです。
 Linux VulkanとWindowsのGPU全6構成では、開発検証の有無それぞれでReleaseをリンクし、`sashiko-renderer-core` のbackend・runtime・表示・シェーダープログラムのテストを実行します。Windows二API表示の開発構成では、これらを上記のテスト一式に含めます。
+WebGPU の表示・公開 API と共有 CPU ワーカーのブラウザ試験は別ジョブで並列に実行します。両方とも `Cargo.lock` に対応する公式 Windows 版 wasm-bindgen CLI と test runner を使い、展開前に SHA-256 を照合します。wasm-bindgen を更新するときは CI のハッシュも更新してください。
 Tracyを有効にした構成では全targetをClippyで検査し、ReleaseのBistroでキャプチャ接続・コマンド処理のテストを実行します。Rust検証ジョブはバックエンドと試験の組み合わせごとにCargo依存のキャッシュを再利用します。
 サンプルのCPU契約は代表構成で実行します。`windowed` の引数・再描画・終了処理、読戻しの容量と画素の判定は、Windowsの二API表示でDebugを1回実行します。実際の表示と最小化からの復帰は実機の `--smoke`・`--verify` で確認します。`frame_loop` の引数・容量・集計はLinux VulkanのReleaseで検証します。CPUのGraph構成例2本はLinuxでDebugのエントリーポイントを実行し、Releaseのテストで生成したパスを照合します。
 各backendは製品／開発検証＋dumpの両構成を確認し、Vulkanはrelease両構成と独立診断featureも確認します。
