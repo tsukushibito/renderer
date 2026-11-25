@@ -10,7 +10,7 @@ pub(super) fn build(
     meshes: &mut Meshes,
     p: &Palette,
 ) -> PipelineResult<Vec<RenderObject>> {
-    let [w, d] = arena.half_extent;
+    let [w, d] = arena.half_extent.to_array();
     let mut floor = Geometry::default();
     let mut steel = Geometry::default();
     let mut ivory = Geometry::default();
@@ -110,8 +110,8 @@ pub(super) fn build(
     // The simulation supplies the occupied footprints. Build a plinth, drawers,
     // worktop and instrument racks wholly inside each collision rectangle.
     for (i, obstacle) in arena.obstacles.iter().enumerate() {
-        let [x, z] = obstacle.center;
-        let [hx, hz] = obstacle.half_extent;
+        let [x, z] = obstacle.center.to_array();
+        let [hx, hz] = obstacle.half_extent.to_array();
         for side in [-1., 1.] {
             for end in [-1., 1.] {
                 // Painted L-marks leave the exposed corners of the benches readable

@@ -4,6 +4,7 @@ pub mod capture;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod input;
+pub mod math;
 #[cfg(all(
     windows,
     feature = "presentation",

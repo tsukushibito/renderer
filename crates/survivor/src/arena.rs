@@ -1,14 +1,15 @@
 //! Editable room geometry and survivor-specific spawn and marker placements.
 use crate::PLAYER_RADIUS;
+use sashiko::math::Vec2;
 use sashiko::space::Floor;
 pub use sashiko::space::Footprint as Obstacle;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Arena {
-    pub half_extent: [f32; 2],
-    pub player_spawn: [f32; 2],
-    pub marker: [f32; 2],
+    pub half_extent: Vec2,
+    pub player_spawn: Vec2,
+    pub marker: Vec2,
     pub obstacles: Vec<Obstacle>,
     #[serde(default = "crate::authoring::default_subjects")]
     pub subjects: Vec<crate::authoring::SubjectType>,
@@ -34,6 +35,7 @@ impl Arena {
         crate::authoring::validate_subjects(&a.subjects)?;
         if !a
             .half_extent
+            .to_array()
             .into_iter()
             .all(|v| (2.0..=128.0).contains(&v))
         {

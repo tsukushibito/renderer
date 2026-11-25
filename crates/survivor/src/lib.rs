@@ -3,7 +3,7 @@ mod arena;
 pub mod authoring;
 mod combat;
 pub use arena::{Arena, Obstacle};
-use sashiko::space::{CrowdNavigation, direction, distance_squared, unit_or_zero};
+use sashiko::{math::Vec2, space::CrowdNavigation};
 use serde::{Deserialize, Serialize};
 pub const TICK_HZ: u32 = 60;
 pub const MAX_ENEMIES: usize = 500;
@@ -39,7 +39,7 @@ pub enum Upgrade {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Input {
-    pub movement: [f32; 2],
+    pub movement: Vec2,
     pub upgrade: Option<Upgrade>,
     pub restart: bool,
     #[serde(default, skip_serializing_if = "sashiko::ui::MenuInput::is_idle")]
@@ -58,8 +58,8 @@ pub struct Events {
 pub struct Enemy {
     pub archetype: usize,
     pub id: u64,
-    pub pos: [f32; 2],
-    pub facing: [f32; 2],
+    pub pos: Vec2,
+    pub facing: Vec2,
     pub windup: bool,
     hp: u8,
     windup_left: u8,
@@ -69,8 +69,8 @@ pub struct Enemy {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Shot {
-    pub pos: [f32; 2],
-    pub dir: [f32; 2],
+    pub pos: Vec2,
+    pub dir: Vec2,
     remaining_ticks: u8,
     pierce_left: u8,
     last_hit: Option<u64>,
@@ -78,7 +78,7 @@ pub struct Shot {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Drop {
-    pub pos: [f32; 2],
+    pub pos: Vec2,
     value: u32,
 }
 
@@ -98,7 +98,7 @@ pub struct Game {
     pub tick: u64,
     pub phase: Phase,
     pub upgrade_focus: sashiko::ui::Focus,
-    pub player: [f32; 2],
+    pub player: Vec2,
     pub hp: u32,
     pub xp: u32,
     pub level: u32,
@@ -174,7 +174,7 @@ impl Game {
             }
             for i in 0..32 {
                 let angle = i as f32 * std::f32::consts::TAU / 32.;
-                game.shoot([angle.cos(), angle.sin()]);
+                game.shoot(Vec2::new(angle.cos(), angle.sin()));
             }
         }
         game
@@ -229,7 +229,7 @@ impl Game {
         }
         self.elapsed += 1;
         self.invulnerability = self.invulnerability.saturating_sub(1);
-        let movement = unit_or_zero(input.movement);
+        let movement = input.movement.normalize_or_zero();
         let (pos, contact) =
             self.arena
                 .floor()
@@ -260,10 +260,12 @@ impl Game {
         events
     }
 
-    fn random_pos(&mut self) -> [f32; 2] {
+    fn random_pos(&mut self) -> Vec2 {
         self.arena
             .half_extent
+            .to_array()
             .map(|v| (self.rng.uniform() * 2. - 1.) * (v - ENEMY_RADIUS))
+            .into()
     }
 
     fn repopulate(&mut self) {
@@ -271,9 +273,8 @@ impl Game {
         while self.enemies.len() < count {
             let spawn = (0..64).find_map(|_| {
                 let p = self.random_pos();
-                (distance_squared(p, self.player) >= 16.
-                    && self.arena.floor().open(p, ENEMY_RADIUS))
-                .then_some(p)
+                (p.distance_squared(self.player) >= 16. && self.arena.floor().open(p, ENEMY_RADIUS))
+                    .then_some(p)
             });
             let Some(spawn) = spawn else {
                 break;
@@ -303,7 +304,7 @@ impl Game {
                 archetype,
                 id,
                 pos: spawn,
-                facing: direction(spawn, self.player),
+                facing: (self.player - spawn).normalize_or_zero(),
                 windup: false,
                 hp: self.arena.subjects[archetype].hp,
                 windup_left: 0,
@@ -318,7 +319,7 @@ impl Game {
             .update(self.player, &self.enemies, |enemy| enemy.pos)
             .expect("enemies fit prepared capacity");
         for (index, enemy) in self.enemies.iter_mut().enumerate() {
-            let d = distance_squared(self.player, enemy.pos);
+            let d = self.player.distance_squared(enemy.pos);
             let subject = &self.arena.subjects[enemy.archetype];
             enemy.recovery = enemy.recovery.saturating_sub(1);
             let speed = if enemy.windup_left > 0 {
@@ -338,7 +339,7 @@ impl Game {
                 && d < lunge.range * lunge.range
                 && enemy.recovery == 0
             {
-                enemy.facing = direction(enemy.pos, self.player);
+                enemy.facing = (self.player - enemy.pos).normalize_or_zero();
                 enemy.windup = true;
                 enemy.windup_left = lunge.windup_ticks;
                 0.
@@ -356,7 +357,7 @@ impl Game {
                     ENEMY_RADIUS,
                 )
                 .0;
-            if distance_squared(enemy.pos, self.player) < (PLAYER_RADIUS + ENEMY_RADIUS).powi(2) {
+            if enemy.pos.distance_squared(self.player) < (PLAYER_RADIUS + ENEMY_RADIUS).powi(2) {
                 events.contact = true;
                 if self.invulnerability == 0 && !enemy.windup {
                     self.hp = self
@@ -373,7 +374,7 @@ impl Game {
 pub struct Snapshot {
     pub tick: u64,
     pub phase: Phase,
-    pub player: [f32; 2],
+    pub player: Vec2,
     pub hp: u32,
     pub xp: u32,
     pub level: u32,
@@ -398,17 +399,17 @@ pub fn benchmark_input(game: &Game) -> Input {
         });
     let along = t.saturating_sub(54) % 1300;
     let movement = if t < 54 {
-        [0., 1.]
+        Vec2::new(0., 1.)
     } else if along < 190 {
-        [1., 0.]
+        Vec2::new(1., 0.)
     } else if along < 460 {
-        [0., -1.]
+        Vec2::new(0., -1.)
     } else if along < 840 {
-        [-1., 0.]
+        Vec2::new(-1., 0.)
     } else if along < 1110 {
-        [0., 1.]
+        Vec2::new(0., 1.)
     } else {
-        [1., 0.]
+        Vec2::new(1., 0.)
     };
     Input {
         movement,
@@ -427,7 +428,7 @@ mod tests {
         let run = |arena: Arena, per_frame: u32| {
             let mut game = Game::new(arena, Scenario::Early, 1);
             let input = Input {
-                movement: [0., -1.],
+                movement: Vec2::new(0., -1.),
                 ..Input::default()
             };
             for _ in 0..(60 / per_frame) {
@@ -446,8 +447,8 @@ mod tests {
         assert_eq!(smooth.marker_entries, 1);
         let mut edited = Arena::default();
         edited.obstacles.push(Obstacle {
-            center: [0., 4.5],
-            half_extent: [0.8, 0.3],
+            center: Vec2::new(0., 4.5),
+            half_extent: Vec2::new(0.8, 0.3),
         });
         let blocked = run(
             Arena::from_json(&serde_json::to_string(&edited).unwrap()).unwrap(),
@@ -543,7 +544,7 @@ mod tests {
         let mut pierce = choose(Upgrade::Pierce);
         let pulse = choose(Upgrade::Pulse);
         assert!(rapid.reload < pierce.reload);
-        pierce.shoot([0., 1.]);
+        pierce.shoot(Vec2::new(0., 1.));
         assert_eq!(pierce.shots.last().unwrap().pierce_left, 1);
         assert_eq!(rapid.pulse_radius, 0.);
         assert!(pulse.pulse_radius > 1.);

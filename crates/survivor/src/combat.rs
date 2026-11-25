@@ -1,7 +1,7 @@
-use crate::{Drop, Events, Game, MAX_DROPS, Shot, TICK_HZ, direction, distance_squared};
+use crate::{Drop, Events, Game, MAX_DROPS, Shot, TICK_HZ, Vec2};
 
 impl Game {
-    pub(crate) fn shoot(&mut self, dir: [f32; 2]) {
+    pub(crate) fn shoot(&mut self, dir: Vec2) {
         self.shots.push(Shot {
             pos: self.player,
             dir,
@@ -15,12 +15,13 @@ impl Game {
             let dir = self
                 .enemies
                 .iter()
-                .filter(|e| distance_squared(e.pos, self.player) <= 100.)
+                .filter(|e| e.pos.distance_squared(self.player) <= 100.)
                 .min_by(|a, b| {
-                    distance_squared(a.pos, self.player)
-                        .total_cmp(&distance_squared(b.pos, self.player))
+                    a.pos
+                        .distance_squared(self.player)
+                        .total_cmp(&b.pos.distance_squared(self.player))
                 })
-                .map(|enemy| direction(self.player, enemy.pos));
+                .map(|enemy| (enemy.pos - self.player).normalize_or_zero());
             if let Some(dir) = dir {
                 self.shoot(dir);
                 self.reload = 30 / (1 + self.upgrades[0].min(5));
@@ -32,15 +33,13 @@ impl Game {
         if pulse > 0 && self.elapsed.is_multiple_of(90) {
             self.pulse_radius = 1.7 + 0.6 * f32::from(pulse.min(5));
             for enemy in &mut self.enemies {
-                if distance_squared(enemy.pos, self.player) < self.pulse_radius.powi(2) {
+                if enemy.pos.distance_squared(self.player) < self.pulse_radius.powi(2) {
                     enemy.hp = enemy.hp.saturating_sub(1 + pulse / 2);
                 }
             }
         }
         for shot in &mut self.shots {
-            for i in 0..2 {
-                shot.pos[i] += shot.dir[i] * 13. / TICK_HZ as f32;
-            }
+            shot.pos += shot.dir * 13. / TICK_HZ as f32;
             shot.remaining_ticks -= 1;
             if !self.arena.floor().open(shot.pos, 0.) {
                 shot.remaining_ticks = 0;
@@ -49,7 +48,7 @@ impl Game {
             for enemy in &mut self.enemies {
                 if enemy.hp == 0
                     || shot.last_hit == Some(enemy.id)
-                    || distance_squared(enemy.pos, shot.pos) > 0.36 * 0.36
+                    || enemy.pos.distance_squared(shot.pos) > 0.36 * 0.36
                 {
                     continue;
                 }
@@ -75,7 +74,9 @@ impl Game {
             } else {
                 // Preserve XP at capacity by stacking it in the nearest drop.
                 if let Some(near) = self.drops.iter_mut().min_by(|a, b| {
-                    distance_squared(a.pos, e.pos).total_cmp(&distance_squared(b.pos, e.pos))
+                    a.pos
+                        .distance_squared(e.pos)
+                        .total_cmp(&b.pos.distance_squared(e.pos))
                 }) {
                     near.value = near.value.saturating_add(1);
                 }
@@ -85,7 +86,7 @@ impl Game {
         });
         self.kills = self.kills.saturating_add(events.kills);
         self.drops.retain(|drop| {
-            if distance_squared(drop.pos, self.player) < 1.4 * 1.4 {
+            if drop.pos.distance_squared(self.player) < 1.4 * 1.4 {
                 self.xp = self.xp.saturating_add(drop.value);
                 false
             } else {

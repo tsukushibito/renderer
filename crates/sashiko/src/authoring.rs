@@ -1,4 +1,5 @@
 //! Shared scene commands for a game's property inspector and command-line tools.
+use crate::math::{Rotation3, Vec3};
 use crate::scene::{Placement, Registry, Scene};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -44,19 +45,19 @@ pub enum Edit {
     Inspect,
     Move {
         id: String,
-        translation: [f32; 3],
+        translation: Vec3,
     },
     TranslateWorld {
         id: String,
-        delta: [f32; 3],
+        delta: Vec3,
     },
     Rotate {
         id: String,
-        rotation: [f32; 4],
+        rotation: Rotation3,
     },
     Scale {
         id: String,
-        scale: [f32; 3],
+        scale: Vec3,
     },
     Set {
         id: String,
@@ -70,7 +71,7 @@ pub enum Edit {
     Place {
         id: String,
         prefab: String,
-        translation: [f32; 3],
+        translation: Vec3,
     },
     SetDefault {
         prefab: String,
@@ -102,25 +103,25 @@ pub fn inspect<C: 'static>(
         Edit::TranslateWorld { id, delta } => {
             let index = find(&scene, &id)?;
             let p = &scene.placements[index];
-            let delta = glam::Vec3::from_array(delta);
+
             let delta = match &p.parent {
                 None => delta,
                 Some(parent) => {
                     let world = scene.instantiate(registry)?;
                     let e = world.find(parent).ok_or("missing parent")?;
-                    let basis = glam::Mat3::from_cols_array_2d(&[
-                        e.transform_vector([1., 0., 0.]),
-                        e.transform_vector([0., 1., 0.]),
-                        e.transform_vector([0., 0., 1.]),
-                    ]);
+                    let basis = glam::Mat3::from_cols(
+                        e.transform_vector(Vec3::X).0,
+                        e.transform_vector(Vec3::Y).0,
+                        e.transform_vector(Vec3::Z).0,
+                    );
                     if basis.determinant() == 0. {
                         return Err(format!("{id}: parent transform is singular"));
                     }
-                    basis.inverse() * delta
+                    Vec3(basis.inverse() * delta.0)
                 }
             };
             let p = &mut scene.placements[index];
-            p.translation = (glam::Vec3::from_array(p.translation) + delta).to_array();
+            p.translation += delta;
         }
         Edit::Rotate { id, rotation } => {
             let index = find(&scene, &id)?;
@@ -151,8 +152,8 @@ pub fn inspect<C: 'static>(
                 prefab,
                 translation,
                 parent: None,
-                rotation: [0., 0., 0., 1.],
-                scale: [1.; 3],
+                rotation: Rotation3::IDENTITY,
+                scale: Vec3::ONE,
                 overrides: Default::default(),
             });
         }
@@ -178,8 +179,8 @@ pub fn inspect<C: 'static>(
             "id": entity.placement_id,
             "kind": entity.kind,
             "world": entity.world_translation,
-            "axis_x": entity.transform_vector([1.,0.,0.]),
-            "axis_z": entity.transform_vector([0.,0.,1.]),
+            "axis_x": entity.transform_vector(Vec3::X),
+            "axis_z": entity.transform_vector(Vec3::Z),
             "fields": entity.fields,
             "registered_fields": registry.fields(&entity.kind),
         }));

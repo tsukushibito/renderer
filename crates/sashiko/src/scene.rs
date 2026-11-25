@@ -1,5 +1,6 @@
 //! Versioned editable scenes. Prefab values and placement overrides are kept separately.
-use glam::{Affine3A, Quat, Vec3};
+use crate::math::{LocalTransform, Rotation3, Vec3};
+use glam::Affine3A;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 use std::sync::Arc;
@@ -31,14 +32,20 @@ pub struct Placement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     #[serde(default)]
-    pub translation: [f32; 3],
+    pub translation: Vec3,
     /// Local unit quaternion, in XYZW order.
-    #[serde(default = "identity_rotation")]
-    pub rotation: [f32; 4],
+    #[serde(default)]
+    pub rotation: Rotation3,
     #[serde(default = "unit_scale")]
-    pub scale: [f32; 3],
+    pub scale: Vec3,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub overrides: Fields,
+}
+
+impl Placement {
+    pub fn local_transform(&self) -> LocalTransform {
+        LocalTransform::new(self.translation, self.rotation, self.scale)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -153,7 +160,7 @@ pub struct Entity {
     local: Affine3A,
     world: Affine3A,
     component: Component,
-    pub world_translation: [f32; 3],
+    pub world_translation: Vec3,
     /// Initial resolved editor properties. Runtime changes live in the typed component.
     pub fields: Fields,
 }
@@ -163,15 +170,11 @@ impl Entity {
     pub fn component<T: Any>(&self) -> Option<&T> {
         self.component.downcast_ref()
     }
-    pub fn transform_vector(&self, local: [f32; 3]) -> [f32; 3] {
-        self.world
-            .transform_vector3(Vec3::from_array(local))
-            .to_array()
+    pub fn transform_vector(&self, local: Vec3) -> Vec3 {
+        Vec3(self.world.transform_vector3(local.0))
     }
-    pub fn transform_point(&self, local: [f32; 3]) -> [f32; 3] {
-        self.world
-            .transform_point3(Vec3::from_array(local))
-            .to_array()
+    pub fn transform_point(&self, local: Vec3) -> Vec3 {
+        Vec3(self.world.transform_point3(local.0))
     }
 }
 
@@ -193,27 +196,8 @@ impl<C> Default for World<C> {
     }
 }
 
-fn identity_rotation() -> [f32; 4] {
-    [0., 0., 0., 1.]
-}
-fn unit_scale() -> [f32; 3] {
-    [1.; 3]
-}
-
-fn local_pose(
-    translation: [f32; 3],
-    rotation: [f32; 4],
-    scale: [f32; 3],
-) -> Result<Affine3A, String> {
-    let rotation = Quat::from_array(rotation);
-    if !rotation.is_normalized() || !translation.into_iter().chain(scale).all(f32::is_finite) {
-        return Err("expected a finite translation, unit quaternion and finite scale".into());
-    }
-    Ok(Affine3A::from_scale_rotation_translation(
-        Vec3::from_array(scale),
-        rotation,
-        Vec3::from_array(translation),
-    ))
+fn unit_scale() -> Vec3 {
+    Vec3::ONE
 }
 fn compose(parent: Affine3A, local: Affine3A) -> Result<Affine3A, String> {
     let world = parent * local;
@@ -265,8 +249,7 @@ impl<C: 'static> World<C> {
                     .ok_or_else(|| format!("{}: missing parent {name}", placement.id))
             })
             .transpose()?;
-        let local = local_pose(placement.translation, placement.rotation, placement.scale)
-            .map_err(|e| format!("{}: {e}", placement.id))?;
+        let local = placement.local_transform().affine();
         let world = compose(parent.map_or(Affine3A::IDENTITY, |p| p.world), local)
             .map_err(|e| format!("{}: {e}", placement.id))?;
         let parent = parent.map(|p| p.id);
@@ -298,7 +281,7 @@ impl<C: 'static> World<C> {
                 local,
                 world,
                 component,
-                world_translation: world.translation.into(),
+                world_translation: Vec3(world.translation.into()),
                 fields,
             },
         );
@@ -312,11 +295,9 @@ impl<C: 'static> World<C> {
     pub fn set_transform(
         &mut self,
         root: EntityId,
-        translation: [f32; 3],
-        rotation: [f32; 4],
-        scale: [f32; 3],
+        transform: LocalTransform,
     ) -> Result<(), String> {
-        let local = local_pose(translation, rotation, scale)?;
+        let local = transform.affine();
         let node = self.entity(root).ok_or("unknown entity")?;
         let parent = node
             .parent
@@ -340,7 +321,7 @@ impl<C: 'static> World<C> {
         for &(id, world) in &self.pose_changes {
             let child = self.entities.get_mut(&id).expect("live descendant");
             child.world = world;
-            child.world_translation = world.translation.into();
+            child.world_translation = Vec3(world.translation.into());
         }
         Ok(())
     }
@@ -443,14 +424,21 @@ mod tests {
         let mut world = scene.instantiate(&registry).unwrap();
         let root = world.find("root").unwrap().id;
         let child = world.find("child").unwrap();
-        assert_eq!(child.world_translation, [12., 0., 0.]);
+        assert_eq!(child.world_translation.to_array(), [12., 0., 0.]);
         assert_eq!(child.component::<Weight>().unwrap().value, 2);
         let child = child.id;
         world
-            .set_transform(root, [3., 0., 0.], [0., 0., 1., 0.], [4., 1., 1.])
+            .set_transform(
+                root,
+                LocalTransform::new(
+                    [3., 0., 0.].into(),
+                    Rotation3::try_from([0., 0., 1., 0.]).unwrap(),
+                    [4., 1., 1.].into(),
+                ),
+            )
             .unwrap();
         assert_eq!(
-            world.entity(child).unwrap().world_translation,
+            world.entity(child).unwrap().world_translation.to_array(),
             [-1., 0., 0.]
         );
         let other = scene.instantiate(&registry).unwrap();
@@ -484,19 +472,36 @@ mod tests {
         assert!(error.contains("placement child") && error.contains("value"));
     }
     #[test]
+    fn rotated_child_preserves_the_shear_from_nonuniform_parent_scale() {
+        let (registry, mut scene) = fixture();
+        scene.placements[0].rotation =
+            Rotation3::from_axis_angle(Vec3::Z, std::f32::consts::FRAC_PI_4).unwrap();
+        let world = scene.instantiate(&registry).unwrap();
+        let child = world.find("child").unwrap();
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        assert!((child.transform_vector(Vec3::X) - Vec3::new(2. * k, k, 0.)).length() < 1e-5);
+        assert!((child.transform_vector(Vec3::Y) - Vec3::new(-2. * k, k, 0.)).length() < 1e-5);
+    }
+    #[test]
     fn overflowing_descendant_move_keeps_the_previous_world() {
         let (registry, mut scene) = fixture();
-        scene.placements[0].scale = [2.; 3];
+        scene.placements[0].scale = [2.; 3].into();
         let mut world = scene.instantiate(&registry).unwrap();
         let root = world.find("root").unwrap().id;
         assert!(
             world
-                .set_transform(root, [99.; 3], identity_rotation(), [f32::MAX; 3])
+                .set_transform(
+                    root,
+                    LocalTransform::new([99.; 3].into(), Rotation3::IDENTITY, [f32::MAX; 3].into())
+                )
                 .is_err()
         );
-        assert_eq!(world.find("root").unwrap().world_translation, [10., 0., 0.]);
         assert_eq!(
-            world.find("child").unwrap().world_translation,
+            world.find("root").unwrap().world_translation.to_array(),
+            [10., 0., 0.]
+        );
+        assert_eq!(
+            world.find("child").unwrap().world_translation.to_array(),
             [12., 0., 0.]
         );
     }

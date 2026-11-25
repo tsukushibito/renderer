@@ -48,7 +48,7 @@ pub(super) fn controls() -> Controls {
 pub(super) fn next_input(controls: &mut Controls) -> Input {
     use Action::*;
     controls.actions.sample(|actions| Input {
-        movement: [actions.axis(Left, Right), actions.axis(Forward, Back)],
+        movement: sashiko::math::Vec2::new(actions.axis(Left, Right), actions.axis(Forward, Back)),
         upgrade: actions.latest_press(|a| if let Select(u) = a { Some(u) } else { None }),
         restart: actions.pressed(Restart),
         menu: MenuInput {
@@ -80,14 +80,14 @@ mod tests {
         }
         keys.key(KeyCode::Enter, false);
         let tick = next_input(&mut keys);
-        assert_eq!(tick.movement, [0., -1.]);
+        assert_eq!(tick.movement.to_array(), [0., -1.]);
         assert_eq!(tick.upgrade, Some(Upgrade::Pulse));
         assert!(tick.restart && tick.menu.activate);
         assert_eq!(tick.menu.direction, 1);
         let after = next_input(&mut keys);
-        assert_eq!(after.movement, [0., -1.]);
+        assert_eq!(after.movement.to_array(), [0., -1.]);
         assert!(!after.restart && !after.menu.activate && after.upgrade.is_none());
         keys.focus_lost();
-        assert_eq!(next_input(&mut keys).movement, [0., 0.]);
+        assert_eq!(next_input(&mut keys).movement.to_array(), [0., 0.]);
     }
 }

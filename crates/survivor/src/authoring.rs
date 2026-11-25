@@ -1,5 +1,6 @@
 //! Research hall components registered with the shared scene authoring API.
 use crate::{Arena, Obstacle};
+use sashiko::math::Vec2;
 use sashiko::scene::{EntityId, Registry, Scene, World};
 use sashiko::view::{PointLamp, PointLight, TrackingCamera};
 use serde::{Deserialize, Serialize};
@@ -61,12 +62,13 @@ pub(crate) fn default_subjects() -> Vec<SubjectType> {
 
 #[derive(Deserialize)]
 struct Extent {
-    half_extent: [f32; 2],
+    half_extent: Vec2,
 }
 impl Extent {
     fn validate(&self) -> Result<(), String> {
         if self
             .half_extent
+            .to_array()
             .into_iter()
             .all(|x| x.is_finite() && x > 0.)
         {
@@ -82,8 +84,8 @@ struct Empty {}
 
 /// Values exchanged between scene behaviors and one gameplay update.
 pub struct RuleContext {
-    pub player: [f32; 2],
-    pub marker: [f32; 2],
+    pub player: Vec2,
+    pub marker: Vec2,
     pub entered_marker: bool,
 }
 
@@ -106,8 +108,7 @@ impl Marker {
         }
     }
     fn update(&mut self, _id: EntityId, ctx: &mut RuleContext) {
-        let occupied =
-            sashiko::space::distance_squared(ctx.player, ctx.marker) < self.radius * self.radius;
+        let occupied = ctx.player.distance_squared(ctx.marker) < self.radius * self.radius;
         ctx.entered_marker |= occupied && !self.occupied;
         self.occupied = occupied;
     }
@@ -140,7 +141,7 @@ pub fn registry() -> Registry<RuleContext> {
 #[derive(Clone, Debug)]
 pub struct LabView {
     pub camera: TrackingCamera,
-    pub anchor: [f32; 2],
+    pub anchor: Vec2,
     pub point_lights: Vec<PointLight>,
 }
 impl LabView {
@@ -152,8 +153,8 @@ impl LabView {
                 point_lights.push(lamp.at(e.world_translation)?);
             }
             if let Some(rig) = e.component::<TrackingCamera>() {
-                let [x, _, z] = e.world_translation;
-                single(&mut camera, (*rig, [x, z]), "GroundCamera")?;
+                let [x, _, z] = e.world_translation.to_array();
+                single(&mut camera, (*rig, Vec2::new(x, z)), "GroundCamera")?;
             }
         }
         let (camera, anchor) = camera.ok_or("place one GroundCamera for the research hall")?;
@@ -163,7 +164,7 @@ impl LabView {
             point_lights,
         })
     }
-    pub(crate) fn legacy(extent: [f32; 2]) -> Result<Self, String> {
+    pub(crate) fn legacy(extent: Vec2) -> Result<Self, String> {
         // Older flat layouts and version-one scenes predate authored views.
         // Instantiate today's bundled rig with the old room's dimensions.
         let mut scene: Scene =
@@ -174,7 +175,7 @@ impl LabView {
             .iter_mut()
             .find(|p| p.id == "lighting-frame")
             .ok_or("bundled scene has no lighting frame")?;
-        lights.scale = [extent[0], 1., extent[1]];
+        lights.scale = [extent[0], 1., extent[1]].into();
         Self::read(&scene.instantiate(&registry())?)
     }
 }
@@ -196,7 +197,7 @@ pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
     let mut obstacles = Vec::new();
     let mut subjects = Vec::new();
     for e in world.entities() {
-        let [x, y, z] = e.world_translation;
+        let [x, y, z] = e.world_translation.to_array();
         if matches!(e.kind.as_str(), "PointLight" | "Group") {
             continue;
         }
@@ -206,13 +207,13 @@ pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
                 e.placement_id
             ));
         }
-        let pos = [x, z];
+        let pos = Vec2::new(x, z);
         let half_extent = || {
             let extent = e.component::<Extent>().ok_or("missing extent")?;
             // This game's navigation and visible benches share axis-aligned footprints.
             // Reject rotations and shears they cannot both represent.
-            let edge_x = e.transform_vector([extent.half_extent[0], 0., 0.]);
-            let edge_z = e.transform_vector([0., 0., extent.half_extent[1]]);
+            let edge_x = e.transform_vector([extent.half_extent[0], 0., 0.].into());
+            let edge_z = e.transform_vector([0., 0., extent.half_extent[1]].into());
             if edge_x[1] != 0.
                 || edge_z[1] != 0.
                 || edge_x[2].abs() > 1e-4
@@ -223,12 +224,12 @@ pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
                     e.placement_id
                 ));
             }
-            Ok([edge_x[0].abs(), edge_z[2].abs()])
+            Ok(Vec2::new(edge_x[0].abs(), edge_z[2].abs()))
         };
         match e.kind.as_str() {
             "GroundCamera" => {}
             "Room" => {
-                if pos != [0., 0.] {
+                if pos != Vec2::ZERO {
                     return Err(format!(
                         "{}: Room must be centered at the origin",
                         e.placement_id
@@ -313,7 +314,7 @@ mod tests {
                 .unwrap()
                 .obstacles
                 .into_iter()
-                .map(|b| b.center)
+                .map(|b| b.center.to_array())
                 .collect::<Vec<_>>()
         };
         let original = vec![[-3.2, 0.], [3.2, 0.], [-10., -6.], [10., 6.]];
@@ -438,9 +439,14 @@ mod tests {
             .find(|p| p.id == "bench-west")
             .unwrap();
         bench.parent = Some("marker".into());
-        bench.translation = [0., 0., 1.5];
+        bench.translation = [0., 0., 1.5].into();
         let arena = Arena::from_json(&serde_json::to_string(&scene).unwrap()).unwrap();
-        assert!(arena.obstacles.iter().any(|b| b.center == [0., 4.5]));
-        assert!(!arena.floor().open([0., 4.5], 0.1));
+        assert!(
+            arena
+                .obstacles
+                .iter()
+                .any(|b| b.center == Vec2::new(0., 4.5))
+        );
+        assert!(!arena.floor().open(Vec2::new(0., 4.5), 0.1));
     }
 }

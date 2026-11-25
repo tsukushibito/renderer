@@ -1,5 +1,6 @@
 //! Research hall, animated subjects and gameplay feedback shared by capture and presentation.
-use sashiko::view::{DrawList, facing_transform as transform, on_screen};
+use sashiko::math::{LocalTransform, Rotation3, Vec2, Vec3};
+use sashiko::view::{DrawList, on_screen, render_transform};
 mod geometry;
 mod hud;
 mod instruments;
@@ -13,11 +14,21 @@ use renderer::{
     core::runtime::Runtime,
     material::{AlphaMode, MaterialHandle, Materials, PbrParams},
     mesh::{MeshCapacity, MeshHandle, Meshes},
-    pbr::{Bounds, LocalLight, Sun},
+    pbr::{Bounds, LocalLight, Sun, Transform},
     pipeline::{CameraView, PipelineResult, RenderObject, SceneAssets, SceneInput},
 };
 use surfaces::Surfaces;
 use survivor::{Game, MAX_DROPS, MAX_ENEMIES, MAX_SHOTS};
+
+/// Lift the game's XZ bearing into a 3D placement; coincident targets face +Z.
+fn placement(pos: Vec3, scale: Vec3, facing: Vec2) -> PipelineResult<Transform> {
+    let rotation = if facing == Vec2::ZERO {
+        Rotation3::IDENTITY
+    } else {
+        Rotation3::from_forward_up(Vec3::new(facing.x(), 0., facing.y()), Vec3::Y)?
+    };
+    render_transform(LocalTransform::new(pos, rotation, scale))
+}
 
 struct Palette {
     floor: MaterialHandle,
@@ -87,15 +98,15 @@ pub struct Visual {
     ring: MeshHandle,
     disk: MeshHandle,
     tracking: sashiko::view::TrackingCamera,
-    camera_anchor: [f32; 2],
+    camera_anchor: Vec2,
     lights: Vec<LocalLight>,
     sun: Sun,
     bounds: Bounds,
     visible: usize,
     drawn: usize,
     last_step: Option<u64>,
-    player_facing: [f32; 2],
-    previous_player: [f32; 2],
+    player_facing: Vec2,
+    previous_player: Vec2,
 }
 
 impl Visual {
@@ -170,7 +181,7 @@ impl Visual {
         for obj in &mut prepared[hall.len()..] {
             obj.casts_shadow = false;
         }
-        let [w, d] = game.arena.half_extent;
+        let [w, d] = game.arena.half_extent.to_array();
         // A broad ceiling fixture shades the permanent hall. Moving subjects
         // retain their floor contacts without invalidating the static lamp atlas.
         let mut lights = vec![LocalLight::shadowed_rect(
@@ -205,7 +216,7 @@ impl Visual {
             visible: 0,
             drawn: 0,
             last_step: None,
-            player_facing: [0., 1.],
+            player_facing: Vec2::new(0., 1.),
             previous_player: game.player,
         })
     }
@@ -257,12 +268,12 @@ impl Visual {
         &mut self,
         mesh: MeshHandle,
         material: MaterialHandle,
-        pos: [f32; 3],
-        scale: [f32; 3],
-        facing: [f32; 2],
+        pos: Vec3,
+        scale: Vec3,
+        facing: Vec2,
     ) -> PipelineResult<()> {
         let mut object =
-            RenderObject::new(mesh, material).with_transform(transform(pos, scale, facing)?);
+            RenderObject::new(mesh, material).with_transform(placement(pos, scale, facing)?);
         object.casts_shadow = false;
         self.objects.push(object)?;
         Ok(())
@@ -274,34 +285,35 @@ impl Visual {
         // Fixed tick controls animation time even when a presentation gets repeated.
         if self.last_step != Some(game.tick) {
             self.cast.animate(game.tick, &mut self.meshes)?;
-            let dx = game.player[0] - self.previous_player[0];
-            let dz = game.player[1] - self.previous_player[1];
-            let dist = dx.hypot(dz);
+            let displacement = game.player - self.previous_player;
+            let dist = displacement.length();
             if dist > 0.001 {
-                self.player_facing = [dx / dist, dz / dist]
+                self.player_facing = displacement / dist;
             }
             self.previous_player = game.player;
             self.last_step = Some(game.tick);
         }
-        let aligned = [0., 1.];
-        let [px, pz] = game.player;
-        let [mx, mz] = game.arena.marker;
+        let aligned = Vec2::new(0., 1.);
+        let [px, pz] = game.player.to_array();
+        let [mx, mz] = game.arena.marker.to_array();
         self.instance(
             self.ring,
             self.palette.drop,
-            [mx, 0.035, mz],
-            [0.70, 1., 0.70],
+            Vec3::new(mx, 0.035, mz),
+            Vec3::new(0.70, 1., 0.70),
             aligned,
         )?;
         self.instance(
             self.ring,
             self.palette.pulse,
-            [px, 0.045, pz],
-            [0.63, 1., 0.63],
+            Vec3::new(px, 0.045, pz),
+            Vec3::new(0.63, 1., 0.63),
             aligned,
         )?;
-        let mut player = RenderObject::new(self.cast.actors[0].mesh, self.palette.player)
-            .with_transform(transform([px, 0., pz], [1.; 3], self.player_facing)?);
+        let mut player =
+            RenderObject::new(self.cast.actors[0].mesh, self.palette.player).with_transform(
+                placement(Vec3::new(px, 0., pz), Vec3::ONE, self.player_facing)?,
+            );
         player.pose = Some(self.cast.actors[0].poses[0]);
         player.casts_shadow = false;
         self.objects.push(player)?;
@@ -310,10 +322,10 @@ impl Visual {
         for enemy in &game.enemies {
             if on_screen(view, enemy.pos, 1.9, 0.65) {
                 self.visible += 1;
-                let [x, z] = enemy.pos;
+                let [x, z] = enemy.pos.to_array();
                 let actor = &self.cast.actors[self.cast.subjects[enemy.archetype]];
                 let mut object = RenderObject::new(actor.mesh, actor.material)
-                    .with_transform(transform([x, 0., z], [1.; 3], enemy.facing)?);
+                    .with_transform(placement(Vec3::new(x, 0., z), Vec3::ONE, enemy.facing)?);
                 object.pose = Some(actor.poses[(enemy.id % WALK_PHASES as u64) as usize]);
                 object.casts_shadow = false;
                 self.objects.push(object)?;
@@ -321,19 +333,19 @@ impl Visual {
                 self.instance(
                     self.disk,
                     self.palette.shadow,
-                    [x, 0.014, z],
-                    [0.32, 1., 0.28],
+                    Vec3::new(x, 0.014, z),
+                    Vec3::new(0.32, 1., 0.28),
                     aligned,
                 )?;
             }
             // A lunge warning may enter the frame before its source becomes visible.
             if enemy.windup {
-                let [dx, dz] = enemy.facing;
+                let [dx, dz] = enemy.facing.to_array();
                 self.instance(
                     self.block,
                     self.palette.warning,
-                    [enemy.pos[0] + dx * 1.15, 0.04, enemy.pos[1] + dz * 1.15],
-                    [0.14, 0.025, 2.25],
+                    Vec3::new(enemy.pos[0] + dx * 1.15, 0.04, enemy.pos[1] + dz * 1.15),
+                    Vec3::new(0.14, 0.025, 2.25),
                     enemy.facing,
                 )?;
             }
@@ -343,9 +355,9 @@ impl Visual {
                 self.instance(
                     self.block,
                     self.palette.drop,
-                    [drop.pos[0], 0.22, drop.pos[1]],
-                    [0.17, 0.31, 0.17],
-                    [std::f32::consts::FRAC_1_SQRT_2; 2],
+                    Vec3::new(drop.pos[0], 0.22, drop.pos[1]),
+                    Vec3::new(0.17, 0.31, 0.17),
+                    Vec2::ONE * std::f32::consts::FRAC_1_SQRT_2,
                 )?;
             }
         }
@@ -353,8 +365,8 @@ impl Visual {
             self.instance(
                 self.block,
                 self.palette.shot,
-                [shot.pos[0], 0.80, shot.pos[1]],
-                [0.07, 0.07, 0.48],
+                Vec3::new(shot.pos[0], 0.80, shot.pos[1]),
+                Vec3::new(0.07, 0.07, 0.48),
                 shot.dir,
             )?;
         }
@@ -362,8 +374,8 @@ impl Visual {
             self.instance(
                 self.ring,
                 self.palette.pulse,
-                [px, 0.07, pz],
-                [game.pulse_radius, 1., game.pulse_radius],
+                Vec3::new(px, 0.07, pz),
+                Vec3::new(game.pulse_radius, 1., game.pulse_radius),
                 aligned,
             )?;
         }

@@ -1,5 +1,8 @@
 //! Orthographic framing and extraction of objects positioned on the XZ plane.
-use crate::scene::Registry;
+use crate::{
+    math::{LocalTransform, Vec2, Vec3},
+    scene::Registry,
+};
 pub use renderer::pbr::PointLight;
 use renderer::{
     pbr::{Projection, Transform, ViewInput},
@@ -16,8 +19,8 @@ pub struct PointLamp {
     pub candela: f32,
 }
 impl PointLamp {
-    pub fn at(self, position: [f32; 3]) -> Result<PointLight, String> {
-        PointLight::from_candela(position, self.range, self.tint, self.candela)
+    pub fn at(self, position: Vec3) -> Result<PointLight, String> {
+        PointLight::from_candela(position.to_array(), self.range, self.tint, self.candela)
             .map_err(|e| e.to_string())
     }
 }
@@ -48,7 +51,7 @@ impl TrackingCamera {
             return Err("follow and screen_margin must be in [0,1]".into());
         }
         self.rig()
-            .view(ViewId(0), [0.; 2], [1, 1])
+            .view(ViewId(0), Vec2::ZERO, [1, 1])
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
@@ -56,14 +59,21 @@ impl TrackingCamera {
     pub fn follow_view(
         self,
         id: ViewId,
-        anchor: [f32; 2],
-        target: [f32; 2],
-        bounds: [f32; 2],
+        anchor: Vec2,
+        target: Vec2,
+        bounds: Vec2,
         extent: [u32; 2],
     ) -> PipelineResult<CameraView> {
         if extent.contains(&0)
-            || !target.into_iter().chain(anchor).all(f32::is_finite)
-            || !bounds.into_iter().all(|v| v >= 0. && v.is_finite())
+            || !target
+                .to_array()
+                .into_iter()
+                .chain(anchor.to_array())
+                .all(f32::is_finite)
+            || !bounds
+                .to_array()
+                .into_iter()
+                .all(|v| v >= 0. && v.is_finite())
         {
             return Err("camera needs a nonempty viewport and finite ground bounds".into());
         }
@@ -89,7 +99,7 @@ impl TrackingCamera {
 
 pub fn register_components<C: 'static>(registry: &mut Registry<C>) -> Result<(), String> {
     registry.register::<PointLamp>("PointLight", &["range", "tint", "candela"], |lamp| {
-        lamp.at([0.; 3]).map(|_| ())
+        lamp.at(Vec3::ZERO).map(|_| ())
     })?;
     registry.register(
         "GroundCamera",
@@ -115,17 +125,12 @@ pub struct GroundCamera {
 }
 
 impl GroundCamera {
-    pub fn view(
-        self,
-        id: ViewId,
-        target: [f32; 2],
-        extent: [u32; 2],
-    ) -> PipelineResult<CameraView> {
+    pub fn view(self, id: ViewId, target: Vec2, extent: [u32; 2]) -> PipelineResult<CameraView> {
         let [width, height] = extent;
         if width == 0 || height == 0 {
             return Err("camera requires a nonempty viewport".into());
         }
-        let [x, z] = target;
+        let [x, z] = target.to_array();
         let half_height = self.height * 0.5;
         if !(half_height > 0.
             && half_height.is_finite()
@@ -168,7 +173,7 @@ impl GroundCamera {
 
 /// Intersect the screen rectangle with the projected bounds of an upright object.
 /// The camera must be produced by GroundCamera::view.
-pub fn on_screen(camera: &CameraView, pos: [f32; 2], height: f32, radius: f32) -> bool {
+pub fn on_screen(camera: &CameraView, pos: Vec2, height: f32, radius: f32) -> bool {
     let m = camera.camera.clip_from_world();
     let x = m[0][0] * pos[0] + m[3][0];
     let feet = m[2][1] * pos[1] + m[3][1];
@@ -178,23 +183,13 @@ pub fn on_screen(camera: &CameraView, pos: [f32; 2], height: f32, radius: f32) -
     x.abs() <= 1. + margin_x && feet >= -1. - margin_y && head <= 1. + margin_y
 }
 
-/// Construct a world transform from translation, per-axis scale and a unit XZ bearing.
-pub fn facing_transform(
-    [x, y, z]: [f32; 3],
-    [w, h, d]: [f32; 3],
-    [sin, cos]: [f32; 2],
-) -> PipelineResult<Transform> {
-    // A stationary actor coincident with its target has no movement bearing.
-    let (sin, cos) = if sin == 0. && cos == 0. {
-        (0., 1.)
-    } else {
-        (sin, cos)
-    };
-    Ok(Transform::new([
-        [cos * w, 0., sin * d, x],
-        [0., h, 0., y],
-        [-sin * w, 0., cos * d, z],
-    ])?)
+/// Prepare a standalone model placement for rendering. The renderer requires an
+/// invertible linear part so it can transform normals.
+pub fn render_transform(placement: LocalTransform) -> PipelineResult<Transform> {
+    let columns = placement.affine().to_cols_array_2d();
+    Ok(Transform::new(std::array::from_fn(|row| {
+        columns.map(|column| column[row])
+    }))?)
 }
 
 /// Contiguous drawing inputs for a world with persistent scenery and a bounded
@@ -246,11 +241,11 @@ mod tests {
             pitch_radians: 0.8,
             depth_range: [0.1, 100.],
         };
-        let view = rig.view(ViewId(7), [12., 9.], [960, 480]).unwrap();
-        assert!(on_screen(&view, [12., 9.], 2., 0.4));
-        assert!(!on_screen(&view, [25., 9.], 2., 0.4));
-        assert!(!on_screen(&view, [12., -12.], 2., 0.4));
-        assert!(rig.view(ViewId(7), [12., 9.], [0, 480]).is_err());
+        let view = rig.view(ViewId(7), Vec2::new(12., 9.), [960, 480]).unwrap();
+        assert!(on_screen(&view, Vec2::new(12., 9.), 2., 0.4));
+        assert!(!on_screen(&view, Vec2::new(25., 9.), 2., 0.4));
+        assert!(!on_screen(&view, Vec2::new(12., -12.), 2., 0.4));
+        assert!(rig.view(ViewId(7), Vec2::new(12., 9.), [0, 480]).is_err());
         assert!(view.camera.clip_from_world()[2][1] > 0.);
     }
 }
