@@ -104,7 +104,7 @@ try {
         'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp',
         'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag',
         'bake_transport.comp', 'bake_transport_l2.comp', 'bake_surface.comp', 'bake_surface_rt.comp', 'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag',
-        'frustum_visibility.comp', 'skin.comp', 'pbr_instancing.vert',
+        'frustum_visibility.comp', 'skin.comp', 'skin_compare.vert', 'skin_compare_vertex.vert', 'pbr_instancing.vert',
         'pbr_transformed.vert', 'pbr_transformed_small.vert',
         'gbuffer_transformed.vert', 'gbuffer_transformed_small.vert',
         'shadow_transformed.vert', 'shadow_transformed_small.vert',
@@ -117,6 +117,7 @@ try {
         $shaderSource = $name
         $defines = @()
         switch -CaseSensitive ($name) {
+            'skin_compare_vertex.vert' { $shaderSource = 'skin_compare.vert'; $defines = @('SKIN_IN_VERTEX=1') }
             'bake_surface_rt.comp' { $shaderSource = 'bake_transport.comp'; $defines = @('BAKE_SURFACE=1','BAKE_RAY_QUERY=1') }
             'bake_surface.comp' { $shaderSource = 'bake_transport.comp'; $defines = @('BAKE_SURFACE=1') }
             'bake_transport_l2.comp' { $shaderSource = 'bake_transport.comp'; $defines = @('BAKE_L2=1') }

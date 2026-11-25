@@ -86,6 +86,12 @@ impl Palette {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct CharacterRendering {
+    pub compute_skin: bool,
+    pub shadows: bool,
+}
+
 pub struct Visual {
     meshes: Meshes,
     materials: Materials,
@@ -95,6 +101,7 @@ pub struct Visual {
     objects: DrawList,
     hud: Vec<Layer>,
     cast: Cast,
+    character_shadows: bool,
     block: MeshHandle,
     ring: MeshHandle,
     disk: MeshHandle,
@@ -114,6 +121,7 @@ impl Visual {
     pub fn content(&self, character: &str) -> crate::RecordedVisual {
         crate::RecordedVisual {
             character: character.into(),
+            character_shadows: self.character_shadows,
             catalog: self.cast.catalog_digest,
             models: self
                 .cast
@@ -125,7 +133,12 @@ impl Visual {
         }
     }
 
-    pub fn new(game: &Game, catalog: &std::path::Path, character: &str) -> PipelineResult<Self> {
+    pub fn new(
+        game: &Game,
+        catalog: &std::path::Path,
+        character: &str,
+        characters: CharacterRendering,
+    ) -> PipelineResult<Self> {
         let mut meshes = Meshes::new(MeshCapacity {
             meshes: 20usize
                 .checked_add(game.arena.subjects.len())
@@ -143,6 +156,7 @@ impl Visual {
         let cast = Cast::load(
             catalog,
             character,
+            characters.compute_skin,
             game.arena
                 .subjects
                 .iter()
@@ -179,8 +193,8 @@ impl Visual {
             maximum.max(prepared.len()),
             RenderObject::new(block, palette.drop),
         );
-        for obj in &mut prepared[hall.len()..] {
-            obj.casts_shadow = false;
+        for (i, obj) in prepared[hall.len()..].iter_mut().enumerate() {
+            obj.casts_shadow = characters.shadows && i <= MAX_ENEMIES;
         }
         let [w, d] = game.arena.half_extent.to_array();
         // A broad ceiling fixture shades the permanent hall. Moving subjects
@@ -206,6 +220,7 @@ impl Visual {
             objects: DrawList::new(hall, 6 + 3 * MAX_ENEMIES + MAX_DROPS + MAX_SHOTS)?,
             hud: Vec::with_capacity(256),
             cast,
+            character_shadows: characters.shadows,
             block,
             ring,
             disk,
@@ -316,21 +331,25 @@ impl Visual {
                 placement(Vec3::new(px, 0., pz), Vec3::ONE, self.player_facing)?,
             );
         player.pose = Some(self.cast.actors[0].poses[0]);
-        player.casts_shadow = false;
+        player.casts_shadow = self.character_shadows;
         self.objects.push(player)?;
         self.visible = 0;
         self.drawn = 0;
         for enemy in &game.enemies {
-            if on_screen(view, enemy.pos, 1.9, 0.65) {
-                self.visible += 1;
+            let visible = on_screen(view, enemy.pos, 1.9, 0.65);
+            self.visible += usize::from(visible);
+            if visible || self.character_shadows {
                 let [x, z] = enemy.pos.to_array();
                 let actor = &self.cast.actors[self.cast.subjects[enemy.archetype]];
                 let mut object = RenderObject::new(actor.mesh, actor.material)
                     .with_transform(placement(Vec3::new(x, 0., z), Vec3::ONE, enemy.facing)?);
                 object.pose = Some(actor.poses[(enemy.id % WALK_PHASES as u64) as usize]);
-                object.casts_shadow = false;
+                object.casts_shadow = self.character_shadows;
                 self.objects.push(object)?;
                 self.drawn += 1;
+            }
+            if visible {
+                let [x, z] = enemy.pos.to_array();
                 self.instance(
                     self.disk,
                     self.palette.shadow,

@@ -23,7 +23,7 @@ impl View {
         if size.contains(&0) {
             return Err("attach requires a non-empty client area".into());
         }
-        let mut visual = Visual::new(game, catalog, "primary")?;
+        let mut visual = Visual::new(game, catalog, "primary", Default::default())?;
         let camera = visual.camera(game, size)?;
         #[cfg(feature = "d3d12")]
         let backend = RuntimeConfig::D3D12(Default::default());

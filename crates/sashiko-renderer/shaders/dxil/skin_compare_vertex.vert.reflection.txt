@@ -1,0 +1,93 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyz         0     NONE   float   xyz
+; TEXCOORD                 1   xyz         1     NONE   float   xyz
+; TEXCOORD                 2   xyzw        2     NONE   float   xyzw
+; TEXCOORD                 3   xy          3     NONE   float   xy
+; TEXCOORD                 4   xyzw        4     NONE   float   xyzw
+; TEXCOORD                 5   xyzw        5     NONE   float   xyzw
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyzw        0     NONE   float   xyzw
+; SV_Position              0   xyzw        1      POS   float   xyzw
+;
+; shader hash: ee78a251dddb61de3a7f0b4649853ad0
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Vertex Shader
+; OutputPositionPresent=1
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 6
+; SigOutputElements: 2
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 6
+; SigOutputVectors[0]: 2
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0
+; TEXCOORD                 1
+; TEXCOORD                 2
+; TEXCOORD                 3
+; TEXCOORD                 4
+; TEXCOORD                 5
+;
+; Output signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0        nointerpolation
+; SV_Position              0          noperspective
+;
+; Buffer Definitions:
+;
+; cbuffer Palette
+; {
+;
+;   struct Palette
+;   {
+;
+;       float4 rows[768];                             ; Offset:    0
+;
+;   } Palette;                                        ; Offset:    0 Size: 12288
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; Palette                           cbuffer      NA          NA     CB0            cb0     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 24, outputs: 8
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;   output 0 depends on inputs: { 4, 5, 6, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23 }
+;   output 1 depends on inputs: { 4, 5, 6, 8, 9, 10, 11, 13, 16, 17, 18, 19, 20, 21, 22, 23 }
+;   output 2 depends on inputs: { 4, 5, 6, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23 }
+;   output 4 depends on inputs: { 0, 1, 2, 16, 17, 18, 19, 20, 21, 22, 23 }
+;   output 5 depends on inputs: { 0, 1, 2, 16, 17, 18, 19, 20, 21, 22, 23 }
+;   output 6 depends on inputs: { 0, 1, 2, 16, 17, 18, 19, 20, 21, 22, 23 }
+;

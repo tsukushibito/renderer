@@ -40,8 +40,16 @@ pub struct Options {
     pub record: Option<PathBuf>,
     pub capture: Option<PathBuf>,
     pub character: String,
+    pub characters: survivor::visual::CharacterRendering,
     pub catalog: PathBuf,
 }
+
+#[cfg(feature = "memory-profiling")]
+use sashiko_renderer::core::measurement::{CountingAllocator, Snapshot};
+#[cfg(feature = "memory-profiling")]
+#[global_allocator]
+static ALLOCATOR: CountingAllocator<std::alloc::System> =
+    CountingAllocator::new(std::alloc::System);
 
 const TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -52,7 +60,7 @@ fn capture(
     path: &Path,
     content: &crate::RecordedVisual,
 ) -> PipelineResult<()> {
-    let mut visual = Visual::new(game, &o.catalog, &o.character)?;
+    let mut visual = Visual::new(game, &o.catalog, &o.character, o.characters)?;
     if &visual.content(&o.character) != content {
         return Err("assets changed before final capture".into());
     }
@@ -95,6 +103,8 @@ struct PlayWindow<'a> {
     fixed: bool,
     update_time: Duration,
     draw_time: Duration,
+    #[cfg(feature = "memory-profiling")]
+    frame_start: Snapshot,
 }
 
 impl PlayWindow<'_> {
@@ -125,6 +135,10 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
     }
     fn update(&mut self, controls: &mut Controls, elapsed: Duration) -> PipelineResult<()> {
         let start = Instant::now();
+        #[cfg(feature = "memory-profiling")]
+        {
+            self.frame_start = Snapshot::now();
+        }
         let ticks = if self.fixed {
             1
         } else {
@@ -187,6 +201,8 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
             samples.push(Sample {
                 #[cfg(feature = "memory-profiling")]
                 pose_bytes: self.visual.take_pose_bytes(),
+                #[cfg(feature = "memory-profiling")]
+                memory: Snapshot::now().since(self.frame_start),
                 interval,
                 update: self.update_time,
                 draw: self.draw_time,
@@ -237,7 +253,7 @@ pub fn run(
         )
         .into());
     }
-    let mut visual = Visual::new(&game, &o.catalog, &o.character)?;
+    let mut visual = Visual::new(&game, &o.catalog, &o.character, o.characters)?;
     let content = (initial.visual.is_some() || o.record.is_some() || o.capture.is_some())
         .then(|| visual.content(&o.character));
     if initial.visual.is_some() && initial.visual != content {
@@ -289,6 +305,8 @@ pub fn run(
         fixed: limit.is_some(),
         update_time: Duration::ZERO,
         draw_time: Duration::ZERO,
+        #[cfg(feature = "memory-profiling")]
+        frame_start: Snapshot::default(),
     };
     host.run(&mut client, limit, TIMEOUT)?;
     let last_extent = client.last_extent;

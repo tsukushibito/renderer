@@ -21,6 +21,8 @@ cargo run --locked --release -p survivor
 cargo run --locked --release -p survivor -- --scenario endgame --seed 506
 ```
 
+キャラクターを影マップにも描くには `--character-shadows` を付けます。このときは Compute で変形した頂点を影と本描画で共有します。接地影だけの通常表示には CPU 経路を使います。`--skinning cpu` または `--skinning compute` で、同じ入力と影の設定で比較できます。リプレイにはキャラクターの影の設定も保存されます。[実機での比較](../verification/current.md#compute-skin)
+
 配置は [arena.json](../../assets/survivor/arena.json) を編集し、`--arena assets/survivor/arena.json` で読み直せます。座標は水平面の X・Z をメートルで指定します。次の例はウィンドウの各更新で消費した入力を保存し、同じ開始条件で GPU なしで再生します。終了時の JSON にはゲーム状態と接触・到達の累計が含まれます。
 
 ```powershell

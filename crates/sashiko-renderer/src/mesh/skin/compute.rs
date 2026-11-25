@@ -11,7 +11,7 @@ const THREADS: usize = 64;
 const MAX_GROUPS: u32 = 65_535;
 const MAX_JOINTS: usize = 128;
 const INPUT_BYTES: usize = VERTEX_BYTES + 8 + 16;
-const PALETTE_BYTES: usize = MAX_JOINTS * 96;
+pub(super) const PALETTE_BYTES: usize = MAX_JOINTS * 96;
 const PALETTE: &str = "skin palette";
 const UPLOAD_PALETTE: &str = "upload skin palette";
 const DISPATCH: &str = "compute skin vertices";
@@ -19,13 +19,32 @@ const DISPATCH: &str = "compute skin vertices";
 /// Prepared model-space linear blend skinning for host RenderGraphs.
 /// The bind stream is immutable across poses. Upload it once, then pass its
 /// imported buffer to each evaluation. Draws use the original mesh indices.
+#[derive(Clone)]
 pub struct PreparedComputeSkin {
-    bind: Vec<u8>,
+    bind: Arc<[u8]>,
     groups: u32,
     joints: usize,
 }
 
 impl MeshData {
+    /// Select resident compute skinning for pose instances of this mesh.
+    pub fn with_compute_skin(mut self) -> Result<Self, GraphError> {
+        if self
+            .skin
+            .as_ref()
+            .is_some_and(|skin| skin.compute.is_some())
+        {
+            return Ok(self);
+        }
+        let prepared = self.prepare_compute_skin()?;
+        self.geometry = self.geometry.with_storage(Arc::clone(&prepared.bind))?;
+        let skin =
+            Arc::get_mut(self.skin.as_mut().expect("prepared skin")).expect("owned mesh data");
+        skin.compute = Some((prepared, JointBounds::from_skin(skin)));
+        skin.vertices = Vec::new();
+        Ok(self)
+    }
+
     /// Pack normalized skin weights and PBR vertices for the compute pass.
     /// This shader supports up to 128 joints and 65,535 groups of 64 vertices.
     pub fn prepare_compute_skin(&self) -> Result<PreparedComputeSkin, GraphError> {
@@ -33,6 +52,9 @@ impl MeshData {
             .skin
             .as_ref()
             .ok_or_else(|| GraphError::invalid_input("mesh has no skin"))?;
+        if let Some((prepared, _)) = &skin.compute {
+            return Ok(prepared.clone());
+        }
         let groups = skin.vertices.len().div_ceil(THREADS);
         if skin.joints > MAX_JOINTS || groups > MAX_GROUPS as usize {
             return Err(GraphError::invalid_input(
@@ -51,7 +73,7 @@ impl MeshData {
             record[56..].copy_from_slice(influence.weights.map(f32::to_le_bytes).as_flattened());
         }
         Ok(PreparedComputeSkin {
-            bind,
+            bind: bind.into(),
             groups: groups as u32,
             joints: skin.joints,
         })

@@ -21,6 +21,7 @@ pub enum GeometryStream {
     Vertices,
     Indices,
     SecondaryVertices,
+    Storage,
 }
 
 /// Owned encoded vertices and little-endian `u32` triangle indices.
@@ -42,6 +43,7 @@ pub struct GeometryData {
     pub(crate) vertices: Arc<[u8]>,
     pub(crate) indices: Arc<[u8]>,
     secondary: Option<Arc<[u8]>>,
+    storage: Option<Arc<[u8]>>,
     vertex_stride: u32,
     vertex_count: u64,
     index_count: u32,
@@ -123,6 +125,7 @@ impl GeometryData {
             vertices: Arc::from(vertices),
             indices: encoded_indices.into(),
             secondary: None,
+            storage: None,
             vertex_stride,
             vertex_count,
             index_count,
@@ -150,6 +153,17 @@ impl GeometryData {
     pub fn secondary_byte_len(&self) -> u64 {
         self.secondary.as_ref().map_or(0, |v| v.len() as u64)
     }
+    /// Attach immutable four-byte-aligned shader storage to this geometry version.
+    pub fn with_storage(mut self, bytes: Arc<[u8]>) -> Result<Self, GraphError> {
+        if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
+            return Err(GraphError::invalid_input("invalid geometry storage length"));
+        }
+        self.storage = Some(bytes);
+        Ok(self)
+    }
+    pub fn storage_byte_len(&self) -> u64 {
+        self.storage.as_ref().map_or(0, |v| v.len() as u64)
+    }
     pub fn vertex_stride(&self) -> u32 {
         self.vertex_stride
     }
@@ -172,7 +186,10 @@ impl GeometryData {
 
     /// Encoded payload bytes, independent of sharing and native allocation size.
     pub fn byte_len(&self) -> u64 {
-        self.vertex_byte_len() + self.index_byte_len() + self.secondary_byte_len()
+        self.vertex_byte_len()
+            + self.index_byte_len()
+            + self.secondary_byte_len()
+            + self.storage_byte_len()
     }
 
     /// Capture the complete immutable vertex stream into an equally sized buffer.
@@ -216,14 +233,23 @@ impl GeometryData {
         stream: GeometryStream,
         range: Range<usize>,
     ) -> Result<PassHandle, GraphError> {
-        if stream == GeometryStream::SecondaryVertices {
-            let bytes = self
-                .secondary
-                .as_ref()
-                .ok_or_else(|| GraphError::invalid_input("mesh has no secondary vertex stream"))?;
-            graph.upload_mesh_slice(name, dst, bytes, range, MeshUpload::Vertices)
-        } else {
-            self.upload_graph_slice(graph, name, dst, stream == GeometryStream::Indices, range)
+        match stream {
+            GeometryStream::Storage => {
+                let bytes = self
+                    .storage
+                    .as_ref()
+                    .ok_or_else(|| GraphError::invalid_input("mesh has no storage stream"))?;
+                graph.upload_mesh_slice(name, dst, bytes, range, MeshUpload::Vertices)
+            }
+            GeometryStream::SecondaryVertices => {
+                let bytes = self.secondary.as_ref().ok_or_else(|| {
+                    GraphError::invalid_input("mesh has no secondary vertex stream")
+                })?;
+                graph.upload_mesh_slice(name, dst, bytes, range, MeshUpload::Vertices)
+            }
+            GeometryStream::Vertices | GeometryStream::Indices => {
+                self.upload_graph_slice(graph, name, dst, stream == GeometryStream::Indices, range)
+            }
         }
     }
 

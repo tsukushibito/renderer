@@ -2,6 +2,8 @@
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RecordedVisual {
     pub character: String,
+    #[serde(default)]
+    pub character_shadows: bool,
     catalog: sashiko::asset::Digest,
     models: Vec<[sashiko::asset::Digest; 2]>,
     environment: [sashiko::asset::Digest; 6],

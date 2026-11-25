@@ -10,6 +10,8 @@ use std::{
 pub(super) struct Sample {
     #[cfg(feature = "memory-profiling")]
     pub pose_bytes: u64,
+    #[cfg(feature = "memory-profiling")]
+    pub memory: sashiko_renderer::core::measurement::Snapshot,
     pub interval: Duration,
     pub update: Duration,
     pub draw: Duration,
@@ -58,7 +60,10 @@ impl Measurements {
             "frame,interval_ms,update_ms,draw_ms,active,visible,drawn,shots,drops,graph_gpu_ms,present_gpu_ms,graph_prepare_ms,graph_record_ms,graph_submit_ms,graph_retire_ms,tick,pulse,rapid_level,pierce_level,pulse_level"
         )?;
         #[cfg(feature = "memory-profiling")]
-        write!(csv, ",recorded_pose_bytes")?;
+        write!(
+            csv,
+            ",recorded_pose_bytes,alloc,alloc_zeroed,realloc,free,object_create,object_destroy,resource_create,resource_destroy,memory_allocate,memory_free,descriptor_allocate,descriptor_free,native_reset"
+        )?;
         writeln!(csv)?;
         for (index, sample) in self.samples.iter().enumerate().skip(warmup) {
             write!(
@@ -97,7 +102,15 @@ impl Measurements {
                 u8::from(sample.pulse)
             )?;
             #[cfg(feature = "memory-profiling")]
-            write!(csv, ",{}", sample.pose_bytes)?;
+            {
+                write!(csv, ",{}", sample.pose_bytes)?;
+                for count in sample.memory.rust {
+                    write!(csv, ",{}", count.calls)?;
+                }
+                for count in sample.memory.native {
+                    write!(csv, ",{count}")?;
+                }
+            }
             writeln!(csv)?;
         }
         csv.flush()?;

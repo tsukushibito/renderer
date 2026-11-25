@@ -21,7 +21,7 @@ pub struct MeshUploadProgress {
 struct Transfer {
     mesh: MeshHandle,
     end: u64,
-    exports: Option<[Option<BufferHandle>; 3]>,
+    exports: Option<[Option<BufferHandle>; 4]>,
 }
 
 /// Exclusive setup borrows the registry until it publishes or restores these versions.
@@ -322,13 +322,14 @@ impl super::Upload {
         runtime: &mut Runtime,
         geometry: &GeometryData,
         end: u64,
-    ) -> Result<Option<[Option<BufferHandle>; 3]>, DefaultResourceError> {
+    ) -> Result<Option<[Option<BufferHandle>; 4]>, DefaultResourceError> {
         let sizes = [
             geometry.vertex_byte_len(),
             geometry.index_byte_len(),
             geometry.secondary_byte_len(),
+            geometry.storage_byte_len(),
         ];
-        let mut exports = [None; 3];
+        let mut exports = [None; 4];
         let complete = end == geometry.byte_len();
         let mut base = 0;
         for (n, ((name, pass, stream), size)) in [
@@ -343,6 +344,7 @@ impl super::Upload {
                 "mesh UV upload",
                 GeometryStream::SecondaryVertices,
             ),
+            ("skin bind", "skin bind upload", GeometryStream::Storage),
         ]
         .into_iter()
         .zip(sizes)

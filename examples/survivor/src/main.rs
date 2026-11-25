@@ -60,6 +60,18 @@ fn arguments() -> Command {
                 .value_parser(value_parser!(u64))
                 .default_value("506"),
         )
+        .arg(
+            Arg::new("skinning")
+                .long("skinning")
+                .value_parser(["cpu", "compute"])
+                .conflicts_with("headless")
+                .help("Character deformation path (default: compute with character shadows, cpu otherwise)"),
+        )
+        .arg(
+            flag("character-shadows")
+                .conflicts_with("headless")
+                .help("Include moving characters in shadow maps"),
+        )
         .arg(path("arena").help("Load edited arena JSON"))
         .arg(flag("alternate-model").conflicts_with_all(["headless", "character"]))
         .arg(
@@ -235,6 +247,15 @@ fn play(
             })
             .to_owned()
     };
+    let requested_shadows = args.get_flag("character-shadows");
+    let shadows = if let Some(visual) = &initial.visual {
+        if requested_shadows && !visual.character_shadows {
+            return Err("requested character shadows conflict with recorded appearance".into());
+        }
+        visual.character_shadows
+    } else {
+        requested_shadows
+    };
     window::run(
         game,
         initial,
@@ -251,6 +272,12 @@ fn play(
             capture: args.get_one("capture").cloned(),
             gpu_profile: args.get_flag("gpu-profile"),
             character,
+            characters: survivor::visual::CharacterRendering {
+                compute_skin: args
+                    .get_one::<String>("skinning")
+                    .map_or(shadows, |v| v == "compute"),
+                shadows,
+            },
             catalog: args
                 .get_one::<PathBuf>("character-catalog")
                 .cloned()

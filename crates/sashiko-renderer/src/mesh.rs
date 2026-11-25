@@ -122,17 +122,17 @@ struct Resident {
     layout: Arc<Layout>,
     revision: u64,
     uploaded_by: sashiko_renderer_core::runtime::FrameId,
-    buffers: [Option<ImportBuffer>; 3],
+    buffers: [Option<ImportBuffer>; 4],
 }
 #[derive(Default)]
 struct Upload {
-    keys: [Option<ResourceKey>; 3],
+    keys: [Option<ResourceKey>; 4],
     accepted_bytes: u64,
 }
 // Published layout ownership moves here until explicit GPU collection. Import
 // tokens return their range slots at publication; only their registrations remain.
 struct RetiredVersion {
-    keys: [Option<ResourceKey>; 3],
+    keys: [Option<ResourceKey>; 4],
     _layout: Option<Arc<Layout>>,
 }
 
@@ -292,19 +292,23 @@ impl Meshes {
         let mut upload = GraphRequirements::default();
         for handle in handles {
             let data = self.geometry(handle)?;
-            let extra = usize::from(data.secondary_byte_len() > 0);
+            let uv = usize::from(data.secondary_byte_len() > 0);
+            let storage = usize::from(data.storage_byte_len() > 0);
+            let extra = uv + storage;
             upload = upload.checked_add(GraphRequirements {
                 resources: 2 + extra,
                 passes: 2 + extra,
                 accesses: 2 + extra,
                 name_bytes: "mesh verticesmesh indicesmesh vertex uploadmesh index upload".len()
-                    + extra * "mesh UVmesh UV upload".len(),
+                    + uv * "mesh UVmesh UV upload".len()
+                    + storage * "skin bindskin bind upload".len(),
                 ..Default::default()
             })?;
             for size in [
                 data.vertex_byte_len(),
                 data.index_byte_len(),
                 data.secondary_byte_len(),
+                data.storage_byte_len(),
             ]
             .into_iter()
             .filter(|&s| s > 0)
@@ -344,13 +348,11 @@ impl Meshes {
             .registry
             .geometry(mesh)
             .map_err(|e| GraphError::invalid_input(e.to_string()))?;
-        if data.secondary_byte_len() > 0 {
-            preparation.reserve_buffer(
-                BufferDesc {
-                    size: data.secondary_byte_len(),
-                },
-                1,
-            )?;
+        for size in [data.secondary_byte_len(), data.storage_byte_len()]
+            .into_iter()
+            .filter(|&size| size > 0)
+        {
+            preparation.reserve_buffer(BufferDesc { size }, 1)?;
         }
         preparation.add_working_set(WorkingSet {
             resources: &[

@@ -1,7 +1,9 @@
 //! Linear blend skinning from the final mesh-space joint palette supplied by the host.
 use super::*;
+mod bounds;
 mod compute;
 use crate::{pbr::Transform, pipeline::RenderObject};
+use bounds::JointBounds;
 pub use compute::PreparedComputeSkin;
 use sashiko_renderer_core::graph::{BufferHandle, GraphCapacityKind};
 use std::{
@@ -19,6 +21,7 @@ pub struct JointWeights {
 }
 
 pub(super) struct Skin {
+    compute: Option<(PreparedComputeSkin, JointBounds)>,
     joints: usize,
     vertices: Vec<(PbrVertex, JointWeights)>,
 }
@@ -63,6 +66,7 @@ impl MeshData {
             ));
         }
         data.skin = Some(Arc::new(Skin {
+            compute: None,
             joints: joint_count,
             vertices: weighted,
         }));
@@ -78,12 +82,16 @@ pub(super) struct Pose {
     skin: Arc<Skin>,
     revision: u64,
     bounds: Bounds,
-    bytes: Vec<u8>,
-    scratch: Vec<u8>,
+    data: PoseData,
+}
+
+enum PoseData {
+    Cpu { bytes: Vec<u8>, scratch: Vec<u8> },
+    Compute(Vec<Transform>),
 }
 
 impl Meshes {
-    /// Bytes of posed vertex uploads recorded since the previous observation.
+    /// Bytes of posed vertex or palette uploads recorded since the previous observation.
     #[cfg(feature = "memory-profiling")]
     pub fn take_recorded_pose_bytes(&self) -> u64 {
         self.recorded_pose_bytes.swap(0, Ordering::Relaxed)
@@ -103,11 +111,24 @@ impl Meshes {
             .skin
             .as_ref()
             .ok_or_else(|| GraphError::invalid_input("mesh has no skin"))?;
-        let bytes: Vec<_> = skin
-            .vertices
-            .iter()
-            .flat_map(|(vertex, _)| vertex.encode())
-            .collect();
+        let (data, bounds) = if let Some((_, ranges)) = &skin.compute {
+            let palette = vec![Transform::IDENTITY; skin.joints];
+            let bounds = ranges.transform(&palette)?;
+            (PoseData::Compute(palette), bounds)
+        } else {
+            let bytes: Vec<_> = skin
+                .vertices
+                .iter()
+                .flat_map(|(vertex, _)| vertex.encode())
+                .collect();
+            (
+                PoseData::Cpu {
+                    scratch: vec![0; bytes.len()],
+                    bytes,
+                },
+                layout.bounds,
+            )
+        };
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let id = SkinPoseId(
             NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
@@ -119,9 +140,8 @@ impl Meshes {
                 mesh,
                 skin: Arc::clone(skin),
                 revision: 1,
-                bounds: layout.bounds,
-                scratch: vec![0; bytes.len()],
-                bytes,
+                bounds,
+                data,
             },
         );
         Ok(id)
@@ -147,28 +167,37 @@ impl Meshes {
                 "joint palette size differs from the skin",
             ));
         }
-        let mut low = [f32::INFINITY; 3];
-        let mut high = [f32::NEG_INFINITY; 3];
-        for ((vertex, influence), dst) in pose.skin.vertices.iter().zip(
-            pose.scratch
-                .as_chunks_mut::<{ crate::passes::pbr::VERTEX_BYTES }>()
-                .0,
-        ) {
-            let joints = influence
-                .joints
-                .into_iter()
-                .zip(influence.weights)
-                .filter(|(_, w)| *w > 0.)
-                .map(|(i, w)| (palette[usize::from(i)], w));
-            let result = vertex.skinned(joints)?;
-            for ((min, max), v) in low.iter_mut().zip(&mut high).zip(result.position()) {
-                *min = min.min(v);
-                *max = max.max(v);
+        match &mut pose.data {
+            PoseData::Compute(stored) => {
+                let (_, bounds) = pose.skin.compute.as_ref().expect("compute pose");
+                pose.bounds = bounds.transform(palette)?;
+                stored.copy_from_slice(palette);
             }
-            *dst = result.encode();
+            PoseData::Cpu { bytes, scratch } => {
+                let mut low = [f32::INFINITY; 3];
+                let mut high = [f32::NEG_INFINITY; 3];
+                for ((vertex, influence), dst) in pose.skin.vertices.iter().zip(
+                    scratch
+                        .as_chunks_mut::<{ crate::passes::pbr::VERTEX_BYTES }>()
+                        .0,
+                ) {
+                    let joints = influence
+                        .joints
+                        .into_iter()
+                        .zip(influence.weights)
+                        .filter(|(_, w)| *w > 0.)
+                        .map(|(i, w)| (palette[usize::from(i)], w));
+                    let result = vertex.skinned(joints)?;
+                    for ((min, max), v) in low.iter_mut().zip(&mut high).zip(result.position()) {
+                        *min = min.min(v);
+                        *max = max.max(v);
+                    }
+                    *dst = result.encode();
+                }
+                pose.bounds = Bounds::new(low, high)?;
+                std::mem::swap(scratch, bytes);
+            }
         }
-        pose.bounds = Bounds::new(low, high)?;
-        std::mem::swap(&mut pose.scratch, &mut pose.bytes);
         pose.revision = pose
             .revision
             .checked_add(1)
@@ -207,10 +236,20 @@ impl Meshes {
                     .get(&object.mesh)
                     .ok_or_else(|| GraphError::invalid_input("unknown skin mesh"))?;
                 let pose = self.pose(id, object.mesh, &asset.layout)?;
-                if seen.insert(id) {
+                if !seen.insert(id) {
+                    continue;
+                }
+                if let Some((prepared, _)) = &pose.skin.compute {
+                    prepared.reserve_pose(prep)?;
+                    prep.add_graph_requirements(GraphRequirements {
+                        resources: 1,
+                        name_bytes: "skin bind".len(),
+                        ..Default::default()
+                    })?;
+                } else if let PoseData::Cpu { bytes, .. } = &pose.data {
                     prep.reserve_buffer(
                         BufferDesc {
-                            size: pose.bytes.len() as u64,
+                            size: bytes.len() as u64,
                         },
                         1,
                     )?;
@@ -219,7 +258,7 @@ impl Meshes {
                         passes: 1,
                         accesses: 1,
                         name_bytes: STREAM.len() + UPLOAD.len(),
-                        upload_bytes: pose.bytes.len(),
+                        upload_bytes: bytes.len(),
                         ..Default::default()
                     })?;
                 }
@@ -280,17 +319,37 @@ impl FramePoses {
                     Some(self.streams.len() + 1),
                 ));
             }
-            let vertices = graph.buffer(
-                STREAM,
-                BufferDesc {
-                    size: pose.bytes.len() as u64,
-                },
-            )?;
-            graph.upload_buffer(UPLOAD, vertices, 0, &pose.bytes)?;
+            let (vertices, _uploaded) = match &pose.data {
+                PoseData::Compute(palette) => {
+                    let bind = asset
+                        .active
+                        .as_ref()
+                        .and_then(|a| a.buffers[3].as_ref())
+                        .ok_or_else(|| {
+                            GraphError::invalid_input("prepare the compute skin before drawing")
+                        })?;
+                    let bind = graph.import_readonly_buffer("skin bind", bind)?;
+                    let (prepared, _) = pose.skin.compute.as_ref().expect("compute pose");
+                    (
+                        prepared.add_pose(graph, bind, palette)?,
+                        compute::PALETTE_BYTES,
+                    )
+                }
+                PoseData::Cpu { bytes, .. } => {
+                    let vertices = graph.buffer(
+                        STREAM,
+                        BufferDesc {
+                            size: bytes.len() as u64,
+                        },
+                    )?;
+                    graph.upload_buffer(UPLOAD, vertices, 0, bytes)?;
+                    (vertices, bytes.len())
+                }
+            };
             #[cfg(feature = "memory-profiling")]
             meshes
                 .recorded_pose_bytes
-                .fetch_add(pose.bytes.len() as u64, Ordering::Relaxed);
+                .fetch_add(_uploaded as u64, Ordering::Relaxed);
             self.streams.insert(
                 id,
                 PosedStream {
@@ -320,6 +379,56 @@ impl FramePoses {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compute_bounds_cover_blended_positions_and_failed_update_keeps_palette() {
+        let vertices = [[-2., 1., 0.], [5., -3., 0.], [1., 2., 0.]]
+            .map(|p| PbrVertex::new(p, [0., 0., 1.], [1., 0., 0., 1.], [0.; 2]).unwrap());
+        let weights = [0., 0.25, 1.].map(|w| JointWeights {
+            joints: [0, 1, u16::MAX, 2],
+            weights: [w, 1. - w, 0., 0.],
+        });
+        let mut meshes = Meshes::new(MeshCapacity {
+            meshes: 1,
+            retired_mesh_versions: 1,
+        })
+        .unwrap();
+        let data = MeshData::skinned_pbr(&vertices, &[0, 1, 2], 3, &weights)
+            .unwrap()
+            .with_compute_skin()
+            .unwrap();
+        let mesh = meshes.create(data).unwrap();
+        let id = meshes.create_pose(mesh).unwrap();
+        let palette = [
+            Transform::new([[-2., 0.5, 0., 3.], [0., 1., 0., -2.], [0., 0., 1., 0.]]).unwrap(),
+            Transform::IDENTITY,
+            Transform::new([[1., 0., 0., 1e20], [0., 1., 0., 0.], [0., 0., 1., 0.]]).unwrap(),
+        ];
+        meshes.set_joint_transforms(id, &palette).unwrap();
+        let pose = &meshes.poses[&id];
+        let bounds = pose.bounds;
+        let revision = pose.revision;
+        assert!(bounds.max()[0] < 100.);
+        for (v, w) in vertices.iter().zip(weights) {
+            let p = v
+                .skinned(palette.into_iter().zip(w.weights))
+                .unwrap()
+                .position();
+            for (i, x) in p.into_iter().enumerate() {
+                assert!((bounds.min()[i]..=bounds.max()[i]).contains(&x));
+            }
+        }
+        let extreme =
+            Transform::new([[f32::MAX, 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]]).unwrap();
+        assert!(meshes.set_joint_transforms(id, &[extreme; 3]).is_err());
+        let pose = &meshes.poses[&id];
+        assert_eq!(pose.revision, revision);
+        assert_eq!(pose.bounds.min(), bounds.min());
+        let PoseData::Compute(stored) = &pose.data else {
+            unreachable!()
+        };
+        assert_eq!(stored.as_slice(), palette);
+    }
 
     #[test]
     fn rejects_invalid_weights_and_preserves_committed_pose_on_update_failure() {
@@ -357,15 +466,24 @@ mod tests {
             Transform::new([[1., 0., 0., 4.], [0., 1., 0., 0.], [0., 0., 1., 0.]]).unwrap();
         meshes.set_joint_transforms(id, &[translated]).unwrap();
         let previous = &meshes.poses[&id];
-        let (bytes, bounds, revision) =
-            (previous.bytes.clone(), previous.bounds, previous.revision);
+        let PoseData::Cpu { bytes, .. } = &previous.data else {
+            unreachable!()
+        };
+        let (bytes, bounds, revision) = (bytes.clone(), previous.bounds, previous.revision);
         // Only the last vertex overflows. Earlier vertices already touched the scratch buffer.
         let overflow =
             Transform::new([[f32::MAX, 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]]).unwrap();
         assert!(meshes.set_joint_transforms(id, &[]).is_err());
         assert!(meshes.set_joint_transforms(id, &[overflow]).is_err());
         let current = &meshes.poses[&id];
-        assert_eq!(current.bytes, bytes);
+        let PoseData::Cpu {
+            bytes: current_bytes,
+            ..
+        } = &current.data
+        else {
+            unreachable!()
+        };
+        assert_eq!(current_bytes, &bytes);
         assert_eq!(current.bounds.min(), bounds.min());
         assert_eq!(current.bounds.max(), bounds.max());
         assert_eq!(current.revision, revision);

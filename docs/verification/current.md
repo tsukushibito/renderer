@@ -11,7 +11,32 @@
 
 Windows の Vulkan・D3D12 で、常駐バインド頂点を転送する Graph と、その内容を読む描画 Graph を CPU 完了待ちなしで連続投入した。65 頂点・2 関節の試験で、画面外の三角形を非一様スケールと反転を含むポーズで画面内へ移した。1 回の dispatch の出力を 2 つの描画パスで読み、両方の中央画素でそれぞれの ID を確認した。全頂点の位置・法線・接線・向き・UV は CPU 参照との絶対差 0.00001 未満、最後のグループの余白 63 頂点は全バイトゼロ。開発検証付き debug と検証を無効にした release の両方で通過し、警告・エラーは 0 件だった。
 
-再現は `cargo test --locked -p sashiko-renderer --features vulkan,d3d12,development-validation --lib compute_skin_views -- --ignored --test-threads=1`。製品構成は `--release` を追加して機能指定を `vulkan,d3d12` にする。WebGPU は WGSL の生成・検証とバインディング照合まで。Survivor の通常表示への統合、フレーム時間・確保回数の実測、頂点シェーダー経路との比較は Beads `renderer-7xa2` で追跡する。[設計と利用方法](../design/animation.md#gpu-スキニングとマルチパス)
+再現は `cargo test --locked -p sashiko-renderer --features vulkan,d3d12,development-validation --lib compute_skin_views -- --ignored --test-threads=1`。製品構成は `--release` を追加して機能指定を `vulkan,d3d12` にする。WebGPU は WGSL の生成・検証とバインディング照合まで。[設計と利用方法](../design/animation.md#gpu-スキニングとマルチパス)
+
+### Survivor での比較
+
+Windows、GeForce RTX 3060、ドライバー 610.88。ネイティブの release で `memory-profiling` と GPU タイムスタンプを有効にした。終盤500体、seed 506、640 × 360、12フレームの予熱後に40フレームを計測した。次の値は中央値（ms）。GPU は描画 Graph の区間、フレームは提示間隔。全経路で52 tick 後のゲーム状態が一致した。
+
+| API・キャラクターの影 | CPU フレーム | Compute フレーム | CPU GPU時間 | Compute GPU時間 |
+|---|---:|---:|---:|---:|
+| Vulkan・接地影 | 2.16 | 2.19 | 1.52 | 1.54 |
+| Vulkan・影マップあり | 3.51 | 3.52 | 2.42 | 2.46 |
+| D3D12・影マップあり | 3.21 | 3.31 | 1.99 | 2.00 |
+
+4位相の転送量は CPU 284,736 B、Compute 49,152 B／フレーム。影ありの準備直後は両 API とも staging 容量 4 MiB。登録バイト数は CPU 3,712,080 B、Compute 3,822,672 B、キャッシュ容量は 19,587,276 B と 19,927,116 B。52 tick 目の影あり画像で CPU と Compute の差は Vulkan 11画素、D3D12 12画素（230,400画素中、最大9/255）。Vulkan の接地影では3画素、最大1/255。
+
+更新開始から提示通知までの40フレームで、Rust の確保と解放が影あり Vulkan の CPU 経路で各12,981回、Compute で各28,456回、D3D12 で各149,823回と177,229回だった。再確保、Renderer のネイティブオブジェクト・資源の作成／破棄、メモリ・記述子の確保／解放は各0回。リセットは Vulkan 280回、D3D12 160回。Rust の値はゲーム、ホスト、計測を含むプロセス全体で、発生箇所の切り分けは `renderer-qo1m` で追跡する。
+
+実行例は `cargo run --release --locked -p survivor --features memory-profiling,d3d12 -- --window --backend vulkan --scenario endgame --skinning compute --character-shadows --width 640 --height 360 --warmup 12 --frames 40 --gpu-profile --metrics frames.csv --memory-samples memory.json --capture final.ppm`。CPU 比較は `--skinning cpu`、接地影のみの比較は `--character-shadows` を外す。
+
+頂点シェーダーとの比較試験は同じ primary モデル（1,483頂点）、インデックス、歩行パレット、128 × 128 の描画先、同じ変形関数を使う。1回または4回の indexed draw に対し、8回の予熱後に32回の Graph GPU 時間を測り、別フレームで色成分の最大差が1/255以内であることを確認した。表は中央値（µs）。頂点シェーダーの常駐入力は118,640 B、変形済みキャッシュは0 B。Compute は常駐入力110,592 B、ポーズあたりの一時頂点73,728 B。両経路ともパレットは12,288 B。ゲームの影描画ではパスごとの可視頂点数とシェーダーが異なる。
+
+| API | 1パス 頂点 / Compute | 4パス 頂点 / Compute |
+|---|---:|---:|
+| Vulkan | 12.70 / 13.09 | 39.49 / 23.62 |
+| D3D12 | 12.29 / 15.36 | 23.36 / 17.41 |
+
+再現は `cargo test --release --locked -p survivor --features d3d12 --test skin_compare -- --ignored --nocapture --test-threads=1`。開発検証を有効にした release でも両 API の画像照合と、終盤の500体を含む影付きウィンドウの3フレーム提示が警告・エラー0件で通過した。端末別の自動切替と WebGPU 実機の性能は未測定。[設計と選択条件](../design/animation.md#gpu-スキニングとマルチパス)
 
 ## 共通 CPU ジョブ
 

@@ -45,6 +45,7 @@ impl Cast {
     pub fn load<'a>(
         path: &Path,
         player: &'a str,
+        compute_skin: bool,
         subjects: impl IntoIterator<Item = (Option<&'a str>, &'a str)>,
         meshes: &mut Meshes,
         materials: &mut Materials,
@@ -68,7 +69,12 @@ impl Cast {
                     loaded
                 } else {
                     let model = catalog.load(id)?;
-                    let mesh = meshes.create(model.model.mesh_data()?)?;
+                    let data = model.model.mesh_data()?;
+                    let mesh = meshes.create(if compute_skin {
+                        data.with_compute_skin()?
+                    } else {
+                        data
+                    })?;
                     let texture = models.len();
                     models.push(model);
                     loaded.insert(id, (texture, mesh));
@@ -183,6 +189,7 @@ mod tests {
         let mut cast = Cast::load(
             &catalog_path()?,
             "primary",
+            true,
             [
                 (None, "walk"),
                 (Some("alternate"), "jog"),
