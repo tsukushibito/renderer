@@ -49,7 +49,17 @@ def make_plan(args):
     return runs
 
 
-def run_process(exe, root, run, policy):
+def check_device_and_build(run, report, devices):
+    validation = report["validation"]
+    if validation["clean"] is not True or validation["strict"] is not False:
+        raise ValueError(f"{run['name']}: performance measurements require a clean shipping configuration")
+    device = report["device"]
+    if (device["api"] != run["api"] or not device["device"]
+            or device != devices.setdefault(run["api"], device)):
+        raise ValueError(f"{run['name']}: unexpected device identity {device}")
+
+
+def run_process(exe, root, run, policy, devices):
     destination = root / run["name"]
     destination.mkdir()
     # Publish the report only after the measured process has exited successfully.
@@ -68,14 +78,16 @@ def run_process(exe, root, run, policy):
     ) as process:
         try:
             observed = host_policy.apply(process.pid, policy)
-            result = process.wait()
+            result = process.wait(timeout=900)
         except BaseException:
-            process.kill()
+            if process.poll() is None:
+                process.kill()
             process.wait()
             raise
     write_json(destination / "process.json", {"command": command, "cpu_policy": observed, "exit": result})
     if result:
         raise RuntimeError(f"{run['name']} failed with exit code {result}: {destination / 'process.log'}")
+    check_device_and_build(run, json.loads(pending.read_text(encoding="utf-8")), devices)
     pending.rename(destination / "report.json")
 
 
@@ -85,9 +97,8 @@ def run_metrics(run, report):
         if report[field] != run[field]:
             raise ValueError(f"{run['name']}: expected {field}={run[field]}, got {report[field]}")
     samples = report["samples"]
-    if (report["device"]["api"] != run["api"] or len(samples) != run["frames"]
-            or report["wall_ns"] <= 0 or samples[0]["interval_ns"] != 0):
-        raise ValueError(f"{run['name']}: unexpected device, measurement window or samples")
+    if len(samples) != run["frames"] or report["wall_ns"] <= 0 or samples[0]["interval_ns"] != 0:
+        raise ValueError(f"{run['name']}: unexpected measurement window or samples")
     # The first measured frame has no preceding start. Use inclusive linear percentiles.
     intervals = [s["interval_ns"] / 1e6 for s in samples[1:]]
     percentiles = statistics.quantiles(intervals, n=100, method="inclusive")
@@ -112,11 +123,14 @@ def run_metrics(run, report):
 def summarize(output):
     plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
     groups = {}
+    devices = {}
     completed = 0
     for run in plan["runs"]:
-        report = output / run["name"] / "report.json"
-        if report.is_file():
-            metrics = run_metrics(run, json.loads(report.read_text(encoding="utf-8")))
+        path = output / run["name"] / "report.json"
+        if path.is_file():
+            report = json.loads(path.read_text(encoding="utf-8"))
+            check_device_and_build(run, report, devices)
+            metrics = run_metrics(run, report)
             groups.setdefault(run["group"], []).append({"name": run["name"], **metrics})
             completed += 1
     results = {}
@@ -127,7 +141,7 @@ def summarize(output):
                                for key in runs[0] if key != "name"},
         }
     write_json(output / "summary.json", {
-        "planned_runs": len(plan["runs"]), "completed_runs": completed, "groups": results,
+        "planned_runs": len(plan["runs"]), "completed_runs": completed, "devices": devices, "groups": results,
         "completed_fps_scope": "Measured frames divided by elapsed time including final GPU drain; headless.",
     })
     print(f"{completed}/{len(plan['runs'])} processes completed. {output / 'summary.json'}")
@@ -165,9 +179,10 @@ def main():
     with exe.open("rb") as binary:
         digest = hashlib.file_digest(binary, "sha256").hexdigest()
     write_json(output / "plan.json", {"exe": str(exe), "sha256": digest, "cpu_policy": policy, "runs": runs})
+    devices = {}
     try:
         for run in runs:
-            run_process(exe, output, run, policy)
+            run_process(exe, output, run, policy, devices)
     finally:
         summarize(output)
 
