@@ -40,6 +40,7 @@ raw-window-handle = { version = "0.6", optional = true, features = ["std"] }
 windows-sys = { version = "0.61", optional = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(windows)'.dev-dependencies]
+sashiko-jobs = { version = "0.1.0", path = "../sashiko-jobs" }
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
