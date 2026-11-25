@@ -74,7 +74,11 @@ pub(crate) struct RasterRegions {
     pub scissor: Option<RasterRect>,
 }
 
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(any(
+    feature = "vulkan",
+    all(feature = "d3d12", windows),
+    all(feature = "webgpu", target_arch = "wasm32", target_os = "unknown")
+))]
 impl RasterRegions {
     pub(crate) fn resolve(self, width: u32, height: u32) -> (RasterRect, RasterRect) {
         let full = RasterRect::new(0, 0, width, height);
