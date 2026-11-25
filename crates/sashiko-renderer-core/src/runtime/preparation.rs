@@ -93,7 +93,8 @@ pub struct WebGpuConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VulkanConfig {
     pub validation: crate::vulkan::ValidationMode,
-    /// Capacity of each shared upload and readback staging buffer.
+    /// Minimum byte capacity of each shared staging buffer. The backing
+    /// allocation rounds up to the selected device's cache/copy alignment.
     pub staging_bytes: u64,
     /// Retained staging range leases per shared buffer.
     pub staging_ranges: usize,
