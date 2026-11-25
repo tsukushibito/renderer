@@ -105,7 +105,8 @@ impl Engine {
             Arc::new(move |lost, message| {
                 observer.fail(if lost { Kind::DeviceLost } else { Kind::Native }, message)
             }),
-        );
+        )
+        .map_err(|error| Error::webgpu(Kind::Native, error))?;
         let mut registry = Registry::new(owner, limits)?;
         registry.prepare(&device, limits, set.resources)?;
         registry.prepare_samplers(&device, set.samplers);
