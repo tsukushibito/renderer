@@ -190,15 +190,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .cloned()
         .map(Ok)
         .unwrap_or_else(survivor::catalog_path)?;
-    if initial.locomotion.is_none() {
-        let catalog = if args.get_flag("headless") {
-            sashiko::animation::CharacterCatalog::parse(
-                std::path::Path::new("catalog.json"),
-                include_bytes!("../../../assets/survivor/characters/catalog.json"),
-            )?
-        } else {
-            sashiko::animation::CharacterCatalog::open(&catalog_path)?
-        };
+    if initial.locomotion.is_none() && !args.get_flag("headless") {
+        let catalog = sashiko::animation::CharacterCatalog::open(&catalog_path)?;
         initial.locomotion = Some(survivor::LocomotionClips::load(&catalog, &character)?);
     }
     if let Some(clips) = &initial.locomotion {

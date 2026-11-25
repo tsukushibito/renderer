@@ -291,7 +291,7 @@ Windows x64・Core i5-14600KF・Rust 1.99.0 release。Survivor primary の 62 �
 
 上表は 12 回予熱、64 標本の単一プロセス測定。部分骨格のレイアウト・作業領域・バッチの準備後に残ったヒープは 29,088 B。変更前の全関節分の出力行列だけで 2,097,152 B を必要とした。各計測区間で Rust の alloc・alloc_zeroed・realloc・dealloc はすべて 0 回。再現は `cargo test --release --locked -p sashiko --lib --features memory-profiling measure_composed_and_sparse_poses -- --ignored --nocapture --test-threads=1` と同条件の `measure_palette_jobs`。
 
-RTX 3060 の Vulkan・Compute・キャラクター影あり、640×360、終盤 500 体、seed 506、12 フレーム予熱後の 40 提示で、フレーム間隔の p50/p95 は 4.00/10.32 ms、Graph の GPU 時間は 2.47/8.45 ms。ゲーム全体の速度改善は判定していない。Vulkan と D3D12 は CPU／Compute、GPU 計時オン／オフの計 8 条件で定常割当ゲートを通過し、両 API の開発検証付きスキニング比較も成功した。Windows の既定音声エンドポイントで接地イベントが足音を再生し、デバイスがクリップを消費して音声枠を返すことを確認した。
+RTX 3060 の Vulkan・Compute・キャラクター影あり、640×360、終盤 500 体、seed 506、12 フレーム予熱後の 40 提示で、フレーム間隔の p50/p95 は 4.00/10.32 ms、Graph の GPU 時間は 2.47/8.45 ms。ゲーム全体の速度改善は判定していない。Vulkan と D3D12 は CPU／Compute、GPU 計時オン／オフの計 8 条件で定常割当ゲートを通過し、両 API の開発検証付きスキニング比較も成功した。Windows の既定音声エンドポイントで接地イベントが足音を再生し、デバイスがクリップを消費して音声枠を返すことを確認した。歩行・走行・停止の入力 90 tick を実画面で録画し、両タイムラインと同期マーカーを収録した規則版 2 の JSON をヘッドレスで再生した。終端のゲーム状態は一致し、規則版 1 の録画は不一致エラーで終了した。
 
 ### 階層評価を用いた従来のパレット経路の比較
 
