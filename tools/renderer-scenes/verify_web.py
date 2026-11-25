@@ -236,7 +236,7 @@ def rectangle_ratio(output, name, width, height, roi):
         luma[mode] = (hdr[y0:y1, x0:x1, :3].astype(np.float32) @ [0.2126, 0.7152, 0.0722]).mean()
     if len(depths) != 1 or luma["unshadowed"] <= luma["off"]:
         raise ValueError(f"Invalid direct rectangle lighting control at {name}")
-    ratio = (luma["shadowed"] - luma["off"]) / (luma["unshadowed"] - luma["off"])
+    ratio = float((luma["shadowed"] - luma["off"]) / (luma["unshadowed"] - luma["off"]))
     return {
         "roi": roi,
         "ratio": ratio,
