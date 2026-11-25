@@ -139,10 +139,26 @@ fn buffer<T>(capacity: usize, kind: GraphCapacityKind) -> Result<Vec<T>, GraphEr
     Ok(result)
 }
 
+/// Wall-clock time inside indexed capture and pass resource aggregation.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RasterBuildMetrics {
+    /// Streaming input production, operand capture and per-draw read registration.
+    pub streaming_capture: std::time::Duration,
+    /// Generated operand and constant writes, including job dispatch and join.
+    pub generated_capture: std::time::Duration,
+    /// Ordered reduction of the workers' resource footprints.
+    pub generated_merge: std::time::Duration,
+    /// Vertex/index read aggregation at the end of all raster passes.
+    pub finalize_reads: std::time::Duration,
+    pub generated_runs: usize,
+    pub generated_draws: usize,
+}
+
 /// Opaque prepared backing. Its fields and all mutable access are private to
 /// Renderer; dereferencing a Graph or plan only exposes an immutable value.
 #[doc(hidden)]
 pub struct GraphStorage {
+    pub(super) raster_metrics: Option<RasterBuildMetrics>,
     pub(crate) id: u64,
     pub(crate) resources: Vec<Resource>,
     pub(crate) passes: Vec<Pass>,
@@ -220,6 +236,7 @@ impl GraphStorage {
         raster_binding_access_ranges.resize(capacity.bindings, 0..0);
         Ok(Self {
             id: 0,
+            raster_metrics: None,
             resources: buffer(capacity.resources, GraphCapacityKind::Resources)?,
             passes: buffer(capacity.passes, GraphCapacityKind::Passes)?,
             exports: buffer(capacity.resources, GraphCapacityKind::Resources)?,
@@ -270,6 +287,11 @@ impl GraphStorage {
             dump: std::sync::OnceLock::new(),
         })
     }
+    /// Measured phases for this checkout when the pool enabled raster profiling.
+    pub fn raster_build_metrics(&self) -> Option<RasterBuildMetrics> {
+        self.raster_metrics
+    }
+
     fn reset(&mut self, id: u64) {
         self.clear_raster_ranges();
         self.id = id;
@@ -420,6 +442,7 @@ impl Slot {
 /// Prepared Graph slots. Keep the pool alive through normal frame processing;
 /// destroying it and its last plan is an explicit shutdown/change boundary.
 pub struct GraphPool {
+    raster_profiling: bool,
     generated_batch_size: Option<std::num::NonZeroUsize>,
     raster_jobs: Option<Arc<super::raster::CaptureJobs>>,
     slots: Vec<Arc<Slot>>,
@@ -450,6 +473,7 @@ impl GraphPool {
         }
         Ok(Self {
             slots: prepared,
+            raster_profiling: false,
             generated_batch_size: None,
             raster_jobs: None,
             capacity,
@@ -468,6 +492,13 @@ impl GraphPool {
     /// batches in future checkouts. Explicit streaming batches are kept intact.
     pub fn set_generated_batch_size(&mut self, max_draws: std::num::NonZeroUsize) {
         self.generated_batch_size = Some(max_draws);
+    }
+
+    /// Collect raster build durations at batch and pass boundaries on future
+    /// checkouts. Disabled by default; ordinary capture reads no clocks.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    pub fn set_raster_profiling(&mut self, enabled: bool) {
+        self.raster_profiling = enabled;
     }
 
     /// The immutable per-slot limits selected at preparation.
@@ -516,7 +547,9 @@ impl GraphPool {
             .map(|client| client.span(tracy_client::span_location!("renderer.graph.begin"), 0));
         for slot in &mut self.slots {
             if let Some(unique) = Arc::get_mut(slot) {
-                unique.data_mut().reset(super::next_id());
+                let data = unique.data_mut();
+                data.reset(super::next_id());
+                data.raster_metrics = self.raster_profiling.then(RasterBuildMetrics::default);
                 return Ok(Graph {
                     slot: Arc::clone(slot),
                     raster_jobs: self.raster_jobs.clone(),

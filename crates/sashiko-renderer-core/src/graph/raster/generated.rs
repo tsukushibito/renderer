@@ -138,6 +138,11 @@ impl RasterPass<'_, '_> {
         team: &RendererJobs,
         chunks: &mut [Result<Footprint, GraphError>],
     ) -> Result<(), GraphError> {
+        let started = self
+            .graph
+            .raster_metrics
+            .as_ref()
+            .map(|_| std::time::Instant::now());
         Self::require_indexed_program(program)?;
         self.validate_attachments(program)?;
         let graph = &mut *self.graph;
@@ -214,6 +219,12 @@ impl RasterPass<'_, '_> {
             )
         });
 
+        let merging = started.map(|started| {
+            let now = std::time::Instant::now();
+            let metrics = graph.data_mut().raster_metrics.as_mut().unwrap();
+            metrics.generated_capture += now - started;
+            now
+        });
         for (group, result) in chunks.iter_mut().enumerate() {
             let summary = std::mem::replace(result, Ok(Footprint::default()))?;
             let start = first + group * chunk_size;
@@ -246,6 +257,12 @@ impl RasterPass<'_, '_> {
             constant_words_per_draw: stride,
             indirect: None,
         });
+        if let Some(merging) = merging {
+            let metrics = graph.data_mut().raster_metrics.as_mut().unwrap();
+            metrics.generated_merge += merging.elapsed();
+            metrics.generated_runs += 1;
+            metrics.generated_draws += count;
+        }
         Ok(())
     }
 }
