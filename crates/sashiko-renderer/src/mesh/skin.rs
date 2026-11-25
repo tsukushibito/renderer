@@ -1,6 +1,8 @@
 //! Linear blend skinning from the final mesh-space joint palette supplied by the host.
 use super::*;
+mod compute;
 use crate::{pbr::Transform, pipeline::RenderObject};
+pub use compute::PreparedComputeSkin;
 use sashiko_renderer_core::graph::{BufferHandle, GraphCapacityKind};
 use std::{
     collections::HashSet,

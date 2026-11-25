@@ -5,6 +5,14 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="compute-skin"></a>
+
+## Compute スキニング
+
+Windows の Vulkan・D3D12 で、常駐バインド頂点を転送する Graph と、その内容を読む描画 Graph を CPU 完了待ちなしで連続投入した。65 頂点・2 関節の試験で、画面外の三角形を非一様スケールと反転を含むポーズで画面内へ移した。1 回の dispatch の出力を 2 つの描画パスで読み、両方の中央画素でそれぞれの ID を確認した。全頂点の位置・法線・接線・向き・UV は CPU 参照との絶対差 0.00001 未満、最後のグループの余白 63 頂点は全バイトゼロ。開発検証付き debug と検証を無効にした release の両方で通過し、警告・エラーは 0 件だった。
+
+再現は `cargo test --locked -p sashiko-renderer --features vulkan,d3d12,development-validation --lib compute_skin_views -- --ignored --test-threads=1`。製品構成は `--release` を追加して機能指定を `vulkan,d3d12` にする。WebGPU は WGSL の生成・検証とバインディング照合まで。Survivor の通常表示への統合、フレーム時間・確保回数の実測、頂点シェーダー経路との比較は Beads `renderer-7xa2` で追跡する。[設計と利用方法](../design/animation.md#gpu-スキニングとマルチパス)
+
 ## 共通 CPU ジョブ
 
 Windows / Core i5-14600KF / Rust 1.99.0 release。64 関節・256 姿勢の PoseBatch を 32 回予熱し、続く 64 回から p50 / p95（µs）を取得した。逐次は既存の 4 姿勢 SIMD 評価。旧共有キュー（`683039e7`）とローカルキューは同じ入力と並列用 SIMD カーネルを使い、ホストを含む 4 並列で個別のプロセスを計時した。休止条件は各評価の前に 16 ms 待ち、待ち時間を除外する。

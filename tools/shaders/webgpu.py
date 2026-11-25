@@ -39,7 +39,7 @@ def generate(module, directory, args, recipe):
     elif name == "frustum_visibility.comp":
         run([args.slang, STANDARD / recipe[name]["source"], "-entry", "main",
              "-stage", "compute", "-target", "wgsl", "-matrix-layout-row-major", "-o", out])
-    elif module.parent == CORE and name.endswith(".comp"):
+    elif (module.parent == CORE and name.endswith(".comp")) or name == "skin.comp":
         # The storage buffer shader only writes. WebGPU exposes read_write
         # as the declaration and has no write-only storage buffer type.
         assembly = run(["spirv-dis", module])

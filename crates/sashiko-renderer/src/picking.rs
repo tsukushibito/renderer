@@ -243,3 +243,6 @@ impl PickReadback {
         Ok(NonZeroU32::new(u32::from_le_bytes(bytes)))
     }
 }
+
+#[cfg(all(test, any(feature = "vulkan", all(windows, feature = "d3d12"))))]
+mod tests;

@@ -1,0 +1,57 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; no parameters
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; no parameters
+; shader hash: 466be2645bac239cfb3c9d9e8baae672
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Compute Shader
+; NumThreads=(64,1,1)
+; NumBytesGroupSharedMemory: 0
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 0
+; SigOutputElements: 0
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 0
+; SigOutputVectors[0]: 0
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Buffer Definitions:
+;
+; cbuffer Palette
+; {
+;
+;   struct Palette
+;   {
+;
+;       float4 rows[768];                             ; Offset:    0
+;
+;   } Palette;                                        ; Offset:    0 Size: 12288
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; Palette                           cbuffer      NA          NA     CB0            cb0     1
+; rest                              texture    byte         r/o      T0             t1     1
+; posed                                 UAV    byte         r/w      U0             u2     1
+;
