@@ -164,7 +164,7 @@ impl<'a> Playback<'a> {
                 local,
                 Some((
                     target.pose(elapsed, self.rate),
-                    elapsed as f64 / fade.duration.get() as f64,
+                    elapsed as f32 / fade.duration.get() as f32,
                 )),
             );
         }

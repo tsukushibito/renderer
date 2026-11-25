@@ -1,4 +1,4 @@
-use glam::{DQuat, DVec3};
+use glam::{DVec3, Quat};
 use sashiko_animation::{
     AnimationError, Clip, LocalPose, Marker, Playback, PoseWorkspace, Skeleton,
 };
@@ -12,9 +12,9 @@ fn rate() -> NonZeroU32 {
 }
 fn local(translation: DVec3) -> LocalPose {
     LocalPose {
-        translation,
-        scale: DVec3::ONE,
-        rotation: DQuat::IDENTITY,
+        translation: translation.as_vec3(),
+        scale: glam::Vec3::ONE,
+        rotation: Quat::IDENTITY,
     }
 }
 
@@ -52,7 +52,10 @@ fn retry_across_loops_preserves_time_and_marker_order() {
     let mut workspace = PoseWorkspace::all(&rig);
     for _ in 0..2 {
         player.evaluate_pose(&mut workspace).unwrap();
-        assert_eq!(workspace.joint(0).unwrap().w_axis.truncate(), DVec3::ZERO);
+        assert_eq!(
+            workspace.joint(0).unwrap().w_axis.truncate().as_dvec3(),
+            DVec3::ZERO
+        );
     }
     assert_eq!(player.advance_to(4, &mut []).unwrap().event_count, 0);
     assert!(player.advance_to(3, &mut []).is_err());
@@ -71,7 +74,7 @@ fn single_shot_holds_with_fractional_clock_and_no_repeated_events() {
     assert_eq!(events, [11, 12]);
     let mut out = PoseWorkspace::all(&rig);
     player.evaluate_pose(&mut out).unwrap();
-    assert_eq!(out.joint(0).unwrap().w_axis.truncate(), DVec3::X);
+    assert_eq!(out.joint(0).unwrap().w_axis.truncate().as_dvec3(), DVec3::X);
 }
 
 #[test]
@@ -79,7 +82,7 @@ fn turning_parent_and_partial_pose_agree_through_transition() {
     let rig = Skeleton::new(vec![Some(2), Some(2), None]).unwrap();
     let start = [local(DVec3::X), local(DVec3::Y), local(DVec3::ZERO)];
     let mut end = start;
-    end[2].rotation = DQuat::from_rotation_z(std::f64::consts::PI);
+    end[2].rotation = Quat::from_xyzw(0., 0., 1., 0.);
     let make = |poses: [LocalPose; 3], id| {
         Clip::new(
             rig.clone(),
@@ -121,7 +124,8 @@ fn turning_parent_and_partial_pose_agree_through_transition() {
                 .unwrap()
                 .w_axis
                 .truncate()
-                .abs_diff_eq(expected, 1e-10)
+                .as_dvec3()
+                .abs_diff_eq(expected, 1e-6)
         );
         assert_eq!(partial.joint(0), full.joint(0));
         assert!(partial.joint(1).is_none());

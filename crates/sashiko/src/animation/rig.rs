@@ -9,7 +9,7 @@ pub(super) struct Rig {
     skeleton: Arc<Skeleton>,
     parents: Vec<Option<usize>>,
     bind: Vec<DMat4>,
-    inverse_bind: Arc<[DMat4]>,
+    inverse_bind: Arc<[Mat4]>,
 }
 
 impl Rig {
@@ -23,7 +23,16 @@ impl Rig {
             bind.push(matrix(Transform::new(rows)?));
         }
         let skeleton = Skeleton::new(parents.clone())?;
-        let inverse_bind = bind.iter().map(DMat4::inverse).collect();
+        let inverse_bind = bind
+            .iter()
+            .map(|m| m.inverse().as_mat4())
+            .collect::<Arc<[_]>>();
+        if inverse_bind
+            .iter()
+            .any(|m| !m.is_finite() || !m.as_dmat4().inverse().is_finite())
+        {
+            return Err("inverse bind cannot be represented in single precision".into());
+        }
         Ok(Self {
             skeleton,
             parents,
@@ -55,9 +64,9 @@ impl Rig {
                 }
                 let (scale, rotation, translation) = relative.to_scale_rotation_translation();
                 local.push(LocalPose {
-                    scale,
-                    rotation: rotation.normalize(),
-                    translation,
+                    scale: scale.as_vec3(),
+                    rotation: rotation.normalize().as_quat(),
+                    translation: translation.as_vec3(),
                 });
             }
         }
@@ -109,7 +118,7 @@ struct Rigged {
 /// Prepared model-space pose storage and mesh-specific skin palette.
 pub struct PaletteWorkspace {
     workspace: PoseWorkspace,
-    inverse_bind: Arc<[DMat4]>,
+    inverse_bind: Arc<[Mat4]>,
     palette: Vec<Transform>,
 }
 enum PreparedData {
@@ -164,7 +173,7 @@ impl PaletteWorkspace {
             .enumerate()
         {
             let model = self.workspace.joint(i).expect("full skeleton workspace");
-            let cols = (model * inverse_bind).as_mat4().to_cols_array_2d();
+            let cols = (model * inverse_bind).to_cols_array_2d();
             *dest = Transform::new(std::array::from_fn(|row| cols.map(|c| c[row])))?;
         }
         Ok(&self.palette)

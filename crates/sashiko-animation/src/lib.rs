@@ -1,5 +1,5 @@
 //! Fixed-tick animation. Assets are immutable; playback and pose storage belong to the caller.
-use glam::{DMat4, DQuat, DVec3};
+use glam::{DVec3, Mat4, Quat, Vec3};
 use std::{num::NonZeroU32, sync::Arc};
 
 mod playback;
@@ -68,15 +68,15 @@ impl Skeleton {
 /// Frame-major local translation, rotation and positive scale.
 #[derive(Clone, Copy, Debug)]
 pub struct LocalPose {
-    pub translation: DVec3,
-    pub rotation: DQuat,
-    pub scale: DVec3,
+    pub translation: Vec3,
+    pub rotation: Quat,
+    pub scale: Vec3,
 }
 impl LocalPose {
-    fn matrix(self) -> DMat4 {
-        DMat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
+    fn matrix(self) -> Mat4 {
+        Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
     }
-    fn blend(self, to: Self, t: f64) -> Self {
+    fn blend(self, to: Self, t: f32) -> Self {
         Self {
             translation: self.translation.lerp(to.translation, t),
             rotation: self.rotation.slerp(to.rotation, t),
@@ -178,7 +178,7 @@ impl Clip {
 pub struct PoseWorkspace {
     skeleton: Arc<Skeleton>,
     order: Vec<usize>,
-    matrices: Vec<DMat4>,
+    matrices: Vec<Mat4>,
     selected: Vec<bool>,
 }
 impl PoseWorkspace {
@@ -187,7 +187,7 @@ impl PoseWorkspace {
             skeleton: skeleton.clone(),
             order: skeleton.order.clone(),
             selected: vec![true; skeleton.joint_count()],
-            matrices: vec![DMat4::IDENTITY; skeleton.joint_count()],
+            matrices: vec![Mat4::IDENTITY; skeleton.joint_count()],
         }
     }
     pub fn subset(skeleton: &Arc<Skeleton>, requested: &[usize]) -> Result<Self, AnimationError> {
@@ -210,7 +210,7 @@ impl PoseWorkspace {
         out.order.retain(|&j| out.selected[j]);
         Ok(out)
     }
-    pub fn joint(&self, joint: usize) -> Option<DMat4> {
+    pub fn joint(&self, joint: usize) -> Option<Mat4> {
         self.selected
             .get(joint)
             .filter(|&&s| s)
@@ -220,7 +220,7 @@ impl PoseWorkspace {
         &mut self,
         clip: &Clip,
         local: &[LocalPose],
-        target: Option<(&[LocalPose], f64)>,
+        target: Option<(&[LocalPose], f32)>,
     ) -> Result<(), AnimationError> {
         if !Arc::ptr_eq(&self.skeleton, &clip.skeleton) {
             return Err(Invalid("pose and clip skeletons differ"));
