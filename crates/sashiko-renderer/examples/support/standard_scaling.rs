@@ -504,9 +504,9 @@ pub fn run() -> PipelineResult<()> {
     let enable_scene = o.scene;
     let scene_jobs = shared.clone();
     let group = CameraGroup::custom(camera(0, &o)?, move |_, limits, defs| {
-        let pipeline = StandardPipeline::new(Technique::Forward, config, limits, defs)?;
+        let mut pipeline = StandardPipeline::new(Technique::Forward, config, limits, defs)?;
         if enable_scene {
-            let _ = &scene_jobs;
+            pipeline.set_scene_jobs(scene_jobs.unwrap(), NonZeroUsize::MIN);
         }
         Ok(pipeline)
     });
