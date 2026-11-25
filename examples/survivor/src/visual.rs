@@ -13,7 +13,10 @@ use crate::{Game, MAX_DROPS, MAX_ENEMIES, MAX_SHOTS};
 use sashiko_renderer::{
     Renderer, WindowRenderer,
     canvas::Layer,
-    core::runtime::Runtime,
+    core::{
+        jobs::{JobSystem, RendererJobs},
+        runtime::Runtime,
+    },
     material::{AlphaMode, MaterialHandle, Materials, PbrParams},
     mesh::{MeshCapacity, MeshHandle, Meshes},
     pbr::{Bounds, LocalLight, Sun, Transform},
@@ -93,6 +96,7 @@ pub struct CharacterRendering {
 }
 
 pub struct Visual {
+    jobs: RendererJobs,
     meshes: Meshes,
     materials: Materials,
     palette: Palette,
@@ -216,7 +220,11 @@ impl Visual {
         )];
         let view = game.arena.prepare_view()?;
         lights.extend(view.point_lights.iter().copied().map(LocalLight::Point));
+        let participants = std::thread::available_parallelism()
+            .unwrap_or(std::num::NonZeroUsize::MIN)
+            .min(4.try_into().unwrap());
         Ok(Self {
+            jobs: JobSystem::new(participants)?.into(),
             meshes,
             materials,
             palette,
@@ -267,12 +275,12 @@ impl Visual {
     pub fn prepare_window(&mut self, r: &mut WindowRenderer) -> PipelineResult<()> {
         self.install(Surfaces::for_window(r, &self.cast.models)?)?;
         r.prepare_scene(self.assets())?;
-        Ok(())
+        r.prepare_jobs(self.jobs.clone())
     }
     pub fn prepare_headless(&mut self, r: &mut Renderer) -> PipelineResult<()> {
         self.install(Surfaces::for_headless(r, &self.cast.models)?)?;
         r.prepare_scene(self.assets())?;
-        Ok(())
+        r.prepare_jobs(self.jobs.clone())
     }
 
     pub fn camera(&self, game: &Game, extent: [u32; 2]) -> PipelineResult<CameraView> {
@@ -305,10 +313,7 @@ impl Visual {
         // Sparse animation phases share the same posed vertex stream across the crowd.
         // Fixed tick controls animation time even when a presentation gets repeated.
         if self.last_step != Some(game.tick) {
-            self.cast
-                .animate(game.tick, &game.enemies, &mut self.meshes)?;
-            self.cast
-                .animate_player(&game.locomotion, &mut self.meshes)?;
+            self.cast.animate(game, &self.jobs, &mut self.meshes)?;
             let displacement = game.player - self.previous_player;
             let dist = displacement.length();
             if dist > 0.001 {

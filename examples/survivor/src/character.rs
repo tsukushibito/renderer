@@ -1,6 +1,7 @@
 //! Game asset selection and shared crowd pose slots.
-use sashiko::animation::{AnimatedModel, CharacterCatalog, PhaseAnimation};
+use sashiko::animation::{AnimatedModel, CharacterCatalog, PaletteBatch, PaletteRequest};
 use sashiko_renderer::{
+    core::jobs::RendererJobs,
     material::{MaterialHandle, Materials},
     mesh::{MeshHandle, Meshes, SkinPoseId},
     pipeline::PipelineResult,
@@ -14,8 +15,21 @@ pub(super) struct Actor {
     pub poses: [SkinPoseId; WALK_PHASES],
     pub texture: usize,
     pub material: MaterialHandle,
-    animation: PhaseAnimation,
+    clip: usize,
     requested: bool,
+}
+
+struct ModelPoses {
+    batch: PaletteBatch,
+    requests: Vec<PaletteRequest>,
+    targets: Vec<SkinPoseId>,
+}
+
+impl ModelPoses {
+    fn request(&mut self, clip: usize, tick: u64, pose: SkinPoseId) {
+        self.requests.push(PaletteRequest { clip, tick });
+        self.targets.push(pose);
+    }
 }
 
 pub(super) struct Cast {
@@ -25,8 +39,8 @@ pub(super) struct Cast {
     subjects: Vec<[usize; 2]>,
     pub player_pose: SkinPoseId,
     last_player_sample: Option<(bool, u64)>,
-    player_walk: sashiko::animation::PreparedAnimation,
-    player_jog: Option<sashiko::animation::PreparedAnimation>,
+    poses: Vec<ModelPoses>,
+    player_clips: [usize; 2],
 }
 impl Cast {
     pub fn load<'a>(
@@ -41,6 +55,7 @@ impl Cast {
         let catalog = CharacterCatalog::open(path)?;
         let mut models = Vec::<AnimatedModel>::new();
         let mut actors = Vec::new();
+        let mut clip_names = Vec::<Vec<&str>>::new();
         let mut loaded = HashMap::new();
         let mut actors_by_clip = HashMap::new();
         let mut subject_indices = Vec::new();
@@ -63,10 +78,12 @@ impl Cast {
                     })?;
                     let texture = models.len();
                     models.push(model);
+                    clip_names.push(Vec::new());
                     loaded.insert(id, (texture, mesh));
                     (texture, mesh)
                 };
-                let animation = models[texture].prepare_animation(clip)?.into_four_phases();
+                let clip_index = clip_names[texture].len();
+                clip_names[texture].push(clip);
                 let poses = [
                     meshes.create_pose(mesh)?,
                     meshes.create_pose(mesh)?,
@@ -84,7 +101,7 @@ impl Cast {
                     poses,
                     texture,
                     material,
-                    animation,
+                    clip: clip_index,
                     requested: false,
                 });
                 actors_by_clip.insert((id, clip), index);
@@ -104,42 +121,44 @@ impl Cast {
             subject_indices.push([normal, dash]);
         }
         let player_pose = meshes.create_pose(actors[0].mesh)?;
-        let model = &models[actors[0].texture];
-        let player_walk = model.prepare_animation("walk")?;
-        let player_jog = model
-            .clip("jog")
-            .map(|_| model.prepare_animation("jog"))
-            .transpose()?;
+        let player_model = actors[0].texture;
+        let walk = actors[0].clip;
+        let names = &mut clip_names[player_model];
+        let jog = if models[player_model].clip("jog").is_some() {
+            names
+                .iter()
+                .position(|&name| name == "jog")
+                .unwrap_or_else(|| {
+                    names.push("jog");
+                    names.len() - 1
+                })
+        } else {
+            walk
+        };
+        let poses = models
+            .iter()
+            .enumerate()
+            .zip(clip_names)
+            .map(|((index, model), names)| {
+                let capacity = actors.iter().filter(|a| a.texture == index).count() * WALK_PHASES
+                    + usize::from(index == player_model);
+                Ok(ModelPoses {
+                    batch: model.prepare_palette_batch(&names, capacity)?,
+                    requests: Vec::with_capacity(capacity),
+                    targets: Vec::with_capacity(capacity),
+                })
+            })
+            .collect::<PipelineResult<_>>()?;
         Ok(Self {
             player_pose,
             last_player_sample: None,
-            player_walk,
-            player_jog,
+            player_clips: [walk, jog],
+            poses,
             catalog_digest: catalog.definition_digest(),
             models,
             actors,
             subjects: subject_indices,
         })
-    }
-
-    pub fn animate_player(
-        &mut self,
-        state: &crate::Locomotion,
-        meshes: &mut Meshes,
-    ) -> PipelineResult<()> {
-        let sample = (state.jogging(), state.tick());
-        if self.last_player_sample == Some(sample) {
-            return Ok(());
-        }
-        let clip = if state.jogging() {
-            self.player_jog.as_mut().unwrap_or(&mut self.player_walk)
-        } else {
-            &mut self.player_walk
-        };
-        let palette = clip.sample(state.tick(), crate::TICK_HZ.try_into().unwrap())?;
-        meshes.set_joint_transforms(self.player_pose, palette)?;
-        self.last_player_sample = Some(sample);
-        Ok(())
     }
 
     pub fn subject_actor(&self, enemy: &crate::Enemy) -> &Actor {
@@ -148,11 +167,15 @@ impl Cast {
 
     pub fn animate(
         &mut self,
-        tick: u64,
-        enemies: &[crate::Enemy],
+        game: &crate::Game,
+        jobs: &RendererJobs,
         meshes: &mut Meshes,
     ) -> PipelineResult<()> {
-        for enemy in enemies {
+        for model in &mut self.poses {
+            model.requests.clear();
+            model.targets.clear();
+        }
+        for enemy in &game.enemies {
             let index = self.subjects[enemy.archetype][usize::from(enemy.dashing)];
             self.actors[index].requested = true;
         }
@@ -160,15 +183,30 @@ impl Cast {
             if !std::mem::take(&mut actor.requested) {
                 continue;
             }
-            let ticks = std::array::from_fn(|phase| tick.wrapping_add(phase as u64 * 13));
-            let palettes = actor.animation.sample(
-                ticks,
-                crate::TICK_HZ.try_into().expect("positive update rate"),
-            )?;
-            for (pose, palette) in actor.poses.iter().zip(palettes) {
-                meshes.set_joint_transforms(*pose, palette)?;
+            for (phase, pose) in actor.poses.into_iter().enumerate() {
+                self.poses[actor.texture].request(
+                    actor.clip,
+                    game.tick.wrapping_add(phase as u64 * 13),
+                    pose,
+                );
             }
         }
+        let player = (game.locomotion.jogging(), game.locomotion.tick());
+        if self.last_player_sample != Some(player) {
+            self.poses[self.actors[0].texture].request(
+                self.player_clips[usize::from(player.0)],
+                player.1,
+                self.player_pose,
+            );
+        }
+        let rate = crate::TICK_HZ.try_into().expect("positive update rate");
+        for model in &mut self.poses {
+            let palettes = model.batch.evaluate(&model.requests, rate, jobs)?;
+            for (&pose, palette) in model.targets.iter().zip(palettes) {
+                meshes.set_joint_transforms(pose, palette)?;
+            }
+        }
+        self.last_player_sample = Some(player);
         Ok(())
     }
 }
@@ -246,7 +284,11 @@ mod tests {
         assert_eq!(cast.subjects, [[0, 1], [2, 2], [2, 2]]);
         assert_ne!(cast.actors[0].mesh, cast.actors[2].mesh);
         let game = crate::Game::new(Default::default(), crate::Scenario::Early, 1);
-        cast.animate(20, &game.enemies, &mut meshes)
+        cast.animate(
+            &game,
+            &RendererJobs::new(sashiko_renderer::core::jobs::JobSystem::inline()),
+            &mut meshes,
+        )
     }
     #[test]
     fn transitions_use_the_shared_rig_and_advance_both_clips() -> PipelineResult<()> {

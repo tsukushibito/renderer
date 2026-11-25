@@ -3,7 +3,7 @@ use sashiko_asset::{AssetId, Digest};
 use serde::{Deserialize, Serialize};
 mod rig;
 use rig::Rig;
-pub use rig::{PaletteWorkspace, PhaseAnimation, PreparedAnimation};
+pub use rig::{PaletteBatch, PaletteRequest, PaletteWorkspace, PhaseAnimation, PreparedAnimation};
 pub use sashiko_animation::{ClipTimeline, Playback};
 use std::{
     collections::{BTreeMap, HashSet},
