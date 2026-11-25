@@ -227,7 +227,7 @@ impl Scene {
             let mut object = RenderObject::new(mesh, paint[material]).with_transform(transform(
                 placement(i, options.objects, options.visible, SEED),
             )?);
-            object.casts_shadow = options.workload.shadow();
+            object.casts_shadow = options.workload.shadow() && i % 10 == 0;
             objects.push(object);
         }
         Ok(Self {
@@ -326,6 +326,8 @@ struct Sample {
     interval: Duration,
     update: Duration,
     build: Duration,
+    bind: Duration,
+    view: Duration,
     compile: Duration,
     passes: usize,
     shadow_reused: Option<[bool; 4]>,
@@ -335,7 +337,7 @@ impl Sample {
     fn report(&self) -> Value {
         let ns = |d: Duration| d.as_nanos() as u64;
         json!({"interval_ns":ns(self.interval),"input_update_ns":ns(self.update),
-            "build_ns":ns(self.build),"compile_ns":ns(self.compile),"passes":self.passes,
+            "build_ns":ns(self.build),"bind_ns":ns(self.bind),"view_ns":ns(self.view),"compile_ns":ns(self.compile),"passes":self.passes,
             "shadow_reused":self.shadow_reused,"prepare_ns":self.times.map(|v|ns(v[0])),
             "record_ns":self.times.map(|v|ns(v[1])),"submit_ns":self.times.map(|v|ns(v[2])),
             "retire_ns":self.times.map(|v|ns(v[3])),"gpu_ns":self.times.map(|v|ns(v[4]))})
@@ -355,8 +357,12 @@ fn draw(
     sample.update = start.elapsed();
     let start = Instant::now();
     let mut frame = renderer.begin_frame()?;
+    let bind = Instant::now();
     let input = frame.bind_for_view(camera.id, scene.input())?;
+    sample.bind = bind.elapsed();
+    let view_start = Instant::now();
     let view = frame.draw_view(input, &camera)?;
+    sample.view = view_start.elapsed();
     let standard = frame
         .standard_output(camera.id)
         .ok_or("missing standard output")?;
@@ -530,7 +536,10 @@ pub fn run() -> PipelineResult<()> {
             }
         }
     }
-    let mut renderer = plan.build(backend(&o.api)?)?;
+    let mut backend = backend(&o.api)?;
+    plan.fit_backend(&mut backend)?;
+    let backend_limits = format!("{backend:?}");
+    let mut renderer = plan.build(backend)?;
     let device = identity(renderer.runtime())?;
     let mut texture = None;
     if o.workload == Workload::Textured {
@@ -568,7 +577,14 @@ pub fn run() -> PipelineResult<()> {
         renderer.runtime().set_profiling(true)?;
     }
     measure(&mut renderer, &mut scene, &o, o.warmup)?;
+    #[cfg(windows)]
+    let process_start = sashiko_example_support::clock::Boundary::capture()?;
     let (wall, samples, memory) = measure(&mut renderer, &mut scene, &o, o.frames)?;
+    #[cfg(windows)]
+    let cpu = sashiko_example_support::clock::Boundary::capture()?
+        .difference(process_start, sashiko_example_support::clock::frequency()?)?;
+    #[cfg(not(windows))]
+    let cpu = Value::Null;
     let captures = if o.capture {
         capture(&mut renderer, &mut scene, &o)?
     } else {
@@ -580,13 +596,12 @@ pub fn run() -> PipelineResult<()> {
     drop(texture);
     validation::check_validation(runtime)?;
     let report = json!({"schema":1,"api":o.api,"device":device,"validation":{"strict":cfg!(feature="development-validation"),"clean":true},
-        "objects":o.objects,"visible":o.visible,"seed":SEED,"workload":o.workload.name(),"extent":o.extent,"in_flight":2,
+        "objects":o.objects,"visible":o.visible,"shadow_casters":scene.objects.iter().filter(|item|item.casts_shadow).count(),"backend_limits":backend_limits,"seed":SEED,"workload":o.workload.name(),"extent":o.extent,"in_flight":2,
         "participants":o.team.get(),"scene_jobs":o.scene,"graph_jobs":o.graph,"native_jobs":o.native,
         "warmup":o.warmup,"frames":o.frames,"profile":o.profile,"wall_ns":wall.as_nanos() as u64,
-        "samples":samples.iter().map(Sample::report).collect::<Vec<_>>(),"memory":memory,"capture":captures});
-    serde_json::to_writer(
-        std::io::BufWriter::new(std::fs::File::create(o.report)?),
-        &report,
-    )?;
+        "samples":samples.iter().map(Sample::report).collect::<Vec<_>>(),"memory":memory,"cpu":cpu,"capture":captures,"capture_plane_order":["sdr","hdr","depth","shadow0","shadow1","shadow2","shadow3"]});
+    let mut file = std::io::BufWriter::new(std::fs::File::create(o.report)?);
+    serde_json::to_writer(&mut file, &report)?;
+    std::io::Write::flush(&mut file)?;
     Ok(())
 }
