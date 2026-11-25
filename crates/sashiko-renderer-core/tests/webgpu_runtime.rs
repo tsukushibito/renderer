@@ -17,7 +17,7 @@ use sashiko_renderer_core::{
     },
     program::{ManagedProgram, ManagedRasterProgram, SamplerDescriptor},
     runtime::{ExecutionErrorKind, Runtime, RuntimeLimits, WebGpuConfig},
-    webgpu::CanvasTarget,
+    webgpu::{CanvasTarget, wgpu},
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
@@ -27,10 +27,13 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 #[wasm_bindgen(inline_js = "
 export function newCanvas() { return document.createElement('canvas'); }
+export function nextTurn() { return new Promise(resolve => setTimeout(resolve, 0)); }
 ")]
 extern "C" {
     #[wasm_bindgen(js_name = newCanvas)]
     fn new_canvas() -> HtmlCanvasElement;
+    #[wasm_bindgen(js_name = nextTurn)]
+    async fn next_turn();
 }
 
 async fn target() -> CanvasTarget {
@@ -68,6 +71,36 @@ fn buffer(size: u64) -> ResourceClass {
     ResourceClass::Buffer {
         desc: BufferDesc { size },
         count: 1,
+    }
+}
+
+#[wasm_bindgen_test]
+#[ignore = "requires browser WebGPU"]
+async fn device_failures_reach_the_canvas_and_each_attached_runtime() {
+    for expected in [ExecutionErrorKind::Native, ExecutionErrorKind::DeviceLost] {
+        let target = target().await;
+        let mut first = runtime(&target, WorkingSet::default()).await;
+        let mut second = runtime(&target, WorkingSet::default()).await;
+        if expected == ExecutionErrorKind::DeviceLost {
+            target.device().destroy();
+        } else {
+            // A mapping buffer may only combine MAP_READ with COPY_DST.
+            drop(target.device().create_buffer(&wgpu::BufferDescriptor {
+                label: Some("intentional uncaptured validation error"),
+                size: 16,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: false,
+            }));
+        }
+        for _ in 0..2500 {
+            if target.check_device().is_err() {
+                break;
+            }
+            next_turn().await;
+        }
+        assert!(target.check_device().is_err());
+        assert_eq!(first.poll_frame().err().unwrap().kind(), expected);
+        assert_eq!(second.poll_frame().err().unwrap().kind(), expected);
     }
 }
 
