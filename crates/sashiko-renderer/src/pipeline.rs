@@ -26,7 +26,7 @@ pub use geometry::{GeometryPipeline, Technique};
 mod input;
 mod view;
 pub use input::{Draw, GeometryDrawInput, Mesh};
-pub use view::{StandardViewOutput, StandardViewState};
+pub use view::{StandardViewOutput, StandardViewState, StandardViewTimings};
 mod scene;
 pub use scene::{
     BakedLightingInput, EnvironmentMaps, MeshIndexRange, ProbeLighting, ReflectionProbeInput,
@@ -154,6 +154,7 @@ pub struct StandardPipeline {
     transform_indices: HashMap<[[u32; 4]; 3], u32>,
     connected: Vec<Draw>,
     classification: classification::Classification,
+    timings: Option<StandardViewTimings>,
     order: Vec<(f64, usize, [bool; pbr::CASCADE_COUNT])>,
     forward: ForwardDraws,
 }
@@ -288,6 +289,7 @@ impl StandardPipeline {
             transform_indices: HashMap::with_capacity(limits.max_transforms),
             connected: Vec::with_capacity(max),
             classification: classification::Classification::new(max),
+            timings: None,
             order: Vec::with_capacity(max),
             forward: ForwardDraws {
                 opaque: Vec::with_capacity(max),
@@ -456,8 +458,12 @@ impl StandardPipeline {
                     0,
                 )
             });
+            let start = self.timings.map(|_| std::time::Instant::now());
             self.order
                 .sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+            if let (Some(timings), Some(start)) = (&mut self.timings, start) {
+                timings.transparent_sort = start.elapsed();
+            }
         }
         for index in 0..self.order.len() {
             let (_, source, cascades) = self.order[index];
