@@ -12,6 +12,10 @@ use super::{
 use crate::program::{INDIRECT_COMMAND_BYTES, ManagedRasterProgram};
 use std::{borrow::Borrow, ops::Range};
 
+mod generated;
+use super::resource::BufferLookup;
+pub(super) use generated::CaptureJobs;
+
 /// A temporary recorder for ordered draw batches in one Raster attachment scope.
 /// On error the enclosing pass is discarded, including any earlier batches.
 pub struct RasterPass<'graph, 'attachments> {
@@ -239,13 +243,7 @@ impl RasterPass<'_, '_> {
         });
         for draw in draws {
             let draw = draw.borrow();
-            if !draw.index_count.is_multiple_of(3) {
-                return Err(graph.resource_error(
-                    GraphErrorKind::InvalidInput,
-                    "Raster requires complete triangles",
-                    graph.buffer_id(draw.indices)?,
-                ));
-            }
+            BufferLookup::new(graph.id, &graph.resources, &graph.names).check_triangles(draw)?;
             graph.capture_raster_draw(program, draw)?;
         }
         let draws = first_draw..graph.draws.len();
@@ -320,52 +318,14 @@ impl Graph {
     ) -> Result<(), GraphError> {
         let words = draw.parameters.words();
         self.check_raster_draw_storage(program, words)?;
+        let lookup = BufferLookup::new(self.id, &self.resources, &self.names);
+        let indexed = lookup.indexed_draw(program, draw)?;
         let bindings = self.use_raster_bindings(program, draw.bindings)?;
-        let (vertices, indices, index_range) =
-            self.raster_buffers(draw, u64::from(program.vertex_stride()))?;
-        let vertex_bytes = self.resources[vertices].desc.units();
-        let stride = program.descriptor().secondary_vertex_stride;
-        let secondary = draw
-            .secondary_vertices
-            .map(|v| self.buffer_id(v))
-            .transpose()?;
-        let required = vertex_bytes / u64::from(program.vertex_stride());
-        match secondary {
-            Some(id)
-                if stride != 0
-                    && self.resources[id]
-                        .desc
-                        .units()
-                        .is_multiple_of(u64::from(stride))
-                    && self.resources[id].desc.units() / u64::from(stride) == required => {}
-            None if stride == 0 => (),
-            _ => {
-                return Err(GraphError::invalid_input(
-                    "secondary vertex buffer does not match the program and primary vertex count",
-                ));
-            }
-        }
+        self.register_indexed_reads(indexed, indexed.byte_range());
         let data = self.data_mut();
-        if let Some(id) = secondary {
-            data.track_raster_prefix(id, 0, required * u64::from(stride));
-        }
-        data.track_raster_prefix(vertices, 0, vertex_bytes);
-        if draw.first_index == 0 {
-            data.track_raster_prefix(indices, 1, index_range.end);
-        } else {
-            // One scratch range per stored draw fits the reserved draw limit.
-            data.raster_index_ranges.push((indices, index_range));
-        }
         data.draws.push(RasterDrawOperands {
             bindings,
-            indexed: Some(IndexedDrawOperands {
-                secondary_vertices: secondary,
-                vertices,
-                indices,
-                first_index: draw.first_index,
-                index_count: draw.index_count,
-                instance_count: draw.instance_count,
-            }),
+            indexed: Some(indexed),
         });
         if !words.is_empty() {
             data.raster_constant_words.extend_from_slice(words);
@@ -527,36 +487,89 @@ impl Graph {
         Ok(())
     }
 
-    fn raster_buffers(
+    fn register_indexed_reads(&mut self, draw: IndexedDrawOperands, range: Range<u64>) {
+        let data = self.data_mut();
+        if let Some(secondary) = draw.secondary_vertices {
+            data.track_raster_prefix(secondary, 0, data.resources[secondary].desc.units());
+        }
+        data.track_raster_prefix(draw.vertices, 0, data.resources[draw.vertices].desc.units());
+        if range.start == 0 {
+            data.track_raster_prefix(draw.indices, 1, range.end);
+        } else {
+            data.raster_index_ranges.push((draw.indices, range));
+        }
+    }
+}
+
+impl IndexedDrawOperands {
+    fn byte_range(self) -> Range<u64> {
+        let start = u64::from(self.first_index) * 4;
+        start..start + u64::from(self.index_count) * 4
+    }
+}
+
+impl BufferLookup<'_> {
+    fn check_triangles(&self, draw: &RasterDraw) -> Result<(), GraphError> {
+        if !draw.index_count.is_multiple_of(3) {
+            self.buffer_id(draw.indices)?;
+            return Err(self.invalid(draw.indices, "Raster requires complete triangles"));
+        }
+        Ok(())
+    }
+
+    fn indexed_draw(
         &self,
+        program: &ManagedRasterProgram,
         draw: &RasterDraw,
-        stride: u64,
-    ) -> Result<(usize, usize, Range<u64>), GraphError> {
+    ) -> Result<IndexedDrawOperands, GraphError> {
         let vertices = self.buffer_id(draw.vertices)?;
         let indices = self.buffer_id(draw.indices)?;
-        let vs = self.resources[vertices].desc.units();
-        if vs < stride || !vs.is_multiple_of(stride) {
-            return Err(self.resource_error(
-                GraphErrorKind::InvalidInput,
-                "Raster requires complete vertex strides",
-                vertices,
-            ));
+        let vertex_bytes = self.resources[vertices].desc.units();
+        let stride = u64::from(program.vertex_stride());
+        if vertex_bytes < stride || !vertex_bytes.is_multiple_of(stride) {
+            return Err(self.invalid(draw.vertices, "Raster requires complete vertex strides"));
         }
-        let start = u64::from(draw.first_index) * 4;
-        let end = start + u64::from(draw.index_count) * 4;
-        if draw.index_count == 0 || end > self.resources[indices].desc.units() {
-            return Err(self.resource_error(
-                GraphErrorKind::InvalidInput,
+        let indexed = IndexedDrawOperands {
+            vertices,
+            indices,
+            secondary_vertices: draw
+                .secondary_vertices
+                .map(|v| self.buffer_id(v))
+                .transpose()?,
+            first_index: draw.first_index,
+            index_count: draw.index_count,
+            instance_count: draw.instance_count,
+        };
+        if indexed.index_count == 0
+            || indexed.byte_range().end > self.resources[indices].desc.units()
+        {
+            return Err(self.invalid(
+                draw.indices,
                 "Raster requires a nonempty u32 index range within the index buffer",
-                indices,
             ));
         }
         if draw.instance_count == 0 {
-            return Err(GraphError::new(
-                GraphErrorKind::InvalidInput,
+            return Err(GraphError::invalid_input(
                 "Raster requires a nonzero instance count",
             ));
         }
-        Ok((vertices, indices, start..end))
+        let secondary_stride = u64::from(program.descriptor().secondary_vertex_stride);
+        match indexed.secondary_vertices {
+            Some(id)
+                if secondary_stride != 0
+                    && self.resources[id]
+                        .desc
+                        .units()
+                        .is_multiple_of(secondary_stride)
+                    && self.resources[id].desc.units() / secondary_stride
+                        == vertex_bytes / stride => {}
+            None if secondary_stride == 0 => {}
+            _ => {
+                return Err(GraphError::invalid_input(
+                    "secondary vertex buffer does not match the program and primary vertex count",
+                ));
+            }
+        }
+        Ok(indexed)
     }
 }

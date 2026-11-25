@@ -96,6 +96,8 @@ pub(crate) fn next_id() -> u64 {
 /// remain usable. Required input, owner and capacity guarantees also apply when
 /// development validation is disabled.
 pub struct Graph {
+    generated_batch_size: Option<std::num::NonZeroUsize>,
+    raster_jobs: Option<Arc<raster::CaptureJobs>>,
     slot: Arc<Slot>,
 }
 impl Deref for Graph {

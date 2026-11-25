@@ -132,6 +132,7 @@ struct Options {
     topology: Topology,
     workers: usize,
     native_workers: usize,
+    graph_workers: usize,
     report: PathBuf,
     warmup: usize,
     frames: usize,
@@ -146,6 +147,7 @@ impl Options {
         let (mut warmup, mut frames, mut profile, mut capture) = (120, 600, false, None);
         let (mut passes, mut batches_per_pass, mut workers) = (1usize, 1usize, 0usize);
         let mut native_workers = 0usize;
+        let mut graph_workers = 0usize;
         let mut topology = Topology::Independent;
         while let Some(flag) = args.next() {
             let mut value = || {
@@ -158,7 +160,7 @@ impl Options {
                         "raster_draw_scaling --api <vulkan|d3d12> --draws <1024|10000|50000> --words <0|20> --report <path>\n\
                          [--passes <1..={MAX_PASSES}>] [--batches-per-pass <positive count>] [--topology <independent|chain>]\n\
                          [--workers <0 for direct, or 1 through available logical CPU count>]\n\
-                         [--native-workers <0 for direct, or scoped recording team size>] [--warmup <count>] [--frames <count>] [--profile] [--capture <stem>]"
+                         [--graph-workers <0 for direct, or scoped capture team size>] [--native-workers <0 for direct, or scoped recording team size>] [--warmup <count>] [--frames <count>] [--profile] [--capture <stem>]"
                     );
                     std::process::exit(0);
                 }
@@ -173,6 +175,7 @@ impl Options {
                 "--words" => words = Some(value()?.parse::<usize>()?),
                 "--passes" => passes = value()?.parse()?,
                 "--batches-per-pass" => batches_per_pass = value()?.parse()?,
+                "--graph-workers" => graph_workers = value()?.parse()?,
                 "--native-workers" => native_workers = value()?.parse()?,
                 "--workers" => workers = value()?.parse()?,
                 "--topology" => {
@@ -208,10 +211,10 @@ impl Options {
         if batches_per_pass == 0 || passes > draws / batches_per_pass {
             return Err("each requested pass and batch must contain at least one draw".into());
         }
-        if workers.max(native_workers) > 1 {
+        if workers.max(native_workers).max(graph_workers) > 1 {
             let available = std::thread::available_parallelism()?.get();
-            if workers.max(native_workers) > available {
-                return Err(format!("--workers and --native-workers must each be 0 or 1..={available} on this host (includes the calling thread)").into());
+            if workers.max(native_workers).max(graph_workers) > available {
+                return Err(format!("worker counts must each be 0 or 1..={available} on this host (includes the calling thread)").into());
             }
         }
         Ok(Self {
@@ -223,6 +226,7 @@ impl Options {
             topology,
             workers,
             native_workers,
+            graph_workers,
             report: report.ok_or("missing --report")?,
             warmup,
             frames,
@@ -284,6 +288,7 @@ impl Runtime {
         capacity: GraphCapacity,
         program: ManagedRasterProgram,
         buffers: &[BufferDesc],
+        native_jobs: Option<sashiko_renderer_core::jobs::RendererJobs>,
     ) -> Result<Self, Failure> {
         let colors = options.passes * options.color_count();
         let resources = buffers.len() + colors * IN_FLIGHT;
@@ -335,9 +340,9 @@ impl Runtime {
                     &classes,
                 )?;
                 runtime.prepare_raster_programs(&[program])?;
-                if let Some(workers) = NonZeroUsize::new(options.native_workers) {
+                if let Some(jobs) = native_jobs {
                     runtime.prepare_raster_recording(
-                        sashiko_jobs::JobSystem::new(workers)?,
+                        jobs,
                         NonZeroUsize::new(options.passes * options.batches_per_pass).unwrap(),
                     )?;
                 }
@@ -380,9 +385,9 @@ impl Runtime {
                     &[program.into()],
                     &[],
                 )?;
-                if let Some(workers) = NonZeroUsize::new(options.native_workers) {
+                if let Some(jobs) = native_jobs {
                     runtime.prepare_raster_recording(
-                        sashiko_jobs::JobSystem::new(workers)?,
+                        jobs,
                         NonZeroUsize::new(options.passes * options.batches_per_pass).unwrap(),
                     )?;
                 }
@@ -785,9 +790,12 @@ impl Scene {
                 |pass| {
                     for range in batches {
                         if let Some(prep) = &self.preparation {
-                            pass.draw(&self.program, prep.draws(range.clone()))?;
+                            let draws = prep.draws(range.clone());
+                            pass.draw_generated(&self.program, draws.len(), |i| &draws[i])?;
                         } else {
-                            pass.draw(&self.program, range.clone().map(direct))?;
+                            pass.draw_generated(&self.program, range.len(), |i| {
+                                direct(range.start + i)
+                            })?;
                         }
                     }
                     Ok(())
@@ -1035,10 +1043,32 @@ pub fn run() -> Result<(), Failure> {
     let capacity = options.capacity();
     let mut scene = Scene::new(&options)?;
     let buffers = scene.buffers();
-    let mut runtime = Runtime::new(&options, capacity, scene.program.clone(), &buffers)?;
+    let make_jobs = |count| {
+        NonZeroUsize::new(count)
+            .map(|n| {
+                sashiko_jobs::JobSystem::new(n).map(sashiko_renderer_core::jobs::RendererJobs::new)
+            })
+            .transpose()
+    };
+    let graph_jobs = make_jobs(options.graph_workers)?;
+    let native_jobs = if options.native_workers == options.graph_workers {
+        graph_jobs.clone()
+    } else {
+        make_jobs(options.native_workers)?
+    };
+    let mut runtime = Runtime::new(
+        &options,
+        capacity,
+        scene.program.clone(),
+        &buffers,
+        native_jobs,
+    )?;
     let identity = runtime.identity();
     let resident = scene.upload(&mut runtime, &buffers)?;
     let mut pool = GraphPool::new(capacity, IN_FLIGHT)?;
+    if let Some(jobs) = graph_jobs {
+        pool.set_raster_jobs(jobs, NonZeroUsize::MIN);
+    }
     // Audit the exported, timed topology and inputs outside every measurement
     // window. Capture has extra readback consumers and is verified separately.
     let (graph, _) = scene.build(&mut pool, &resident, 0, false, true)?;
@@ -1082,7 +1112,7 @@ pub fn run() -> Result<(), Failure> {
         &json!({
             "device": identity, "draws": options.draws, "words": options.words,
             "passes": options.passes, "batches_per_pass": options.batches_per_pass,
-            "topology": options.topology.name(), "workers": options.workers, "native_workers": options.native_workers,
+            "topology": options.topology.name(), "workers": options.workers, "native_workers": options.native_workers, "graph_workers": options.graph_workers,
             "packet_capacity_bytes": scene.preparation.as_ref().map_or(0, DrawPreparation::packet_capacity_bytes),
             "draws_per_pass": (0..options.passes).map(|p| scene.layout.pass_draws(p).len()).collect::<Vec<_>>(),
             "extent": EXTENT, "in_flight": IN_FLIGHT, "warmup": options.warmup,
@@ -1110,6 +1140,7 @@ mod tests {
             topology: Topology::Chain,
             workers: 4,
             native_workers: 4,
+            graph_workers: 4,
             report: PathBuf::new(),
             warmup: 0,
             frames: 0,
