@@ -313,7 +313,7 @@ impl DrawConstants {
                 ),
             )
         })?;
-        for (word, bytes) in words.iter().zip(dst.chunks_exact_mut(4)) {
+        for (word, bytes) in words.iter().zip(dst.as_chunks_mut::<4>().0) {
             bytes.copy_from_slice(&word.to_le_bytes());
         }
         self.used = end;
