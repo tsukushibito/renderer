@@ -379,6 +379,7 @@ runtime生涯の追加回数ではなく、明示準備した現在の集合に�
 この変更境界のpipeline再作成費用は通常frameメモリ保証と区別し、時間性能の改善を主張しない。
 
 共有stagingのoffset alignmentはnonCoherentAtomSizeと最大ブロックサイズ16 byteの大きい方を使う。
+シーンから算出した staging の要求バイト数はデバイス選択前に決まる。共有プール作成・再準備時に、選択したデバイスのこの境界へ切り上げた同一サイズを backing buffer と範囲管理に渡す。個々の lease は要求したデータ長を保持し、予約範囲だけを境界に揃える。丸め後に CPU のアドレス上限またはデバイスのバッファ上限を超えたときは準備を拒否する。
 BCのbyte offsetは各mipのceil(幅/4) × ceil(高さ/4) × ブロックbyte数を積算する。
 D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyは同extent/formatのcolor画像を扱い、
 各実format/usage能力の作成時照会とnative失敗処理を行う。

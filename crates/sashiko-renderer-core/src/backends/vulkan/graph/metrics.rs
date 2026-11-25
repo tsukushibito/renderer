@@ -595,12 +595,13 @@ mod tests {
         use crate::graph::{BufferDesc, Graph};
         use std::collections::HashMap;
 
+        const REQUESTED_STAGING: u64 = 4097;
         let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
         tracing::dispatcher::with_default(&dispatch, || {
             let mut runtime = VulkanRuntime::new(super::super::RuntimeConfig {
                 execution_slots: 2,
                 resource_capacity: 4,
-                staging_bytes: 4096,
+                staging_bytes: REQUESTED_STAGING,
                 max_shader_bindings: 2,
                 staging_ranges: 256,
             })
@@ -690,6 +691,10 @@ mod tests {
                 }
                 assert!(query_owner.lock().iter().all(|leased| !leased));
                 let memory = runtime.memory_stats().unwrap();
+                let bytes =
+                    REQUESTED_STAGING.next_multiple_of(memory.non_coherent_atom_size.max(16));
+                assert_eq!(memory.upload.capacity_bytes, bytes);
+                assert_eq!(memory.readback.capacity_bytes, bytes);
                 assert_eq!(memory.upload.used_bytes, 0);
                 assert_eq!(memory.readback.used_bytes, u64::from(epoch + 1) * 32);
                 assert_eq!(memory.cached_logical_bytes, 32);

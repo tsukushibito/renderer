@@ -92,4 +92,17 @@ mod tests {
         });
         other.with(|team| assert_eq!(team.parallelism(), two));
     }
+
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    #[test]
+    fn automatic_recording_requires_enough_independent_work() {
+        let team = RecordingTeam {
+            jobs: RendererJobs::new(JobSystem::new(NonZeroUsize::new(4).unwrap()).unwrap()),
+            automatic: true,
+        };
+        assert!(team.large_enough([3_125; 16].into_iter().chain([1])));
+        assert!(!team.large_enough([12_500; 4].into_iter()));
+        assert!(!team.large_enough([64; 16].into_iter()));
+        assert!(!team.large_enough([50_000].into_iter().chain([1; 15])));
+    }
 }

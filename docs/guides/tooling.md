@@ -382,6 +382,16 @@ let receipt = frame.submit()?;
 登録された PBR 個体はそれぞれ独立して移動できる。初期姿勢が同じ場合も初回移動のための余裕指定は不要である。
 新しいサイズのメッシュ、独自シェーダーや追加の描画方式を使う際は、変更時にそれらの資源も予約する。
 
+大量描画をジョブ化する場合は、初期化後、フレーム開始前にホストのチームを一度渡す。以下は呼び出し元と3ワーカーで実行する例。`Renderer`、`WindowRenderer`、`SceneRenderer` は同じ `prepare_jobs` を持つ。複数の利用者で共有する場合は `core::jobs::RendererJobs::new(team)` のクローンを渡す。アプリが所有する Graph を `begin_host_frame` に渡す場合は、その `GraphPool` の登録方針をホストが設定する。[ジョブの適用条件と実測](../verification/current.md#standard-renderer-jobs)
+
+```rust
+use sashiko_renderer::core::jobs::JobSystem;
+use std::num::NonZeroUsize;
+
+let team = JobSystem::new(NonZeroUsize::new(4).unwrap())?;
+renderer.prepare_jobs(team)?;
+```
+
 同じ方式・寸法のカメラは `CameraGroup::add_view` で登録し、フレーム内で
 `frame.bind_for_view(camera.id, scene)?` の戻り値を複数回の `draw_view` に使える。
 寸法や方式の異なるカメラは `RendererSetup::add_group` で追加する。

@@ -1768,6 +1768,21 @@ python tools/renderer-scenes/raster_job_benchmark.py --exe target/release/exampl
 python tools/renderer-scenes/raster_job_benchmark.py --exe target/release/examples/raster_draw_scaling.exe --output .tools/native-record --workers 0 --native-workers 0 1 4 --conditions in-pass independent mixed --draws 50000 --words 0 20 --warmup 80 --frames 360 --repeats 3 --profile both
 ```
 
+<a id="standard-renderer-jobs"></a>
+
+**標準パイプライン・視錐台カリングを含む計測**。Windows上の物理GPUで、通常のRelease実行ファイルを使う。以下の各ランナーは空いている出力先を必要とする。1実行ごとにCPU affinityを設定して、同じカメラ軌道、材質、描画先、同時進行2フレームで最終GPU回収までを測る。
+
+```powershell
+cargo build --release --locked -p sashiko-renderer --features vulkan,d3d12,presentation --example standard_scene_scaling --example packed_visibility_scaling
+python tools/renderer-scenes/standard_job_benchmark.py --exe target/release/examples/standard_scene_scaling.exe --output .tools/standard-jobs --objects 50000 --visible 10 50 100 --stages serial graph scene both native scene-graph-native auto --warmup 120 --frames 600 --repeats 3
+python tools/renderer-scenes/standard_job_benchmark.py --exe target/release/examples/standard_scene_scaling.exe --output .tools/standard-present --present --extent 1920x1080 --objects 50000 --visible 50 --stages serial auto
+python tools/renderer-scenes/packed_visibility_benchmark.py --exe target/release/examples/packed_visibility_scaling.exe --output .tools/packed-jobs --objects 50000 --visible 10 50 100 --moving 0 500 --groups 1 --variants cpu cpu-all4 ranges4 direct-all gpu
+```
+
+`--workloads textured blend shadow-static shadow-dynamic` で、テクスチャ付き複数材質、半透明混在、4カスケードの再利用・更新を選べる。`--capture` はGPU計測後に2フレームを再生し、SDR・HDR・深度と該当する影マップのハッシュを直列経路と突き合わせる。`development-validation` を有効にした別ビルドでは `--strict --capture`、`memory-profiling` ビルドでは `--memory` を使う。各ビルドの実行ファイルは別名で保持する。`scheduler-metrics` ビルドの `--profile` では、シーン・Graph・バックエンドの区間、GPUタイムスタンプ、合流時に実際に待機した時間を調べられる。時間が包含関係にある区間は加算しない。
+
+低レベルの `raster_job_benchmark.py` は `--graph-workers 0 1 4` で従来の登録、最終領域への1人の一括登録、4人の一括登録を比べられる。GPUカリングの比較では同じジオメトリと材質順を使い、個別のCPU直接描画に加え、可視の連続範囲をまとめる直接描画、グループ全体を一括描画できる場合の直接描画も含める。[実機の採用結果](../verification/current.md#standard-renderer-jobs)
+
 `frame_loop`は`--draws 0..1024`、`--layout overlap|grid`、`--extent WIDTHxHEIGHT`、
 `--mesh-layout shared|distinct`を受け付けます。
 指定しなければ従来の1 draw・128×96・history/custom有効の負荷です。
