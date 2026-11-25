@@ -42,6 +42,11 @@ windows-sys = { version = "0.61", optional = true, features = ["Win32_Foundation
 [target.'cfg(windows)'.dev-dependencies]
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+wasm-bindgen-test = "0.3"
+
 [dev-dependencies]
 criterion.workspace = true
 tracing-subscriber.workspace = true
