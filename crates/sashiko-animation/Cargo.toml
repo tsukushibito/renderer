@@ -6,8 +6,15 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+scheduler-metrics = ["sashiko-jobs/scheduler-metrics"]
+
 [dependencies]
+sashiko-jobs = { path = "../sashiko-jobs", version = "0.1.0" }
 glam = "0.30"
 
 [lints]
 workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+sashiko-renderer-core = { version = "0.1.0", path = "../sashiko-renderer-core", features = ["memory-profiling"] }

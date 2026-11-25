@@ -1,4 +1,4 @@
-use sashiko_jobs::{JobContext, JobSystem};
+use sashiko_jobs::{JobScope, JobSystem};
 use sashiko_renderer_core::measurement::{CountingAllocator, Snapshot};
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
@@ -44,11 +44,9 @@ impl Example {
         let mut frame = || {
             let (left, right) = values.split_at_mut(512);
             let size = NonZeroUsize::new(16).unwrap();
-            self.pool.run(|jobs| {
-                jobs.join(
-                    |jobs| jobs.for_each_chunk_mut(left, size, visit),
-                    |jobs| jobs.for_each_chunk_mut(right, size, visit),
-                )
+            self.pool.scope(|jobs| {
+                jobs.for_each_chunk_mut(left, size, visit);
+                jobs.for_each_chunk_mut(right, size, visit);
             });
         };
         for _ in 0..128 {
@@ -69,22 +67,25 @@ impl Example {
     /// Two independent clients share the same executor. Keep a thread ID per
     /// chunk in this sample so the browser can verify actual participation.
     pub fn calculate(&mut self, rounds: u32) -> Vec<u32> {
-        let calculate_batch = |jobs: &JobContext, seed: u32| {
-            let mut chunks = [(0u32, None::<ThreadId>); 128];
-            jobs.for_each_chunk_mut(&mut chunks, NonZeroUsize::MIN, |i, chunk| {
+        fn batch<'s>(
+            jobs: &JobScope<'s, '_>,
+            chunks: &'s mut [(u32, Option<ThreadId>)],
+            seed: u32,
+            rounds: u32,
+        ) {
+            jobs.for_each_chunk_mut(chunks, NonZeroUsize::MIN, move |i, chunk| {
                 let mut value = i as u32 + seed;
                 for _ in 0..rounds {
                     value = value.wrapping_mul(0x9e3779b1).rotate_left(11) ^ seed;
                 }
                 chunk[0] = (value, Some(thread::current().id()));
             });
-            chunks
-        };
-        let (left, right) = self.pool.run(|jobs| {
-            jobs.join(
-                |jobs| calculate_batch(jobs, 7),
-                |jobs| calculate_batch(jobs, 11),
-            )
+        }
+        let mut left = [(0, None); 128];
+        let mut right = left;
+        self.pool.scope(|s| {
+            batch(s, &mut left, 7, rounds);
+            batch(s, &mut right, 11, rounds);
         });
         let mut workers = HashSet::new();
         let mut checksum = 0u32;

@@ -1,202 +1,216 @@
-//! Bounded queue of borrowed right branches. The queue mutex orders publication,
-//! unique removal, and completion with respect to the submitting stack frame.
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::sync::atomic::{AtomicBool, Ordering};
+//! A task owns its capture in aligned inline storage. Erasure is private to
+//! scoped submission: drain waits for every callback (including descendants).
+use std::cell::Cell;
+use std::collections::VecDeque;
+use std::mem::{MaybeUninit, align_of, size_of};
+
+use super::Group;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Condvar, Mutex};
 
-pub(crate) struct Scheduler {
-    state: Mutex<State>,
-    available: Condvar,
-    progress: Condvar,
-    pub(crate) helpers: usize,
-    #[cfg(test)]
-    pub(crate) publications: std::sync::atomic::AtomicUsize,
-    #[cfg(test)]
-    pub(crate) wake_requests: std::sync::atomic::AtomicUsize,
-}
-
-struct State {
-    queue: Vec<Task>,
-    idle: usize,
-    ready: usize,
-    joining: usize,
-    shutdown: bool,
-}
-
+thread_local! { static LANE: Cell<usize> = const {Cell::new(0)}; }
+const CAPACITY: usize = 16;
+#[repr(C, align(64))]
+struct Storage([MaybeUninit<u8>; 128]);
 struct Task {
-    callback: *mut (),
-    invoke: unsafe fn(*mut ()),
-    completed: *const AtomicBool,
+    storage: Storage,
+    invoke: unsafe fn(&mut Storage),
+    group: *const Group,
 }
-
-// SAFETY: fork publishes only Send callbacks. The frame and its completion
-// flag remain alive until execution and acknowledgement under the mutex.
+// SAFETY: only Send closures are erased. Group lives through the final completion.
 unsafe impl Send for Task {}
 
-// No internal unwind may retire a stack frame that is still published.
-struct Published;
-impl Drop for Published {
-    fn drop(&mut self) {
-        std::process::abort();
+// Keep independent owners' hot locks and availability hints on separate cache lines.
+#[repr(align(64))]
+struct LocalQueue {
+    tasks: Mutex<VecDeque<Task>>,
+    available: AtomicBool,
+}
+impl LocalQueue {
+    fn pop(&self, owner: bool) -> Option<Task> {
+        if !self.available.load(SeqCst) {
+            return None;
+        }
+        let mut tasks = self.tasks.lock().unwrap();
+        let task = if owner {
+            tasks.pop_back()
+        } else {
+            tasks.pop_front()
+        };
+        if tasks.is_empty() {
+            self.available.store(false, SeqCst);
+        }
+        task
     }
 }
-
+pub(crate) struct Scheduler {
+    #[cfg(feature = "scheduler-metrics")]
+    pub(crate) counters: [AtomicUsize; 4],
+    queues: Vec<LocalQueue>,
+    gate: Mutex<()>,
+    wake: Condvar,
+    sleeping: AtomicUsize,
+    joining: AtomicUsize,
+    ready: AtomicUsize,
+    stopped: AtomicBool,
+    pub(crate) helpers: usize,
+}
 impl Scheduler {
     pub(crate) fn new(helpers: usize) -> std::io::Result<Self> {
-        let mut queue = Vec::new();
-        queue
-            .try_reserve_exact(helpers)
-            .map_err(std::io::Error::other)?;
+        let n = helpers
+            .checked_add(1)
+            .ok_or(std::io::ErrorKind::InvalidInput)?;
+        let mut queues = Vec::new();
+        queues.try_reserve_exact(n).map_err(std::io::Error::other)?;
+        for _ in 0..n {
+            let mut q = VecDeque::new();
+            q.try_reserve_exact(CAPACITY)
+                .map_err(std::io::Error::other)?;
+            queues.push(LocalQueue {
+                tasks: Mutex::new(q),
+                available: false.into(),
+            });
+        }
         Ok(Self {
-            state: Mutex::new(State {
-                queue,
-                idle: 0,
-                ready: 0,
-                joining: 0,
-                shutdown: false,
-            }),
-            available: Condvar::new(),
-            progress: Condvar::new(),
+            #[cfg(feature = "scheduler-metrics")]
+            counters: Default::default(),
+            queues,
+            gate: Mutex::new(()),
+            wake: Condvar::new(),
+            sleeping: 0.into(),
+            joining: 0.into(),
+            ready: 0.into(),
+            stopped: false.into(),
             helpers,
-            #[cfg(test)]
-            publications: Default::default(),
-            #[cfg(test)]
-            wake_requests: Default::default(),
         })
     }
-
-    pub(crate) fn stop(&self) {
-        self.state.lock().unwrap().shutdown = true;
-        self.available.notify_all();
+    pub(crate) fn lane(&self) -> usize {
+        LANE.get() % self.queues.len()
     }
-
+    pub(crate) fn needs_split(&self, owner: usize) -> bool {
+        // The owner already has more ranges for peers to take. Avoid adding a
+        // second generation of tasks while those initial ranges are available.
+        !self.queues[owner]
+            .available
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && self.sleeping.load(std::sync::atomic::Ordering::Relaxed) != 0
+    }
+    fn signal(&self, all: bool) {
+        if self.sleeping.load(SeqCst) != 0 {
+            let _gate = self.gate.lock().unwrap();
+            if all {
+                self.wake.notify_all()
+            } else {
+                #[cfg(feature = "scheduler-metrics")]
+                self.counters[3].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.wake.notify_one()
+            }
+        }
+    }
+    /// SAFETY: the caller drains group before any data borrowed by f expires.
+    pub(crate) unsafe fn publish<F: FnOnce() + Send>(&self, group: &Group, f: F) -> Result<(), F> {
+        if size_of::<F>() > size_of::<Storage>() || align_of::<F>() > align_of::<Storage>() {
+            return Err(f);
+        }
+        let local = &self.queues[self.lane()];
+        let mut queue = local.tasks.lock().unwrap();
+        if queue.len() == CAPACITY {
+            return Err(f);
+        }
+        unsafe fn invoke<F: FnOnce()>(storage: &mut Storage) {
+            // SAFETY: publish stored exactly one aligned F here. Removal transfers ownership.
+            let f = unsafe { storage.0.as_mut_ptr().cast::<F>().read() };
+            f();
+        }
+        let mut task = Task {
+            storage: Storage([MaybeUninit::uninit(); 128]),
+            invoke: invoke::<F>,
+            group,
+        };
+        // SAFETY: the size/alignment checks above fit F at offset zero in this unused storage.
+        unsafe {
+            task.storage.0.as_mut_ptr().cast::<F>().write(f);
+        }
+        group.pending.fetch_add(1, SeqCst);
+        queue.push_back(task);
+        local.available.store(true, SeqCst);
+        #[cfg(feature = "scheduler-metrics")]
+        self.counters[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        drop(queue);
+        self.signal(false);
+        Ok(())
+    }
+    fn take(&self, lane: usize) -> Option<Task> {
+        if let Some(task) = self.queues[lane].pop(true) {
+            return Some(task);
+        }
+        for offset in 1..self.queues.len() {
+            let victim = (lane + offset) % self.queues.len();
+            if let Some(task) = self.queues[victim].pop(false) {
+                #[cfg(feature = "scheduler-metrics")]
+                self.counters[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Some(task);
+            }
+            #[cfg(feature = "scheduler-metrics")]
+            self.counters[2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        None
+    }
+    fn execute(&self, mut task: Task) {
+        // SAFETY: task counted from publication through this call; drain cannot
+        // finish while any task can still submit descendants or record a panic.
+        let group = unsafe { &*task.group };
+        // SAFETY: take removes this task exactly once and invoke matches its stored type.
+        group.capture(|| unsafe { (task.invoke)(&mut task.storage) });
+        if group.pending.fetch_sub(1, SeqCst) == 1 && self.joining.load(SeqCst) != 0 {
+            self.signal(true);
+        }
+    }
+    fn help_until(&self, joining: bool, done: impl Fn() -> bool) {
+        let lane = self.lane();
+        while !done() {
+            if let Some(task) = self.take(lane) {
+                self.execute(task);
+                continue;
+            }
+            let gate = self.gate.lock().unwrap();
+            self.sleeping.fetch_add(1, SeqCst);
+            if joining {
+                self.joining.fetch_add(1, SeqCst);
+            }
+            // Recheck all predicates after registering so a publisher cannot
+            // slip between the empty scan and the condition-variable wait.
+            let task = if done() { None } else { self.take(lane) };
+            if task.is_none() && !done() {
+                drop(self.wake.wait(gate).unwrap());
+            } else {
+                drop(gate);
+            }
+            if joining {
+                self.joining.fetch_sub(1, SeqCst);
+            }
+            self.sleeping.fetch_sub(1, SeqCst);
+            if let Some(task) = task {
+                self.execute(task);
+            }
+        }
+    }
+    pub(crate) fn drain(&self, group: &Group) {
+        self.help_until(true, || group.pending.load(SeqCst) == 0);
+    }
+    pub(crate) fn worker(&self) {
+        let lane = self.ready.fetch_add(1, SeqCst) + 1;
+        LANE.set(lane);
+        self.signal(true);
+        self.help_until(false, || self.stopped.load(SeqCst));
+    }
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn wait_ready(&self) {
-        let state = self.state.lock().unwrap();
-        drop(
-            self.progress
-                .wait_while(state, |s| s.ready < self.helpers)
-                .unwrap(),
-        );
+        // Startup only. Workers have no tasks before construction returns.
+        self.help_until(false, || self.ready.load(SeqCst) == self.helpers);
     }
-
-    pub(crate) fn worker(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.ready += 1;
-        if state.ready == self.helpers {
-            self.progress.notify_all();
-        }
-        loop {
-            if let Some(task) = state.queue.pop() {
-                drop(state);
-                self.execute(task);
-                state = self.state.lock().unwrap();
-            } else if state.shutdown {
-                return;
-            } else {
-                state.idle += 1;
-                state = self.available.wait(state).unwrap();
-                state.idle -= 1;
-            }
-        }
-    }
-
-    fn execute(&self, task: Task) {
-        // SAFETY: removal gives exclusive execution. The callback catches the
-        // user's unwind before returning; it is never accessed after this call.
-        unsafe { (task.invoke)(task.callback) };
-        let state = self.state.lock().unwrap();
-        // SAFETY: join waits for this write before it may discard the flag.
-        unsafe { &*task.completed }.store(true, Ordering::Relaxed);
-        if state.joining != 0 {
-            self.progress.notify_all();
-        }
-    }
-
-    pub(crate) fn fork<A, B>(
-        &self,
-        left: impl FnOnce() -> A,
-        right: impl FnOnce() -> B + Send,
-    ) -> (A, B)
-    where
-        B: Send,
-    {
-        let done = AtomicBool::new(false);
-        let mut result = None;
-        let mut right = Some(right);
-        let mut call = || result = Some(catch_unwind(AssertUnwindSafe(right.take().unwrap())));
-        unsafe fn invoke<F: FnMut()>(p: *mut ()) {
-            // SAFETY: erased by task_for using this exact type.
-            unsafe { (&mut *p.cast::<F>())() };
-        }
-        fn task_for<F: FnMut() + Send>(call: &mut F, done: &AtomicBool) -> Task {
-            Task {
-                callback: std::ptr::from_mut(call).cast(),
-                invoke: invoke::<F>,
-                completed: done,
-            }
-        }
-        let mut state = self.state.lock().unwrap();
-        if state.queue.len() == self.helpers {
-            drop(state);
-            let a = catch_unwind(AssertUnwindSafe(left));
-            call();
-            return (
-                a.unwrap_or_else(|p| resume_unwind(p)),
-                result.unwrap().unwrap_or_else(|p| resume_unwind(p)),
-            );
-        }
-        let guard = Published;
-        state.queue.push(task_for(&mut call, &done));
-        #[cfg(test)]
-        self.publications.fetch_add(1, Ordering::Relaxed);
-        if state.idle != 0 {
-            #[cfg(test)]
-            self.wake_requests.fetch_add(1, Ordering::Relaxed);
-            self.available.notify_one();
-        } else if state.joining != 0 {
-            self.progress.notify_one();
-        }
-        drop(state);
-        let a = catch_unwind(AssertUnwindSafe(left));
-        let mut state = self.state.lock().unwrap();
-        while !done.load(Ordering::Relaxed) {
-            let own = state
-                .queue
-                .iter()
-                .rposition(|task| std::ptr::eq(task.completed, &done));
-            let task = match own {
-                Some(i) => Some(state.queue.swap_remove(i)),
-                None => state.queue.pop(),
-            };
-            if let Some(task) = task {
-                drop(state);
-                self.execute(task);
-                state = self.state.lock().unwrap();
-            } else {
-                state.joining += 1;
-                state = self.progress.wait(state).unwrap();
-                state.joining -= 1;
-            }
-        }
-        drop(state);
-        std::mem::forget(guard);
-        (
-            a.unwrap_or_else(|p| resume_unwind(p)),
-            result.unwrap().unwrap_or_else(|p| resume_unwind(p)),
-        )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn full_queue_executes_nested_pair_locally() {
-        // Leave the single slot occupied throughout the nested fork.
-        let scheduler = Scheduler::new(1).unwrap();
-        let pair = scheduler.fork(|| scheduler.fork(|| 1, || 2), || 3);
-        assert_eq!(pair, ((1, 2), 3));
-        assert_eq!(scheduler.publications.load(Ordering::Relaxed), 1);
+    pub(crate) fn stop(&self) {
+        self.stopped.store(true, SeqCst);
+        self.signal(true);
     }
 }

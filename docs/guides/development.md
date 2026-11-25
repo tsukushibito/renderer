@@ -9,14 +9,17 @@
 
 ## CPU ジョブを検証する
 
-ネイティブの公開 API、全スレッドの Rust ヒープ、最大 1・4 並列の p50・p95 を確認する。軽い加算は直接ループとチャンク分割で比較し、連続実行と 16 ms 休止後を分ける。対象の CPU 処理は GPU や外部アセットを使わない。
+ネイティブのスコープ契約と定常時ヒープ、軽い加算の起床コスト、PoseBatch の連続実行・16 ms 休止後の p50 / p95 を確認する。PoseBatch は 16 / 64 関節、8 / 256 姿勢で最大並列度 1・2・4・8 を比較する。先頭 1/4 のみブレンドする条件も測る。カウンタ計測は別に実行する。
 
 ```sh
-cargo test --locked --release -p sashiko-jobs
+cargo test --locked --release -p sashiko-jobs -p sashiko-animation
 cargo run --locked --release -p sashiko-jobs --example frame_jobs
+cargo run --locked --release -p sashiko-animation --example pose_jobs
+cargo run --locked --release -p sashiko-animation --example pose_jobs -- --idle
+cargo run --locked --release -p sashiko-animation --features scheduler-metrics --example pose_jobs
 ```
 
-借用した枝の受け渡し・合流・巻き戻しは `cargo +nightly-2026-11-15 miri test --locked --target x86_64-unknown-linux-gnu -p sashiko-jobs` でも検証できる（同 nightly の miri と rust-src が必要）。
+型消去した借用クロージャの受け渡しと panic 時の合流は `cargo +nightly-2026-11-15 miri test --locked --target x86_64-unknown-linux-gnu -p sashiko-jobs` で検証できる（同 nightly の miri と rust-src が必要）。
 
 ブラウザのサンプルは同じ Rust 処理を二通りの Wasm にビルドする。共有メモリ版だけに固定 nightly と atomics 用の標準ライブラリを使う。リポジトリのルートで次を実行する。`wasm-bindgen-cli` は Cargo.lock の版に合わせる。
 

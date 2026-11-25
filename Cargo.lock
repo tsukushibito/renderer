@@ -1765,6 +1765,8 @@ name = "sashiko-animation"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "sashiko-jobs",
+ "sashiko-renderer-core",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 //! Isolated process-wide allocation and latency check of two borrowed clients.
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    use sashiko_jobs::{JobContext, JobSystem};
+    use sashiko_jobs::{JobScope, JobSystem};
     use sashiko_renderer_core::measurement::{CountingAllocator, Snapshot};
     use std::hint::black_box;
     use std::time::{Duration, Instant};
@@ -9,7 +9,7 @@ fn main() {
     #[global_allocator]
     static HEAP: CountingAllocator<std::alloc::System> = CountingAllocator::new(std::alloc::System);
 
-    fn client(pool: &JobContext, data: &mut [u32]) {
+    fn client<'s>(pool: &JobScope<'s, '_>, data: &'s mut [u32]) {
         pool.for_each_chunk_mut(data, 256.try_into().unwrap(), |start, chunk| {
             for value in chunk {
                 for _ in 0..64 {
@@ -28,7 +28,10 @@ fn main() {
             let mut times = [Duration::ZERO; 256];
             let mut frame = || {
                 let (a, b) = black_box(&mut values).split_at_mut(size / 2);
-                pool.run(|jobs| jobs.join(|j| client(j, a), |j| client(j, b)));
+                pool.scope(|jobs| {
+                    client(jobs, a);
+                    client(jobs, b);
+                });
             };
             for _ in 0..128 {
                 frame();
@@ -59,7 +62,7 @@ fn main() {
                         std::thread::sleep(Duration::from_millis(16));
                     }
                     let start = Instant::now();
-                    pool.run(|jobs| {
+                    pool.scope(|jobs| {
                         let visit = |start: usize, chunk: &mut [u32]| {
                             for value in chunk {
                                 *value = black_box(*value).wrapping_add(start as u32 + 1);

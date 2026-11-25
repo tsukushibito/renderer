@@ -39,15 +39,7 @@ impl PoseBatch {
         &mut self,
         requests: &[PoseSample<'_>],
     ) -> Result<&[PoseWorkspace], AnimationError> {
-        if requests.len() > self.outputs.len() {
-            return Err(Invalid("pose batch capacity exceeded"));
-        }
-        if requests
-            .iter()
-            .any(|r| !Arc::ptr_eq(&r.clip.skeleton, &self.skeleton))
-        {
-            return Err(Invalid("incompatible batch skeleton"));
-        }
+        self.validate(requests)?;
         let outputs = &mut self.outputs[..requests.len()];
         let (groups, tail) = requests.as_chunks::<4>();
         let (dest, remainder) = outputs.as_chunks_mut::<4>();
@@ -68,6 +60,83 @@ impl PoseBatch {
             sample.evaluate(out)?;
         }
         Ok(outputs)
+    }
+    fn validate(&self, requests: &[PoseSample<'_>]) -> Result<(), AnimationError> {
+        if requests.len() > self.outputs.len() {
+            return Err(Invalid("pose batch capacity exceeded"));
+        }
+        if requests
+            .iter()
+            .any(|r| !Arc::ptr_eq(&r.clip.skeleton, &self.skeleton))
+        {
+            return Err(Invalid("incompatible batch skeleton"));
+        }
+        Ok(())
+    }
+
+    /// Evaluate independent four-pose SIMD groups on a borrowed job scope.
+    /// Only these pose jobs must complete before the output can be consumed.
+    pub fn evaluate_scoped(
+        &mut self,
+        requests: &[PoseSample<'_>],
+        jobs: &sashiko_jobs::JobScope<'_, '_>,
+    ) -> Result<&[PoseWorkspace], AnimationError> {
+        let joints = self.outputs.first().map_or(0, |pose| pose.order.len());
+        if jobs.parallelism().get() == 1
+            || requests.len() < 8
+            || requests.len().saturating_mul(joints) <= 128
+        {
+            return self.evaluate(requests);
+        }
+        self.validate(requests)?;
+        let outputs = &mut self.outputs[..requests.len()];
+        let (groups, tail) = requests.as_chunks::<4>();
+        let (dest, remainder) = outputs.as_chunks_mut::<4>();
+        let rig = &self.skeleton;
+        jobs.scope(|s| {
+            s.for_each_chunk_mut(dest, std::num::NonZeroUsize::MIN, |i, part| {
+                evaluate_independent_group(rig, &groups[i], &mut part[0]);
+            });
+            for (sample, out) in tail.iter().zip(remainder) {
+                sample.evaluate(out)?;
+            }
+            Ok(())
+        })?;
+        Ok(outputs)
+    }
+}
+
+// A packed affine fits in three of the four lane matrices. Keep intermediate
+// worlds there until all parents have been read, then unpack in place. Each
+// group owns its scratch even when stolen, without per-group heap allocations.
+fn evaluate_independent_group(
+    rig: &Skeleton,
+    group: &[PoseSample<'_>; 4],
+    lanes: &mut [PoseWorkspace; 4],
+) {
+    for &i in &lanes[0].order {
+        let local = Affine4::from_joint(group, i);
+        let world = rig.parents[i].map_or(local, |p| {
+            let rows = std::array::from_fn(|r: usize| {
+                let m = lanes[r].matrices[p];
+                [m.x_axis, m.y_axis, m.z_axis, m.w_axis]
+            });
+            Affine4(rows).compose(local)
+        });
+        for (r, [x, y, z, w]) in world.0.into_iter().enumerate() {
+            lanes[r].matrices[i] = Mat4::from_cols(x, y, z, w);
+        }
+    }
+    for &i in &lanes[0].order {
+        let packed = Affine4(std::array::from_fn(|r: usize| {
+            let m = lanes[r].matrices[i];
+            [m.x_axis, m.y_axis, m.z_axis, m.w_axis]
+        }));
+        let [a, b, c, d] = packed.unpack();
+        lanes[0].matrices[i] = a;
+        lanes[1].matrices[i] = b;
+        lanes[2].matrices[i] = c;
+        lanes[3].matrices[i] = d;
     }
 }
 
