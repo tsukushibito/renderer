@@ -11,9 +11,9 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VULKAN_CACHE = "crates/renderer-core/src/backends/vulkan/graph/cache.rs"
-VULKAN_BENCH = "crates/renderer-core/benches/vulkan_resource_cache.rs"
-D3D12_BENCH = "crates/renderer-core/benches/d3d12_reuse.rs"
+VULKAN_CACHE = "crates/sashiko-renderer-core/src/backends/vulkan/graph/cache.rs"
+VULKAN_BENCH = "crates/sashiko-renderer-core/benches/vulkan_resource_cache.rs"
+D3D12_BENCH = "crates/sashiko-renderer-core/benches/d3d12_reuse.rs"
 
 
 def run(command, **kwargs):
@@ -42,9 +42,12 @@ def main():
     suffix = ".exe" if os.name == "nt" else ""
 
     baseline = capture(["git", "rev-parse", args.baseline]).strip()
-    cache_path = VULKAN_CACHE
-    if not capture(["git", "ls-tree", "--name-only", baseline, "--", cache_path]).strip():
-        cache_path = VULKAN_CACHE.replace("crates/renderer-core/", "crates/renderer/", 1)
+    for package in ("sashiko-renderer-core", "renderer-core", "renderer"):
+        cache_path = f"crates/{package}/src/backends/vulkan/graph/cache.rs"
+        if capture(["git", "ls-tree", "--name-only", baseline, "--", cache_path]).strip():
+            break
+    else:
+        raise RuntimeError(f"Missing Vulkan resource cache in baseline {baseline}")
     old_cache = capture(["git", "show", f"{baseline}:{cache_path}"])
     before_cache = build / "cache-before.rs"
     before_cache.write_text(old_cache, encoding="utf-8", newline="\n")
@@ -61,7 +64,7 @@ def main():
     run(["rustc", "--edition=2024", "-O", str(ROOT / VULKAN_BENCH), "-o", str(after)])
     env = dict(os.environ, CARGO_INCREMENTAL="0")
     build_output = run([
-        "cargo", "build", "--locked", "--release", "-p", "renderer-core", "--no-default-features",
+        "cargo", "build", "--locked", "--release", "-p", "sashiko-renderer-core", "--no-default-features",
         "--bench", "d3d12_reuse", "--message-format=json",
     ], env=env, stdout=subprocess.PIPE, encoding="utf-8").stdout
     executables = [
@@ -87,7 +90,7 @@ def main():
             "baseline_vulkan_cache": digest(old_cache),
             **{path: digest((ROOT / path).read_text(encoding="utf-8")) for path in [
                 VULKAN_CACHE, VULKAN_BENCH, D3D12_BENCH,
-                "crates/renderer-core/src/backends/d3d12/registry/reuse.rs",
+                "crates/sashiko-renderer-core/src/backends/d3d12/registry/reuse.rs",
                 "tools/measure_resource_reuse.py",
             ]},
         },

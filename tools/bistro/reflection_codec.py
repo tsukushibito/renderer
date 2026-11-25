@@ -1,4 +1,4 @@
-"""Encode the padded linear RGBA32F atlas supplied by bistro-bake on stdin."""
+"""Encode the padded linear RGBA32F atlas supplied by renderer-scenes-bake on stdin."""
 import sys
 
 import ispc_texcomp

@@ -11,7 +11,7 @@
 
 ## オフラインの拡散照明ベイク
 
-`renderer-bake` は両バックエンド共通の管理下 Compute を使用する。読み取り専用のシーン・BVH は完全な RGBA32F 画像ビューに一度アップロードし、各バッチの受光点と出力には範囲指定した別バッファを使う。1 グループが 1 個の受光点と最大 2 条件を処理する。3 条件以上は同じシーン画像を保持して時刻を 2 個ずつ dispatch し、固定長の応答を CPU 側で一つのアトラスに格納する。Graph に upload・dispatch・readback を宣言し、転送と計算の同期を通常の lowering に任せる。CPU が結果を読む前と、アップロードした入力を再利用する前に完了を確認する。ベイク終了時に検証レポートを確認する。これはオフライン処理で、描画中の待機やネイティブ資源作成を追加しない。[実機検証](../verification/current.md#bistro-baked-lighting)
+`sashiko-lighting-bake` は両バックエンド共通の管理下 Compute を使用する。読み取り専用のシーン・BVH は完全な RGBA32F 画像ビューに一度アップロードし、各バッチの受光点と出力には範囲指定した別バッファを使う。1 グループが 1 個の受光点と最大 2 条件を処理する。3 条件以上は同じシーン画像を保持して時刻を 2 個ずつ dispatch し、固定長の応答を CPU 側で一つのアトラスに格納する。Graph に upload・dispatch・readback を宣言し、転送と計算の同期を通常の lowering に任せる。CPU が結果を読む前と、アップロードした入力を再利用する前に完了を確認する。ベイク終了時に検証レポートを確認する。これはオフライン処理で、描画中の待機やネイティブ資源作成を追加しない。[実機検証](../verification/current.md#bistro-baked-lighting)
 
 プローブの SH 次数をベイク開始時に選び、同じ HLSL から生成した L1・L2 の Compute と、それぞれに対応するバッファ範囲・dispatch 契約を組にする。1 受光点・最大 2 条件の出力は、可視距離を含めて L1 が 160 バイト、L2 が 320 バイト。静的ライトマップは従来の 160 バイトの経路を使う。描画シェーダーはアトラスのタグから係数数を選ぶ。既存の画像 binding、キュー同期、画像寿命の契約を使う。[形式と補間](implementation-policy.md)・[次数別の検証](../verification/current.md#probe-sh-order)
 
@@ -19,7 +19,7 @@
 
 ## 実装境界
 
-`crates/renderer-core`の`vulkan` feature配下に、初期化、診断、VMAによるbuffer／image所有、
+`crates/sashiko-renderer-core`の`vulkan` feature配下に、初期化、診断、VMAによるbuffer／image所有、
 単一キューのcopy・Compute・Dynamic Rendering、投入・完了管理、資源再利用を実装する。
 ashはVulkanローダーを実行時に読み込み、通常のCPUライブラリビルドへSDK依存を広げない。
 CPUのテスト・benchmark用依存が要求するツールは開発手順で分けて管理する。
@@ -383,12 +383,12 @@ BCのbyte offsetは各mipのceil(幅/4) × ceil(高さ/4) × ブロックbyte数
 D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyは同extent/formatのcolor画像を扱い、
 各実format/usage能力の作成時照会とnative失敗処理を行う。
 
-`renderer`の各レシピと`passes`は通常のGraph／Program／copy APIを使って構築する。
+`sashiko-renderer`の各レシピと`passes`は通常のGraph／Program／copy APIを使って構築する。
 利用側の多段Computeも同じ公開`dispatch`で接続し、標準専用のloweringやnative実行分岐を追加しない。
 三経路の混合構成ではRaster／Compute双方のProgram、画像class、vertex/indexとprovenanceを明示準備し、
 Graph由来のattachment→sampled／storage→copy依存、実Fence完了とCPU結果返却までの所有を維持する。
 実GPUのstrict／shippingと全frameメモリの実行範囲は[検証記録](../verification/current.md#公開三経路のconsumer移行と混合compute受入)に記す。
-`renderer::unlit_forward::snapshot`の便利経路はVulkanEngineの公開入力接続・出力選択とunlit Forwardを組み合わせる。
+`sashiko_renderer::unlit_forward::snapshot`の便利経路はVulkanEngineの公開入力接続・出力選択とunlit Forwardを組み合わせる。
 両crateで同じGraphの同期と実行資源の寿命管理を使う。
 prepassedのshader深度writeを止めてもGraphのattachment accessは保守的read/writeのままとし、
 通常のEARLY/LATE_FRAGMENT_TESTS依存とrendering scope外のbarrierを維持する。
@@ -689,7 +689,7 @@ pool所有者は通常処理中保持し、pool先終了後の最後のbacking�
 
 ### 大きなmeshの準備
 
-常駐側は `renderer_core::geometry::MeshSnapshot` のメッシュ版と描画定数を保持する。Unlitのビュー、色、行列は上位の `renderer::unlit_forward` が解釈する。
+常駐側は `sashiko_renderer_core::geometry::MeshSnapshot` のメッシュ版と描画定数を保持する。Unlitのビュー、色、行列は上位の `sashiko_renderer::unlit_forward` が解釈する。
 常駐入力の利用側Graphは`VulkanEngine::begin_graph`から始め、必要なsnapshotだけを`connect_snapshot`する。
 既存の準備済みframe scratchがmesh handleとrevisionごとの登録pinを保持し、Graphと一緒にcompile・cancel・submitへ進む。
 接続はRasterや出力を追加せず、出力の形式・寸法・個数をViewへ固定しない。

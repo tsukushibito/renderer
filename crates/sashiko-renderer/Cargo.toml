@@ -1,0 +1,33 @@
+[package]
+name = "sashiko-renderer"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Reusable RenderGraph composition for renderer"
+
+[features]
+default = []
+vulkan = ["sashiko-renderer-core/vulkan"]
+d3d12 = ["sashiko-renderer-core/d3d12"]
+development-validation = ["sashiko-renderer-core/development-validation"]
+vulkan-diagnostics = ["sashiko-renderer-core/vulkan-diagnostics"]
+d3d12-diagnostics = ["sashiko-renderer-core/d3d12-diagnostics"]
+presentation = ["sashiko-renderer-core/presentation", "dep:raw-window-handle"]
+tracy = ["sashiko-renderer-core/tracy", "dep:tracy-client"]
+graph-diagnostics = ["sashiko-renderer-core/graph-diagnostics"]
+memory-profiling = ["sashiko-renderer-core/memory-profiling"]
+
+[dependencies]
+sha2 = "0.10.9"
+sashiko-renderer-core = { version = "0.1.0", path = "../sashiko-renderer-core", default-features = false }
+tracy-client = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = { version = "0.6", optional = true }
+
+[dev-dependencies]
+serde_json = "1.0"
+
+[lints]
+workspace = true

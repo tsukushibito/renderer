@@ -22,7 +22,7 @@
 /build/
 
 # Exported equipment distributions
-/crates/training-yard/assets/equipment/dist/
+/examples/training-yard/assets/equipment/dist/
 
 /hosts/winforms/bin/
 /hosts/winforms/obj/

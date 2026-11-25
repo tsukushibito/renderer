@@ -4,7 +4,7 @@ param([switch]$Verify)
 $ErrorActionPreference = 'Stop'
 $repository = Split-Path -Parent $PSScriptRoot
 $manifest = Join-Path $repository 'tools/d3d12-bindings/Cargo.toml'
-$destination = Join-Path $repository 'crates/renderer-core/src/backends/d3d12/bindings.rs'
+$destination = Join-Path $repository 'crates/sashiko-renderer-core/src/backends/d3d12/bindings.rs'
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('renderer-d3d12-bindings-' + [Guid]::NewGuid().ToString('N') + '.rs')
 try {
     cargo run --locked --manifest-path $manifest --target-dir (Join-Path $repository '.tools/d3d12-bindings-target') -- $temporary

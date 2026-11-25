@@ -73,7 +73,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or
     throw 'M4 preparation acceptance requires 64-bit Windows PowerShell or pwsh.'
 }
 $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$shaderVerification = Join-Path $repository 'crates/renderer-core/shaders/regenerate-dxil.ps1'
+$shaderVerification = Join-Path $repository 'crates/sashiko-renderer-core/shaders/regenerate-dxil.ps1'
 if (-not (Test-Path -LiteralPath $shaderVerification -PathType Leaf)) {
     throw "Missing DXIL verification script: $shaderVerification"
 }
@@ -153,14 +153,14 @@ try {
     $summary.commands += @{ executable = $hostExecutable; arguments = $shaderArgs }
     $null = Invoke-LoggedNative $hostExecutable $shaderArgs (Join-Path $OutputDirectory 'shader-verification.log')
     $summary.shader_artifacts = @(
-        Get-ChildItem -LiteralPath 'crates/renderer-core/shaders', 'crates/renderer/shaders/output' -File -Recurse |
+        Get-ChildItem -LiteralPath 'crates/sashiko-renderer-core/shaders', 'crates/sashiko-renderer/shaders/output' -File -Recurse |
             Where-Object Extension -in @('.spv', '.hlsl', '.dxil', '.json', '.vert', '.frag', '.comp') |
             Sort-Object FullName | ForEach-Object {
                 @{ path = $_.FullName.Substring($repository.Length + 1).Replace('\', '/');
                    sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
             }
     )
-    $probeArgs = @('test', '--locked', '-p', 'renderer-core', '--lib', '--no-default-features',
+    $probeArgs = @('test', '--locked', '-p', 'sashiko-renderer-core', '--lib', '--no-default-features',
         '--features', 'vulkan,d3d12,development-validation', '::d3d12_preparation_', '--')
     $inventoryArgs = $probeArgs + @('--list', '--ignored')
     $summary.commands += @{ executable = $cargo; arguments = $inventoryArgs }

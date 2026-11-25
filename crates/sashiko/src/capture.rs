@@ -1,5 +1,5 @@
 //! Offscreen game captures for tools and acceptance tests.
-use renderer::{Frame, Renderer, pipeline::PipelineResult};
+use sashiko_renderer::{Frame, Renderer, pipeline::PipelineResult};
 use std::{io::Write, time::Duration};
 
 /// Top-row-first, tightly packed RGBA8 pixels from a completed frame.

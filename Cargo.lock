@@ -1461,93 +1461,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "renderer"
-version = "0.1.0"
-dependencies = [
- "raw-window-handle",
- "renderer-core",
- "serde_json",
- "sha2",
- "tracy-client",
-]
-
-[[package]]
-name = "renderer-asset"
-version = "0.1.0"
-dependencies = [
- "renderer",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "renderer-asset-cook"
-version = "0.1.0"
-dependencies = [
- "bevy_mikktspace",
- "getrandom",
- "glam",
- "gltf",
- "png",
- "renderer",
- "renderer-asset",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "renderer-bake"
-version = "0.1.0"
-dependencies = [
- "ash",
- "renderer",
- "sha2",
- "vk-mem",
-]
-
-[[package]]
-name = "renderer-bistro"
+name = "renderer-scenes"
 version = "0.1.0"
 dependencies = [
  "half",
- "renderer",
- "renderer-bake",
- "renderer-core",
- "renderer-example-support",
+ "sashiko-example-support",
+ "sashiko-lighting-bake",
+ "sashiko-renderer",
+ "sashiko-renderer-core",
  "serde",
  "serde_json",
  "sha2",
  "tracy-client",
  "winit",
-]
-
-[[package]]
-name = "renderer-core"
-version = "0.1.0"
-dependencies = [
- "ash",
- "criterion",
- "raw-window-handle",
- "renderer",
- "renderer-example-support",
- "serde_json",
- "sha2",
- "tracing",
- "tracing-subscriber",
- "tracy-client",
- "vk-mem",
- "windows-core 0.100.0",
- "windows-sys 0.61.2",
- "winit",
-]
-
-[[package]]
-name = "renderer-example-support"
-version = "0.1.0"
-dependencies = [
- "serde_json",
 ]
 
 [[package]]
@@ -1609,10 +1535,84 @@ dependencies = [
  "glam",
  "hound",
  "raw-window-handle",
- "renderer",
- "renderer-asset",
+ "sashiko-asset",
+ "sashiko-renderer",
  "serde",
  "serde_json",
+ "windows-sys 0.61.2",
+ "winit",
+]
+
+[[package]]
+name = "sashiko-asset"
+version = "0.1.0"
+dependencies = [
+ "sashiko-renderer",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "sashiko-asset-cook"
+version = "0.1.0"
+dependencies = [
+ "bevy_mikktspace",
+ "getrandom",
+ "glam",
+ "gltf",
+ "png",
+ "sashiko-asset",
+ "sashiko-renderer",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "sashiko-example-support"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "sashiko-lighting-bake"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "sashiko-renderer",
+ "sha2",
+ "vk-mem",
+]
+
+[[package]]
+name = "sashiko-renderer"
+version = "0.1.0"
+dependencies = [
+ "raw-window-handle",
+ "sashiko-renderer-core",
+ "serde_json",
+ "sha2",
+ "tracy-client",
+]
+
+[[package]]
+name = "sashiko-renderer-core"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "criterion",
+ "raw-window-handle",
+ "sashiko-example-support",
+ "sashiko-renderer",
+ "serde_json",
+ "sha2",
+ "tracing",
+ "tracing-subscriber",
+ "tracy-client",
+ "vk-mem",
+ "windows-core 0.100.0",
  "windows-sys 0.61.2",
  "winit",
 ]
@@ -1746,8 +1746,8 @@ name = "survivor"
 version = "0.1.0"
 dependencies = [
  "clap",
- "renderer",
  "sashiko",
+ "sashiko-renderer",
  "serde",
  "serde_json",
 ]
@@ -1946,10 +1946,10 @@ dependencies = [
 name = "training-yard"
 version = "0.1.0"
 dependencies = [
- "renderer",
- "renderer-asset",
- "renderer-core",
  "sashiko",
+ "sashiko-asset",
+ "sashiko-renderer",
+ "sashiko-renderer-core",
  "serde",
  "serde_json",
  "windows-sys 0.61.2",

@@ -9,8 +9,8 @@ import re
 from build_material_programs import hash_file, object_pairs
 
 
-SHADERS = Path("crates/renderer/shaders")
-RENDERER_SHADERS = Path("crates/renderer-core/shaders")
+SHADERS = Path("crates/sashiko-renderer/shaders")
+RENDERER_SHADERS = Path("crates/sashiko-renderer-core/shaders")
 ARTIFACT_SUFFIXES = ("spv", "dxil", "reflection.txt", "spirv-reflection.json")
 ASSET_SUFFIXES = (".hlsl", ".hlsli", *(f".{suffix}" for suffix in ARTIFACT_SUFFIXES))
 
@@ -18,7 +18,7 @@ ASSET_SUFFIXES = (".hlsl", ".hlsli", *(f".{suffix}" for suffix in ARTIFACT_SUFFI
 def output_hashes(renderer_manifest: dict) -> dict[str, str]:
     """The shared GLSL generator records these fragments alongside the fullscreen vertex stage."""
     expected = {}
-    prefix = "../../renderer/shaders/output/"
+    prefix = "../../sashiko-renderer/shaders/output/"
     for key, record in renderer_manifest["artifacts"].items():
         if not key.startswith(prefix):
             continue

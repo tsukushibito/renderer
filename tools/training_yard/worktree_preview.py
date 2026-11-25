@@ -21,7 +21,7 @@ import zlib
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = Path("crates/training-yard/assets/equipment/source")
+SOURCE = Path("examples/training-yard/assets/equipment/source")
 
 
 def git(repo, *args, env=None):
@@ -270,7 +270,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", required=True, type=Path,
                         help="release training-yard with presentation, memory-profiling, and selected API")
-    parser.add_argument("--cooker", required=True, type=Path, help="release renderer-asset-cook")
+    parser.add_argument("--cooker", required=True, type=Path, help="release sashiko-asset-cook")
     parser.add_argument("--report", required=True, type=Path, help="new JSON file")
     parser.add_argument("--api", choices=["vulkan", "d3d12"], default="vulkan")
     parser.add_argument("--revision", default="HEAD")

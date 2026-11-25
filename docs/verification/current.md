@@ -5,6 +5,10 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## クレート再配置後の実行確認
+
+Windows の開発検証構成で、移動後の `renderer-scenes` は Vulkan で Bistro と Sponza の cook をそれぞれ 320×180、予熱 1・計測 2 フレーム描画した。小規模 fixture は標準 PBR と手組み Graph の両方で Vulkan 描画し、標準 PBR は D3D12 でも描画した。各実行の検証レポートは警告・エラーともに 0 件だった。CPU の照明ベイク、装備 cook、訓練場の Vulkan ホストキャプチャ、サンプルゲームのヘッドレス 5 tick を確認した。フルシーンの D3D12 描画と画面表示は今回の移行では再計測していない。
+
 <a id="game-engine"></a>
 
 ## ゲーム制作 API の統合受け入れ
@@ -104,11 +108,11 @@ python tools/sponza/audit_o3de_materials.py audit <project> <sdk> report.json ne
 
 ## 装備の cook と配布物の再現性
 
-共有ストアの修復では、2 つの worktree が別々の世代を読んでいる間に、一方の画像をサイズを保って破損させた。読み込み側が検出し、`repair` は画像 1 件だけを再変換・再公開した。両方の読み手が元の画素を取得でき、再修復時の公開量は 0 バイトだった。[プロセス間の回帰テスト](../../crates/renderer-asset-cook/tests/worktree_preview.rs)
+共有ストアの修復では、2 つの worktree が別々の世代を読んでいる間に、一方の画像をサイズを保って破損させた。読み込み側が検出し、`repair` は画像 1 件だけを再変換・再公開した。両方の読み手が元の画素を取得でき、再修復時の公開量は 0 バイトだった。[プロセス間の回帰テスト](../../tools/sashiko-asset-cook/tests/worktree_preview.rs)
 
 Ubuntu 24.04（WSL2）の隔離した tmpfs で、レシピロック待ちの修復プロセスを強制終了した場合と、空き容量を使い切って修復が ENOSPC で失敗した場合を検証した。選択ファイルの内容は一致し、読み手を開いたまま再試行して破損前のバイト列を復元できた。未知のストア形式では修復を拒否した。旧版と新版の cooker を別々の worktree で同時実行する試験では、新版による修復後も双方の GC による回収量は 0 バイトだった。
 
-**worktree での開発。** Windows のプロセス間テストでは、二つの worktree が同じ未生成の装備を要求したとき一方が変換結果を再利用した。共有 PNG の編集で変換した画像は 1 件で、別の worktree のゲームは元の色を維持した。読込中の世代がある間の回収見込みは 0 バイトだった。読み手を閉じると見込みと実回収量が一致し、未コミットの画像から再開できた。マージで画像と取込設定が競合した場合は旧世代を表示し、解決を Git に記録すると採用した側の世代と一致した。[worktree の統合テスト](../../crates/renderer-asset-cook/tests/worktree_preview.rs)
+**worktree での開発。** Windows のプロセス間テストでは、二つの worktree が同じ未生成の装備を要求したとき一方が変換結果を再利用した。共有 PNG の編集で変換した画像は 1 件で、別の worktree のゲームは元の色を維持した。読込中の世代がある間の回収見込みは 0 バイトだった。読み手を閉じると見込みと実回収量が一致し、未コミットの画像から再開できた。マージで画像と取込設定が競合した場合は旧世代を表示し、解決を Git に記録すると採用した側の世代と一致した。[worktree の統合テスト](../../tools/sashiko-asset-cook/tests/worktree_preview.rs)
 
 訓練場の実画面では、ビルド済みの release 実行ファイル、Windows 11、Core i5-14600KF、RTX 3060、Vulkan を使用した。A のゲームを開いたまま B を作成し、B の最初の提示フレームまでと、PNG 保存から変更世代を装着して提示したフレームまでを測る。初回の各 20 回で、装備 4 件の p95 は起動 2.666 秒・編集 0.445 秒、40 件では 3.731 秒・0.752 秒だった。起動は事前に設定した絶対上限 3.666 秒、編集は増加率から求めた上限 0.667 秒を超えた。全 40 回で Bistro の大型原本はポインタのまま、LFS 取得・成果物本体の追加書き込みは 0 バイト、起動時の変換は 0 件だった。[測定手順](../../tools/training_yard/worktree_preview.py)
 
@@ -123,7 +127,7 @@ Ubuntu 24.04（WSL2）の隔離した tmpfs で、レシピロック待ちの修
 
 訓練場の静的 glTF 装備 4 件を空のキャッシュから Rust で cook し、旧配布カタログの SHA-256 と一致すること、および参照する 9 オブジェクト（計 1,745 バイト）のサイズ・ハッシュを確認した。原本とキャッシュを取り除いた状態でも、保存済み ID からメッシュと画像を復元できた。原本と ID ファイルをサブディレクトリに移し、共通画像への相対 URI を更新しても、カタログのハッシュは一致した。
 
-共有 PNG の変更で再実行された変換は画像 1 件だった。不正な PNG、制作ディレクトリ外の参照、接線の accessor を同じバイト数の別の型に変えた入力を検出した。cook に失敗した後も直前の配布世代を開けた。比較用装備の全 6 コーナーで、既存の Bistro cook との位置・法線・接線・UV の成分差は最大 `5.96 × 10⁻⁸` だった。[配布の回帰テスト](../../crates/renderer-asset-cook/tests/equipment_distribution.rs)・[Bistro の接線との比較](../../crates/renderer-asset-cook/src/gltf.rs)・[材質の比較](../../crates/renderer-asset-cook/tests/bistro_parity.rs)
+共有 PNG の変更で再実行された変換は画像 1 件だった。不正な PNG、制作ディレクトリ外の参照、接線の accessor を同じバイト数の別の型に変えた入力を検出した。cook に失敗した後も直前の配布世代を開けた。比較用装備の全 6 コーナーで、既存の Bistro cook との位置・法線・接線・UV の成分差は最大 `5.96 × 10⁻⁸` だった。[配布の回帰テスト](../../tools/sashiko-asset-cook/tests/equipment_distribution.rs)・[Bistro の接線との比較](../../tools/sashiko-asset-cook/src/gltf.rs)・[材質の比較](../../tools/sashiko-asset-cook/tests/bistro_parity.rs)
 
 接線生成を C 参照実装から `bevy_mikktspace` 1.0.0 に移行した。移行判定では、描画順に展開した各コーナーの位置・法線・UV・接線の符号を一致させ、単位接線の XYZ に限り各成分の絶対誤差 `2 × 10⁻⁶` までを許容する。鏡映した UV の境界で同じ頂点が正負の符号を持つケースと、孤立した退化三角形の既定接線もテストした。Windows x86-64 の release で装備 4 件をクリーン cook した結果、異なるメッシュ 3 個すべてが旧配布物とバイト単位で一致した。同一ツールチェーンでの再現性と、配布物の読み込み時の SHA-256 検証には完全一致を使う。
 
@@ -151,7 +155,7 @@ Windows、RTX 3060、Rust 1.99.0。統合コミット `b03c6e42` で、訓練場
 再現には新規出力ディレクトリを指定する。API 引数は `vulkan` または `d3d12`。開発時検証も有効にした最適化構成では、両 API で同じ読み戻しを検査し、teardown 後の警告・エラー 0 を確認した。
 
 ```powershell
-cargo run --locked --release -p renderer-asset-cook -- cook crates/training-yard/assets/equipment/source .tools/asset-perf-dist --cache .tools/asset-perf-cache
+cargo run --locked --release -p sashiko-asset-cook -- cook examples/training-yard/assets/equipment/source .tools/asset-perf-dist --cache .tools/asset-perf-cache
 cargo run --locked --release -p training-yard --example asset_pipeline_perf --features vulkan,d3d12,memory-profiling -- vulkan .tools/asset-perf-dist 00000000000000000000000000000001 .tools/asset-perf-vulkan
 ```
 
@@ -416,7 +420,7 @@ Bistro の１サンプルは全ページの書き出し・再読込・表示を�
 | 側廊の床 (228, 479) | 0.006461 | 0.007924 |
 | 壁 (806, 227) | 0.000171 | 0.000922 |
 
-別途調べた床付近の小形状（配置 88、三角形 304）の中心では R が 0.09231、CPU 参照は 0.01582。全静的配置がライトマップを参照しても、サブテクセルの形状や狭い遮蔽境界の照度まで一致する保証はない。比較を再実行するには `bistro-bake --diffuse-reference points.json --samples 16384` に同じ manifest、look、IBL、出力を指定する。入力はワールド座標の `position` と単位 `normal` の配列。
+別途調べた床付近の小形状（配置 88、三角形 304）の中心では R が 0.09231、CPU 参照は 0.01582。全静的配置がライトマップを参照しても、サブテクセルの形状や狭い遮蔽境界の照度まで一致する保証はない。比較を再実行するには `renderer-scenes-bake --diffuse-reference points.json --samples 16384` に同じ manifest、look、IBL、出力を指定する。入力はワールド座標の `position` と単位 `normal` の配列。
 
 開発検証をコンパイルしない release Vulkan Forward、側廊、960×540、8 フレームのウォームアップ後の 30 フレームで、GPU 時間は平均 2.92 ms。局所鏡面プローブ 11 個、矩形ライトの影、昼１条件を含む。ウォームアップ後のデバイスローカルヒープには 433 件、526,320,128 バイトの割り当てがあった。同条件でライトマップと拡散照度プローブを外した対照は平均 2.84 ms。別の memory-profiling 実行（2 frames in flight、12 フレーム）で通常描画の Rust ヒープ割り当て・再割り当て・解放、およびネイティブリソース作成・破棄はすべて０だった。Sponza の2視点で資産寿命の検証も実施し、実行中のフレームが旧材質を維持すること、転送後の置き換え、容量回復後の再投入を確認した。数値はこのカメラと機器での測定値。
 
@@ -450,10 +454,10 @@ RTX 3060、Vulkan、Forward で同じ2灯を「消灯」「点灯・影なし」
 
 2灯の D32 アトラスは2048×1536、12 MiB。VMA のデバイスローカル割り当て量は、準備した投影バッファを含めて12,588,032バイト増えた。静止・移動の両計測区間でRustの確保・再確保・解放とRendererが発行したネイティブ資源生成・破棄はすべて0。GPU時間はこの撮影条件の観測値で、影パス単独の時間や他機種の予測値ではない。
 
-再現には標準の `bistro` バイナリ、同じSponza cook、アトリウムのIBL、およびそのcookと `o3de-atrium` の組み合わせで作成したGI・反射資産を使用する。[比較スクリプト](../../tools/sponza/compare_rect_shadows.py) は2ビューの完成画像・直接光画像を原寸PNGで保存し、側廊1%以下、中央通路の変化5%以内を検査する。ベイカーでも `--look o3de-atrium` を選べる。
+再現には標準の `renderer-scenes` バイナリ、同じSponza cook、アトリウムのIBL、およびそのcookと `o3de-atrium` の組み合わせで作成したGI・反射資産を使用する。[比較スクリプト](../../tools/sponza/compare_rect_shadows.py) は2ビューの完成画像・直接光画像を原寸PNGで保存し、側廊1%以下、中央通路の変化5%以内を検査する。ベイカーでも `--look o3de-atrium` を選べる。
 
 ```text
-python tools/sponza/compare_rect_shadows.py --binary target/release/bistro.exe --manifest COOK/manifest.json --ibl-manifest IBL/manifest.json --baked-lighting light.gi --reflection-probes light.reflections --output captures
+python tools/sponza/compare_rect_shadows.py --binary target/release/renderer-scenes.exe --manifest COOK/manifest.json --ibl-manifest IBL/manifest.json --baked-lighting light.gi --reflection-probes light.reflections --output captures
 ```
 
 比較スクリプトの `--verify-cache` で太陽の影を切った側廊を撮影した。Vulkan・D3D12それぞれでForward・Forward+・Deferredの全方式が矩形の影を保持し、移動後の部分更新と全再描画のHDR RGB全画素が一致した。
@@ -549,13 +553,13 @@ RGB は表示画像の領域平均（0–255）。日陰の床では、矩形な
 [測定データ](../../assets/verification/sponza-sh-quality-evidence.zip) には光線、係数、受光点参照、図と、比較に必要な入力キャプチャを収録した。リポジトリのルートから実行する。新しくベイクする場合は別途クック済み Sponza と HDR 環境を用意する。Python 依存は [Bistro の固定バージョン](../../tools/bistro/requirements.txt) の NumPy と Pillow。次は全景を新しい出力先に再現する例。
 
 ```powershell
-cargo build --release --locked -p renderer-bistro --no-default-features --features bake-tool --bin bistro-bake
+cargo build --release --locked -p renderer-scenes --no-default-features --features bake-tool --bin renderer-scenes-bake
 $sponza = (Resolve-Path .tools/sponza-display).Path
 Expand-Archive assets/verification/sponza-sh-quality-evidence.zip build/sh-evidence
 $captures = (Resolve-Path build/sh-evidence/capture-inputs/arcade-measure).Path
 $manifest = "$sponza/cooked/manifest.json"
 $environment = "$sponza/o3de-comparison/o3de-lighting/o3de-atrium/environment/manifest.json"
-$baker = (Resolve-Path target/release/bistro-bake.exe).Path
+$baker = (Resolve-Path target/release/renderer-scenes-bake.exe).Path
 $run = "build/reproduce-sh"
 python -B tools/sponza/compare_probe_sh_view.py --captures $captures --baker $baker --manifest $manifest --environment $environment --out "$run/courtyard"
 ```
@@ -766,7 +770,7 @@ ORCA 公式配布の **Bistro_Exterior_1.png** に、スクーター、車止め
 
 日向・日陰の位置関係と店先の明るさが近づいた。暗部の外壁には褐色が残り、右手の路面では建物の影の境界がずれる。材質の原本を保持し、全視点で固定の光を使った。`street-mid` と `material-detail` の白・黒端の画素率は増えなかった（SDR 符号値の加重輝度が 1 以下または 254 以上）。ルートの先頭 2 秒を両設定で撮影した。柵や葉の時間方向の安定性は映像での観察対象で、静止画の輝度指標には含めていない。[実行手順](../guides/examples.md#bistro-daylight)
 
-Vulkan／D3D12 の実 GPU で、街角 1 視点、既存 7 視点、ルート 60 フレームの各 HDR・SDR・深度が既存の `scene` 閾値内だった。既定の `street` は両 API とも変更前の 1280 × 720 キャプチャと 3 面がバイト一致した。Vulkan の街角では `bistro-graph` と `bistro` も同じ 3 面がバイト一致した。実行はオフスクリーンの開発検証構成で、警告・エラーは各 0 件。
+Vulkan／D3D12 の実 GPU で、街角 1 視点、既存 7 視点、ルート 60 フレームの各 HDR・SDR・深度が既存の `scene` 閾値内だった。既定の `street` は両 API とも変更前の 1280 × 720 キャプチャと 3 面がバイト一致した。Vulkan の街角では `renderer-scenes-graph` と `renderer-scenes` も同じ 3 面がバイト一致した。実行はオフスクリーンの開発検証構成で、警告・エラーは各 0 件。
 
 <a id="engine-integration"></a>
 
@@ -774,7 +778,7 @@ Vulkan／D3D12 の実 GPU で、街角 1 視点、既存 7 視点、ルート 60
 
 Windows build 26200、GeForce RTX 3060、NVIDIA 610.88、Rust 1.99.0 で訓練場の Vulkan・D3D12 を実行した。各 API の最適化した厳格構成と製品構成で、標準ウィンドウ 29 フレームに続けて、同じデバイスでホストが組み立てた監視モニター・輪郭込みの 24 フレームを提示した。ヘッドレス 29 枚とホスト 24 フレームの入力・色・ID・深度・全 4 カスケードを合わせて各構成 293 ファイルが基準内に収まった。製品構成では画面外の射線 5 フレームも、準備後の記録から取得までの各メモリイベントが 0 件だった。画像比較は提示元の GPU 画像とヘッドレスの読み戻しに対して行い、デスクトップの色管理やディスプレイの出力は測定範囲外とした。[比較条件と追試手順](../guides/tooling.md#scene-materials)
 
-主画面の光を赤、装備プレビューの光を緑に固定した。主カメラの近クリップ面の外側に遮蔽物を追加すると受け面の中央だけが暗くなり、横へ動かすと影が移り、削除後は全画素が元に戻った。受け面の全画素の深度は 0.5 のまま。準備数を超えるプレビュー追加が失敗したフレームも、既存プレビューの全画素が同じだった。[照明・影の検査](../../crates/training-yard/src/replay/lighting.rs)
+主画面の光を赤、装備プレビューの光を緑に固定した。主カメラの近クリップ面の外側に遮蔽物を追加すると受け面の中央だけが暗くなり、横へ動かすと影が移り、削除後は全画素が元に戻った。受け面の全画素の深度は 0.5 のまま。準備数を超えるプレビュー追加が失敗したフレームも、既存プレビューの全画素が同じだった。[照明・影の検査](../../examples/training-yard/src/replay/lighting.rs)
 
 全量 Bistro Exterior の street（2,832,120 三角形、1920 × 1080、24 フレーム予熱・120 フレーム描画、同時提出 2、Bloom 無効）を、二クレートへの再配置直前の `3254177` と比較した。同じ cook・IBL を用い、移行後の `bistro` と `bistro-graph` を二つの API と厳格・製品の両構成で実行した。各バックエンドの 4 通りすべてで移行前の HDR・深度・SDR と SHA-256 が一致した。厳格構成の native 警告・エラーは全経路で 0 件。[Bistro の入力と再生条件](../guides/development.md)
 
@@ -785,25 +789,25 @@ Windows build 26200、GeForce RTX 3060、NVIDIA 610.88、Rust 1.99.0 で訓練�
 
 同じ street 条件で製品構成に `memory-profiling` を加え、両バイナリ・両 API の各 120 フレームを計測した。全 4 回とも Rust と VMA ホストの確保・再確保・解放、Renderer 発行の native 作成・破棄・メモリとディスクリプターの確保・解放は各 0 件だった。準備済み native オブジェクトのリセットは各 240 回で、画像ハッシュは上表と一致した。起動、ロード、予熱、最終キャプチャは計測区間外。
 
-workspace の外に `renderer` だけを直接依存に持つアプリを置き、空の 3D シーンと赤い HUD を一つの Frame に記録した。厳格構成の Vulkan と D3D12 で 2 × 1 の結果がともに黒と赤の不透明 2 画素になった。バックエンド選択と画像領域には `renderer::core` の再公開型を使用した。
+workspace の外に `sashiko-renderer` だけを直接依存に持つアプリを置き、空の 3D シーンと赤い HUD を一つの Frame に記録した。厳格構成の Vulkan と D3D12 で 2 × 1 の結果がともに黒と赤の不透明 2 画素になった。バックエンド選択と画像領域には `sashiko_renderer::core` の再公開型を使用した。
 
-変更のない `4d1e6eb` から受入スクリプトを実行し、全 24 コマンドが成功した。各構成 293 ファイル、計 1,172 ファイルはすべて基準とバイト一致した（基準 ZIP の SHA-256 は `a33b2c846e9144452be41ea4683f0e02d43cff04993ae1feb5f8442aa70f17dc`）。監視映像の提示中、8 枚目の後に実ウィンドウを 384 × 192 から 320 × 160 に変更して以降の 16 枚も提示した。各ビルド構成で訓練場の実機テスト 13 件に加え、Vulkan と D3D12 のホスト所有デバイス・画像の試験が通過した。最小化中は描画を休止し、復帰後の寸法で提示できた。GPU とドライバーの実機範囲は上記の Windows 環境に限る。[ウィンドウ復帰の試験](../../crates/training-yard/tests/window.rs)・[受入手順](../guides/tooling.md#scene-materials)
+変更のない `4d1e6eb` から受入スクリプトを実行し、全 24 コマンドが成功した。各構成 293 ファイル、計 1,172 ファイルはすべて基準とバイト一致した（基準 ZIP の SHA-256 は `a33b2c846e9144452be41ea4683f0e02d43cff04993ae1feb5f8442aa70f17dc`）。監視映像の提示中、8 枚目の後に実ウィンドウを 384 × 192 から 320 × 160 に変更して以降の 16 枚も提示した。各ビルド構成で訓練場の実機テスト 13 件に加え、Vulkan と D3D12 のホスト所有デバイス・画像の試験が通過した。最小化中は描画を休止し、復帰後の寸法で提示できた。GPU とドライバーの実機範囲は上記の Windows 環境に限る。[ウィンドウ復帰の試験](../../examples/training-yard/tests/window.rs)・[受入手順](../guides/tooling.md#scene-materials)
 
-公開例の `rust_pipeline` を実行し、`toon_views`、`two_views`、`textured_view`、`mixed_post`、`pbr_forward` を両バックエンドで再生した。最後の例はホストの HDR コピー、Bloom、影再利用を含み、中心の SDR は両 API とも [252, 118, 118, 255]、深度は 0.976431、2 枚目で 4 カスケードを再利用した。graphics を外した訓練場の直接依存は `renderer-core` だけとなり、二つの Compute の逆順回収試験も両 API で通過した。workspace の全機能テストは 611 件成功、通常実行で除外した実機等のテストは 166 件。上記の実機試験は別途明示実行した。[公開例](../guides/examples.md)・[core 単独の試験](../../crates/training-yard/tests/core_compute.rs)
+公開例の `rust_pipeline` を実行し、`toon_views`、`two_views`、`textured_view`、`mixed_post`、`pbr_forward` を両バックエンドで再生した。最後の例はホストの HDR コピー、Bloom、影再利用を含み、中心の SDR は両 API とも [252, 118, 118, 255]、深度は 0.976431、2 枚目で 4 カスケードを再利用した。graphics を外した訓練場の直接依存は `sashiko-renderer-core` だけとなり、二つの Compute の逆順回収試験も両 API で通過した。workspace の全機能テストは 611 件成功、通常実行で除外した実機等のテストは 166 件。上記の実機試験は別途明示実行した。[公開例](../guides/examples.md)・[core 単独の試験](../../examples/training-yard/tests/core_compute.rs)
 
-隊員と装備交換に続く射線の 5 フレームを、単体ウィンドウ・ヘッドレス・ホスト所有 Graph の 3 経路で再生した。48 × 24 の出力で、ガラスを通した赤い弾道、緑の障害物による遮蔽、その手前に移動した弾道、消えた後の背景を全画素で照合した。途中の 2 フレームは 3D が 24 × 12、白い照準は出力の (1, 1) の 1 画素だけで、色差は各成分 1 以下。Windows Vulkan・D3D12 の厳格構成・製品構成で各 3 経路が成功し、実ウィンドウでは各 29 枚を提示した。ホストの射線 5 フレームは製品構成で毎回のメモリイベントがすべて 0 件だった。[描画と判定](../../crates/training-yard/src/effects.rs)・[再現手順](../guides/tooling.md)
+隊員と装備交換に続く射線の 5 フレームを、単体ウィンドウ・ヘッドレス・ホスト所有 Graph の 3 経路で再生した。48 × 24 の出力で、ガラスを通した赤い弾道、緑の障害物による遮蔽、その手前に移動した弾道、消えた後の背景を全画素で照合した。途中の 2 フレームは 3D が 24 × 12、白い照準は出力の (1, 1) の 1 画素だけで、色差は各成分 1 以下。Windows Vulkan・D3D12 の厳格構成・製品構成で各 3 経路が成功し、実ウィンドウでは各 29 枚を提示した。ホストの射線 5 フレームは製品構成で毎回のメモリイベントがすべて 0 件だった。[描画と判定](../../examples/training-yard/src/effects.rs)・[再現手順](../guides/tooling.md)
 
-空で起動して箱を移動・削除した後、個別の姿勢を持つ PBR 個体 17 体と、起動時に存在しなかった Toon 材質を標準 `prepare_scene` でロードし、両方の色を描画できた。共通 Runtime の試験では、初期 4 KiB の転送領域を拡張して 128 KiB の全バイトを書き戻し、拡張前に保持した登録バッファーの内容を読み戻した。不正な画像を含む拡張に失敗した直後にも、以前の上限と登録内容が維持された。Vulkan・D3D12 の厳格構成と製品構成で確認した。[ロード後の描画](../../crates/training-yard/tests/standard_motion.rs)・[同一デバイスでの容量変更](../../crates/renderer-core/tests/shared_runtime.rs)
+空で起動して箱を移動・削除した後、個別の姿勢を持つ PBR 個体 17 体と、起動時に存在しなかった Toon 材質を標準 `prepare_scene` でロードし、両方の色を描画できた。共通 Runtime の試験では、初期 4 KiB の転送領域を拡張して 128 KiB の全バイトを書き戻し、拡張前に保持した登録バッファーの内容を読み戻した。不正な画像を含む拡張に失敗した直後にも、以前の上限と登録内容が維持された。Vulkan・D3D12 の厳格構成と製品構成で確認した。[ロード後の描画](../../examples/training-yard/tests/standard_motion.rs)・[同一デバイスでの容量変更](../../crates/sashiko-renderer-core/tests/shared_runtime.rs)
 
-Windows Vulkan・D3D12 の訓練場で、1,024 体を全件・16 体・0 件更新した。保持シーンとホスト配列の 128 × 64 出力は各段階でバイト一致し、全画素の色分類と位置も期待値に一致した。2 体分のビューで容量超過を検出してその描画を省き、ロード境界で再準備した。提出済みの実行枠の回収と、読み戻し結果の返却を別々に要求することを確認した。製品構成は各更新から二つの描画と結果返却まで、確保・再確保・解放および native 作成・破棄が各 0 件だった。[標的の入力と画像照合](../../crates/training-yard/src/targets.rs)
+Windows Vulkan・D3D12 の訓練場で、1,024 体を全件・16 体・0 件更新した。保持シーンとホスト配列の 128 × 64 出力は各段階でバイト一致し、全画素の色分類と位置も期待値に一致した。2 体分のビューで容量超過を検出してその描画を省き、ロード境界で再準備した。提出済みの実行枠の回収と、読み戻し結果の返却を別々に要求することを確認した。製品構成は各更新から二つの描画と結果返却まで、確保・再確保・解放および native 作成・破棄が各 0 件だった。[標的の入力と画像照合](../../examples/training-yard/src/targets.rs)
 
-Vulkan・D3D12 のホスト再生で、左の鎧とその先端、右の胴、背景を ID 画像から読み戻した。上位バイトを含む u32 ID は完全一致し、先端を動かすとクリック結果も変わった。別途、横に移したカメラからのマウス照会を提出し、隊員の削除・同一スロットへの再生成後に結果を取得した。クリック時の部位は旧世代の鎧、新しい対応表の同じ ID は新世代の鎧を指し、古い選択を棄却できた。ホストの輪郭は選択部位の外側 1 画素だけがマゼンタになり、ID 画像から計算した全画素と一致した。プレビューをカットするとその 4 カスケードだけを再描画し、主画面の 4 カスケードは再利用した。次フレームは両方が再利用に戻った。開発検証ありと最適化した製品構成で実行し、製品構成の第 5～14 フレームに各確保／解放系イベントはなかった。[選択と世代の照合](../../crates/training-yard/src/replay/selection.rs)・[影の履歴試験](../../crates/training-yard/src/replay.rs)
+Vulkan・D3D12 のホスト再生で、左の鎧とその先端、右の胴、背景を ID 画像から読み戻した。上位バイトを含む u32 ID は完全一致し、先端を動かすとクリック結果も変わった。別途、横に移したカメラからのマウス照会を提出し、隊員の削除・同一スロットへの再生成後に結果を取得した。クリック時の部位は旧世代の鎧、新しい対応表の同じ ID は新世代の鎧を指し、古い選択を棄却できた。ホストの輪郭は選択部位の外側 1 画素だけがマゼンタになり、ID 画像から計算した全画素と一致した。プレビューをカットするとその 4 カスケードだけを再描画し、主画面の 4 カスケードは再利用した。次フレームは両方が再利用に戻った。開発検証ありと最適化した製品構成で実行し、製品構成の第 5～14 フレームに各確保／解放系イベントはなかった。[選択と世代の照合](../../examples/training-yard/src/replay/selection.rs)・[影の履歴試験](../../examples/training-yard/src/replay.rs)
 
-訓練場のホスト再生 24 フレームで、主画面と装備プレビューに加えて監視カメラを第 6・12・18・24 フレームだけ描いた。監視パネルの全画素は、第 1～5 フレームがマゼンタの待機色、更新フレームが同じ Graph 内のカメラ画像、それ以降が前回提出から保持した画像と一致した。初回は左の隊員、以降は右の隊員のみが映り、パネル外の全画素は合成前の主画面と一致した。Windows Vulkan・D3D12 の開発検証ありと製品構成で成功し、製品構成の第 5～14 フレームは変更・提出・画像保持・再利用・結果返却を含めて確保／解放系イベント各 0 件だった。[監視モニターの記録と照合](../../crates/training-yard/src/replay/monitor.rs)
+訓練場のホスト再生 24 フレームで、主画面と装備プレビューに加えて監視カメラを第 6・12・18・24 フレームだけ描いた。監視パネルの全画素は、第 1～5 フレームがマゼンタの待機色、更新フレームが同じ Graph 内のカメラ画像、それ以降が前回提出から保持した画像と一致した。初回は左の隊員、以降は右の隊員のみが映り、パネル外の全画素は合成前の主画面と一致した。Windows Vulkan・D3D12 の開発検証ありと製品構成で成功し、製品構成の第 5～14 フレームは変更・提出・画像保持・再利用・結果返却を含めて確保／解放系イベント各 0 件だった。[監視モニターの記録と照合](../../examples/training-yard/src/replay/monitor.rs)
 
-訓練場の Vulkan・D3D12 の画面外出力 48 × 24 は 24 枚すべてがバイト一致した。実ウィンドウでは 384 × 192 で各 24 枚を提示した。最適化した `presentation,vulkan,d3d12,memory-profiling` 構成のウィンドウ再生では、第 5～14 フレームで入力更新から記録・提示・再試行・回収までの Rust、VMA ホスト、native の確保／解放系イベントはそれぞれ 0 件だった。OS イベントのポンプ、初期化・ロード・破棄はこの計測の外にある。[再現手順](../guides/tooling.md)・[計測範囲](../../crates/training-yard/src/window.rs)
+訓練場の Vulkan・D3D12 の画面外出力 48 × 24 は 24 枚すべてがバイト一致した。実ウィンドウでは 384 × 192 で各 24 枚を提示した。最適化した `presentation,vulkan,d3d12,memory-profiling` 構成のウィンドウ再生では、第 5～14 フレームで入力更新から記録・提示・再試行・回収までの Rust、VMA ホスト、native の確保／解放系イベントはそれぞれ 0 件だった。OS イベントのポンプ、初期化・ロード・破棄はこの計測の外にある。[再現手順](../guides/tooling.md)・[計測範囲](../../examples/training-yard/src/window.rs)
 
-第 15 フレームから二つの装備を別のワーカーに要求し、後から要求した黄色い鎧を先に受け取って GPU に登録した。遅れて届いた鎧と不正な頂点インデックスを持つ装備を受けた後も、黄色い鎧の外形と色を維持した。隊員を削除したフレームには体も鎧も映らず、同じ位置に生成した新しい隊員には旧世代宛ての装備が適用されなかった。画面外再生では未回収の旧画像を保ったまま資産の更新を試み、両 API とも所有者の返却を求めた。旧画像の取得後に同じ資産を準備できた。隊員削除の後にも、その直前に提出した黄色い鎧を画像から確認した。[装備の要求と完了通知](../../crates/training-yard/src/yard/equipment.rs)・[旧画像の回収](../../crates/training-yard/src/standalone.rs)
+第 15 フレームから二つの装備を別のワーカーに要求し、後から要求した黄色い鎧を先に受け取って GPU に登録した。遅れて届いた鎧と不正な頂点インデックスを持つ装備を受けた後も、黄色い鎧の外形と色を維持した。隊員を削除したフレームには体も鎧も映らず、同じ位置に生成した新しい隊員には旧世代宛ての装備が適用されなかった。画面外再生では未回収の旧画像を保ったまま資産の更新を試み、両 API とも所有者の返却を求めた。旧画像の取得後に同じ資産を準備できた。隊員削除の後にも、その直前に提出した黄色い鎧を画像から確認した。[装備の要求と完了通知](../../examples/training-yard/src/yard/equipment.rs)・[旧画像の回収](../../examples/training-yard/src/standalone.rs)
 
 ウィンドウ試験では各 API で 3 枚を提示した後、最小化してゼロ寸法の描画コールバックが呼ばれず、160 × 112 への復帰後さらに 3 枚提示し、破棄まで検証した。D3D12 で旧出力が提示側に保持されたまま次の描画が失敗する事例を訓練場で再現した。描画中の出力に加え、提示枠数だけ同じ形式・寸法の画像を準備すると同じ操作列が通った。ビューの変更試験では新しい Toon ビューが PBR 資産を拒否した後、以前の PBR ビューで三角形の深度 0.5 を両 API で読み戻した。
 
@@ -835,7 +839,7 @@ Vulkan の descriptor 予約では、同じバインディングを深度付き�
 | 常駐メッシュ | メッシュと材質のスナップショットを保持して描画先を 32×16 から未予約の 23×13 に変更し、HDR 画素を確認した。別の試験では更新を 128 バイトずつ転送し、新しい版が揃うまで旧版を描画できた。 |
 | テクスチャと描画領域 | BC1・BC3・BC5・BC7 を含む画像の末端 mip をシェーダーで読み、BC3 の複数ブロック行はコピー後のバイト列も照合した。部分転送した mip の初期化状態と全 mip 転送時の状態を確認した。viewport と scissor は描画後の画素で有効範囲を照合した。 |
 | ウィンドウと外部画像 | Windows の二つのホスト所有ウィンドウで同じ Runtime の画像を表示した。片方を閉じている間も他方で表示できた。ホスト所有テクスチャを Graph で更新し、使用中の返却拒否、退役後の返却と再登録、返却した画像の値を確認した。 |
-| 照明と合成 | Forward、Forward+、Deferred の不透明・半透明で 257 番目の点光源による画素を単灯の参照と比較した。Forward+ の 129 灯ではタイルごとのマスクも照合した。標準出力のシェーダーは `renderer` への移動前後で同じ生成物を使う。 |
+| 照明と合成 | Forward、Forward+、Deferred の不透明・半透明で 257 番目の点光源による画素を単灯の参照と比較した。Forward+ の 129 灯ではタイルごとのマスクも照合した。標準出力のシェーダーは `sashiko-renderer` への移動前後で同じ生成物を使う。 |
 
 Windows の RTX 3060 で統合版 `7a5d119` と `renderer-jw0` の Bistro 小規模 fixture を比較した。
 Vulkan／D3D12、それぞれ開発検証あり／なしで 6 ケースずつ、計 24 ケースの HDR・SDR・深度・影など 236 キャプチャ
@@ -860,7 +864,7 @@ private 項目を含む rustdoc、HTML ドキュメントのリンク検査も�
 個別プロセスで実行した core の実機・計測受入は開発検証構成 122 件、通常構成 82 件が通過した。
 実ウィンドウの smoke と tour では、標準・独自 Raster の 16 実行、合計 384 フレームについて寸法、描画画素数、画像ダイジェストを照合した。
 開発検証の Vulkan Core／SyncVal と D3D12 Debug Layer／GBV は破棄まで警告・エラー 0 件だった。
-同じ 2 構成で `renderer` の実機試験 34 件と Bistro の 11 件、CPU 上での異種ビュー検査、公開例の 19 通りの実行がそれぞれ成功した。
+同じ 2 構成で `sashiko-renderer` の実機試験 34 件と Bistro の 11 件、CPU 上での異種ビュー検査、公開例の 19 通りの実行がそれぞれ成功した。
 
 ## ビューパイプラインの差し替え
 
@@ -1048,13 +1052,13 @@ Vulkan Core／SyncValとD3D12 Debug Layer／GBVを有効にした構成で、警
 
 両API・両構成で外部材質バンドル、常駐資源の入れ替え・mip診断、表示24フレームとresize・最小化・復帰・再生・未退役フレームを残した終了を確認した。
 Vulkanは128×96のfixture、D3D12厳格は801×601のfixture、D3D12製品は801×601の全量シーンでシャドウを毎フレーム描画する設定を使った。
-単体`renderer-core`のBistroも、4構成のfixtureで出力48枚が移行前と一致した。
+単体`sashiko-renderer-core`のBistroも、4構成のfixtureで出力48枚が移行前と一致した。
 手順は[小さなPBRシーン](../guides/examples.md#pbr-forward-example)と[Bloomの受入](../guides/development.md#bistro-bloom-fixture)を参照する。
 画像照合と計測のログは`.tools/renderer-2l7/`に保存した。
 
 ## 標準 PBR Forward の公開レシピ
 
-`renderer-aqe`。容量集約は`renderer_core::capacity`で行い、`renderer`の`pbr_forward`が
+`renderer-aqe`。容量集約は`sashiko_renderer_core::capacity`で行い、`sashiko-renderer`の`pbr_forward`が
 1×のPBR・4カスケード・HDR／SDR出力を公開Graph APIで構成する。
 CPUテストで予約登録の原子性、最大描画数と容量超過後の再試行、既存の影画像の再利用、既存ターゲットへの描画、
 書き込み先の重複拒否を確認した。影の依存・資源の版・GPU完了までの所有は既存のGraphとRuntimeの契約を使う。
@@ -1064,11 +1068,11 @@ Bistro素材を使わない64×48の小シーンで、同じ公開レシピか�
 Vulkan／D3D12それぞれの最適化製品・厳格構成で、SDRとD32は両経路でバイト一致し、
 三角形の内外の画素・深度と、ネイティブ検証が有効な構成での正常な解放も確認した。
 
-WindowsのRTX 3060（610.88）で、`renderer`のBistroを移行前`c152abb`と同一API・構成内で比較した。
+WindowsのRTX 3060（610.88）で、`sashiko-renderer`のBistroを移行前`c152abb`と同一API・構成内で比較した。
 129×97 fixtureでForward系3モード、Deferred、1×／4× MSAA、直接／packed／間接描画、インスタンス、Bloom、FXAAを実行し、
 `full-a3`／`ibl-final`の全量シーンで36フレームの巡回を行った。HDR、SDR、D32、4カスケードと診断画像は
 移行前との364比較、再利用と強制再描画の324比較でバイト一致した。固定視点では全カスケードが5回、巡回では順に3、15、24、32回ヒットした。
-影を無効にした4枚は全画素がクリア値だった。個別にビルドした`renderer-core`のBistroのfixtureも従来の48出力と一致した。
+影を無効にした4枚は全画素がクリア値だった。個別にビルドした`sashiko-renderer-core`のBistroのfixtureも従来の48出力と一致した。
 
 3 warm-upフレーム・同時投入3枠の通常588フレームで、Graph構築から投入・退役・結果返却までを計測した。
 Rust／VMA hostの確保・再確保・解放、Rendererによるネイティブ資源・メモリの作成・破棄、descriptorの確保・解放は0件だった。
@@ -1087,7 +1091,7 @@ Vulkanは128×96のfixture、D3D12厳格は801×601のfixture、D3D12製品は80
 標準Forwardと出力レシピの間に自作copyを挟むCPUサンプルで、同じGraphへの合成と入力切替を確認した。
 CPUテストでは予約の重複・容量不足からの再試行、Bistroの126構成と、透明描画の有無による4× MSAAのresolveを確認した。
 シャドウ画像のimport、書き込み、投入受理後の版の公開は既存のGraphとRuntimeの同期・寿命契約を使う。
-全量描画は`renderer`のBistro、Graphの直接利用は`renderer-core`のBistroで確認できる。
+全量描画は`sashiko-renderer`のBistro、Graphの直接利用は`sashiko-renderer-core`のBistroで確認できる。
 
 WindowsのRTX 3060（610.88）で、Vulkan／D3D12それぞれの最適化製品・厳格構成を実行した。
 129×97 fixtureはForward系3モード、Deferred、対応する1×／4× MSAA、直接／packed／間接描画、個別／インスタンス描画、
@@ -1115,7 +1119,7 @@ D3D12製品版のfixtureは801×601と1601×901で24フレームを表示し、�
 
 ## 移行前のBistroパイプラインの比較基準
 
-`renderer-12t`の`renderer`サンプルは、4カスケード、シーン描画、Bloom、トーンマッピング、SDR出力を
+`renderer-12t`の`sashiko-renderer`サンプルは、4カスケード、シーン描画、Bloom、トーンマッピング、SDR出力を
 一つの準備済みYAMLパイプラインで構築する。キャッシュが有効なカスケードでは、Graphに取り込んだ既存のD32画像を読み、
 生成パスとその描画リストを省く。更新時は永続画像をclearして描画し、投入受理後にその版を次フレームへ渡す。
 この選択はGraph構築時に確定し、既存のGraphによる同期と寿命管理を使用する。
@@ -1146,7 +1150,7 @@ Renderer発行のネイティブ資源・メモリの作成・破棄、descripto
 未完了フレームを残した終了を確認した。D3D12の128×96製品構成は両版で24フレームを表示し、初回の線形表示元が一致した。
 両試行とも終了時の未完了数は0件だった。未完了フレームの終了試験は801×601で行った。
 
-`renderer-core`のBistroは公開Rust APIでパスとGraphを構築する。同じGPUのVulkan／D3D12で、
+`sashiko-renderer-core`のBistroは公開Rust APIでパスとGraphを構築する。同じGPUのVulkan／D3D12で、
 最適化した製品・厳格構成のfixtureと640×480の全量Bistro（street）を実行した。各APIの製品と厳格、
 および構成ごとの両APIの画像比較が受入基準内に収まり、厳格検証は警告・エラー0件だった。
 
@@ -1174,7 +1178,7 @@ YAMLから材質型のProgramを解決し、カスケード・材質資源・カ
 計測区間はGraph構築から結果返却までとした。厳格構成のnative warning/errorとD3D12 corruptionは0件だった。
 別のステージを指すようにbundleとハッシュを改変した試行では、Bistroのレビュー済みバイナリとの照合でフレーム実行前に拒否した。
 
-`renderer`の`yaml_pipeline`も同じGPUで、`build`から一つのRasterパスへ二つのProgramと材質別textureを設定した。
+`sashiko-renderer`の`yaml_pipeline`も同じGPUで、`build`から一つのRasterパスへ二つのProgramと材質別textureを設定した。
 入力順を保った描画が1／2／3件のとき、9×7画像の全画素は順に赤／黄／青になった。
 製品・厳格の両release構成で、4経路×2API×2構成×24回の合計384通常フレームを計測し、
 Rustの確保・再確保・解放、VMAのhostイベント、nativeの作成・破棄とdescriptorの確保・解放は0件だった。
@@ -1241,10 +1245,10 @@ Vulkan Core／SyncVal、D3D12 Debug Layer／GBVのwarningとerrorは全12 runで
 
 ## 配布ビルドと起動時のバックエンド選択
 
-`renderer-6yh`。WindowsのRTX 3060（610.88）で`windowed`と`bistro`のreleaseビルドを
+`renderer-6yh`。WindowsのRTX 3060（610.88）で`windowed`と`renderer-scenes`のreleaseビルドを
 Vulkan専用、D3D12専用、両対応で作成した。EXE中の既知のSPIR-V／DXILを元ファイルの全byte列と照合した。
 
-| releaseビルド | `windowed`のSPIR-V／DXIL | `bistro`のSPIR-V／DXIL |
+| releaseビルド | `windowed`のSPIR-V／DXIL | `renderer-scenes`のSPIR-V／DXIL |
 | --- | --- | --- |
 | Vulkan専用 | 4／0 | 27／0 |
 | D3D12専用 | 0／5 | 0／27 |
@@ -2189,7 +2193,7 @@ Godotのallocation event観測、B4相当の描画と最終表示の受入は未
 ## Bistroの実行用cookと二APIのForward PBR
 
 `renderer-7ft.3.1`／`.3.2`と、実装後レビュー・計測の`renderer-bj6`。
-利用側の`tools/bistro/cook.py`と`bistro` exampleを公開Graphへ接続した。
+利用側の`tools/bistro/cook.py`と`renderer-scenes` exampleを公開Graphへ接続した。
 Model／scene／材質recipeをRenderer本体へ追加せず、同じcook・camera・shader契約をVulkanとD3D12で実行する。
 実行方法は[開発ガイド](../guides/development.md#bistro-pbr)、
 現在の境界は[実装方針](../design/implementation-policy.md#bistro-runtime-cook)を参照する。
@@ -2678,7 +2682,7 @@ build manifest、各run、counterの全値、受理／拒否したtrace、実IP�
 未準備や固定上限超過を通常backpressureと分け、同Graph内の累積staging／range／資源不足も
 失敗時に判定する。追加の診断走査を通常成功経路へ持ち込まない。
 D3D12表示例の3440×1440 verifyは19,814,400 byteを要求し、16 MiB上限を準備前に明示拒否する。
-Graph／Programの画像形式は単一の`renderer_core::ImageFormat`とし、用途別native formatと能力検査は維持した。
+Graph／Programの画像形式は単一の`sashiko_renderer_core::ImageFormat`とし、用途別native formatと能力検査は維持した。
 READMEも二APIの現行対応範囲と三層の利用入口へ更新した。
 
 Windows x64、Intel Core i5-14600KF、Rust 1.99.0、最適化有効。
@@ -2894,7 +2898,7 @@ release CPUは全feature325件、二API製品301件、D3D12単独の製品188件
 `frame_scaling`の古いexample CPU試験も現行の容量・pool・公開構成へ更新した。
 ライブラリの同期・寿命・検証配置やshader binaryは変更していない。
 
-[共有fixture](../../crates/renderer-core/fixtures/standard_fixture.rs)は、標準forward直接、
+[共有fixture](../../crates/sashiko-renderer-core/fixtures/standard_fixture.rs)は、標準forward直接、
 identity post、利用側post、標準パスからの直接合成という4出力で三経路を比較する。
 既存trusted sampled乗算／storage加算shaderを`Graph::dispatch`で接続し、
 無効・乗算→加算・加算→乗算への交換・追加加算を選ぶ。3×7のRGBA16F全画素を独立期待値と照合する。
@@ -2928,11 +2932,11 @@ Vulkan／VMA一般推奨からの新たな例外は設けていない。
 
 ## 公開標準パスと標準グラフ
 
-`renderer-abr`で標準パス、Forwardレシピ、snapshotの標準描画ヘルパーを`renderer::standard`へ移した。
-組み込みProgramの信頼境界とバイナリ、資源の所有、Graphの解析とnative実行は`renderer-core`が担う。
+`renderer-abr`で標準パス、Forwardレシピ、snapshotの標準描画ヘルパーを`sashiko_renderer::standard`へ移した。
+組み込みProgramの信頼境界とバイナリ、資源の所有、Graphの解析とnative実行は`sashiko-renderer-core`が担う。
 CPUとVulkanは出力確定を共有し、Graphの置換、互換性のない出力と未初期化の読み取りを引き続き拒否する。
 入力接続のscratchは拡張callbackの前に返し、Vulkanの常駐入力pinは従来どおり投入または取消まで保持する。
-YAMLは独立featureで、既定の型付きRust APIの通常依存は`renderer-core`だけである。
+YAMLは独立featureで、既定の型付きRust APIの通常依存は`sashiko-renderer-core`だけである。
 
 型付きAPI単体14件とworkspace CPU301件が成功した。全feature／全targetのClippy、全featureのRustdoc、fmt、
 固定ツールによるSPIR-V／DXILの再生成照合とABI検証、mdBookとChromiumのMermaid検査も成功した。
@@ -3793,7 +3797,7 @@ B0の設計確認ではRenderer本体・管理下shader・native経路を変更�
 CPU／GPU速度の優位を実測した判断ではない。基盤選定の`.1.3`でもAを維持した。
 一般owned命令は現行Graphへ接続済みで、B2の二API PBR受入も[本書冒頭](#bistro-pbr)へ記録した。
 
-[当時のRust試作](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer-core/examples/graph_api_comparison.rs)はGPU非依存のCPU意図を比較した。
+[当時のRust試作](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/sashiko-renderer-core/examples/graph_api_comparison.rs)はGPU非依存のCPU意図を比較した。
 複数draw、depth-only／color-only、独自Compute、module内の多段Bloom、履歴初回／継続／resize、
 このCPU試作で扱ったMRT／mip Viewを同じ入力で書き、ownerだけを正規化した命令とアクセス用途を照合する。
 短命なdraw slice終了後のAの命令保持、Bのframe借用と不要callback非実行、

@@ -10,7 +10,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 
-TOOLCHAIN = Path(__file__).resolve().parents[2] / "crates/renderer-core/shaders/dxil-toolchain.json"
+TOOLCHAIN = Path(__file__).resolve().parents[2] / "crates/sashiko-renderer-core/shaders/dxil-toolchain.json"
 SPIRV_ARGUMENTS = ["-spirv", "-fspv-target-env=vulkan1.1", "-fvk-stage-io-order=decl"]
 PROFILES = {
     "vertex": ("vs_6_0", "vert", "; Vertex Shader"),

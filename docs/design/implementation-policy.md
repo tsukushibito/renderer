@@ -36,9 +36,9 @@
 | 所有者 | 責務 |
 | --- | --- |
 | アセットビルド、ゲーム | ベイク対象の静的形状と材質を抽出する。静的配置・LOD ごとの描画順を記録する。太陽と空の時刻ごとの条件、時刻の進め方、読み込みと再ベイクのタイミングを決める。 |
-| `renderer-bake` | 共通 BVH を構築する。形状に近いセルの自動細分化、共有コーナーの位置補正と無効化、各軸の可視距離、拡散プローブの SH、クック済み UV から静的配置ごとのライトマップを生成する。線形色で最大 2 回の拡散反射を解き、1～16 条件の拡散照明を同じ配置で保存する。GPU 機能はオプション。 |
-| `renderer` | バージョン付きベイク資産をインポート時に検証する。標準 PBR が配置に対応する静的チャートをサンプルし、その他の受光点はセルの 8 コーナーを三線形重みと可視距離で補間する。シナリオの照度を線形に混合する。 |
-| `renderer-core` | 既存の画像・バッファ、転送、Compute、完了管理を提供する。 |
+| `sashiko-lighting-bake` | 共通 BVH を構築する。形状に近いセルの自動細分化、共有コーナーの位置補正と無効化、各軸の可視距離、拡散プローブの SH、クック済み UV から静的配置ごとのライトマップを生成する。線形色で最大 2 回の拡散反射を解き、1～16 条件の拡散照明を同じ配置で保存する。GPU 機能はオプション。 |
+| `sashiko-renderer` | バージョン付きベイク資産をインポート時に検証する。標準 PBR が配置に対応する静的チャートをサンプルし、その他の受光点はセルの 8 コーナーを三線形重みと可視距離で補間する。シナリオの照度を線形に混合する。 |
+| `sashiko-renderer-core` | 既存の画像・バッファ、転送、Compute、完了管理を提供する。 |
 
 太陽の直射はランタイムのシャドウ付き PBR が受け持つ。空の放射輝度、発光面、他の面で拡散反射した直射光をベイクする。アトラスは現在、全体を常駐させる。範囲外はシナリオごとの空の照度、内部で全コーナーが遮蔽された場合はゼロを返す。6 軸の可視距離と SH は近似であり、薄い斜めの壁、細い戸口、異なるセル解像度の境界は光漏れ・不連続の評価対象である。
 
@@ -68,7 +68,7 @@ N 条件の拡散アトラスでは、各プローブが L1 で 2＋4N、L2 で 
 
 `BakeScene::place_reflection_probes` は静的形状から編集用の初期配置を生成する。XZ 格子ごとに上から全層をたどり、傾斜 45 度以内の表向きの床で、指定したキャプチャ高さまで空いている位置を採る。中央で配置できなければセルを一度だけ四分割して試す。材質のアルファマスクを考慮し、水平４方向の最寄りの面で箱を切る。支持面にはフェード幅だけ下へ影響を延ばし、遮蔽物のない隣接セルはフェード域を重ねる。上階の床下面、斜めの境界、細い通路や箱の角の遮蔽には手調整が必要になる場合がある。探索する元の格子は最大 65,536 列、結果は既存アトラスの最大 32 個。配置・検査はオフラインで完結し、描画時は手動配置と同じアトラスを使う。
 
-配置はアプリまたはエディターがワールド座標のキャプチャ点、影響 AABB、内側のフェード距離で指定する。`renderer-bake` は静的シーンの BVH と材質を使い、1～2 条件の入射放射輝度を CPU で画素ごとに並列キャプチャする。空への可視性、アルファマスク、拡散面で反射した太陽光と発光を含む。鏡面反射の再帰と移動物体の映り込みはベイクの対象外。線形 HDR の経緯度マップを GGX で事前フィルタする。配布形式はアセットの cook 設定が選ぶ。Bistro は BC6H unsigned を既定とし、RGBA32F を画質比較用に選べる。
+配置はアプリまたはエディターがワールド座標のキャプチャ点、影響 AABB、内側のフェード距離で指定する。`sashiko-lighting-bake` は静的シーンの BVH と材質を使い、1～2 条件の入射放射輝度を CPU で画素ごとに並列キャプチャする。空への可視性、アルファマスク、拡散面で反射した太陽光と発光を含む。鏡面反射の再帰と移動物体の映り込みはベイクの対象外。線形 HDR の経緯度マップを GGX で事前フィルタする。配布形式はアセットの cook 設定が選ぶ。Bistro は BC6H unsigned を既定とし、RGBA32F を画質比較用に選べる。
 
 単一・二条件とも `RSPROB02` に形式、シナリオ数、プローブ数、各プローブの 48 byte の配置レコード、放射輝度の順に保存する。ロード時に形式、個数、長さ、配置を検証し、GPU へは放射輝度と 1,824 byte の読み取り専用定数バッファを一度転送する。位置・境界・フェードは FP32、候補マスクと個数は uint32 として保持する。BC6H は符号なし RGB 用で、圧縮前に有限値と表現範囲を確認する。ロード時にブロックを展開する必要はない。旧 `RSPRST01`・`RSPROB01` はロード時に配置を分離して同じレイアウトへ詰め直す。
 
@@ -83,8 +83,8 @@ Forward、Forward+、Deferred は共通の PBR 関数を使う。4 箱までは�
 Rendererは特定のECS、アセット管理システム、ウィンドウイベントループに依存しないライブラリとして設計する。エンジンはシーンの所有と更新を担当し、Rendererへ描画に必要なデータを渡す。
 
 制作原本、永続的なモデル参照、装備やシーンの状態はエンジンが所有する。
-`renderer` はメッシュ・材質・LOD をまとめる描画用の `Model` と `ModelInstance` を任意で提供し、利用側が抽出した描画入力も受け付ける。
-`renderer-core` は個別資源とその実行・完了を扱う。制作・配布・実行時の境界は[アセットパイプラインの到達設計](asset-pipeline.md)に従う。
+`sashiko-renderer` はメッシュ・材質・LOD をまとめる描画用の `Model` と `ModelInstance` を任意で提供し、利用側が抽出した描画入力も受け付ける。
+`sashiko-renderer-core` は個別資源とその実行・完了を扱う。制作・配布・実行時の境界は[アセットパイプラインの到達設計](asset-pipeline.md)に従う。
 
 | 領域 | 最終的に満たすべき内容 |
 |---|---|
@@ -166,9 +166,9 @@ aliasing、複数queue、vendor固有最適化の直接制御は今回の選定�
 
 全候補でModel、素材cook、PBR/IBL/CSM、Bloom、自由camera、画像差分の校正と性能測定は利用側／Rendererで作る。
 外部基盤がBistroの描画機能やGraphのproducer/cullingを完成させるわけではない。
-現行範囲は[Graphの形式・固定操作](../../crates/renderer-core/src/graph.rs)、
-[Vulkanの固定Program](../../crates/renderer-core/src/backends/vulkan/program/creation.rs)、
-[D3D12のprepare対応範囲](../../crates/renderer-core/src/backends/d3d12/graph.rs)から確認した。
+現行範囲は[Graphの形式・固定操作](../../crates/sashiko-renderer-core/src/graph.rs)、
+[Vulkanの固定Program](../../crates/sashiko-renderer-core/src/backends/vulkan/program/creation.rs)、
+[D3D12のprepare対応範囲](../../crates/sashiko-renderer-core/src/backends/d3d12/graph.rs)から確認した。
 高位のrenderer/engineをさらに採用する案は、そのscene/material/Graph境界を第7章へ再適合する費用が増えるため、
 直接二APIを提供するwgpuを外部案の代表とした。候補網羅を採用の前提にしない。
 
@@ -340,7 +340,7 @@ backendのnative型は既にprivateで、D3D12本番実装からVulkanへの依�
 
 共通解析だけで全実行計画を固定せず、メモリ要件、キュー能力、フォーマット制約などをバックエンドから計画部へ返せるようにする。参考例としてAtomは、共通のFrameGraphコンパイル処理と、API固有の同期・実行への具体化を分けている。本書はその開発順序やクラス構成を再現する指示ではない。[^atom]
 
-ビュー描画の初期化は `renderer` の `RendererSetup` が担当する。シーンの選択、ウィンドウ、
+ビュー描画の初期化は `sashiko-renderer` の `RendererSetup` が担当する。シーンの選択、ウィンドウ、
 外部画像の所有権と同期はホストが担当する。シーンの走査、容量の集約、資源作成は初期化・構成変更の境界で行う。
 通常フレームは既存の ViewRenderer と同じプール、履歴トランザクション、GPU の完了契約を使う。
 共有 Runtime への接続ではホストが準備した作業用資源を使用し、初期化に使った投入のみを ID で回収する。
@@ -373,7 +373,7 @@ docs/
   verification/current.md
 ```
 
-既存の`renderer-core`、`renderer-present`等があれば、責務を対応づけて利用する。グラフをcoreへ置くか別クレートへ置くかは、依存方向とテストの必要性で決める。名称を合わせるためだけの大規模移動は行わない。
+既存の`sashiko-renderer-core`、`renderer-present`等があれば、責務を対応づけて利用する。グラフをcoreへ置くか別クレートへ置くかは、依存方向とテストの必要性で決める。名称を合わせるためだけの大規模移動は行わない。
 
 必須条件は、グラフの純粋な解析テストがGPU・ウィンドウなしで実行できること、通常の公開APIがVulkanやVMAの型へ依存しないこと、Presentationのために解析部分へSwapchain管理を持ち込まないことである。
 
@@ -590,8 +590,8 @@ UXの受入条件は、入出力と処理を近くで読めること、同じ資
 
 `renderer-7ft.1.2`の設計対象は利用側から見た契約である。以下は**B1で実証する第一案**であり、
 現行`Graph`の実装済み機能や基盤採用の決定ではない。
-[当時のCPU試作](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer-core/examples/graph_api_comparison.rs)は二案を同じ入力で比較する。
-[当時の利用コードと試作本体](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer-core/examples/support/graph_api_comparison.rs)の`Study::add`が
+[当時のCPU試作](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/sashiko-renderer-core/examples/graph_api_comparison.rs)は二案を同じ入力で比較する。
+[当時の利用コードと試作本体](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/sashiko-renderer-core/examples/support/graph_api_comparison.rs)の`Study::add`が
 両案の呼出し、`scenario`が代表入力、`bloom`が利用側の多段処理である。
 固定effectの選択肢を増やす方式は、独自shaderをGraph本体の変更なしで追加する条件を満たさない。
 
@@ -748,13 +748,13 @@ snapshotを使う標準描画の入口は[現行契約](rendergraph.md#エンジ
 
 | 公開する層 | 責務と利用方法 |
 |---|---|
-| 汎用Graph API | `renderer-core`で提供する。利用側がProgram/pipeline、binding、draw/dispatch/copy、資源と接続を定義する。独自のGraphも構築・実行できる。 |
-| 標準パス | `renderer`で提供する、公開Graph APIを使った再利用部品。利用側が不透明描画やポスト処理など必要な部品を直接組み合わせられる。 |
-| 標準グラフ | `renderer`で提供する、公開標準パスを組み合わせる構築レシピ。意味を定めた箇所で利用側の処理を交換・追加できる。 |
+| 汎用Graph API | `sashiko-renderer-core`で提供する。利用側がProgram/pipeline、binding、draw/dispatch/copy、資源と接続を定義する。独自のGraphも構築・実行できる。 |
+| 標準パス | `sashiko-renderer`で提供する、公開Graph APIを使った再利用部品。利用側が不透明描画やポスト処理など必要な部品を直接組み合わせられる。 |
+| 標準グラフ | `sashiko-renderer`で提供する、公開標準パスを組み合わせる構築レシピ。意味を定めた箇所で利用側の処理を交換・追加できる。 |
 
-依存は`アプリ → renderer → renderer-core`の向きとする。Graph、Program、snapshotの入力接続、容量の集約、GPU実行は`renderer-core`が担う。
-描画方式に応じたパスの選択・合成を`renderer`に置くことで、独自構成は`renderer-core`だけに依存できる。
-`renderer-core`は共通の組み込みProgramとABI、`renderer`は標準レシピ固有の監査済みシェーダーとABIを所有する。
+依存は`アプリ → renderer → sashiko-renderer-core`の向きとする。Graph、Program、snapshotの入力接続、容量の集約、GPU実行は`sashiko-renderer-core`が担う。
+描画方式に応じたパスの選択・合成を`sashiko-renderer`に置くことで、独自構成は`sashiko-renderer-core`だけに依存できる。
+`sashiko-renderer-core`は共通の組み込みProgramとABI、`sashiko-renderer`は標準レシピ固有の監査済みシェーダーとABIを所有する。
 Rustの標準パス、レシピと準備APIは既定の構成で利用できる。GPUで使うProgramは選んだバックエンドの形式だけを埋め込み、
 パイプラインの作成と資源の予約は使用するレシピの`WorkingSet`に従う。
 標準グラフは標準パスを組み合わせ、各パスは通常の構築関数と型付き入出力で公開Graph APIを呼ぶ。
@@ -766,7 +766,7 @@ Graphの共通解析・backendへ、opaqueやBloom等の効果選択を追加す
 
 `geometry::MeshRegistry` はメッシュの版を管理し、描画定数とともに不変な入力をcaptureする。Unlitの入力形式・tintは上位のレシピが扱う。runtimeは資源の常駐、同期、投入、GPU完了と退役を担う。
 入力のGraph接続自体が標準opaqueを追加する設計にはしない。
-`renderer::unlit_forward::snapshot`は、Engineの入力接続とunlit Forwardを組み合わせた便利APIを提供する。
+`sashiko_renderer::unlit_forward::snapshot`は、Engineの入力接続とunlit Forwardを組み合わせた便利APIを提供する。
 利用側は同じ資源接続・実行経路で独自のGraphを構築できる。
 snapshotを使わないCompute-only、複数View、必要な数の画像・buffer出力も基本APIの設計対象とし、
 単一RGBA8画像やView寸法をすべてのGraphへ強制しない。nativeの対応範囲とPresentation固有の形式条件は別に維持する。
@@ -860,10 +860,10 @@ B2のPBR、B3の影・HDR・tone mappingは標準パスと標準グラフへ段�
 
 <a id="renderer-core-plan"></a>
 
-### 7.8 renderer と renderer-core の公開 API を検証して実装する計画
+### 7.8 renderer と sashiko-renderer-core の公開 API を検証して実装する計画
 
 単体ゲームが 3D と HUD を一画面に描けること、既存エンジンが自分のシーン・UI・提出権を保てること、GPU 基盤だけでも使えることを同時に満たす。
-製品クレートは `renderer` と `renderer-core` の二つ。以下に利用コードから選んだ境界と、その判断を再検証する条件を示す。
+製品クレートは `sashiko-renderer` と `sashiko-renderer-core` の二つ。以下に利用コードから選んだ境界と、その判断を再検証する条件を示す。
 現在使える API は[組み込みガイド](../guides/tooling.md#scene-materials)、実行済みの検証は[現行の検証記録](../verification/current.md#engine-integration)を参照する。
 
 ゲーム世界の所有と描画入力の境界は、Filament の平坦な描画シーンと Bevy の描画用データ抽出が参考になる。どちらの入力でも同じ描画方式へ到達できるかを試す。
@@ -873,13 +873,13 @@ B2のPBR、B3の影・HDR・tone mappingは標準パスと標準グラフへ段�
 
 | 利用者・入口 | 公開する操作と所有権 | 試作で確かめること |
 |---|---|---|
-| 単体アプリ → `renderer` | 初期化、描画先、共通の `Frame`。ウィンドウでは acquire から提示まで、画面外では画像の出力・取得までを扱う。 | アプリの直接依存は `renderer` 一つ。空のシーンまたは UI だけで開始できる。通常の一画面に GPU の枠数指定、二重提出、個別の完了待ちが出ない。 |
-| ゲーム・ECS → `renderer` のシーンと資産 | メッシュ・材質・テクスチャの共有、非同期準備と版の差し替え、描画個体の登録・削除、変換・ポーズ・部位の上書き、変更列の一括反映、ライトと環境。 | 個体の上書きと共有資産の編集を呼び出し先から識別できる。ECS はゲーム状態の正本を持ち、最終姿勢を一度渡す。ファイル探索、装備選択、アニメーション評価はアプリが担う。 |
-| カメラ・UI → `renderer` のビューと Canvas | シーン・カメラ・出力の組み合わせ、レイヤー、品質、カメラカット、2D の形状・画像・クリップを受け取る。出力テクスチャを同じフレームの別の入力にできる。 | 対象ビューごとに LOD・履歴を扱う。3D の解像度を下げても HUD は出力解像度を保つ。UI の入力、文字組み、レイアウトはホスト側で選べる。 |
-| 独自方式・既存ホスト → `renderer` の描画部品 | ホスト入力または標準シーンから同じ方式で記録する。ホストの Graph に標準パス・独自パスを組み、色・深度など利用できる出力とその意味を返す。 | PBR・Toon の切替で個体を再登録しない。主カメラ外の影の投射物も方式が選べる。輪郭を足すだけならカメラ方式全体の実装は不要。 |
-| GPU 処理・高度な統合 → `renderer-core`（Rust 名 `renderer_core`） | GPU 非依存の Graph、画像・バッファ、Program と binding、Raster・Compute・copy、資源入出力、compile。Runtime が準備・投入・完了・読み戻しを扱う。表示とネイティブデバイス・外部画像との同期は各機能の入口で提供する。 | `renderer-core` 単独で CPU 上の Graph 構築とヘッドレス Compute が成立する。GPU 基盤からシーン・材質・Canvas への逆依存がなく、同一デバイスのホスト資源を契約どおりに返却できる。 |
+| 単体アプリ → `sashiko-renderer` | 初期化、描画先、共通の `Frame`。ウィンドウでは acquire から提示まで、画面外では画像の出力・取得までを扱う。 | アプリの直接依存は `sashiko-renderer` 一つ。空のシーンまたは UI だけで開始できる。通常の一画面に GPU の枠数指定、二重提出、個別の完了待ちが出ない。 |
+| ゲーム・ECS → `sashiko-renderer` のシーンと資産 | メッシュ・材質・テクスチャの共有、非同期準備と版の差し替え、描画個体の登録・削除、変換・ポーズ・部位の上書き、変更列の一括反映、ライトと環境。 | 個体の上書きと共有資産の編集を呼び出し先から識別できる。ECS はゲーム状態の正本を持ち、最終姿勢を一度渡す。ファイル探索、装備選択、アニメーション評価はアプリが担う。 |
+| カメラ・UI → `sashiko-renderer` のビューと Canvas | シーン・カメラ・出力の組み合わせ、レイヤー、品質、カメラカット、2D の形状・画像・クリップを受け取る。出力テクスチャを同じフレームの別の入力にできる。 | 対象ビューごとに LOD・履歴を扱う。3D の解像度を下げても HUD は出力解像度を保つ。UI の入力、文字組み、レイアウトはホスト側で選べる。 |
+| 独自方式・既存ホスト → `sashiko-renderer` の描画部品 | ホスト入力または標準シーンから同じ方式で記録する。ホストの Graph に標準パス・独自パスを組み、色・深度など利用できる出力とその意味を返す。 | PBR・Toon の切替で個体を再登録しない。主カメラ外の影の投射物も方式が選べる。輪郭を足すだけならカメラ方式全体の実装は不要。 |
+| GPU 処理・高度な統合 → `sashiko-renderer-core`（Rust 名 `sashiko_renderer_core`） | GPU 非依存の Graph、画像・バッファ、Program と binding、Raster・Compute・copy、資源入出力、compile。Runtime が準備・投入・完了・読み戻しを扱う。表示とネイティブデバイス・外部画像との同期は各機能の入口で提供する。 | `sashiko-renderer-core` 単独で CPU 上の Graph 構築とヘッドレス Compute が成立する。GPU 基盤からシーン・材質・Canvas への逆依存がなく、同一デバイスのホスト資源を契約どおりに返却できる。 |
 
-製品の依存方向は `renderer → renderer-core`。通常利用で core の型を組み立てる手順は作らず、独自パス・ホスト記録には同一の Graph・画像・Program 型を渡す。
+製品の依存方向は `renderer → sashiko-renderer-core`。通常利用で core の型を組み立てる手順は作らず、独自パス・ホスト記録には同一の Graph・画像・Program 型を渡す。
 旧 `renderer-pipeline` が持っていた PBR、Unlit、標準パス、レシピは上位の公開部品として継承する。投影・描画技法・Canvas の区分はまずモジュールとする。
 独自パイプラインだけを使うホストと外部プラグインがこの形でビルド・実行できるかが、独立パイプラインクレートを廃する判断の検証になる。
 別配布が必要になる具体的な依存や機能が判明したら、利用コードと依存グラフを記録して配置を再評価する。
@@ -901,7 +901,7 @@ let outcome = renderer.draw(|frame| {
 ```
 
 ホストが描画世界と提出を所有する場合は、抽出した形状・姿勢・ライトをそのまま借りて記録する。標準シーンを使う経路と同じ PBR 部品を通す。
-下例ではホストが Graph と最終提出を所有する。記録中の入力借用が終わっても、提出に必要な資源の版は保持する。訓練場はこの境界で輪郭と監視モニターを追加する。[利用コード](../../crates/training-yard/src/replay.rs)
+下例ではホストが Graph と最終提出を所有する。記録中の入力借用が終わっても、提出に必要な資源の版は保持する。訓練場はこの境界で輪郭と監視モニターを追加する。[利用コード](../../examples/training-yard/src/replay.rs)
 
 ```rust,ignore
 let mut graph = host_pool.begin()?;
@@ -931,7 +931,7 @@ Graph 内の画像はその Graph だけで有効とし、別フレームや別�
 比較では Cargo の直接・推移依存、呼び出し側が所有する ID と作業領域、再登録・待機・コピー・提出の箇所、失敗と再試行のコードを残す。
 別名のラッパーへ移した手順も数える。試作で条件を満たせない案は、その反例と代案を本節と Beads に記録し、入口を修正して同じ利用コードで再評価する。
 
-ホスト記録の試作は `crates/training-yard/tests/host_output.rs` にある。ホストが出力先を作り、描画部品は借りた Graph に色変換を記録し、ホストが読み戻しと提出を一度行う。サイズの異なる出力先を渡した場合はその Graph を破棄し、同じプールから再開できる。Vulkan・D3D12 で出力バイトを照合した。この結果から、ホスト記録の引数に Runtime を要求せず、提出権は呼び出し元が保持する形を採る。
+ホスト記録の試作は `examples/training-yard/tests/host_output.rs` にある。ホストが出力先を作り、描画部品は借りた Graph に色変換を記録し、ホストが読み戻しと提出を一度行う。サイズの異なる出力先を渡した場合はその Graph を破棄し、同じプールから再開できる。Vulkan・D3D12 で出力バイトを照合した。この結果から、ホスト記録の引数に Runtime を要求せず、提出権は呼び出し元が保持する形を採る。
 
 `tests/core_compute.rs` は graphics 機能を外しても実行できる。二つの Compute を提出し、後の ID から完了を受け取っても、各入力に対応する結果を取得できた。Graph プールを一枠にした試作では Vulkan の二回目の記録が枠不足になった。両 API で二件を並行させるには、通常フレームの準備で同時実行数に対応する Graph 枠も確保する。アプリ側でバックエンドごとに枠数を調整する手順を標準入口に露出させない。
 
@@ -945,7 +945,7 @@ Canvas の試作は表示リニア空間で乗算済みアルファを合成す�
 
 #### 訓練場の受入シナリオ
 
-シーン入力の試作は、保持した個体を列挙する入口と、ホストが抽出済みの個体列を借りる入口を比較する。CPU 試験で 1,024 個体に全件・16 件・0 件の更新を適用し、両入口から同じ材質・姿勢の 504 個体を抽出した。古い ID が混じる変更列は適用前に失敗し、削除後の個体を指すこともない。GPU の標的試験では PBR と Unlit を交互に配置し、同じ 1,024 個体の保持シーンと ECS 配列から描いた各画素を照合する。PBR と独自 Toon を含む動的ロードは別の実機試験で扱う。[多数の個体](../../crates/training-yard/src/targets.rs)・[混在材質のロード](../../crates/training-yard/tests/standard_motion.rs)
+シーン入力の試作は、保持した個体を列挙する入口と、ホストが抽出済みの個体列を借りる入口を比較する。CPU 試験で 1,024 個体に全件・16 件・0 件の更新を適用し、両入口から同じ材質・姿勢の 504 個体を抽出した。古い ID が混じる変更列は適用前に失敗し、削除後の個体を指すこともない。GPU の標的試験では PBR と Unlit を交互に配置し、同じ 1,024 個体の保持シーンと ECS 配列から描いた各画素を照合する。PBR と独自 Toon を含む動的ロードは別の実機試験で扱う。[多数の個体](../../examples/training-yard/src/targets.rs)・[混在材質のロード](../../examples/training-yard/tests/standard_motion.rs)
 
 単体ゲーム、ホストのビューポート、固定入力のヘッドレス実行で同じ資産と操作を共用する。手動操作と再生は同じ更新経路を通す。
 姿勢・鎧スロット・LOD を画像で識別できる隊員モデル、影を落とすライト、ガラス、箱、監視モニターを使う。
@@ -966,7 +966,7 @@ Canvas の試作は表示リニア空間で乗算済みアルファを合成す�
 | 順序・Beads | 成果物と次へ進む条件 |
 |---|---|
 | 1 · `renderer-p47.2` 利用コードの試作 | 現行 API を使う examples・外部 Toon・Bistro の直接パス・core 単独利用を比較元にする。上記の入口について最小の外部利用クレートを作り、依存と通常・失敗時の手順を比較する。代表となる画像・所有権は現行基盤で実行し、型だけの試作と区別する。採用する公開操作と棄却理由を記録してから改名する。 |
-| 2 · `renderer-p47.3` 二クレートへ再配置 | 旧 `renderer` を `renderer-core`、旧 `renderer-pipeline` の標準部品を新 `renderer` に移す。manifest、feature 転送、lockfile、公開パス・マクロ、テストの相対参照、Bistro、外部プラグイン、シェーダー生成・CI・利用ガイドを同時に移す。CPU 単独・単一 backend・両 backend をビルドし、既存画像・実機経路を再現する。 |
+| 2 · `renderer-p47.3` 二クレートへ再配置 | 旧 `sashiko-renderer` を `sashiko-renderer-core`、旧 `renderer-pipeline` の標準部品を新 `sashiko-renderer` に移す。manifest、feature 転送、lockfile、公開パス・マクロ、テストの相対参照、Bistro、外部プラグイン、シェーダー生成・CI・利用ガイドを同時に移す。CPU 単独・単一 backend・両 backend をビルドし、既存画像・実機経路を再現する。 |
 | 3 · `renderer-p47.4` 最小の画面を実装 | 共通 Frame、空から始まるシーン、通常の個体更新、Canvas 合成を既存 Graph で動かす。ウィンドウ・画面外・ホスト記録で共通の描画部品を使い、四つの UI 合成例を両 backend で実行する。 |
 | 4 · `renderer-p47.5` 動的な訓練場と拡張 | スキニング・部位材質・LOD、世代付き個体と差し替え、ビュー別の履歴・影・ピッキング、ECS 一括入力とホスト画像を順に実装し、上表の成功・失敗を再生する。独自 Toon・輪郭・Bistro の直接パスが上位シーンの所有を強制されないことを外部利用者から確認する。 |
 | 5 · `renderer-p47.6` 実機受入と移行完了 | 訓練場と既存 Bistro の回帰、公開 examples、rustdoc、ガイド、Cargo 機能表、ツール手順を新構成で通す。旧クレート名と互換専用の二重経路を現役の利用手順から除き、再現方法・計測値・未実行範囲を[現行の検証記録](../verification/current.md)に反映する。 |
@@ -1106,7 +1106,7 @@ pipeline、binding layout、sampler、ImageViewなどは、それぞれを導入
 実行ファイルを再ビルドせず、起動や明示的な構成変更でRasterとComputeのシェーダーを選べる。
 アプリがロードしたバイナリとABIは`ManagedRasterProgram::from_trusted_owned_descriptor`と
 `ManagedProgram::from_trusted_owned_descriptor`で取り込む。埋め込みアセットと同じ
-GraphとWorkingSetを使う。`renderer`の利用側も、取り込んだProgramを公開Graph APIで使う。
+GraphとWorkingSetを使う。`sashiko-renderer`の利用側も、取り込んだProgramを公開Graph APIで使う。
 [外部取込の利用例](../guides/tooling.md#runtime-shader-import)と
 [Program契約](rendergraph.md#program由来bindingとshader-stageのowned計画)を参照する。
 
@@ -1115,7 +1115,7 @@ GraphとWorkingSetを使う。`renderer`の利用側も、取り込んだProgram
 | シェーダーのアセットビルド | HLSLなどのソースを配布対象に応じてSPIR-V、DXIL、または両方へコンパイルする。entry point、stage、bindingとアクセス契約などのメタデータを対応するバイナリと組にして配布する。 |
 | アプリのアセット層 | 起動時にアプリが選んだバックエンドに対し、シェーダーの論理名を対応するアセットへ解決する。両形式を配布した場合も、選択したバックエンド用のバイナリと対応するメタデータを読む。 |
 | アプリのレシピ | 取り込んだProgramを準備時に`WorkingSet`へ登録する。準備済みのProgramとフレーム入力を使い、公開Graph APIで資源とパスの依存を宣言する。 |
-| `renderer-core` | 読み込み済みのバイト列とメタデータを受け取り、不変のProgramとして扱う。実Deviceとの適合を確認し、`WorkingSet`の準備でネイティブのレイアウトとパイプラインを作る。 |
+| `sashiko-renderer-core` | 読み込み済みのバイト列とメタデータを受け取り、不変のProgramとして扱う。実Deviceとの適合を確認し、`WorkingSet`の準備でネイティブのレイアウトとパイプラインを作る。 |
 
 取込時に、バイナリ形式・版・サイズ・ステージと、記述子の構造・宣言したABIの整合を確認する。
 SPIR-Vではステージに対応する`main`を確認する。DXILではコンテナとSM6.0のステージを確認する。
@@ -1136,7 +1136,7 @@ GPUが使うパイプラインと対応するProgramは既存の実行所有者�
 レシピは公開Graphを借用し、パスを追加して後段で使うハンドルを返す。構成やフレーム入力に応じた分岐は
 Rustで行う。producer、hazard、初期化、GPU同期と寿命には[RenderGraph](rendergraph.md)の契約を適用する。
 
-`renderer_core::capacity::Preparation`は、起動・構成変更時に標準レシピと独自パスの要求をまとめる。
+`sashiko_renderer_core::capacity::Preparation`は、起動・構成変更時に標準レシピと独自パスの要求をまとめる。
 同一フレームで同時に宣言する数を合算し、同時フレーム数を考慮して一時画像とバッファの個数を予約する。
 Graphの宣言上限と`WorkingSet`を一括で加える場合は、すべての上限・資源の検査が通った時点で要求を更新する。
 同時に使う構成の容量は合算する。GPU処理や結果保持が重ならない構成は`Preparation::add_alternatives`で、
@@ -1150,7 +1150,7 @@ Graphの宣言上限と`WorkingSet`を一括で加える場合は、すべての
 管理下Programへ取り込み、その版を使う。フレーム内は公開Graphでbindingを指定し、描画順に合わせてRaster batchへ渡す。
 [テンプレートのビルド手順](../guides/tooling.md#material-shader-build)を参照する。
 
-`renderer`のPBRレシピは、Forward／Forward+の1×／4×とDeferredの1×を提供する。
+`sashiko-renderer`のPBRレシピは、Forward／Forward+の1×／4×とDeferredの1×を提供する。
 Forward系の4×はカラーを単一サンプルHDRへリゾルブする。シーン深度は1×でD32を返し、4×では`None`になる。
 ゲームエンジンはシーン階層、カメラ、アセットとワールド変換を所有する。`ViewRenderer` は描画方式と寸法ごとのグループに `PipelineId` を割り当て、
 各グループが登録されたカメラの状態を管理する。標準・独自の `ViewPipeline` は一つのGraphに共存でき、単一サンプルのシーンリニアHDRを共通出力とする。
@@ -1172,18 +1172,18 @@ Forward+では16×16画素のタイルごとに候補を絞る。空の光源リ
 同じ公開パスを個別に呼べるため、アプリは標準の`passes::bloom`と独自のHDR加工を合成できる。
 HDRだけを使う構成は標準SDR出力の画像・Programを予約せず、必要な出力をアプリが組み立てる。
 Bloomは同寸のシーンリニアRGBA16Fを返し、Compute Programと中間画像・Graph宣言の容量を準備時に登録する。
-`renderer-bistro`の[Bistro](../guides/tooling.md#bistro-scene-pipeline)は標準レシピと比較用の描画構成を使う。
+`renderer-scenes`の[Bistro](../guides/tooling.md#bistro-scene-pipeline)は標準レシピと比較用の描画構成を使う。
 `pbr::ShadowHistory`はカスケードの行列とアプリが供給するキャスター入力の世代で再利用を判定する。
 更新した画像の版とキーはsubmit受理後にまとめて反映する。次フレームは既存のGraphのimportとGPU寿命の契約に従って画像を参照する。
 履歴が持つ画像の登録は、解像度の変更や使用終了時にアプリが明示的に解除する。
-Vulkanのdescriptor予約はComputeのdispatch分を含める。`renderer-bistro`の`bistro-graph`は公開Graph APIを直接使う例である。
+Vulkanのdescriptor予約はComputeのdispatch分を含める。`renderer-scenes`の`renderer-scenes-graph`は公開Graph APIを直接使う例である。
 
 ## 12. エンジン統合とPresentation
 
 ### 12.1 エンジンとのデータ境界
 
-アプリはシーンとゲームアセットを所有し、`renderer` はサーフェスの定義・インスタンスと描画パスへの割り当てを所有する。
-`renderer-core` は GPU 資源、プログラム、Graph の実行・完了を管理する。マテリアルには pipeline の `MaterialHandle` を使う。
+アプリはシーンとゲームアセットを所有し、`sashiko-renderer` はサーフェスの定義・インスタンスと描画パスへの割り当てを所有する。
+`sashiko-renderer-core` は GPU 資源、プログラム、Graph の実行・完了を管理する。マテリアルには pipeline の `MaterialHandle` を使う。
 
 材質更新では新しい版を発行する。取得済み CPU スナップショットは旧版を参照し、構築済み Graph はその時点の定数・プログラム・資源参照を保持する。
 外部テクスチャや常駐係数の登録は所有者が管理する。提出前に登録を取り消した資源は runtime の鮮度検査に従い、受理済み処理の資源は GPU 完了まで保持する。
@@ -1643,7 +1643,7 @@ ModelをRendererへ持ち込まず、取込/作成/更新境界の保証を保�
 
 #### 実行用cookとForward PBRの境界
 
-実行用cookと`renderer-bistro`の`bistro`はRenderer外の利用側処理とする。
+実行用cookと`renderer-scenes`の`renderer-scenes`はRenderer外の利用側処理とする。
 全1,296 mesh・132材質・405画像をmanifestへ対応付け、glTFのnode transformをgeometryへ反映する。
 頂点はposition、normal、tangentとhandedness、UVを持つ48-byte stream、indexはlittle-endian u32とする。
 normalを正規化してMikkTSpaceを実行し、退化UV/geometry、またはfloat32の角度重みの
@@ -1681,14 +1681,14 @@ B2の照明はsunと明示した一定ambientであり、B3のIBL・影・固定
 SDR確認用のclampとsRGB OETFは利用側の別passで一度だけ行う。
 標準forwardのunlit recipeへPBR固有のeffect列挙やasset読込を追加しない。
 
-Bistroと標準PBRで使うshaderのHLSLは`crates/renderer/shaders/`を正本とし、
+Bistroと標準PBRで使うshaderのHLSLは`crates/sashiko-renderer/shaders/`を正本とし、
 固定版DXCの同じ入力からSPIR-V 1.3とDXILを生成する。
 同じソースで二APIの材質処理・Compute・頂点変換を保守し、手書きのregisterとspaceをRust descriptorの
 bindingとgroupに対応させる。API固有の宣言とclip出力Yの符号はHLSLの`__spirv__`分岐に置く。
 影cascade番号とinstance配置はそれぞれ4／68 byteで、Vulkanのpush constantとD3D12の`b7, space0`のroot constantsに対応する。
 既存の生成スクリプトでソース・include・バリアント・出力を固定し、SPIRV-Crossはreflectionに使う。
 Vulkanのbuffer配置はDXCの既定規則を使い、追加Device featureを前提にしない。
-標準PBRと影の取り込みに限り、`renderer`の非公開モジュールが固定のバイナリとdescriptorの契約を保証する。
+標準PBRと影の取り込みに限り、`sashiko-renderer`の非公開モジュールが固定のバイナリとdescriptorの契約を保証する。
 そのモジュールで既存のtrusted Program入口を使い、公開レシピはGraphの安全な型付き資源とbindingを受け取る。
 生成compilerの変更は描画の丸めにも影響するため、ABI、両APIの画像、同じAPIの移行前後を
 [既存の比較閾値](../guides/development.md#bistro-pbr)で再確認する。

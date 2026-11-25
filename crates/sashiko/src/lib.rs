@@ -14,7 +14,7 @@ pub mod profiling;
 pub use app::App;
 #[cfg(all(windows, feature = "presentation"))]
 pub mod window;
-pub use renderer_asset as asset;
+pub use sashiko_asset as asset;
 
 pub mod animation;
 pub mod audio;

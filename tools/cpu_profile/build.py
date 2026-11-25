@@ -125,13 +125,13 @@ def profile_settings(root, name):
     return {**release, **selected}
 
 
-def source_snapshot(package="renderer-core"):
-    # renderer-core examples use renderer as a dev-dependency.
-    sources = ["crates/renderer-core", "crates/renderer"]
-    if package in ("renderer-core", "renderer-bistro"):
-        sources.append("crates/renderer-example-support")
-    if package == "renderer-bistro":
-        sources.extend(["crates/renderer-bistro", "tools/bistro/conditions.json", "tools/bistro/ibl.py"])
+def source_snapshot(package="sashiko-renderer-core"):
+    # sashiko-renderer-core examples use renderer as a dev-dependency.
+    sources = ["crates/sashiko-renderer-core", "crates/sashiko-renderer"]
+    if package in ("sashiko-renderer-core", "renderer-scenes"):
+        sources.append("examples/support")
+    if package == "renderer-scenes":
+        sources.extend(["examples/renderer-scenes", "tools/bistro/conditions.json", "tools/sponza/conditions.json", "tools/bistro/ibl.py"])
     names = git("ls-files", "--cached", "--others", "--exclude-standard", "-z", "--",
                 "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", *sources,
                 "tools/cpu_profile", "tools/tracy").split("\0")
@@ -216,7 +216,7 @@ def instrumentation_dependencies(messages, instrumentation):
         if item.get("reason") != "compiler-artifact":
             continue
         target = item.get("target", {})
-        if target.get("name") in ("renderer_core", "renderer") and "lib" in target.get("kind", []):
+        if target.get("name") in ("sashiko_renderer_core", "sashiko_renderer") and "lib" in target.get("kind", []):
             forbidden = DIAGNOSTICS.intersection(item.get("features", []))
             if forbidden:
                 raise BuildError("Renderer enabled diagnostics transitively: " + ", ".join(sorted(forbidden)))
@@ -263,8 +263,8 @@ def build(args):
     commit = git("rev-parse", "HEAD")
     instrumentation = getattr(args, "instrumentation", "none")
     features = parse_features(args.features, instrumentation)
-    if args.bin is not None or (args.example is None and args.package == "renderer-bistro"):
-        kind, name = "bin", args.bin or "bistro"
+    if args.bin is not None or (args.example is None and args.package == "renderer-scenes"):
+        kind, name = "bin", args.bin or "renderer-scenes"
     else:
         kind, name = "example", args.example or "windowed"
     command = ["cargo", "build", "--locked", "-p", args.package, "--no-default-features",
@@ -322,11 +322,11 @@ def build(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("profiling", "release"), default="profiling")
-    parser.add_argument("--package", choices=("renderer-core", "renderer", "renderer-bistro"),
-                        default="renderer-core")
+    parser.add_argument("--package", choices=("sashiko-renderer-core", "sashiko-renderer", "renderer-scenes"),
+                        default="sashiko-renderer-core")
     target = parser.add_mutually_exclusive_group()
-    target.add_argument("--example", help="Cargo example (defaults to windowed for renderer-core)")
-    target.add_argument("--bin", help="Cargo binary (defaults to bistro for renderer-bistro)")
+    target.add_argument("--example", help="Cargo example (defaults to windowed for sashiko-renderer-core)")
+    target.add_argument("--bin", help="Cargo binary (defaults to renderer-scenes for renderer-scenes)")
     parser.add_argument("--features", default="vulkan,d3d12,presentation")
     parser.add_argument("--instrumentation", choices=("none", "tracy"), default="none",
                         help="Explicit opt-in; Tracy archives are never normal measurement artifacts")

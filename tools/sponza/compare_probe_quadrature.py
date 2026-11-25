@@ -1,6 +1,6 @@
 """Separate angular approximation error from the effect of interpolating probe locations.
 
-Use --probe-ray-output from the same bistro-bake invocation as --coefficients.
+Use --probe-ray-output from the same renderer-scenes-bake invocation as --coefficients.
 The comparison uses the same normals, corner weights and clamp as compare_probe_sh.
 """
 

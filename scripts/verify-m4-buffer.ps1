@@ -185,7 +185,7 @@ try {
             @{ name = 'strict'; features = 'vulkan,d3d12,development-validation'; strict = $true },
             @{ name = 'shipping'; features = 'vulkan,d3d12'; strict = $false })) {
         $testName = "m4_buffer_shared_graph_$($configuration.name)"
-        $testArgs = @('test', '--locked', '-p', 'renderer-core', '--release', '--no-default-features',
+        $testArgs = @('test', '--locked', '-p', 'sashiko-renderer-core', '--release', '--no-default-features',
             '--features', $configuration.features, '--test', 'd3d12_graph', $testName, '--')
         $inventoryArgs = $testArgs + @('--exact', '--list', '--ignored')
         $summary.commands += @{ executable = $cargo; arguments = $inventoryArgs }
@@ -195,7 +195,7 @@ try {
         if ($tests.Count -ne 1 -or $tests[0] -cne "${testName}: test") {
             throw "Expected exactly the ignored $testName test; found $($tests.Count)."
         }
-        $featureArgs = @('tree', '--locked', '-p', 'renderer-core', '--no-default-features',
+        $featureArgs = @('tree', '--locked', '-p', 'sashiko-renderer-core', '--no-default-features',
             '--features', $configuration.features, '-e', 'features')
         $summary.commands += @{ executable = $cargo; arguments = $featureArgs }
         $null = Invoke-LoggedNative $cargo $featureArgs (

@@ -42,7 +42,7 @@
 
 照明を生成するホストは、表面を `prepare_surface_bake`、プローブを `prepare_probe_bake` で別々に準備する。準備結果の `execution()` から実際の方式、アダプター、ドライバー、使用シェーダーを取得できる。準備した処理が同じデバイスで計算を完了する。例えば表面に Vulkan Ray Query を使う条件でも、プローブには Compute を使う。自動選択で CPU に切り替われば、CPU 用の実行条件を記録する。GPU の準備や破棄はオフラインの境界で行い、既存の完了待ちと検証モニターの契約を引き継ぐ。
 
-Bistro のビルド記録では、シーンと照明の入力識別子、時刻条件、ステージごとの設定、実行環境、実行ファイルとシェーダーのハッシュから表面・プローブそれぞれのビルドキーを求める。端末が配布データを検証する際には実際に書き出した索引・成果物のハッシュを使う。固定環境の反復試験は共有を許す条件を調べるために行う。同じ入力をすべてのビルドで二度計算する必要はない。GPU と CPU の比較には既存の許容誤差を適用し、出力バイトが一致する環境の確認は別途行う。[実行方式](../../crates/renderer-bake/src/execution.rs)・[Bistro のビルド記録](../../crates/renderer-bistro/src/bake/provenance.rs)
+Bistro のビルド記録では、シーンと照明の入力識別子、時刻条件、ステージごとの設定、実行環境、実行ファイルとシェーダーのハッシュから表面・プローブそれぞれのビルドキーを求める。端末が配布データを検証する際には実際に書き出した索引・成果物のハッシュを使う。固定環境の反復試験は共有を許す条件を調べるために行う。同じ入力をすべてのビルドで二度計算する必要はない。GPU と CPU の比較には既存の許容誤差を適用し、出力バイトが一致する環境の確認は別途行う。[実行方式](../../crates/sashiko-lighting-bake/src/execution.rs)・[Bistro のビルド記録](../../examples/renderer-scenes/src/bake/provenance.rs)
 
 変換器は入力の形式ごとに原本を読み、後段の cook は描画に使う型付きデータを処理する。通常のモデルはローカル座標のメッシュを共有し、変換行列をインスタンスに持たせる。Bistro のように配置を焼く静的シーンでは、その選択をレシピに記録する。用途を追加したときは対象型の変換・ロードを追加でき、既存ゲームの ECS や RenderGraph に原本の知識を持ち込まずに済む。
 
@@ -135,17 +135,17 @@ Bistro のビルド記録では、シーンと照明の入力識別子、時刻�
 
 ### 実装状況と受け入れ手順
 
-[Bistro の cook](../../tools/bistro/cook.py) は配置を焼いた頂点・インデックスと、用途別の画像・サンプラーを生成する。静的照明は表面とプローブの実行条件を別々に記録し、世代索引から必要な照明ページを選んで読み込める。[訓練場の装備要求](../../crates/training-yard/src/yard/equipment.rs) は要求世代と装着先を追跡する。
+[Bistro の cook](../../tools/bistro/cook.py) は配置を焼いた頂点・インデックスと、用途別の画像・サンプラーを生成する。静的照明は表面とプローブの実行条件を別々に記録し、世代索引から必要な照明ページを選んで読み込める。[訓練場の装備要求](../../examples/training-yard/src/yard/equipment.rs) は要求世代と装着先を追跡する。
 
-標準 Renderer では、起動時の `prepare_assets` とプレイ中の [AssetCandidate](../../crates/renderer/src/pipeline/setup/candidate.rs) が同じ転送・公開処理を使う。プレイ中は変更対象だけを候補に含め、`poll_candidate` に各回の転送バイト数・投入回数の上限を渡す。完了後に `commit_candidate` で全ビューへ反映し、最後の利用者が手放した資源を同時に退役させる。要求が古くなった場合は `cancel_candidate` を呼ぶ。ホストが Runtime を直接扱う間は自分のフレーム ID を指定して `wait_for_frame(id, Duration::ZERO)` を使い、アセット転送の完了は `poll_candidate` または `collect_assets` に回収させる。画像の常駐 mip 範囲を広げる手順は [SceneRenderer](../../crates/renderer/src/pipeline/setup/scene_renderer.rs)、検証範囲は[検証記録](../verification/current.md#asset-preparation)に示す。
+標準 Renderer では、起動時の `prepare_assets` とプレイ中の [AssetCandidate](../../crates/sashiko-renderer/src/pipeline/setup/candidate.rs) が同じ転送・公開処理を使う。プレイ中は変更対象だけを候補に含め、`poll_candidate` に各回の転送バイト数・投入回数の上限を渡す。完了後に `commit_candidate` で全ビューへ反映し、最後の利用者が手放した資源を同時に退役させる。要求が古くなった場合は `cancel_candidate` を呼ぶ。ホストが Runtime を直接扱う間は自分のフレーム ID を指定して `wait_for_frame(id, Duration::ZERO)` を使い、アセット転送の完了は `poll_candidate` または `collect_assets` に回収させる。画像の常駐 mip 範囲を広げる手順は [SceneRenderer](../../crates/sashiko-renderer/src/pipeline/setup/scene_renderer.rs)、検証範囲は[検証記録](../verification/current.md#asset-preparation)に示す。
 
 **初版の装備経路。** Rust の制作ツールが静的 glTF をモデルローカル座標で変換し、メッシュ・標準 PBR 材質・用途別画像を個別の不変オブジェクトとして保存する。カタログの装備 ID は複数の部位を参照でき、部位ごとにメッシュ、材質、画像の版を結び付ける。画像の画素だけが変わった場合、同じ材質設定とメッシュを再利用して新しいカタログを公開する。[取込・配布の手順](../guides/tooling.md#equipment-cook)
 
-ローダーは `current` を一度読み、内容ハッシュを照合した世代を要求の完了まで保持する。索引の作成費用は世代を開く時点で払う。実行時はその索引で装備を引き、利用中または読込中の同じオブジェクトのバイト列とデコード結果を共有する。訓練場は要求の取り消しや世代変更を装着先ごとに扱い、旧装備を描きながら転送を進める。性能判断には索引を開く時間と、公開済み世代内で装備を変更する費用を個別に記録する。[共有形式とローダー](../../crates/renderer-asset/src/lib.rs)・[訓練場の装備管理](../../crates/training-yard/src/yard/equipment.rs)
+ローダーは `current` を一度読み、内容ハッシュを照合した世代を要求の完了まで保持する。索引の作成費用は世代を開く時点で払う。実行時はその索引で装備を引き、利用中または読込中の同じオブジェクトのバイト列とデコード結果を共有する。訓練場は要求の取り消しや世代変更を装着先ごとに扱い、旧装備を描きながら転送を進める。性能判断には索引を開く時間と、公開済み世代内で装備を変更する費用を個別に記録する。[共有形式とローダー](../../crates/sashiko-asset/src/lib.rs)・[訓練場の装備管理](../../examples/training-yard/src/yard/equipment.rs)
 
-**訓練場での worktree 間再利用。** 開発起動は Git 共通ディレクトリの `renderer-assets/v1` にあるカタログと成果物を直接開く。制作ツリーの Git オブジェクト ID、ローカル編集の内容、対象プロファイル、cooker 実行ファイルのハッシュが一致すれば原本展開を省く。同じ入力の同時 cook は結果を共有する。世代切替は worktree・原本ディレクトリ・プロファイルごとに行い、読み手が保持するプロセス間ロックが回収との競合を防ぐ。[開発起動と世代選択](../../crates/renderer-asset-cook/src/development.rs)・[Git 入力](../../crates/renderer-asset-cook/src/inputs.rs)・[保持と回収](../../crates/renderer-asset-cook/src/retention.rs)
+**訓練場での worktree 間再利用。** 開発起動は Git 共通ディレクトリの `renderer-assets/v1` にあるカタログと成果物を直接開く。制作ツリーの Git オブジェクト ID、ローカル編集の内容、対象プロファイル、cooker 実行ファイルのハッシュが一致すれば原本展開を省く。同じ入力の同時 cook は結果を共有する。世代切替は worktree・原本ディレクトリ・プロファイルごとに行い、読み手が保持するプロセス間ロックが回収との競合を防ぐ。[開発起動と世代選択](../../tools/sashiko-asset-cook/src/development.rs)・[Git 入力](../../tools/sashiko-asset-cook/src/inputs.rs)・[保持と回収](../../tools/sashiko-asset-cook/src/retention.rs)
 
-クリーンな世代を生成するとき、画像の相対パスから利用する装備 ID・部位・スロット・色空間等の用途への対応を記録する。既存 PNG の画素を編集した場合は、その画像を用途ごとに変換し、対応するカタログ参照だけを差し替える。同一の画素を持つ別ファイルの参照を維持し、編集中の画像を使う装備のメッシュ原本も再取得せずに済む。PNG をジオメトリのバッファとして読むレシピには、該当モデルの通常の変換処理を適用する。[画像の依存関係と差分更新](../../crates/renderer-asset-cook/src/image_update.rs)
+クリーンな世代を生成するとき、画像の相対パスから利用する装備 ID・部位・スロット・色空間等の用途への対応を記録する。既存 PNG の画素を編集した場合は、その画像を用途ごとに変換し、対応するカタログ参照だけを差し替える。同一の画素を持つ別ファイルの参照を維持し、編集中の画像を使う装備のメッシュ原本も再取得せずに済む。PNG をジオメトリのバッファとして読むレシピには、該当モデルの通常の変換処理を適用する。[画像の依存関係と差分更新](../../tools/sashiko-asset-cook/src/image_update.rs)
 
 この実装ではモデルの追加・削除や取込設定の変更で制作ツリーを再探索する。カタログと依存索引は世代ごとに一つで、GC はローカルストア全体の到達可能性を調べる。分割索引、背景での予算付き回収、端末間キャッシュの要否は規模測定に基づいて判断する。ストアの内容を外部から変更した場合、同じ長さの破損はロード時のハッシュ照合で検出する。
 

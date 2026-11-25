@@ -1,7 +1,7 @@
 //! Optional local-space animation blending. Prepare only the requested pair.
 use super::{AnimatedModel, AnimationClip, floats};
 use glam::{DMat4, DQuat, DVec3, Mat4};
-use renderer::{pbr::Transform, pipeline::PipelineResult};
+use sashiko_renderer::{pbr::Transform, pipeline::PipelineResult};
 use std::num::{NonZeroU32, NonZeroU64};
 
 struct Joint {
@@ -240,7 +240,7 @@ mod tests {
             looping: true,
         };
         let model = AnimatedModel {
-            content: [renderer_asset::Digest::of(&[]); 2],
+            content: [sashiko_asset::Digest::of(&[]); 2],
             model: SkinnedModel {
                 indices: vec![],
                 vertices: vec![],

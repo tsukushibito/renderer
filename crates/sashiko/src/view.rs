@@ -3,8 +3,8 @@ use crate::{
     math::{LocalTransform, Vec2, Vec3},
     scene::Registry,
 };
-pub use renderer::pbr::PointLight;
-use renderer::{
+pub use sashiko_renderer::pbr::PointLight;
+use sashiko_renderer::{
     pbr::{Projection, Transform, ViewInput},
     pipeline::{CameraView, PipelineResult, RenderObject, ViewId},
 };

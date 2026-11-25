@@ -1,15 +1,15 @@
 [workspace]
 members = [
     "crates/sashiko",
-    "crates/renderer-asset",
-    "crates/renderer-core",
-    "crates/renderer-bake",
-    "crates/renderer-asset-cook",
-    "crates/renderer-bistro",
-    "crates/renderer-example-support",
-    "crates/renderer",
-    "crates/training-yard",
-    "crates/survivor",
+    "crates/sashiko-asset",
+    "crates/sashiko-renderer-core",
+    "crates/sashiko-lighting-bake",
+    "tools/sashiko-asset-cook",
+    "examples/renderer-scenes",
+    "examples/support",
+    "crates/sashiko-renderer",
+    "examples/training-yard",
+    "examples/survivor",
 ]
 resolver = "3"
 

@@ -1,0 +1,43 @@
+[package]
+name = "renderer-scenes"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+default-run = "renderer-scenes"
+description = "Reference scene applications for Bistro and Sponza"
+
+[features]
+default = []
+bake-tool = ["dep:sashiko-lighting-bake", "dep:serde", "dep:half"]
+vulkan = ["sashiko-renderer/vulkan", "sashiko-lighting-bake?/vulkan"]
+d3d12 = ["sashiko-renderer/d3d12", "sashiko-lighting-bake?/d3d12"]
+development-validation = ["sashiko-renderer/development-validation", "sashiko-lighting-bake?/development-validation"]
+vulkan-diagnostics = ["sashiko-renderer/vulkan-diagnostics"]
+d3d12-diagnostics = ["sashiko-renderer/d3d12-diagnostics"]
+graph-diagnostics = ["sashiko-renderer/graph-diagnostics"]
+memory-profiling = ["sashiko-renderer/memory-profiling"]
+presentation = ["sashiko-renderer/presentation", "dep:winit"]
+tracy = ["sashiko-renderer/tracy", "dep:tracy-client"]
+
+[[bin]]
+name = "renderer-scenes-bake"
+path = "src/bin/renderer-scenes-bake.rs"
+required-features = ["bake-tool"]
+
+[dependencies]
+half = { version = "2.7.1", optional = true }
+sashiko-lighting-bake = { version = "0.1.0", path = "../../crates/sashiko-lighting-bake", optional = true }
+sashiko-renderer-core = { version = "0.1.0", path = "../../crates/sashiko-renderer-core", default-features = false }
+sashiko-renderer = { version = "0.1.0", path = "../../crates/sashiko-renderer", default-features = false }
+sashiko-example-support = { version = "0.1.0", path = "../support" }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = "1.0"
+sha2 = "0.10.9"
+tracy-client = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+winit = { version = "0.30", optional = true, default-features = false, features = ["rwh_06"] }
+
+[lints]
+workspace = true

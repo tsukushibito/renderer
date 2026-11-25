@@ -1,0 +1,47 @@
+[package]
+description = "Integration and regression sample for Sashiko rendering and assets"
+name = "training-yard"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["graphics"]
+graphics = ["dep:sashiko-renderer", "dep:sashiko-asset", "dep:serde", "dep:serde_json"]
+presentation = ["graphics", "sashiko-renderer/presentation", "dep:winit", "dep:windows-sys", "dep:sashiko", "sashiko/presentation"]
+vulkan = ["sashiko-renderer-core/vulkan", "sashiko-renderer?/vulkan"]
+d3d12 = ["sashiko-renderer-core/d3d12", "sashiko-renderer?/d3d12"]
+development-validation = ["sashiko-renderer-core/development-validation", "sashiko-renderer?/development-validation"]
+memory-profiling = ["sashiko-renderer-core/memory-profiling", "sashiko-renderer?/memory-profiling", "sashiko-asset?/metrics"]
+
+[dependencies]
+sashiko = { version = "0.1.0", path = "../../crates/sashiko", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+sashiko-asset = { version = "0.1.0", path = "../../crates/sashiko-asset", optional = true }
+sashiko-renderer = { version = "0.1.0", path = "../../crates/sashiko-renderer", optional = true }
+sashiko-renderer-core = { version = "0.1.0", path = "../../crates/sashiko-renderer-core" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", optional = true, features = ["Win32_Storage_FileSystem", "Win32_System_Threading"] }
+winit = { version = "0.30", optional = true, default-features = false, features = ["rwh_06"] }
+
+[[test]]
+name = "host_output"
+required-features = ["graphics"]
+
+[[bin]]
+name = "training-yard"
+path = "src/main.rs"
+required-features = ["graphics"]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+serde_json = "1"
+
+[[example]]
+name = "asset_pipeline_perf"
+required-features = ["graphics", "memory-profiling"]

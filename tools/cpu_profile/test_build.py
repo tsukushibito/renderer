@@ -13,27 +13,27 @@ from build import (BuildError, RELEASE_DEFAULTS, check_artifact, check_configura
 
 class BuildTests(unittest.TestCase):
     def test_renderer_bistro_embedded_inputs_are_bound_to_the_build_source(self):
-        snapshot = source_snapshot("renderer-bistro")
-        for name in ("crates/renderer-bistro/Cargo.toml",
-                     "crates/renderer-bistro/src/shared/ibl-fixture-brdf.rgba16f",
-                     "crates/renderer-example-support/Cargo.toml",
+        snapshot = source_snapshot("renderer-scenes")
+        for name in ("examples/renderer-scenes/Cargo.toml",
+                     "examples/renderer-scenes/src/shared/ibl-fixture-brdf.rgba16f",
+                     "examples/support/Cargo.toml",
                      "tools/bistro/conditions.json",
                      "tools/bistro/ibl.py",
-                     "crates/renderer/shaders/pbr.frag.spv",
-                     "crates/renderer/src/passes/pbr/pbr_programs.rs",
-                     "crates/renderer/src/passes/visibility/program.rs"):
+                     "crates/sashiko-renderer/shaders/pbr.frag.spv",
+                     "crates/sashiko-renderer/src/passes/pbr/pbr_programs.rs",
+                     "crates/sashiko-renderer/src/passes/visibility/program.rs"):
             with self.subTest(name=name):
                 self.assertEqual(snapshot[name]["raw_sha256"],
                                  hashlib.sha256((ROOT / name).read_bytes()).hexdigest())
 
     def test_pipeline_archive_binds_the_workload_and_renderer_dependency(self):
-        snapshot = source_snapshot("renderer")
-        self.assertIn("crates/renderer/Cargo.toml", snapshot)
-        self.assertIn("crates/renderer-core/Cargo.toml", snapshot)
+        snapshot = source_snapshot("sashiko-renderer")
+        self.assertIn("crates/sashiko-renderer/Cargo.toml", snapshot)
+        self.assertIn("crates/sashiko-renderer-core/Cargo.toml", snapshot)
 
     def test_renderer_example_archive_binds_its_pipeline_dependency(self):
         snapshot = source_snapshot()
-        self.assertIn("crates/renderer/src/unlit_forward.rs", snapshot)
+        self.assertIn("crates/sashiko-renderer/src/unlit_forward.rs", snapshot)
 
     def test_shipping_features_reject_direct_diagnostics(self):
         self.assertEqual(parse_features("vulkan,d3d12 vulkan,presentation"),
@@ -92,16 +92,16 @@ class BuildTests(unittest.TestCase):
             check_artifact(artifact, {**RELEASE_DEFAULTS, "debug": 2})
 
     def test_select_binary_by_name_and_cargo_target_kind(self):
-        binary = {"reason": "compiler-artifact", "target": {"name": "bistro", "kind": ["bin"]},
-                  "executable": "bistro.exe"}
-        example = {**binary, "target": {"name": "bistro", "kind": ["example"]}}
-        manual = {**binary, "target": {"name": "bistro-graph", "kind": ["bin"]}}
+        binary = {"reason": "compiler-artifact", "target": {"name": "renderer-scenes", "kind": ["bin"]},
+                  "executable": "renderer-scenes.exe"}
+        example = {**binary, "target": {"name": "renderer-scenes", "kind": ["example"]}}
+        manual = {**binary, "target": {"name": "renderer-scenes-graph", "kind": ["bin"]}}
         messages = "\n".join(map(json.dumps, (example, manual, binary)))
-        self.assertEqual(select_artifact(messages, "bistro", "bin"), binary)
-        self.assertEqual(select_artifact(messages, "bistro-graph", "bin"), manual)
-        self.assertEqual(select_artifact(messages, "bistro"), example)
+        self.assertEqual(select_artifact(messages, "renderer-scenes", "bin"), binary)
+        self.assertEqual(select_artifact(messages, "renderer-scenes-graph", "bin"), manual)
+        self.assertEqual(select_artifact(messages, "renderer-scenes"), example)
         with self.assertRaisesRegex(BuildError, "found 0"):
-            select_artifact(messages, "bistro-graph", "example")
+            select_artifact(messages, "renderer-scenes-graph", "example")
 
     def test_instrumented_dependency_proof_uses_actual_compiled_artifacts(self):
         messages = "\n".join(json.dumps({"reason": "compiler-artifact", "package_id": "registry#" + name,
@@ -115,7 +115,7 @@ class BuildTests(unittest.TestCase):
 
     def test_pipeline_archive_rejects_diagnostics_in_renderer_dependency(self):
         message = json.dumps({"reason": "compiler-artifact",
-                              "target": {"name": "renderer_core", "kind": ["lib"]},
+                              "target": {"name": "sashiko_renderer_core", "kind": ["lib"]},
                               "features": ["memory-profiling"]})
         with self.assertRaisesRegex(BuildError, "Renderer enabled diagnostics transitively"):
             instrumentation_dependencies(message, "none")

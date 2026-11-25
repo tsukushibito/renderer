@@ -1,4 +1,5 @@
 [package]
+description = "Game creation API for the Sashiko engine"
 name = "sashiko"
 version = "0.1.0"
 edition.workspace = true
@@ -8,9 +9,9 @@ publish = false
 [features]
 cli = ["dep:clap"]
 audio-output = ["dep:cpal"]
-presentation = ["dep:winit", "dep:raw-window-handle", "renderer/presentation", "dep:windows-sys"]
-vulkan = ["renderer/vulkan"]
-d3d12 = ["renderer/d3d12"]
+presentation = ["dep:winit", "dep:raw-window-handle", "sashiko-renderer/presentation", "dep:windows-sys"]
+vulkan = ["sashiko-renderer/vulkan"]
+d3d12 = ["sashiko-renderer/d3d12"]
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = { version = "0.6", optional = true }
@@ -20,12 +21,12 @@ winit = { version = "0.30", default-features = false, features = ["rwh_06"], opt
 
 [dependencies]
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"], optional = true }
-renderer = { version = "0.1.0", path = "../renderer", default-features = false }
+sashiko-renderer = { version = "0.1.0", path = "../sashiko-renderer", default-features = false }
 hound = "3.5"
 glam = "0.30"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-renderer-asset = { version = "0.1.0", path = "../renderer-asset" }
+sashiko-asset = { version = "0.1.0", path = "../sashiko-asset" }
 
 [lints]
 workspace = true

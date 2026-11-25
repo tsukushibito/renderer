@@ -24,10 +24,10 @@ def manifest():
 
 class ProfileTests(unittest.TestCase):
     def test_archive_accepts_both_bistro_binaries(self):
-        for name in ("bistro", "bistro-graph"):
+        for name in ("renderer-scenes", "renderer-scenes-graph"):
             value = manifest()
             value["build"].pop("example")
-            value["build"].update(package="renderer-bistro", bin=name)
+            value["build"].update(package="renderer-scenes", bin=name)
             with self.subTest(name=name):
                 profile.check_instrumented(value)
                 value["build"]["bin"] = "other"

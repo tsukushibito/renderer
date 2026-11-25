@@ -1,5 +1,5 @@
 //! Load-time skin preparation and deterministic playback of sampled model-space poses.
-use renderer_asset::{AssetId, Digest};
+use sashiko_asset::{AssetId, Digest};
 use serde::{Deserialize, Serialize};
 mod transition;
 use std::{
@@ -212,7 +212,7 @@ impl<'a> AnimationClip<'a> {
     }
 }
 
-use renderer::{
+use sashiko_renderer::{
     mesh::{JointWeights, MeshData},
     pbr::{PbrVertex, Transform},
     pipeline::PipelineResult,

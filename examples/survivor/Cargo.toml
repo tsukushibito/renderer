@@ -1,0 +1,29 @@
+[package]
+description = "Sample game demonstrating the Sashiko game creation API"
+name = "survivor"
+default-run = "survivor"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+embed = []
+default = ["vulkan", "presentation"]
+vulkan = ["sashiko/vulkan", "sashiko-renderer/vulkan"]
+d3d12 = ["sashiko/d3d12", "sashiko-renderer/d3d12"]
+presentation = ["sashiko-renderer/presentation", "sashiko/presentation", "sashiko/audio-output"]
+development-validation = ["sashiko-renderer?/development-validation"]
+memory-profiling = ["sashiko-renderer?/memory-profiling"]
+
+[dependencies]
+sashiko = { version = "0.1.0", path = "../../crates/sashiko", features = ["cli"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"] }
+
+[target.'cfg(windows)'.dependencies]
+sashiko-renderer = { version = "0.1.0", path = "../../crates/sashiko-renderer", optional = true }
+
+[lints]
+workspace = true

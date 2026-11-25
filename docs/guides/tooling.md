@@ -62,7 +62,7 @@ Vulkan SDK **1.4.341.1**の`glslc`と`spirv-val`を使う。
 明示したtoolや`VULKAN_SDK`が無効な場合は、その原因を報告して失敗する。
 複数SDKが入っている環境では、上の例のように版の分かるパスを渡す。
 
-管理下のShaderと生成済みSPIR-Vは`crates/renderer-core/shaders/`にある。
+管理下のShaderと生成済みSPIR-Vは`crates/sashiko-renderer-core/shaders/`にある。
 固定compilerでの再生成・validator・binary一致確認は[開発手順](development.md#rendergraphとヘッドレス描画)を参照する。
 通常のCPU試験やCPUだけのCriterion測定にVulkan SDKを要求しない。
 SDKの構成は[固定版のSPIR-V toolchain](https://vulkan.lunarg.com/doc/view/1.4.341.1/windows/spirv_toolchain.html)を参照する。
@@ -77,7 +77,7 @@ Vulkan向けはlittle-endian SPIR-V 1.3以下、D3D12向けはDXIL SM6.0で、en
 読み込む。アプリ側でこの契約を満たすと確認したアセットを渡す。
 
 ```rust
-use renderer_core::{
+use sashiko_renderer_core::{
     ImageFormat,
     program::{
         BlendState, DepthState, ManagedRasterProgram, RasterParameterLayout,
@@ -122,12 +122,12 @@ Computeでは`ManagedProgram::from_trusted_owned_descriptor`へ、該当バイ�
 両APIのバイナリを一つのProgramで使う場合は、共通ABIを持つ両形式を`ShaderBinaries::both`へ渡す。
 取込後に元のメタデータを手放せる。
 
-埋め込みのプラグインには `renderer_core::program::embedded_shader_binaries!(spirv, dxil)` を使える。
-ホストアプリの `renderer-core` で有効なバックエンドに応じて対応する式だけを展開する。GPU機能が無い構成ではABIだけを使ってGraphを構築できる。
+埋め込みのプラグインには `sashiko_renderer_core::program::embedded_shader_binaries!(spirv, dxil)` を使える。
+ホストアプリの `sashiko-renderer-core` で有効なバックエンドに応じて対応する式だけを展開する。GPU機能が無い構成ではABIだけを使ってGraphを構築できる。
 パイプライン側はバックエンド別のCargo featureや条件コンパイルを用意せずに、同じ `ViewPipeline` を実装できる。
 
 描画・dispatchの予約には以下の `Preparation` を使う。直接 `WorkingSet` を組む場合はRasterを `WorkingSet::raster`、
-Computeを `WorkingSet::compute` に渡す。標準の表示プリセットは `renderer::passes::output` が提供する。
+Computeを `WorkingSet::compute` に渡す。標準の表示プリセットは `sashiko_renderer::passes::output` が提供する。
 単独で使う場合は `tone_map_neutral_pipeline()` と `SdrOutput::display(fxaa).pipeline()` または `SdrOutput::capture(fxaa).pipeline()` を予約する。
 起動時の `Runtime::new` または変更時の `Runtime::prepare_working_set` がGPUパイプラインを準備する。
 Graphでは同じProgramで `draw_fullscreen`、`draw`、`dispatch` する。差し替えた版を使うGraphは再構築する。
@@ -139,7 +139,7 @@ Graphでは同じProgramで `draw_fullscreen`、`draw`、`dispatch` する。差
 
 ## Rustで描画パイプラインを組み立てる
 
-`renderer`の標準レシピは、フレームの`Graph`にパスを追加し、後段へ渡す画像ハンドルを返す。
+`sashiko-renderer`の標準レシピは、フレームの`Graph`にパスを追加し、後段へ渡す画像ハンドルを返す。
 利用側は標準パスと独自のRaster、Compute、copyを同じGraphに登録する。
 独自のShader Programは[外部取込](#runtime-shader-import)の契約に従って用意し、標準部品と同じように準備する。
 
@@ -161,11 +161,11 @@ preparation.reserve_raster_pass("toon", samples, |pass| {
 分割画面やUIのクリップには `graph.raster` のコールバック内で `set_viewport(Some(rect))`、`set_scissor(Some(rect))` を呼ぶ。
 矩形はアタッチメントの選択mip内の画素単位で、以後の描画に効く。`None` で全域に戻す。load・clear・store・resolveは引き続きアタッチメント全域が対象となる。
 
-[`rust_pipeline`のソース](../../crates/renderer/examples/rust_pipeline.rs)では、unlit Forwardと標準出力の間に
+[`rust_pipeline`のソース](../../crates/sashiko-renderer/examples/rust_pipeline.rs)では、unlit Forwardと標準出力の間に
 HDR画像のコピーパスを挟んだGraphをCPUで構築・compileする。
 
 ```sh
-cargo run --locked -p renderer --no-default-features --example rust_pipeline
+cargo run --locked -p sashiko-renderer --no-default-features --example rust_pipeline
 ```
 
 ### Cook 済みテクスチャを段階的に読み込む
@@ -187,11 +187,11 @@ cargo run --locked -p renderer --no-default-features --example rust_pipeline
 
 ### エンジンのシーンとカメラから描画する
 
-`renderer::material::Materials` をシーンと一緒に保持する。単色の材質は作成時に色を渡せばよい。
+`sashiko_renderer::material::Materials` をシーンと一緒に保持する。単色の材質は作成時に色を渡せばよい。
 同じハンドルを複数の描画に渡すと、そのハンドルへの更新が次に構築する Graph から全描画に反映される。
 
 ```rust
-use renderer::material::{Materials, PbrParams, UnlitParams};
+use sashiko_renderer::material::{Materials, PbrParams, UnlitParams};
 
 let mut materials = Materials::default();
 let red_paint = materials.create_pbr(PbrParams::color([0.8, 0.04, 0.02, 1.0]))?;
@@ -205,7 +205,7 @@ materials.update_pbr(blue_paint, PbrParams::color([0.03, 0.1, 0.8, 1.0]))?;
 アプリケーションがシーン、階層、アニメーションを所有する。描画時には、メッシュと材質のハンドルと
 ワールド変換を持つ `RenderObject` のスライスを渡す。同じスライスを複数のカメラから描画できる。
 
-標準カメラを画面外で使う場合は `renderer::Renderer::headless` で準備する。シーンと HUD は同じ Frame に記録する。
+標準カメラを画面外で使う場合は `sashiko_renderer::Renderer::headless` で準備する。シーンと HUD は同じ Frame に記録する。
 画面上の矩形とクリップは出力画素単位、画像と塗りの色は表示リニアの乗算済みアルファで渡す。
 
 ```rust,ignore
@@ -221,22 +221,22 @@ let ready = renderer.read_capture(&capture, &mut rgba, timeout)?;
 Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受け取り、シーンと HUD を記録する。
 表示待ちの再試行では、すでに受理した画像を提示する。UI だけを描くフレームでは `draw_overlay` から開始できる。
 
-ウィンドウの GPU 時間を調べるには準備後に `set_profiling(true)` を呼び、各 `draw` の試行と最後の `wait_idle` の後で `take_graph_profile` と `take_presentation_profile` を回収する。Graph と提示用コマンドの GPU 区間を分けて扱い、通常版の提示間隔は計測を無効にした別走で採る。[研究施設の実行例](../../crates/survivor/src/window.rs)
+ウィンドウの GPU 時間を調べるには準備後に `set_profiling(true)` を呼び、各 `draw` の試行と最後の `wait_idle` の後で `take_graph_profile` と `take_presentation_profile` を回収する。Graph と提示用コマンドの GPU 区間を分けて扱い、通常版の提示間隔は計測を無効にした別走で採る。[研究施設の実行例](../../examples/survivor/src/window.rs)
 
 空からモデルを追加するときは、ロードの境界で `renderer.prepare_scene(SceneAssets::new(&mut meshes, &mut materials, scene.objects()))?` を呼ぶ。
-標準 `Renderer` はこの一覧から独立に動かせる個体数と必要なシェーダーを求め、同じデバイス上で必要な分を準備する。読取中の画像が変更を妨げる場合は、`error.capacity().map(|c| c.recovery())` が `Some(renderer::CapacityRecovery::ReleaseOwners)` なら、その結果を回収して再試行する。ホストが固定した GPU 予算を使う場合は `SceneRenderer::replace_working_set` で上限超過を受け取れる。
+標準 `Renderer` はこの一覧から独立に動かせる個体数と必要なシェーダーを求め、同じデバイス上で必要な分を準備する。読取中の画像が変更を妨げる場合は、`error.capacity().map(|c| c.recovery())` が `Some(sashiko_renderer::CapacityRecovery::ReleaseOwners)` なら、その結果を回収して再試行する。ホストが固定した GPU 予算を使う場合は `SceneRenderer::replace_working_set` で上限超過を受け取れる。
 転送が完了したら同じビューで描画できる。準備した個体を動かすフレームは描画入力の変換だけを更新する。
 画面内の端末のように自作のパスを組み込む場合は、`headless_with` または `WindowRenderer::new_with` でパスの資源を予約し、`frame.graph()` に記録する。
-そこで描いた画像ビューはそのフレーム内の Canvas に渡せる。[端末の奥行きと HUD 合成の実行例](../../crates/training-yard/tests/world_panel.rs)
+そこで描いた画像ビューはそのフレーム内の Canvas に渡せる。[端末の奥行きと HUD 合成の実行例](../../examples/training-yard/tests/world_panel.rs)
 
 同じモデルを複数の位置に置くときは、`model::Model` に部位ごとのメッシュ範囲、共有材質スロット、LOD の最小画素サイズをまとめる。
 `instantiate` で作った個体には変換と材質の上書きを保持する。ロード時に `assets.add_model(&actor)` で全 LOD の資産を準備し、描画時に `draws(&camera)` でそのビューの部位を抽出する。
-個体の `set_material(slot, Some(handle))` はその個体に効き、`None` は共有材質に戻す。共有材質自体の変更は `Materials::update_pbr` で行う。[隊員のモデルと更新操作](../../crates/training-yard/src/yard.rs)
+個体の `set_material(slot, Some(handle))` はその個体に効き、`None` は共有材質に戻す。共有材質自体の変更は `Materials::update_pbr` で行う。[隊員のモデルと更新操作](../../examples/training-yard/src/yard.rs)
 
 訓練場の装備は隊員ごとに要求を持ち、同じ装備への要求は一つの読み込みと候補にまとめる。
 複数の装備は塗装画像の所有権を共有する。描画の前に一つの候補を進め、装備が描画可能になった時点で旧装備を使う最後の隊員を確認し、採用と退役を同時に確定する。
 標準フレームの `headless_with` と `WindowRenderer::new_with` では、転送と描画を同時に提出するため `frames_in_flight` に 2 を渡す。
-マウス選択や画像読み戻しの結果をホストに残すため、装備の転送結果は提出時の `FrameId` を指定して個別に回収する。[装備の読み込みと採用](../../crates/training-yard/src/yard/equipment.rs)
+マウス選択や画像読み戻しの結果をホストに残すため、装備の転送結果は提出時の `FrameId` を指定して個別に回収する。[装備の読み込みと採用](../../examples/training-yard/src/yard/equipment.rs)
 
 スキニングを使うメッシュは、ロード時に `MeshData::skinned_pbr` に頂点と各頂点の最大 4 関節分の重みを渡す。
 個体ごとに `meshes.create_pose(mesh)` でポーズを作り、`actor.set_pose(mesh, Some(pose))` で結ぶ。
@@ -255,17 +255,17 @@ let receipt = runtime.submit(&graph.compile()?)?;
 histories.publish(&receipt)?;
 ```
 
-ホストは自分の受理票で表示・読み戻しを続ける。提出を取り消す場合は Graph と `histories` を破棄する。投入が受理された後でビュー履歴の確定が中断した場合は、その受理票で `histories.publish` を再試行できる。トークンを手放した後は `drawing.finish_host_submission(&receipt)` で残りを確定する。[ホスト提出と履歴の回復試験](../../crates/renderer/tests/view_pipelines/publication.rs)
+ホストは自分の受理票で表示・読み戻しを続ける。提出を取り消す場合は Graph と `histories` を破棄する。投入が受理された後でビュー履歴の確定が中断した場合は、その受理票で `histories.publish` を再試行できる。トークンを手放した後は `drawing.finish_host_submission(&receipt)` で残りを確定する。[ホスト提出と履歴の回復試験](../../crates/sashiko-renderer/tests/view_pipelines/publication.rs)
 
 <a id="equipment-cook"></a>
 
 ### glTF 装備の取込と配布
 
-制作側は Rust の `renderer-asset-cook` を使う。次の例では、制作ディレクトリ `source` に静的装備の `armor.gltf` と、それが参照するバッファ・PNG を置いている。
+制作側は Rust の `sashiko-asset-cook` を使う。次の例では、制作ディレクトリ `source` に静的装備の `armor.gltf` と、それが参照するバッファ・PNG を置いている。
 
 ```powershell
-cargo run --locked -p renderer-asset-cook -- import source/armor.gltf
-cargo run --locked -p renderer-asset-cook -- cook source dist --cache .tools/armor-cache
+cargo run --locked -p sashiko-asset-cook -- import source/armor.gltf
+cargo run --locked -p sashiko-asset-cook -- cook source dist --cache .tools/armor-cache
 ```
 
 `import` が作る `armor.gltf.meta.json` は原本と一緒に版管理する。改名時は両方を移動し、glTF 内の相対参照も維持する。新しい装備として複製するときは新しい原本に対して `import` を実行する。セーブはメタデータの装備 ID を保持するので、同じ装備の画像を編集して再 cook しても、セーブを書き換えずに新版を利用できる。
@@ -277,25 +277,25 @@ cargo run --locked -p renderer-asset-cook -- cook source dist --cache .tools/arm
 訓練場を開発するときは、clone ごとに一度、次のコマンドでプロジェクト指定の cooker をインストールする。セットアップは大型の Git LFS 原本をポインタのまま checkout する設定も行う。同じ clone の linked worktree はこの設定と実行ファイルを共有する。
 
 ```powershell
-cargo run --locked --release -p renderer-asset-cook -- setup
+cargo run --locked --release -p sashiko-asset-cook -- setup
 ```
 
 以降は任意の worktree で通常どおり訓練場を起動する。ゲームは起動した作業ディレクトリからプロジェクトを見つけ、cooker が選んだ世代を共有ストアから開く。Windows の `--mode interactive` は左の隊員に Narrow を装着し、その worktree の原本と Git インデックスの変更を監視する。`source/paint.png` を保存すると、背景で cook と装備の準備を行い、準備が終わったフレームで新しい色に切り替わる。競合や cook エラーの理由は端末に表示する。
 
 LFS 管理の原本を制作ツールで編集するときは、その worktree で対象のパスを限定して `git lfs pull --include="編集する原本のパス" --exclude=""` を実行する。複数の原本が必要ならパスをカンマで区切る。展開したファイルはその worktree の編集用コピーになる。
 
-変換器を更新する場合は [プロジェクトの指定版](../../crates/renderer-asset-cook/tool-version) を更新して同じセットアップを実行する。一度インストールした版は、その版を指定する別の worktree でも使用できる。変換器を開発中の worktree だけでローカルビルドを試す場合は、`TRAINING_YARD_COOKER` に実行ファイルの絶対パスを指定する。
+変換器を更新する場合は [プロジェクトの指定版](../../tools/sashiko-asset-cook/tool-version) を更新して同じセットアップを実行する。一度インストールした版は、その版を指定する別の worktree でも使用できる。変換器を開発中の worktree だけでローカルビルドを試す場合は、`TRAINING_YARD_COOKER` に実行ファイルの絶対パスを指定する。
 
 休眠させる worktree のルートで、次の順に容量を確認・回収できる。最初のコマンドは、現在の選択世代と復旧用の一世代の保持を解いたとき、追加で回収できるカタログと成果物のファイル長をバイトで返す。実行中の読み手と別の worktree が必要とする分を差し引いている。`--apply` は保持を解き、`gc` はその時点で全体から回収した量を返す。変換が実行中なら終了後に再試行する。未コミットの原本は作業場所に残り、次回起動は残っている成果物、または Git・LFS の原本とその編集から復元する。
 
 ```powershell
-$source = 'crates/training-yard/assets/equipment/source'
-cargo run --locked --release -p renderer-asset-cook -- release $source
-cargo run --locked --release -p renderer-asset-cook -- release $source --apply
-cargo run --locked --release -p renderer-asset-cook -- gc $source
+$source = 'examples/training-yard/assets/equipment/source'
+cargo run --locked --release -p sashiko-asset-cook -- release $source
+cargo run --locked --release -p sashiko-asset-cook -- release $source --apply
+cargo run --locked --release -p sashiko-asset-cook -- gc $source
 ```
 
-共有ストアの読み込み時に内容ハッシュの不一致を検出したら、その世代を選択した worktree で同じ入力と同じバージョンの cooker を使い、`renderer-asset-cook repair <source>` を実行する。修復は各レシピの成果物をハッシュで検査し、破損・欠落分だけを再変換して原子的に公開する。選択と読み手のリースを維持する。出力 JSON の `generation` と `published_bytes` で修復世代と書き込み量を確認できる。入力が変わっていた場合は元の入力を復元して再実行する。
+共有ストアの読み込み時に内容ハッシュの不一致を検出したら、その世代を選択した worktree で同じ入力と同じバージョンの cooker を使い、`sashiko-asset-cook repair <source>` を実行する。修復は各レシピの成果物をハッシュで検査し、破損・欠落分だけを再変換して原子的に公開する。選択と読み手のリースを維持する。出力 JSON の `generation` と `published_bytes` で修復世代と書き込み量を確認できる。入力が変わっていた場合は元の入力を復元して再実行する。
 
 訓練場の配布版では、実行ファイルの隣に `assets/equipment/dist` を生成する。配布ビルドでは必要な LFS 原本を取得して上記の `cook` を実行する。別の配布物を試すときは環境変数 `TRAINING_YARD_ASSETS` に `current` のあるディレクトリを指定する。ホストは `Generation::open` で取得した世代を `Yard::set_asset_generation` に渡し、装着先と保存済み ID を指定して `request_equipment` を呼ぶ。更新先を確認するまで、旧世代の装備を描画できる。
 
@@ -311,8 +311,8 @@ cargo run --release -p training-yard --all-features -- --api vulkan --mode inter
 ```
 
 画面外の再生は各フレームの表示色を PPM に保存する。ホスト再生は主画面、低解像度ビュー、影、6 フレームごとに更新する監視モニターを一度に提出して読み戻す。
-更新時は同じ Graph のカメラ出力をパネルに合成して `submit_with_image` で保持する。次回は保持した `ManagedImage` のスナップショットを Graph に import して使う。[監視モニターの利用コード](../../crates/training-yard/src/replay/monitor.rs)
-ウィンドウ再生は自動で終了する。手動操作では 1 で左の鎧を発光、2 で共有色を変更、3 で発光を解除し、4・5・6 で左のポーズ・右のポーズ・静止姿勢を切り替える。Space で装備要求・完了・削除・再生成を 1 操作ずつ進め、Esc で終了する。[ウィンドウのイベント処理](../../crates/training-yard/src/window.rs)・[ホストの描画コード](../../crates/training-yard/src/replay.rs)
+更新時は同じ Graph のカメラ出力をパネルに合成して `submit_with_image` で保持する。次回は保持した `ManagedImage` のスナップショットを Graph に import して使う。[監視モニターの利用コード](../../examples/training-yard/src/replay/monitor.rs)
+ウィンドウ再生は自動で終了する。手動操作では 1 で左の鎧を発光、2 で共有色を変更、3 で発光を解除し、4・5・6 で左のポーズ・右のポーズ・静止姿勢を切り替える。Space で装備要求・完了・削除・再生成を 1 操作ずつ進め、Esc で終了する。[ウィンドウのイベント処理](../../examples/training-yard/src/window.rs)・[ホストの描画コード](../../examples/training-yard/src/replay.rs)
 
 V で監視モニターと選択輪郭を含む 24 フレームを同じウィンドウに再生して終了する。更新フレームでは監視画像と提示画像を一度の `submit_with_images` で取得する。
 
@@ -322,25 +322,25 @@ Windows の GPU、デスクトップ、Vulkan の検証レイヤー、D3D12 の 
 python -B tools/training_yard/accept.py .tools/yard-acceptance
 ```
 
-保存先にはコマンドと終了状態、Git リビジョン、実行ファイルの SHA-256、アダプター、フレーム別の入力・画像・差分が残る。ヘッドレス画像は sRGB の PPM。ホスト画像は表示リニア RGBA8、部位 ID は little-endian u32、深度と影は little-endian f32。基準は実機で独立の画素・姿勢・選択判定を通した 29 枚の PPM とホスト 24 フレームから作成した。全画素を対象に色は各成分 1、深度・影は絶対差 0.00001 を上限とし、ID と入力列は完全一致を要求する。保存なしのホスト実行でメモリを別途計測する。基準を変更する際は画像差分と期待値の変更理由をレビューする。[受入スクリプト](../../tools/training_yard/accept.py)・[基準データ](../../crates/training-yard/tests/reference.zip)
+保存先にはコマンドと終了状態、Git リビジョン、実行ファイルの SHA-256、アダプター、フレーム別の入力・画像・差分が残る。ヘッドレス画像は sRGB の PPM。ホスト画像は表示リニア RGBA8、部位 ID は little-endian u32、深度と影は little-endian f32。基準は実機で独立の画素・姿勢・選択判定を通した 29 枚の PPM とホスト 24 フレームから作成した。全画素を対象に色は各成分 1、深度・影は絶対差 0.00001 を上限とし、ID と入力列は完全一致を要求する。保存なしのホスト実行でメモリを別途計測する。基準を変更する際は画像差分と期待値の変更理由をレビューする。[受入スクリプト](../../tools/training_yard/accept.py)・[基準データ](../../examples/training-yard/tests/reference.zip)
 
 ウィンドウの寸法イベントは `WindowRenderer::resize(extent, assets)` に渡す。ゼロ寸法では記録を休止する。
-3D の解像度を変えるには、ロード境界で `set_scene_extent(Some([width, height]), assets)` を呼ぶ。`Frame::scene_view()` の寸法を LOD 選択に使える。Canvas とキャプチャの寸法は出力に合わせる。`None` でウィンドウに追従する。訓練場の最後の 5 フレームでは、ガラスと障害物を弾道が横切る間に 3D 解像度を半分にし、1 画素の照準を描く。手動操作の F でこの 5 場面を順に再生して隊員画面へ戻る。[射線の材質と期待画素](../../crates/training-yard/src/effects.rs)
+3D の解像度を変えるには、ロード境界で `set_scene_extent(Some([width, height]), assets)` を呼ぶ。`Frame::scene_view()` の寸法を LOD 選択に使える。Canvas とキャプチャの寸法は出力に合わせる。`None` でウィンドウに追従する。訓練場の最後の 5 フレームでは、ガラスと障害物を弾道が横切る間に 3D 解像度を半分にし、1 画素の照準を描く。手動操作の F でこの 5 場面を順に再生して隊員画面へ戻る。[射線の材質と期待画素](../../examples/training-yard/src/effects.rs)
 連続するカメラ移動には `set_camera`、カットには `cut_camera` を使う。ホストが複数ビューを管理するときは `drawing.camera_cut(view_id)` でそのビューの時間履歴を無効化できる。標準パイプラインは準備済みの影画像に次回描き直す。
 資産のロードやリサイズは以前の描画と提示の完了を待てる変更境界で行う。ホストが待機時間を制御する場合は `wait_idle(timeout)` を使う。提示待ちの画像がある間は通常の `draw` で提示を進める。
 ビュー構成を置き換える際は、旧ビューと新ビューの資源クラスを一時的に同時に準備する。新ビューの初期化が失敗した場合も以前のビューで描画を続けられる。
 
 選択に使う形状は `picking::PickPass` で描ける。準備時に寸法・最大部位数・1 フレームの照会数を渡す。記録時にビューの描画対象と同じ長さの u32 ID 列を渡すと、深度判定した ID 画像が得られる。0 は遮蔽物や背景に使える。標準 PBR・頂点色の頂点ストリームを扱い、スキニングは本描画の頂点を共有する。選択対象や透明材質を含める規則、物体・部位と ID の対応はホストが決める。
 
-`image.read_pixel(graph, [x, y])` は左上を原点として 1 画素を記録し、結果はその提出の完了時に 4 バイトで受け取る。クリック時点の対応表を保持して世代を照合すれば、古いクリックが新しい隊員に適用されるのを防げる。輪郭パスは同じ Graph で ID 画像を直接読める。[非同期クリック](../../crates/training-yard/src/replay/selection.rs)・[ホスト所有の輪郭パス](../../crates/training-yard/src/replay/selection/outline.rs)
+`image.read_pixel(graph, [x, y])` は左上を原点として 1 画素を記録し、結果はその提出の完了時に 4 バイトで受け取る。クリック時点の対応表を保持して世代を照合すれば、古いクリックが新しい隊員に適用されるのを防げる。輪郭パスは同じ Graph で ID 画像を直接読める。[非同期クリック](../../examples/training-yard/src/replay/selection.rs)・[ホスト所有の輪郭パス](../../examples/training-yard/src/replay/selection/outline.rs)
 
-同じ `--mode host` の後半では、1,024 体の標的をホスト側の配列から描く。実行枠が占有されていれば完了を回収し、結果枠が占有されていれば読み戻しを終えて返却する。ビューの描画数を超えた場合はフレームを省略し、ロード時に実際の標的一覧から再準備する。[容量不足からの復帰と描画結果の比較](../../crates/training-yard/src/targets.rs)
+同じ `--mode host` の後半では、1,024 体の標的をホスト側の配列から描く。実行枠が占有されていれば完了を回収し、結果枠が占有されていれば読み戻しを終えて返却する。ビューの描画数を超えた場合はフレームを省略し、ロード時に実際の標的一覧から再準備する。[容量不足からの復帰と描画結果の比較](../../examples/training-yard/src/targets.rs)
 
 個別のパスを準備して標準 Forward を使う場合はカメラと初期シーンから構成する。カメラには安定した `ViewId`、寸法、`ViewInput` を渡す。
 `build` は参照されたメッシュと材質を転送し、初期化に使った投入の完了を回収して返る。
 
 ```rust
-use renderer::pipeline::{RendererSetup, SceneAssets, SceneInput};
+use sashiko_renderer::pipeline::{RendererSetup, SceneAssets, SceneInput};
 
 let assets = SceneAssets::new(&mut meshes, &mut materials, &objects).with_lights(&lights);
 let mut renderer = RendererSetup::standard(camera).build(backend, assets)?;
@@ -396,8 +396,8 @@ let mut renderer = plan.begin_with_runtime(&mut runtime)?.wait()?;
 そのオブジェクトの頂点・インデックス範囲を取り込む。一つのメッシュを材質ごとに分けて描くには
 `RenderObject::with_index_range` を使う。戻り値は同寸の単一サンプルのシーンリニアRec.709 RGBA16Fと、任意の単一サンプルD32。
 標準DeferredのG-bufferを使う独自パスは `draw_view_with_gbuffer` のコールバックで照明前に追加する。
-[外部の Toon 実装](../../crates/renderer/examples/support/toon_pipeline.rs)と
-[共通の描画ループ](../../crates/renderer/examples/support/views.rs)を参照。
+[外部の Toon 実装](../../crates/sashiko-renderer/examples/support/toon_pipeline.rs)と
+[共通の描画ループ](../../crates/sashiko-renderer/examples/support/views.rs)を参照。
 
 半透明物はすべての材質をまとめてビュー奥行きで整列する。基準点はインデックスが参照する頂点の
 境界箱の中心で、モデル変換も反映する。必要なら `RenderObject::sort_center` で変更できる。
@@ -433,7 +433,7 @@ Unlit は頂点色、材質色、オブジェクトの tint を乗算する。
 影を描く定義には同じ頂点・材質入力を受け取る深度Programを指定する。テクスチャとサンプラーは `Parameter::Binding` で宣言する。
 独自の定数ブロックには `Value::Uniform`、読み取り専用の構造化データには `Value::StorageRead` を使う。
 GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resident` で接続できる。
-[独自 Toon の登録、描画、GPU 読み戻しの実例](../../crates/renderer/tests/pbr_gpu/mixed.rs)
+[独自 Toon の登録、描画、GPU 読み戻しの実例](../../crates/sashiko-renderer/tests/pbr_gpu/mixed.rs)
 
 <a id="pbr-forward-recipe"></a>
 
@@ -444,7 +444,7 @@ GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resid
 材質係数をフレーム間で共有するときは `ResidentMaterialUniform::import` で係数を接続し、
 当該Graphのテクスチャ・サンプラーと合わせて `pbr::GraphMaterial` を組み立てる。
 
-`renderer::pipeline::GeometryPipeline::new(technique, config, scene_limits)`でForward、Forward+、Deferredから選ぶ。
+`sashiko_renderer::pipeline::GeometryPipeline::new(technique, config, scene_limits)`でForward、Forward+、Deferredから選ぶ。
 描画寸法・出力条件と、同時フレーム・材質・描画・各カスケードのキャスターの上限を渡す。
 `Technique` で使用できるサンプル数、深度、G-bufferの有無を確認できる。
 標準3方式で局所光源を使うには `SceneLimits::max_local_lights` にビュー当たりの上限を指定する。
@@ -465,7 +465,7 @@ GPU 常駐の PBR 係数とテクスチャを使う場合は `PbrMaterial::resid
 | `MaterialFactors::with_emission_nits` | 発光テクスチャが白の部分の輝度（cd/m²）。`emissive_nits` には校正済み RGB を直接指定できる |
 
 ```rust
-use renderer::pbr::{LocalLight, PointLight, Sun};
+use sashiko_renderer::pbr::{LocalLight, PointLight, Sun};
 
 let sun = Sun::from_lux([0., 1., 0.], [1.; 3], 20_000.)?;
 let bulb = PointLight::from_lumens([0., 2., 0.], 12., [1., 0.8, 0.6], 800.)?;
@@ -474,7 +474,7 @@ let input = input.with_sun(sun).with_lights(&lights);
 
 // オフラインで静的な電球からの反射光を焼く場合
 bake_scene.set_point_lights(vec![bulb]);
-let lighting = renderer_bake::Lighting::environment_map(sky_map, nits_per_unit).with_sun(sun);
+let lighting = sashiko_lighting_bake::Lighting::environment_map(sky_map, nits_per_unit).with_sun(sun);
 ```
 
 点光源は正対面に I/r² lx を与える。ゲーム描画では 0.1 m 未満の発散を抑え、指定した到達距離まで滑らかに減衰させる。ベイカーにも同じ距離則が適用され、静的な遮蔽物は反射光に影を落とす。絶対値の入ったライトマップや局所プローブには HDRI の校正倍率を重ねない。露出とトーンマッピングはこれらの光を加算した後に適用する。Sponza と Bistro の比較用プリセットは絵合わせの値を使っており、現場で測定した照度とは独立している。
@@ -484,7 +484,7 @@ let lighting = renderer_bake::Lighting::environment_map(sky_map, nits_per_unit).
 次は Sponza の中庭で使った下向きの面光源。長さの単位はメートルで、半辺の外積が発光面の表を向く。
 
 ```rust
-use renderer::pbr::{LocalLight, RectLight};
+use sashiko_renderer::pbr::{LocalLight, RectLight};
 
 let panel = |x| RectLight::from_lumens(
     [x, 10.431109, -0.559192], [2.5, 0.0, 0.0], [0.0, 0.0, 0.5],
@@ -514,8 +514,8 @@ bake_scene.set_rect_lights(panels.to_vec());
 追加パスの宣言、アップロード、表示やGPUの完了待ちまで保持する資源の容量もアプリの構成に沿って指定する。
 
 ```rust
-use renderer_core::capacity::Preparation;
-use renderer::{pbr::{Defaults, Technique}, pipeline::GeometryPipeline};
+use sashiko_renderer_core::capacity::Preparation;
+use sashiko_renderer::{pbr::{Defaults, Technique}, pipeline::GeometryPipeline};
 
 let mut preparation = Preparation::new(scene_limits.frames_in_flight);
 let recipe = GeometryPipeline::new(Technique::Forward, config, scene_limits)?;
@@ -577,7 +577,7 @@ Runtimeが投入を受理した時点で履歴が反映される。アプリが�
 先行フレームのGPU完了はRuntimeが管理する。影の解像度変更や終了時には`clear`で画像の登録を解除する。
 キャッシュで保持する4枚の登録をRuntimeの容量に含める。
 
-準備、入力アップロード、Bloom、シャドウ再利用は[`pbr_forward`のソース](../../crates/renderer/examples/pbr_forward.rs)で確認できる。
+準備、入力アップロード、Bloom、シャドウ再利用は[`pbr_forward`のソース](../../crates/sashiko-renderer/examples/pbr_forward.rs)で確認できる。
 実行方法は[小さなPBRシーン](examples.md#pbr-forward-example)を参照する。
 
 #### 照明方式と描画リストを選ぶ
@@ -615,25 +615,25 @@ Runtimeが投入を受理した時点で履歴が反映される。アプリが�
 ビルド入力はJSONで、`schema_version: 1`、名前付きの`templates`と`materials`、コンパイルする組を並べた`programs`を指定する。
 ソースと任意の`include_dirs`は入力ファイルからの相対パスで指定できる。
 
-Python 3.11以降と固定版Vulkan SDKを使い、たとえば[Bistroのビルド入力](../../crates/renderer/shaders/material-programs.json)を次のようにビルドする。
+Python 3.11以降と固定版Vulkan SDKを使い、たとえば[Bistroのビルド入力](../../crates/sashiko-renderer/shaders/material-programs.json)を次のようにビルドする。
 出力先には新しいディレクトリを指定する。SDKの場所は`VULKAN_SDK`または`--sdk-root`で指定できる。
 
 ```powershell
-python -B tools/shaders/build_material_programs.py --manifest crates/renderer/shaders/material-programs.json --output .tools/bistro-material-programs
+python -B tools/shaders/build_material_programs.py --manifest crates/sashiko-renderer/shaders/material-programs.json --output .tools/bistro-material-programs
 ```
 
 `manifest.json`はテンプレート・材質型の組と、各ステージのSPIR-V／DXIL、反射情報とhashを結ぶ。
 テンプレートや材質の変更時は該当する組をビルドし直す。実行時のresolverはその組のバイナリと、レビュー済みの
 頂点・定数・リソースのABIおよびアクセス契約を[既存の取込境界](#runtime-shader-import)で照合してProgramを返す。
 
-`renderer-bistro`の`bistro`では、`--shader-manifest`でForward不透明描画とシャドウのレビュー済みProgramを選ぶ。
+`renderer-scenes`の`renderer-scenes`では、`--shader-manifest`でForward不透明描画とシャドウのレビュー済みProgramを選ぶ。
 半透明には組み込みのProgramを使う。外部バンドルを使う構成はForward 1×、直接描画、インスタンシングなしで、
 取込時にビルドしたバイト列をレビュー済みのBistroバイナリと照合する。
 準備済みのProgram三種を`pbr_forward::prepare_with_programs`に渡すと、レシピが頂点・定数・binding・出力と
 ブレンド・深度の互換性を照合する。シェーダーのアクセス範囲と安全性は、取込時のレビュー済み契約に従う。
 
 ```powershell
-cargo run --locked --release -p renderer-bistro --no-default-features --features vulkan,d3d12,development-validation --bin bistro -- --api vulkan --fixture --capture-shadow-maps --shader-manifest .tools/bistro-material-programs/manifest.json --output .tools/bistro-fixture-material-vulkan
+cargo run --locked --release -p renderer-scenes --no-default-features --features vulkan,d3d12,development-validation --bin renderer-scenes -- --api vulkan --fixture --capture-shadow-maps --shader-manifest .tools/bistro-material-programs/manifest.json --output .tools/bistro-fixture-material-vulkan
 ```
 
 D3D12では`--api d3d12`を指定する。全シーンの素材準備と追加の表示手順は[開発ガイド](development.md#bistro-b5)を参照する。
@@ -642,7 +642,7 @@ D3D12では`--api d3d12`を指定する。全シーンの素材準備と追加�
 
 ### Bistroの描画パイプラインを組み立てる
 
-`renderer-bistro`の`bistro`は、Forward、Forward+、Deferredに公開PBRレシピを使う。
+`renderer-scenes`の`renderer-scenes`は、Forward、Forward+、Deferredに公開PBRレシピを使う。
 `--pipeline`でForward、Forward+、Forward-reference、Deferredを選び、対応するMSAAや描画形式を指定できる。
 Forward-referenceは全点光源を評価する比較用の経路で、サンプルが共通パスから構成する。
 各経路はシャドウからシーンのHDR、[BloomとSDR](#bistro-post-pipeline)までを同じGraphへ追加する。
@@ -650,7 +650,7 @@ Bistroはカメラ、IBL、材質、描画候補とその順序を供給し、
 最終画像をキャプチャまたは表示する。描画寸法が変わるとレシピと一時画像を新しい寸法で準備する。
 
 ```powershell
-cargo run --locked --release -p renderer-bistro --no-default-features --features vulkan,d3d12,development-validation --bin bistro -- --api vulkan --fixture --frames 8 --warmup 2 --capture-shadow-maps --output .tools/bistro-scene-vulkan
+cargo run --locked --release -p renderer-scenes --no-default-features --features vulkan,d3d12,development-validation --bin renderer-scenes -- --api vulkan --fixture --frames 8 --warmup 2 --capture-shadow-maps --output .tools/bistro-scene-vulkan
 ```
 
 D3D12では`--api d3d12`を指定する。
@@ -682,24 +682,24 @@ zlib-style licenseの所在は[provenance](../../tools/bistro/mikktspace/provena
 ClangやMikk shared libraryをRendererのruntime依存へ追加しない。
 
 標準PBRと影、BistroのBloom、Deferred、Forward+、可視性判定の正本は
-`crates/renderer/shaders/`の`.hlsl`と共通`.hlsli`に置く。両方のBistroサンプルもこの資産を参照する。
-[生成スクリプト](../../crates/renderer/shaders/regenerate.ps1)から
+`crates/sashiko-renderer/shaders/`の`.hlsl`と共通`.hlsli`に置く。両方のBistroサンプルもこの資産を参照する。
+[生成スクリプト](../../crates/sashiko-renderer/shaders/regenerate.ps1)から
 固定版DXCを呼び、同じ正本をSPIR-VとDXILに直接コンパイルする。
-標準のNeutral・FXAA・SDR出力shaderとライセンスは`crates/renderer/shaders/output/`に置く。
+標準のNeutral・FXAA・SDR出力shaderとライセンスは`crates/sashiko-renderer/shaders/output/`に置く。
 表示プリセットのGLSLを変更した場合は次の順で標準fragmentのSPIR-V、DXIL、両者を含むPipelineのmanifestを更新する。
 通常buildは同梱のバイナリを読み込む。
 
 ```powershell
-& ./crates/renderer-core/shaders/regenerate.ps1
-& ./crates/renderer-core/shaders/regenerate-dxil.ps1
-& ./crates/renderer/shaders/regenerate.ps1
+& ./crates/sashiko-renderer-core/shaders/regenerate.ps1
+& ./crates/sashiko-renderer-core/shaders/regenerate-dxil.ps1
+& ./crates/sashiko-renderer/shaders/regenerate.ps1
 ```
 
 PBRなどPipeline側のHLSLのみを変更した場合は、Pipelineの生成と照合を実行する。
 
 ```powershell
-& ./crates/renderer/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
-& ./crates/renderer/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+& ./crates/sashiko-renderer/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
+& ./crates/sashiko-renderer/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
 ```
 
 `-Verify`は一時directoryで再生成し、checkoutを書き換えずbinary・reflection・manifestを照合する。
@@ -743,7 +743,7 @@ timer/query無効と有効を独立反復し、差にはrun間変動が含まれ
 ## D3D12 bindingsの生成
 
 `d3d12` featureはWindows限定のprivate bindingsを使う。公開Graph／Engineへnative型を出さず、
-通常ビルドは[生成済みRust](../../crates/renderer-core/src/backends/d3d12/bindings.rs)を使う。
+通常ビルドは[生成済みRust](../../crates/sashiko-renderer-core/src/backends/d3d12/bindings.rs)を使う。
 Device・単一DIRECT queue・buffer Graph実行もこのprivate生成型を使う。
 COM参照やnative handleを公開runtime／Graph APIへ露出させない。
 
@@ -784,13 +784,13 @@ COM ABIが同じでも、他の`windows` crateの型とprivate生成型のRust�
 通常のRustビルドは管理下のbinaryを利用し、shader compilerやSDKを要求しない。
 
 ```powershell
-& ./crates/renderer-core/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
-& ./crates/renderer-core/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+& ./crates/sashiko-renderer-core/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
+& ./crates/sashiko-renderer-core/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
 ```
 
 `-Verify`は生成済みファイルを変更せず、不足・差分・tool不一致・変換失敗をエラーにする。
 先に`regenerate.ps1 -Verify`で対象SPIR-Vの再生成一致と`spirv-val`を確認する。
-[toolchain定義](../../crates/renderer-core/shaders/dxil-toolchain.json)でWindows x64 SDKの
+[toolchain定義](../../crates/sashiko-renderer-core/shaders/dxil-toolchain.json)でWindows x64 SDKの
 glslc・spirv-val・SPIRV-Cross・DXC・dxcompiler.dllのSHA-256と、変換引数を固定する。
 SPIRV-Crossは`vulkan-sdk-1.4.341.0`、DXCは`1.9.0.5180 (e35541826)`である。
 DXCの`-WX`と通常の内部validatorを使い、`-Vd`は使わない。
@@ -798,13 +798,13 @@ DXCの`-WX`と通常の内部validatorを使い、`-Vd`は使わない。
 [DXCのvalidator変更](https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.8.2505)と
 [CLI・reflectionの公式説明](https://github.com/microsoft/DirectXShaderCompiler/wiki/Using-dxc.exe-and-dxcompiler.dll)を参照する。
 
-[生成物](../../crates/renderer-core/shaders/dxil/)にはHLSL、検証付きコンパイルで生成したDXIL、
+[生成物](../../crates/sashiko-renderer-core/shaders/dxil/)にはHLSL、検証付きコンパイルで生成したDXIL、
 DXCのsignature／binding／constant offsetのreflection、入力と出力のSHA-256 manifestを保存する。
 shader modelは6.0、entry pointは`main`、HLSLは2021、最適化は`-O3`、debug情報・include・macroはない。
 GLSLの入力hashだけはGitの改行設定に依存しないUTF-8／LFへ正規化し、binaryは全byteを比較する。
 HLSL・reflection・manifestの改行は管理下の`.gitattributes`でLFへ固定し、reflectionの行末空白は除く。
 
-[固定ABIの契約](../../crates/renderer-core/shaders/dxil-contracts.json)には次を記録する。
+[固定ABIの契約](../../crates/sashiko-renderer-core/shaders/dxil-contracts.json)には次を記録する。
 
 - Computeは8×8×1で、RGBA8 sourceは`u0`、destinationは`u1`、modeのu32は`b0`のoffset 0、4 byte。
   読み取り専用のstorage imageも既定変換ではUAVになるため、D3D12側はRGBA8 typed UAV load/store能力を照会する。
@@ -839,7 +839,7 @@ HLSL・reflection・manifestの改行は管理下の`.gitattributes`でLFへ固�
   half格納のRGBA16FをFP32で読み、16-bit shader演算型を要求しない。
   `managed-abi.ps1`とSDK不要の改変回帰は4本のmanaged assetを確認する。
 
-利用側のCompute受入shaderは`crates/renderer-core/tests/support/shaders/`へ置く。
+利用側のCompute受入shaderは`crates/sashiko-renderer-core/tests/support/shaders/`へ置く。
 `compute_hdr_sampled.comp`はsampled画像・samplerと16-byte UniformからRGBA16F storage画像へ書き、
 `compute_hdr_storage.comp`はreadonly storage画像と16-byte StorageRead bufferから別のRGBA16F storage画像へ書く。
 両方local sizeは4×4×1で、端数invocationをguardする。既存の再生成scriptはこれらの外部配置も列挙し、
@@ -878,8 +878,8 @@ portable版を`.tools/tracy-0.14.1/bin/`へ展開し、通常権限のPowerShell
 OSのUAC・ETW・kernel設定やsampling intervalは変更しない。
 
 ```powershell
-python -B tools/cpu_profile/build.py --package renderer-bistro --bin bistro --features vulkan,d3d12 --profile release --output .tools/tracy/builds/normal
-python -B tools/cpu_profile/build.py --package renderer-bistro --bin bistro --features vulkan,d3d12 --profile release --instrumentation tracy --output .tools/tracy/builds/instrumented
+python -B tools/cpu_profile/build.py --package renderer-scenes --bin renderer-scenes --features vulkan,d3d12 --profile release --output .tools/tracy/builds/normal
+python -B tools/cpu_profile/build.py --package renderer-scenes --bin renderer-scenes --features vulkan,d3d12 --profile release --instrumentation tracy --output .tools/tracy/builds/instrumented
 ```
 
 `--instrumentation tracy`がfeatureを追加し、manifestの`artifact_class`を`tracy-instrumented`として、
@@ -1017,12 +1017,12 @@ full debug情報とstripなしだけを変更する。`release`は通常構成�
 PDBが存在しても行情報を得られるとは限らない。両構成を同条件で測り、debug情報を加えた差も記録する。
 helperは専用のCargo出力領域を作り、実行ファイル、対応するPDB、`manifest.json`を保存する。
 manifestにはCargoパッケージとexample、source/lock/toolchain、要求・実効feature、観測したCargo profile、EXE/PDBのhashとGUID/ageを含める。
-`--package renderer`を選ぶと両crateのソースを記録する。
-Bistroの両バイナリは、`renderer-bistro`と依存パッケージ（Renderer、Pipeline、サンプル補助）のソースをビルド記録に含める。
+`--package sashiko-renderer`を選ぶと両crateのソースを記録する。
+Bistroの両バイナリは、`renderer-scenes`と依存パッケージ（Renderer、Pipeline、サンプル補助）のソースをビルド記録に含める。
 BistroのRustレシピと固定条件`tools/bistro/conditions.json`もsource hashの対象になる。
 capture/export/行解決は保存したbytesを再検証し、後のCargo buildで置換される`target/`のEXEを直接使わない。
 
-既定のパッケージは`renderer-core`、exampleは`windowed`、featuresは`vulkan,d3d12,presentation`であるため、
+既定のパッケージは`sashiko-renderer-core`、exampleは`windowed`、featuresは`vulkan,d3d12,presentation`であるため、
 上のヘッドレス用指定を省略しない。変更中のsourceは既定で拒否し、
 調査上必要なときだけ`--allow-dirty`で実際のhashを記録する。
 profile/rustflags/compilerの環境・Cargo設定による上書き、

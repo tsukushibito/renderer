@@ -68,8 +68,10 @@ def verified_release(path):
 
 def is_bistro_build(build):
     if "bin" in build:
-        return ("example" not in build and build.get("package") == "renderer-bistro"
-                and build["bin"] in ("bistro", "bistro-graph"))
+        if build.get("package") == "renderer-bistro":
+            return "example" not in build and build["bin"] in ("bistro", "bistro-graph")
+        return ("example" not in build and build.get("package") == "renderer-scenes"
+                and build["bin"] in ("renderer-scenes", "renderer-scenes-graph"))
     return (build.get("example") == "bistro"
             and build.get("package", "renderer") in ("renderer-core", "renderer"))
 

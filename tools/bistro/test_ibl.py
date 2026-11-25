@@ -120,7 +120,7 @@ class IblTests(unittest.TestCase):
 
     def test_small_runtime_brdf_fixture_matches_reviewed_cook(self):
         root = Path(__file__).resolve().parents[2]
-        checked_in = root / "crates/renderer-bistro/src/shared/ibl-fixture-brdf.rgba16f"
+        checked_in = root / "examples/renderer-scenes/src/shared/ibl-fixture-brdf.rgba16f"
         generated = ibl.rgba16_bytes([ibl.brdf_lut(16, 16, samples=1024)])
         self.assertEqual(checked_in.read_bytes(), generated)
 

@@ -1,0 +1,23 @@
+[package]
+name = "sashiko-lighting-bake"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Offline surface and probe lighting for Sashiko"
+
+[features]
+vulkan = ["sashiko-renderer/vulkan", "dep:ash","dep:vk-mem"]
+d3d12 = ["sashiko-renderer/d3d12"]
+development-validation = ["sashiko-renderer/development-validation"]
+
+[dependencies]
+ash = {workspace=true,optional=true}
+vk-mem = {workspace=true,optional=true}
+sashiko-renderer = { version = "0.1.0", path = "../sashiko-renderer" }
+
+[dev-dependencies]
+sha2 = "0.10.9"
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 //! Allocation-free layout and menu focus, plus a small bitmap face for screen overlays.
 //! Reserve the layer list when preparing the screen. Coordinates are output pixels.
-use renderer::canvas::{Layer, Paint};
-pub use renderer::core::graph::RasterRect as Rect;
+use sashiko_renderer::canvas::{Layer, Paint};
+pub use sashiko_renderer::core::graph::RasterRect as Rect;
 use serde::{Deserialize, Serialize};
 
 pub type Color = [f32; 4];

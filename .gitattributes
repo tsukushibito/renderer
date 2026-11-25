@@ -1,27 +1,27 @@
 # Generated Rust is byte-compared with fixed-input regeneration.
-/crates/renderer-core/src/backends/d3d12/bindings.rs text eol=lf
+/crates/sashiko-renderer-core/src/backends/d3d12/bindings.rs text eol=lf
 /.beads/hooks/* text eol=lf
 
 # DXIL regeneration hashes configs and byte-compares canonical generated text.
-/crates/renderer-core/shaders/*.json text eol=lf
-/crates/renderer-core/shaders/dxil/*.hlsl text eol=lf
-/crates/renderer-core/shaders/dxil/*.reflection.txt text eol=lf
-/crates/renderer-core/shaders/dxil/*.json text eol=lf
-/crates/renderer-core/fixtures/shaders/dxil/*.hlsl text eol=lf
-/crates/renderer-core/fixtures/shaders/dxil/*.reflection.txt text eol=lf
-/crates/renderer-core/tests/support/shaders/dxil/*.hlsl text eol=lf
-/crates/renderer-core/tests/support/shaders/dxil/*.reflection.txt text eol=lf
-/crates/renderer-core/tests/support/shaders/dxil/*.json text eol=lf
-/crates/renderer-core/tests/support/shaders/*-manifest.json text eol=lf
-/crates/renderer/shaders/*.hlsl text eol=lf
-/crates/renderer/shaders/*.hlsli text eol=lf
-/crates/renderer/shaders/dxil/*.reflection.txt text eol=lf
-/crates/renderer/shaders/dxil/*.json text eol=lf
-/crates/renderer/shaders/manifest.json text eol=lf
-/crates/renderer/shaders/output/dxil/*.hlsl text eol=lf
-/crates/renderer/shaders/output/dxil/*.reflection.txt text eol=lf
-/crates/renderer/shaders/output/dxil/*.json text eol=lf
-/crates/renderer/shaders/output/dxil/*.dxil binary
+/crates/sashiko-renderer-core/shaders/*.json text eol=lf
+/crates/sashiko-renderer-core/shaders/dxil/*.hlsl text eol=lf
+/crates/sashiko-renderer-core/shaders/dxil/*.reflection.txt text eol=lf
+/crates/sashiko-renderer-core/shaders/dxil/*.json text eol=lf
+/crates/sashiko-renderer-core/fixtures/shaders/dxil/*.hlsl text eol=lf
+/crates/sashiko-renderer-core/fixtures/shaders/dxil/*.reflection.txt text eol=lf
+/crates/sashiko-renderer-core/tests/support/shaders/dxil/*.hlsl text eol=lf
+/crates/sashiko-renderer-core/tests/support/shaders/dxil/*.reflection.txt text eol=lf
+/crates/sashiko-renderer-core/tests/support/shaders/dxil/*.json text eol=lf
+/crates/sashiko-renderer-core/tests/support/shaders/*-manifest.json text eol=lf
+/crates/sashiko-renderer/shaders/*.hlsl text eol=lf
+/crates/sashiko-renderer/shaders/*.hlsli text eol=lf
+/crates/sashiko-renderer/shaders/dxil/*.reflection.txt text eol=lf
+/crates/sashiko-renderer/shaders/dxil/*.json text eol=lf
+/crates/sashiko-renderer/shaders/manifest.json text eol=lf
+/crates/sashiko-renderer/shaders/output/dxil/*.hlsl text eol=lf
+/crates/sashiko-renderer/shaders/output/dxil/*.reflection.txt text eol=lf
+/crates/sashiko-renderer/shaders/output/dxil/*.json text eol=lf
+/crates/sashiko-renderer/shaders/output/dxil/*.dxil binary
 
 # Bistro source, verified interchange assets, and comparison image.
 /assets/bistro/source/*.zip filter=lfs diff=lfs merge=lfs -text
@@ -48,10 +48,10 @@
 /docs/theme/vendor/mermaid.min.js -whitespace linguist-vendored=true
 
 # Keep equipment fixture inputs reproducible.
-/crates/training-yard/assets/equipment/source/*.gltf text eol=lf
-/crates/training-yard/assets/equipment/source/*.json text eol=lf
-/crates/training-yard/assets/equipment/source/*.bin binary
-/crates/training-yard/assets/equipment/source/*.png binary
+/examples/training-yard/assets/equipment/source/*.gltf text eol=lf
+/examples/training-yard/assets/equipment/source/*.json text eol=lf
+/examples/training-yard/assets/equipment/source/*.bin binary
+/examples/training-yard/assets/equipment/source/*.png binary
 
 /assets/verification/*-evidence.zip filter=lfs diff=lfs merge=lfs -text
 

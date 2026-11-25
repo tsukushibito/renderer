@@ -191,8 +191,8 @@ if !boxes.is_empty() {
 Bistro と Sponza のクック済みシーンでは、同じ CLI で配置の書き出しとベイクができます。次の例の間隔は 8 m です。生成された JSON を編集してから 2 行目を実行できます。
 
 ```text
-bistro-bake --manifest SCENE/manifest.json --place-reflection-probes 8 --output layout.json
-bistro-bake --manifest SCENE/manifest.json --reflection-probes layout.json --day-only --output reflections.bin
+renderer-scenes-bake --manifest SCENE/manifest.json --place-reflection-probes 8 --output layout.json
+renderer-scenes-bake --manifest SCENE/manifest.json --reflection-probes layout.json --day-only --output reflections.bin
 ```
 
 既定の `floor` は水平な床や屋根から一定の高さに配置します。屋内に絞るには Rust API の `bounds` で高さを指定します。候補が予算を超えた場合は間隔を広げるか、探索範囲を絞ります。
@@ -200,7 +200,7 @@ bistro-bake --manifest SCENE/manifest.json --reflection-probes layout.json --day
 面の向きや階の高さを事前に指定せず、個数を制限する場合は `remedy` を使えます。例えば次のコマンドは、一辺 4 m のボクセルから最大 18 個を選びます。
 
 ```text
-bistro-bake --manifest SCENE/manifest.json --place-reflection-probes 4 --placement-method remedy --max-probes 18 --output layout.json
+renderer-scenes-bake --manifest SCENE/manifest.json --place-reflection-probes 4 --placement-method remedy --max-probes 18 --output layout.json
 ```
 
 Rust API では `method: ReflectionPlacementMethod::Remedy` と `max_probes` を設定します。三角形をボクセル境界で切り、向き別に面積と重心を集計します。面に隣接する空ボクセルの中心がキャプチャ候補です。候補から見える近傍の面について、面積、距離、影響ボックス内のフェードから重みを求め、すでに選んだプローブからの改善が最大の候補を順に採用します。個数予算の既定値と上限は 32 です。
@@ -210,7 +210,7 @@ Rust API では `method: ReflectionPlacementMethod::Remedy` と `max_probes` を
 品質チェックと自動修正を使う場合は、配置コマンドに `--repair-placement` を追加し、反射ベイクと同じ照明プリセットと環境を指定してください。次は Sponza の例です。
 
 ```powershell
-bistro-bake --manifest SCENE/manifest.json --place-reflection-probes 2 --placement-method remedy --max-probes 22 --look o3de-atrium --ibl-manifest SKY/manifest.json --repair-placement --output layout.json > quality.json
+renderer-scenes-bake --manifest SCENE/manifest.json --place-reflection-probes 2 --placement-method remedy --max-probes 22 --look o3de-atrium --ibl-manifest SKY/manifest.json --repair-placement --output layout.json > quality.json
 ```
 
 `layout.json` はそのまま `--reflection-probes` に渡せます。標準出力の JSON には、採否と理由（`decision`）、判定用の受光点における当初・候補・採用後の誤差（`before`、`proposed`、`after`）、最大誤差の位置、品質チェックの秒数を記録します。`changed_probe_index` は0始まりです。`NoReceivers` は評価点が得られなかったことを表します。照明は昼の1条件です。Rust では生成した配置を `BakeScene::repair_reflection_placement` に渡します。[評価方法と実測値](../verification/current.md#reflection-placement-repair)
@@ -219,18 +219,18 @@ bistro-bake --manifest SCENE/manifest.json --place-reflection-probes 2 --placeme
 
 ### Bistro で試す
 
-拡散照度プローブは既定で一次 SH（L1、RGB 4 係数）を使います。二次 SH（L2、RGB 9 係数）でベイクするには、下の `bistro-bake` コマンドに `--probe-sh l2` を追加してください。Rust API ではベイク時に `ProbeSettings { sh_order: ProbeShOrder::L2, ..Default::default() }` を渡します。描画側はアセットから次数を読み取ります。ライトマップのテクセル数と鏡面プローブの設定は独立です。
+拡散照度プローブは既定で一次 SH（L1、RGB 4 係数）を使います。二次 SH（L2、RGB 9 係数）でベイクするには、下の `renderer-scenes-bake` コマンドに `--probe-sh l2` を追加してください。Rust API ではベイク時に `ProbeSettings { sh_order: ProbeShOrder::L2, ..Default::default() }` を渡します。描画側はアセットから次数を読み取ります。ライトマップのテクセル数と鏡面プローブの設定は独立です。
 
 [Bistro の cook と IBL](development.md#bistro-b3) の後、以下をリポジトリのルートで実行します。
 
 ```powershell
-cargo run --release -p renderer-bistro --features bake-tool,vulkan --bin bistro-bake -- --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --output .tools/bistro.gi --samples 96
-cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --baked-lighting .tools/bistro.gi --pipeline forward-plus --white-sphere -14 2.7 0.65 --time-sweep --frames 5 --width 800 --height 450 --output .tools/bistro-gi
+cargo run --release -p renderer-scenes --features bake-tool,vulkan --bin renderer-scenes-bake -- --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --output .tools/bistro.gi --samples 96
+cargo run --release -p renderer-scenes --features vulkan --bin renderer-scenes -- --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --baked-lighting .tools/bistro.gi --pipeline forward-plus --white-sphere -14 2.7 0.65 --time-sweep --frames 5 --width 800 --height 450 --output .tools/bistro-gi
 ```
 
 `--output .tools/bistro.gi` は世代を示す JSON を書きます。同じディレクトリの `lighting-objects/` に配置索引、GPU 用ライトマップ各ページ、照度プローブが SHA-256 名で入ります。配布・コピー時は `bistro.gi` と `lighting-objects/` を一緒に渡してください。同じ出力先への再ベイクでは成果物の書き込み後に JSON を置き換えます。旧世代の JSON を保存しておけば、その参照先が残っている間は旧版を再度ロードできます。従来の単一ファイルを使っていた場合は別名で再ベイクしてください。
 
-昼の静的ライトマップを短時間で比較するには、通常の `bistro-bake` の manifest・IBL・look に `--day-only --backend vulkan --samples 128 --benchmark-seed 17 --output run-a.json` を加える。各ページを約 32,768 受光点の区画に分け、区画ごとに連続する最大 512 点を抽出する。通常のバッチ幅で積分し、全ページと照度プローブの書き出しは一時ファイルで計測する。出力 JSON に cook・照明の識別子、レイ数、抽出位置を決める seed、ページ別の件数、線形 RGB 照度、経過時間を記録する。比較する両実装で同じ seed を使い、採用候補を seed 43 でも確認する。`estimated_seconds` は、各ページの積分経過時間だけを受光点数で換算した値。GPU タイムスタンプとホストの完了待ちは重なる。どちらも積分経過時間に含まれる。
+昼の静的ライトマップを短時間で比較するには、通常の `renderer-scenes-bake` の manifest・IBL・look に `--day-only --backend vulkan --samples 128 --benchmark-seed 17 --output run-a.json` を加える。各ページを約 32,768 受光点の区画に分け、区画ごとに連続する最大 512 点を抽出する。通常のバッチ幅で積分し、全ページと照度プローブの書き出しは一時ファイルで計測する。出力 JSON に cook・照明の識別子、レイ数、抽出位置を決める seed、ページ別の件数、線形 RGB 照度、経過時間を記録する。比較する両実装で同じ seed を使い、採用候補を seed 43 でも確認する。`estimated_seconds` は、各ページの積分経過時間だけを受光点数で換算した値。GPU タイムスタンプとホストの完了待ちは重なる。どちらも積分経過時間に含まれる。
 
 `--backend vulkan` は対応 GPU で静的ライトマップに Ray Query を使う。`vulkan-rt` はその経路を要求し、`vulkan-software` は従来の Compute BVH を選ぶ。照度プローブは両方とも Vulkan Compute で焼く。`--diffuse-reference` にこれらのバックエンドを指定すると、少数の既知の受光点を同じ実装で評価できる。CPU 高サンプル参照には `--backend cpu` を指定する。
 
@@ -243,22 +243,22 @@ cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api v
 `tools/bistro/reflection-probes.json` の各項目に、キャプチャ位置、箱の最小・最大座標、境界から内側へのフェード幅をメートルで指定します。ひさし下と奥の客席で 1 個ずつ使っています。アセットビルドでは `BakeScene::bake_reflection_probes(&placements, [day, dusk])?` を呼びます。
 
 ```powershell
-cargo run --release -p renderer-bistro --features bake-tool --bin bistro-bake -- --manifest .tools/bistro-cook/full-a3/manifest.json --reflection-probes tools/bistro/reflection-probes.json --output .tools/bistro.reflections
-cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --reflection-probes .tools/bistro.reflections --baked-lighting .tools/bistro.gi --frames 5 --width 960 --height 530 --output .tools/bistro-local
+cargo run --release -p renderer-scenes --features bake-tool --bin renderer-scenes-bake -- --manifest .tools/bistro-cook/full-a3/manifest.json --reflection-probes tools/bistro/reflection-probes.json --output .tools/bistro.reflections
+cargo run --release -p renderer-scenes --features vulkan --bin renderer-scenes -- --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --reflection-probes .tools/bistro.reflections --baked-lighting .tools/bistro.gi --frames 5 --width 960 --height 530 --output .tools/bistro-local
 ```
 
 拡散と鏡面は個別に有効化できます。局所反射だけなら `ProbeLighting { diffuse: None, reflections: Some(&reflections) }` をロードします。標準 PBR が BRDF LUT を用意します。大域反射も使う場合は `input.environment` を指定します。
 
 ベイク時の `--day-only` は昼だけを保存します。`--ibl-manifest FILE` は `lumberyard-day` の大域反射と同じ経緯度画像の先頭 mip と強度を使います。昼夕をベイクする場合、夕方の空は昼からの RGB 比で着色します。実行時は同じ IBL と look を指定してください。画像・向き・強度はロード時に照合されます。
 
-反射の配布形式は `cook.py --texture-policy` の JSON で `{"reflection_probes":"bc6h"}`（既定）または `"rgba32f"` を指定します。`bistro-bake` は cook 済み manifest から設定を読み、比較時は `--reflection-format rgba32f` で上書きできます。BC6H でベイクする端末では `python -m pip install -r tools/bistro/requirements.txt` を実行した環境を使ってください。実行時は両形式とも同じ `--reflection-probes FILE` で読み込みます。
+反射の配布形式は `cook.py --texture-policy` の JSON で `{"reflection_probes":"bc6h"}`（既定）または `"rgba32f"` を指定します。`renderer-scenes-bake` は cook 済み manifest から設定を読み、比較時は `--reflection-format rgba32f` で上書きできます。BC6H でベイクする端末では `python -m pip install -r tools/bistro/requirements.txt` を実行した環境を使ってください。実行時は両形式とも同じ `--reflection-probes FILE` で読み込みます。
 
 `--reflection-debug weights` は第 1 箱を赤、第 2 箱を緑、グローバル寄与を青で表示します。`--reflection-debug radiance --time-sweep` は材質 BRDF を掛ける前の HDR を昼・中間・夕方で保存します。`--reflection-spheres -10 0.85 0 --reflection-spheres-to 7 0.85 7` を標準の direct 描画に追加すると、粗さ 0.08 と 0.55 の金属球が路上からひさし下を通って客席へ移動します。通常表示、プローブ無効、重み表示、radiance の各出力を使う[数値比較と実機画像](../verification/current.md#bistro-local-reflections)も参照してください。
 
 ## メッシュと材質からビューを描く
 
 ```powershell
-cargo run --locked --release -p renderer --features vulkan --example textured_view -- vulkan
+cargo run --locked --release -p sashiko-renderer --features vulkan --example textured_view -- vulkan
 ```
 
 | 例 | エンジンに取り込める処理 |
@@ -270,18 +270,18 @@ cargo run --locked --release -p renderer --features vulkan --example textured_vi
 
 コマンドの `--example` の値を表の名前に替えて実行できる。WindowsのD3D12ではfeatureと末尾の引数をともに `d3d12` に替える。
 ヘッドレスの各例は描画結果を読み戻して確認する。エンジン側のイベントループへ組み込む際の起動・更新・解放は[ビューとアセットの手順](tooling.md#scene-materials)、
-実際のフレーム処理は[共通のサンプルコード](../../crates/renderer/examples/support/views.rs)を参照。
+実際のフレーム処理は[共通のサンプルコード](../../crates/sashiko-renderer/examples/support/views.rs)を参照。
 
 ## 最初に動かす
 
 **Graphの合成をCPUだけで確認する**
 
 `graph_composition`は公開Graph APIで利用側のRasterパスをつなぎます。
-`rust_pipeline`は`renderer`の標準レシピと独自パスを合成します。どちらもCPUでGraphをcompileします。
+`rust_pipeline`は`sashiko-renderer`の標準レシピと独自パスを合成します。どちらもCPUでGraphをcompileします。
 
 ```sh
-cargo run --locked -p renderer-core --no-default-features --example graph_composition
-cargo run --locked -p renderer --no-default-features --example rust_pipeline
+cargo run --locked -p sashiko-renderer-core --no-default-features --example graph_composition
+cargo run --locked -p sashiko-renderer --no-default-features --example rust_pipeline
 ```
 
 <a id="pbr-forward-example"></a>
@@ -299,9 +299,9 @@ cargo run --locked -p renderer --no-default-features --example rust_pipeline
 `--copy-hdr`はシーン描画と出力の間にアプリ独自のコピーパスを追加します。
 
 ```sh
-cargo run --locked -p renderer --no-default-features --features vulkan --example pbr_forward -- --api vulkan
-cargo run --locked -p renderer --no-default-features --features vulkan --example pbr_forward -- --api vulkan --technique deferred
-cargo run --locked -p renderer --no-default-features --features d3d12 --example pbr_forward -- --api d3d12 --technique forward-plus --msaa 4 --bloom --reuse-shadows --output pbr-forward-plus.ppm
+cargo run --locked -p sashiko-renderer --no-default-features --features vulkan --example pbr_forward -- --api vulkan
+cargo run --locked -p sashiko-renderer --no-default-features --features vulkan --example pbr_forward -- --api vulkan --technique deferred
+cargo run --locked -p sashiko-renderer --no-default-features --features d3d12 --example pbr_forward -- --api d3d12 --technique forward-plus --msaa 4 --bloom --reuse-shadows --output pbr-forward-plus.ppm
 ```
 
 D3D12はWindowsで実行できます。準備とパスの接続は[PBRレシピの使い方](tooling.md#pbr-forward-recipe)を参照してください。
@@ -313,7 +313,7 @@ D3D12はWindowsで実行できます。準備とパスの接続は[PBRレシピ�
 
 ```powershell
 New-Item -ItemType Directory -Force .tools | Out-Null
-cargo run --locked -p renderer-core --no-default-features --features vulkan,development-validation,graph-diagnostics --example headless -- .tools/headless.ppm
+cargo run --locked -p sashiko-renderer-core --no-default-features --features vulkan,development-validation,graph-diagnostics --example headless -- .tools/headless.ppm
 ```
 
 **Windowsで描画する**
@@ -325,19 +325,19 @@ Windowsでは `Runtime::for_window` に `HasWindowHandle` を実装するウィ�
 画面操作と検証手順は[Windows表示](development.md#windows-presentation)を参照してください。
 
 ```powershell
-cargo run --locked -p renderer-core --no-default-features --features vulkan,presentation --example windowed -- --api vulkan
-cargo run --locked -p renderer-core --no-default-features --features d3d12,presentation --example windowed -- --api d3d12
+cargo run --locked -p sashiko-renderer-core --no-default-features --features vulkan,presentation --example windowed -- --api vulkan
+cargo run --locked -p sashiko-renderer-core --no-default-features --features d3d12,presentation --example windowed -- --api d3d12
 ```
 
 **Bistroの小さなシーンを描画する**
 
-`renderer-bistro`の`bistro-graph`は公開Graph APIを使い、Rustでパスを定義して描画パイプラインを組み立てます。
-同じパッケージの`bistro`は公開のPBR Forward、Forward+、Deferredと比較用の描画構成を組み立てます。どちらも`--fixture`で小さなシーンを描画し、
+`renderer-scenes`の`renderer-scenes-graph`は公開Graph APIを使い、Rustでパスを定義して描画パイプラインを組み立てます。
+同じパッケージの`renderer-scenes`は公開のPBR Forward、Forward+、Deferredと比較用の描画構成を組み立てます。どちらも`--fixture`で小さなシーンを描画し、
 レポートとキャプチャを出力します。実行ごとに新しい出力先を指定します。
 
 ```powershell
-cargo run --locked --release -p renderer-bistro --no-default-features --features vulkan --bin bistro-graph -- --api vulkan --fixture --output .tools/bistro-rust-fixture
-cargo run --locked --release -p renderer-bistro --no-default-features --features vulkan --bin bistro -- --api vulkan --fixture --output .tools/bistro-pipeline-fixture
+cargo run --locked --release -p renderer-scenes --no-default-features --features vulkan --bin renderer-scenes-graph -- --api vulkan --fixture --output .tools/bistro-rust-fixture
+cargo run --locked --release -p renderer-scenes --no-default-features --features vulkan --bin renderer-scenes -- --api vulkan --fixture --output .tools/bistro-pipeline-fixture
 ```
 
 Bistroで全シーンを描画するには[Bistroのcook・描画手順](development.md#bistro-pbr)を参照してください。
@@ -353,20 +353,20 @@ Bistro はフレームごとにカメラ行列、クリップ距離、太陽の�
 [現行 Bistro と ORCA 公式画像の見開き・拡大比較](../verification/current.md#bistro-daylight)を再生成するには、上記のベイク手順で昼の HDR 環境から作成した 3 時刻の拡散アセットと局所反射アセットを使います。公式画像を `.tools/Bistro_Exterior_1.png` に保存して次を実行します。[ORCA 屋外画像 1](https://d29g4g2dyqv443.cloudfront.net/sites/default/files/akamai/Bistro_Exterior_1.png)
 
 ```powershell
-cargo run --release -p renderer-bistro --features bake-tool --bin bistro-bake -- --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --day-only --reflection-probes tools/bistro/reflection-probes.json --output .tools/bistro-hdr-day.reflections
-cargo run --release -p renderer-bistro --features vulkan --bin bistro -- --api vulkan --pipeline forward --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --baked-lighting .tools/bistro.gi --reflection-probes .tools/bistro-hdr-day.reflections --look lumberyard-day --view bistro-corner --scenario-blend 0 --width 1920 --height 1061 --output .tools/current-orca-day
+cargo run --release -p renderer-scenes --features bake-tool --bin renderer-scenes-bake -- --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --day-only --reflection-probes tools/bistro/reflection-probes.json --output .tools/bistro-hdr-day.reflections
+cargo run --release -p renderer-scenes --features vulkan --bin renderer-scenes -- --api vulkan --pipeline forward --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --baked-lighting .tools/bistro.gi --reflection-probes .tools/bistro-hdr-day.reflections --look lumberyard-day --view bistro-corner --scenario-blend 0 --width 1920 --height 1061 --output .tools/current-orca-day
 python tools/bistro/compare_daylight.py .tools/Bistro_Exterior_1.png .tools/current-orca-day .tools/orca-day.png --details .tools/orca-details.png
 ```
 
 <a id="bistro-lighting-debug"></a>
 
-照明を分離するには、標準 Forward の `bistro` に `--lighting-pass base-color|direct|diffuse|diffuse-no-ao|specular|local-specular|emissive` のいずれかを指定します。省略時は通常の合成です。ロード時に入力を切り替え、通常と同じ標準シェーダーで材質、アルファ、影を評価します。間接照度を白い拡散面で見るには既存の `--gi-debug irradiance` を使います。各成分の比較にはトーンマッピング前の `hdr.bin` を使います。
+照明を分離するには、標準 Forward の `renderer-scenes` に `--lighting-pass base-color|direct|diffuse|diffuse-no-ao|specular|local-specular|emissive` のいずれかを指定します。省略時は通常の合成です。ロード時に入力を切り替え、通常と同じ標準シェーダーで材質、アルファ、影を評価します。間接照度を白い拡散面で見るには既存の `--gi-debug irradiance` を使います。各成分の比較にはトーンマッピング前の `hdr.bin` を使います。
 
 次のコマンドは同じカメラ・時刻で 10 回撮影し、照明の内訳、同じ HDR を使った露出とトーンカーブの比較、グローバル鏡面の寄与を変えた部分比較を保存します。標準出力に線形 RGB・輝度と表示 RGB・輝度の領域統計、成分再合成誤差を出します。既存キャプチャから再集計するときは最初の 3 引数だけを渡します。
 
 ```powershell
-cargo build --release -p renderer-bistro --features vulkan --bin bistro
-python tools/bistro/diagnose_daylight.py .tools/Bistro_Exterior_1.png .tools/bistro-passes .tools/bistro-debug --bistro target/release/bistro.exe --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --baked-lighting .tools/bistro.gi --reflection-probes .tools/bistro-hdr-day.reflections
+cargo build --release -p renderer-scenes --features vulkan --bin renderer-scenes
+python tools/bistro/diagnose_daylight.py .tools/Bistro_Exterior_1.png .tools/bistro-passes .tools/bistro-debug --bistro target/release/renderer-scenes.exe --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --baked-lighting .tools/bistro.gi --reflection-probes .tools/bistro-hdr-day.reflections
 ```
 
 <a id="bistro-awning-reference"></a>
@@ -374,8 +374,8 @@ python tools/bistro/diagnose_daylight.py .tools/Bistro_Exterior_1.png .tools/bis
 中央のひさしの鏡面反射を実形状に照らして検証するには、上で撮った `beauty`、`base-color`、`specular` のキャプチャを使います。次のツールは同じ画素の受光位置と材質を復元し、CPU ベイカーで昼の HDR・太陽を使って鏡面を積分します。出力は 3 測定域の表示色見本と、空・形状別の線形 RGB、現行 GPU、形状なし対照、半分のサンプル数との比較を収めた JSON です。[実測結果](../verification/current.md#bistro-awning-rays)
 
 ```powershell
-cargo build --locked --release -p renderer-bistro --features bake-tool --bin bistro-bake
-python tools/bistro/awning_reference.py .tools/bistro-cook/full-a3/manifest.json .tools/b3/ibl-final/manifest.json .tools/bistro-passes target/release/bistro-bake.exe .tools/Bistro_Exterior_1.png .tools/awning-reference
+cargo build --locked --release -p renderer-scenes --features bake-tool --bin renderer-scenes-bake
+python tools/bistro/awning_reference.py .tools/bistro-cook/full-a3/manifest.json .tools/b3/ibl-final/manifest.json .tools/bistro-passes target/release/renderer-scenes-bake.exe .tools/Bistro_Exterior_1.png .tools/awning-reference
 ```
 
 <a id="bistro-upper-probe"></a>
@@ -385,18 +385,18 @@ python tools/bistro/awning_reference.py .tools/bistro-cook/full-a3/manifest.json
 ```powershell
 $trial = '.tools/bistro-upper-awning'
 New-Item -ItemType Directory -Force -Path $trial | Out-Null
-target/release/bistro-bake.exe --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --day-only --reflection-probes tools/bistro/reflection-probes-awning.json --output "$trial/day.reflections"
+target/release/renderer-scenes-bake.exe --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --day-only --reflection-probes tools/bistro/reflection-probes-awning.json --output "$trial/day.reflections"
 $common = @('--api','vulkan','--pipeline','forward','--manifest','.tools/bistro-cook/full-a3/manifest.json','--ibl-manifest','.tools/b3/ibl-final/manifest.json','--baked-lighting','.tools/bistro.gi','--reflection-probes',"$trial/day.reflections",'--view','bistro-corner','--look','lumberyard-day','--width','1920','--height','1061','--warmup','1','--frames','1','--inflight','1','--aa-off')
-target/release/bistro.exe @common --lighting-pass beauty --output "$trial/beauty"
-target/release/bistro.exe @common --lighting-pass specular --output "$trial/specular"
-target/release/bistro.exe @common --reflection-debug weights --output "$trial/weights"
+target/release/renderer-scenes.exe @common --lighting-pass beauty --output "$trial/beauty"
+target/release/renderer-scenes.exe @common --lighting-pass specular --output "$trial/specular"
+target/release/renderer-scenes.exe @common --reflection-debug weights --output "$trial/weights"
 python tools/bistro/compare_awning_probe.py .tools/Bistro_Exterior_1.png .tools/bistro-passes $trial docs/verification/bistro-awning-rays.json "$trial/comparison.jpg"
 ```
 
 既定の描画設定と昼景プリセットを比較する場合は、次の 960 × 530 の手順を使います。
 
 ```powershell
-target/release/bistro.exe --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --width 960 --height 530 --output .tools/daylight
+target/release/renderer-scenes.exe --api vulkan --manifest .tools/bistro-cook/full-a3/manifest.json --ibl-manifest .tools/b3/ibl-final/manifest.json --look lumberyard-day --view bistro-corner --width 960 --height 530 --output .tools/daylight
 ```
 
 同じコマンドを `--look reference --output .tools/daylight-before` に変更すると同一構図の比較元を取得できます。次の手順で、公式プレートと両方の SDR キャプチャを並べ、外壁、ひさし、植生、日向と日陰の石畳を計測します。[ORCA の屋外画像 1](https://d29g4g2dyqv443.cloudfront.net/sites/default/files/akamai/Bistro_Exterior_1.png)
@@ -414,9 +414,9 @@ python tools/bistro/compare_daylight.py .tools/Bistro_Exterior_1.png .tools/dayl
 `--target-dir`で各構成の出力を個別に保持します。
 
 ```powershell
-cargo build --locked --release -p renderer-core --no-default-features --features vulkan,presentation --example windowed --target-dir target/dist-vulkan
-cargo build --locked --release -p renderer-core --no-default-features --features d3d12,presentation --example windowed --target-dir target/dist-d3d12
-cargo build --locked --release -p renderer-core --no-default-features --features vulkan,d3d12,presentation --example windowed --target-dir target/dist-dual
+cargo build --locked --release -p sashiko-renderer-core --no-default-features --features vulkan,presentation --example windowed --target-dir target/dist-vulkan
+cargo build --locked --release -p sashiko-renderer-core --no-default-features --features d3d12,presentation --example windowed --target-dir target/dist-d3d12
+cargo build --locked --release -p sashiko-renderer-core --no-default-features --features vulkan,d3d12,presentation --example windowed --target-dir target/dist-dual
 
 & ./target/dist-dual/release/examples/windowed.exe --api vulkan
 & ./target/dist-dual/release/examples/windowed.exe --api d3d12
@@ -435,8 +435,8 @@ cargo build --locked --release -p renderer-core --no-default-features --features
 | `pbr_forward` | [標準 PBR Forward](tooling.md#pbr-forward-recipe)で型付き頂点・既定の材質テクスチャ・1×／4×・Bloom・シャドウ再利用・独自HDRパスの接続を確認 | `vulkan`またはWindowsの`d3d12` |
 | `headless` | offscreen描画とPPMへの書き出し | `vulkan` |
 | `windowed` | Windowsの表示ループ、標準／独自Graph、カメラ操作 | Windows、`presentation` と `vulkan` または `d3d12` |
-| `bistro-graph` | 公開Graph APIを使ったRustのパス定義と合成 | `vulkan` またはWindowsの`d3d12` |
-| `bistro` | [シーン描画とシャドウ再利用](tooling.md#bistro-scene-pipeline)、Bloom、トーンマッピング、SDR出力、[材質Programの切り替え](tooling.md#material-shader-build) | `vulkan`またはWindowsの`d3d12`。表示はWindowsと`presentation`。全シーンはcook済み素材とIBLが必要 |
+| `renderer-scenes-graph` | 公開Graph APIを使ったRustのパス定義と合成 | `vulkan` またはWindowsの`d3d12` |
+| `renderer-scenes` | [シーン描画とシャドウ再利用](tooling.md#bistro-scene-pipeline)、Bloom、トーンマッピング、SDR出力、[材質Programの切り替え](tooling.md#material-shader-build) | `vulkan`またはWindowsの`d3d12`。表示はWindowsと`presentation`。全シーンはcook済み素材とIBLが必要 |
 | `frame_loop` | [フレーム進行、履歴、アセット更新](development.md#frame-loop) | `vulkan`。計測モードはrelease |
 | `engine_workloads` | [大メッシュ、マルチView、アセット差し替え](development.md#engine-workloads) | `vulkan`。計測モードはrelease |
 | `profile_workload` | [CPUプロファイル用のヘッドレス転送負荷](development.md#cpu-profile-workload) | Windows、`vulkan` または `d3d12` |
@@ -454,7 +454,7 @@ Bistroの全シーン以外の実行には、リポジトリに含まれる小�
 通常のCIでは、小さなCPU fixtureで準備APIとGraph構築を検証します。
 `pbr_forward`のCPUテストと両方のBistroサンプルのビルドは、LinuxのVulkan構成とWindowsの二API・表示構成で確認します。
 BistroのCLI、シェーダーとの接続、レシピのCPUテストはWindowsで各版を一度ずつ実行します。
-Bistroの実GPUテストは`cargo test -p renderer-bistro --lib`に対象featureと`-- --ignored`を指定して実行します。
+Bistroの実GPUテストは`cargo test -p renderer-scenes --lib`に対象featureと`-- --ignored`を指定して実行します。
 
-`rust_pipeline`と`pbr_forward`の入口は`crates/renderer/examples/`、Bistroの2つの入口は`crates/renderer-bistro/src/bin/`にあります。
-ほかの入口は`crates/renderer-core/examples/`にあり、試験や計測と共用するfixtureのRustコードは`crates/renderer-core/fixtures/`にあります。
+`rust_pipeline`と`pbr_forward`の入口は`crates/sashiko-renderer/examples/`、Bistroの2つの入口は`examples/renderer-scenes/src/bin/`にあります。
+ほかの入口は`crates/sashiko-renderer-core/examples/`にあり、試験や計測と共用するfixtureのRustコードは`crates/sashiko-renderer-core/fixtures/`にあります。

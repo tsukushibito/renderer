@@ -1,7 +1,7 @@
 """Compare diffuse SH orders in three captured 44x32 Sponza probe-receiver patches.
 
 Pass the archived arcade-measure directory as --captures. Run 'positions' to
-write the XYZ list for bistro-bake --probe-sh-reference and use --receivers
+write the XYZ list for renderer-scenes-bake --probe-sh-reference and use --receivers
 to write the input for --diffuse-reference. Run both bakes with the same
 scene, environment and daylight preset, then pass their JSON files to 'compare'.
 Reported RGB values are diffuse irradiance divided by pi.
@@ -327,7 +327,7 @@ def main():
     prepare = modes.add_parser("positions")
     prepare.add_argument("--out", type=Path, required=True)
     prepare.add_argument(
-        "--receivers", type=Path, help="Also write the input for bistro-bake --diffuse-reference"
+        "--receivers", type=Path, help="Also write the input for renderer-scenes-bake --diffuse-reference"
     )
     report = modes.add_parser("compare")
     report.add_argument("--positions", type=Path, required=True)

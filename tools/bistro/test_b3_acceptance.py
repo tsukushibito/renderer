@@ -96,7 +96,7 @@ class B3AcceptanceTests(unittest.TestCase):
         self.assertNotEqual([r[:2] for r in runs[:4]], [r[:2] for r in runs[4:8]])
         with self.assertRaises(ValueError):
             acceptance.schedule(2)
-        args = acceptance.command(Path("bistro.exe"), Path("output"), api="vulkan")
+        args = acceptance.command(Path("renderer-scenes.exe"), Path("output"), api="vulkan")
         for flag in ("--fixture", "--resource-checks", "--capture-shadow-maps", "--capture-all-views"):
             self.assertIn(flag, args)
         for option, value in (("--frames", "24"), ("--warmup", "8"), ("--inflight", "2")):

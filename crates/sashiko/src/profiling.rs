@@ -1,5 +1,5 @@
 //! On-demand telemetry for presented games. Memory queries may allocate and belong at explicit observation boundaries.
-use renderer::{
+use sashiko_renderer::{
     WindowRenderer,
     core::{
         profiling::{GpuTiming, SubmissionMetrics},

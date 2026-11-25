@@ -235,7 +235,7 @@ native検証の要求設定と、Layer等から観測した実効状態は別に
 | D3D12のbuffer loweringは不変`CompiledGraph`から準備する | Graphが保証するbyte範囲を反復再走査しない。未対応操作の拒否、実Deviceへの適合、配置・命令記録・完了・CPU copyを成立させる処理は製品にも残す |
 | `MeshData::new`で入力を検査しimmutableな内容要約を生成 | privateな管理下uploadへ保証を引き継ぎ、mesh描画時のindex本文再走査・検査用CPU保持を省く。実Device上限は別に適合確認 |
 | 標準meshの`RasterParameters::new`で有限値を保証する不変公開型 | snapshotと利用側が同じ型から`RasterConstants`へ変換し、Graph構築時の定数全量再走査を省く。genericな`RasterConstants::new(&[u32])`はbyte数だけを保証し、全word値でのshader範囲安全はtrusted取込契約とする。owner・buffer範囲・binding・容量の検査は残す |
-| `renderer`の標準パス・forwardレシピは公開Graph操作を使う | 構築時のattachment・Program・内容保証を共有し、検査済み入力の保証を実行へ引き継ぐ。prepassed Programは0 drawでもdepth Load必須。標準snapshotのpostによるGraph置換と別出力のdescription変更はcallback後の境界で拒否する |
+| `sashiko-renderer`の標準パス・forwardレシピは公開Graph操作を使う | 構築時のattachment・Program・内容保証を共有し、検査済み入力の保証を実行へ引き継ぐ。prepassed Programは0 drawでもdepth Load必須。標準snapshotのpostによるGraph置換と別出力のdescription変更はcallback後の境界で拒否する |
 | snapshotのmesh接続を読み取り専用にする | 公開logical handleから常駐版の内容を書き換えない。Graph構築のwrite/直接export拒否と、構築から投入までの資源pinで保証を保持する |
 | 任意Graph upload／copyのCPU provenance | 部分byte更新や未知の穴からindex安全性を確立するために必要な経路は残す。開発用診断として一括削除しない |
 | 一般indexのcount別最大値とVulkanの共有Raster descriptor | 内容の更新までprefix保証を保持し、同じWorkの不変binding/layoutはDevice適合とset結果を共有する。容量は準備境界で予約し、失効・取消・退役に沿って返す。要約の追い出しによる反復scanやdrawごとの同一binding再検査をしない |
