@@ -66,7 +66,7 @@ pub struct ImportRangesPool {
 impl ImportRangesPool {
     /// Add backing at a load boundary. Existing leases stay anchored in this
     /// pool, so returning their final clone during a frame cannot free memory.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    #[cfg(sashiko_gpu_backend)]
     pub(crate) fn expanded_slots(&self, slots: usize) -> Result<Option<Self>, GraphError> {
         let additional = slots.saturating_sub(self.slots.len());
         if additional > 0 {
