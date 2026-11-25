@@ -844,6 +844,7 @@ struct ResidentScene {
 }
 
 struct Sample {
+    raster: Option<sashiko_renderer_core::graph::RasterBuildMetrics>,
     active_ns: u64,
     build_ns: u64,
     packet_prepare_ns: Option<u64>,
@@ -863,6 +864,14 @@ impl Sample {
             "packet_prepare_ns": self.packet_prepare_ns,
             "compile_ns": self.compile_ns, "interval_ns": self.interval_ns,
         });
+        if let Some(raster) = self.raster {
+            result["streaming_capture_ns"] = ns(raster.streaming_capture).into();
+            result["generated_capture_ns"] = ns(raster.generated_capture).into();
+            result["generated_merge_ns"] = ns(raster.generated_merge).into();
+            result["finalize_reads_ns"] = ns(raster.finalize_reads).into();
+            result["generated_runs"] = raster.generated_runs.into();
+            result["generated_draws"] = raster.generated_draws.into();
+        }
         if let Some(metrics) = self.metrics {
             result["prepare_ns"] = ns(metrics.cpu_prepare).into();
             result["record_ns"] = ns(metrics.cpu_record).into();
@@ -910,6 +919,7 @@ fn measure(
         let submitted = Instant::now();
         if let Some(samples) = &mut samples {
             samples.push(Sample {
+                raster: plan.raster_build_metrics(),
                 active_ns: ns(submitted.duration_since(started)),
                 build_ns: ns(built.duration_since(started)),
                 packet_prepare_ns: packet_time.map(ns),
@@ -1066,6 +1076,7 @@ pub fn run() -> Result<(), Failure> {
     let identity = runtime.identity();
     let resident = scene.upload(&mut runtime, &buffers)?;
     let mut pool = GraphPool::new(capacity, IN_FLIGHT)?;
+    pool.set_raster_profiling(options.profile);
     if let Some(jobs) = graph_jobs {
         pool.set_raster_jobs(jobs, NonZeroUsize::MIN);
     }

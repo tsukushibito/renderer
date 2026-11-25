@@ -699,6 +699,7 @@ mod tests {
                 );
             }
             pool.set_generated_batch_size(4.try_into().unwrap());
+            pool.set_raster_profiling(participants != 0);
             let mut graph = pool.begin().unwrap();
             let base = uploaded_draw(&mut graph, "mesh");
             let alternate = uploaded_draw(&mut graph, "alternate mesh");
@@ -747,6 +748,10 @@ mod tests {
                 .unwrap();
             graph.export_image(image).unwrap();
             let plan = graph.compile().unwrap();
+            assert_eq!(
+                plan.raster_build_metrics().map(|m| m.generated_draws),
+                (participants != 0).then_some(9)
+            );
             assert!(
                 plan.accesses(pass.index)
                     .iter()

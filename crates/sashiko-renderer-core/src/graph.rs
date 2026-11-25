@@ -78,7 +78,7 @@ pub use resource::{
     PassHandle, ResourceKey, SampleCount,
 };
 pub(crate) use resource::{Resource, ResourceDesc};
-pub use storage::{GraphCapacity, GraphPool, GraphStorage};
+pub use storage::{GraphCapacity, GraphPool, GraphStorage, RasterBuildMetrics};
 use storage::{Slot, capacity_error};
 
 static NEXT_GRAPH: AtomicU64 = AtomicU64::new(1);

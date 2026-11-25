@@ -104,6 +104,8 @@ def run_metrics(run, report):
             raise ValueError(f"{run['name']}: expected {field}={run[field]}, got {report[field]}")
     if report.get("native_workers", 0) != run.get("native_workers", 0):
         raise ValueError(f"{run['name']}: native recording team mismatch")
+    if report.get("graph_workers", 0) != run.get("graph_workers", 0):
+        raise ValueError(f"{run['name']}: graph capture team mismatch")
     samples = report["samples"]
     if len(samples) != run["frames"] or report["wall_ns"] <= 0 or samples[0]["interval_ns"] != 0:
         raise ValueError(f"{run['name']}: unexpected measurement window or samples")
@@ -120,6 +122,8 @@ def run_metrics(run, report):
         phases.append("packet_prepare")
     if run["profile"]:
         phases.extend(["prepare", "record", "submit", "gpu"])
+        if "streaming_capture_ns" in samples[0]:
+            phases.extend(["streaming_capture", "generated_capture", "generated_merge", "finalize_reads"])
     for phase in phases:
         values = [s[phase + "_ns"] for s in samples]
         if any(type(value) is not int or value < 0 for value in values):
