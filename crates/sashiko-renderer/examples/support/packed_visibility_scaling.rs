@@ -190,14 +190,18 @@ impl Scene {
 
     fn update(&mut self, count: usize, motion: f32) -> Result<(), Failure> {
         for (i, chunk) in self.vertices[..count * TRIANGLE_BYTES]
-            .chunks_exact_mut(TRIANGLE_BYTES)
+            .as_chunks_mut::<TRIANGLE_BYTES>()
+            .0
+            .iter_mut()
             .enumerate()
         {
             let [x, y, z, half] = self.centers[i];
             let y = y + motion * half;
             self.bounds[i] = Bounds::new([x - half, y - half, z], [x + half, y + half, z])?;
             for (v, [dx, dy, _]) in chunk
-                .chunks_exact_mut(VERTEX_STRIDE)
+                .as_chunks_mut::<VERTEX_STRIDE>()
+                .0
+                .iter_mut()
                 .zip(geometry::TRIANGLE)
             {
                 v.copy_from_slice(
@@ -269,6 +273,7 @@ struct Resources {
 struct Frame {
     plan: CompiledGraph,
     readback: Option<[PassHandle; 2]>,
+    phases: [Duration; 4],
 }
 
 fn initialize(
@@ -327,6 +332,15 @@ fn build(
     frame: usize,
     capture: bool,
 ) -> Result<Frame, Failure> {
+    let mut mark = options.profile.then(Instant::now);
+    let mut lap = || {
+        let next = options.profile.then(Instant::now);
+        let elapsed = mark
+            .zip(next)
+            .map_or(Duration::ZERO, |(start, end)| end - start);
+        mark = next;
+        elapsed
+    };
     let mut graph = pool.begin()?;
     let vertices = graph.import_buffer("mesh", &r.vertices)?;
     let indices = graph.import_buffer("indices", &r.indices)?;
@@ -341,6 +355,7 @@ fn build(
             &scene.vertices[..options.moving * TRIANGLE_BYTES],
         )?;
     }
+    let update = lap();
     let args = if let Some(bounds) = &r.bounds {
         let bounds = graph.import_buffer("bounds", bounds)?;
         if options.moving > 0 {
@@ -391,6 +406,7 @@ fn build(
         }
         None
     };
+    let visibility = lap();
     let color = graph.image("HDR", ImageDesc::rgba16_float(SIZE, SIZE))?;
     let depth = graph.image("depth", ImageDesc::depth32(SIZE, SIZE))?;
     let program = ManagedRasterProgram::mesh_hdr();
@@ -457,9 +473,12 @@ fn build(
         graph.export_frame_image(color)?;
         None
     };
+    let raster = lap();
+    let plan = graph.compile()?;
     Ok(Frame {
-        plan: graph.compile()?,
+        plan,
         readback,
+        phases: [update, visibility, raster, lap()],
     })
 }
 
@@ -606,7 +625,9 @@ pub fn run() -> Result<(), Failure> {
         pool.set_raster_jobs(team.as_ref().unwrap().clone(), NonZeroUsize::MIN);
     }
     let mut intervals = Vec::with_capacity(o.frames);
-    let mut gpu_times = Vec::with_capacity(o.frames);
+    let mut phases: [Vec<f64>; 8] =
+        std::array::from_fn(|_| Vec::with_capacity(if o.profile { o.frames } else { 0 }));
+
     for (frames, measuring) in [(o.warmup, false), (o.frames, true)] {
         let mut previous = None;
         #[cfg(feature = "memory-profiling")]
@@ -621,28 +642,52 @@ pub fn run() -> Result<(), Failure> {
             }
             previous = Some(now);
             if rt.pending_frames() == FRAMES {
-                retire(&mut rt, o.profile && measuring, &mut gpu_times)?;
+                retire(&mut rt, o.profile && measuring, &mut phases[4..])?;
             }
             let built = build(&o, &mut scene, &mut pool, &r, team.as_ref(), frame, false)?;
+            if measuring && o.profile {
+                for (series, d) in phases.iter_mut().zip(built.phases) {
+                    series.push(d.as_secs_f64() * 1000.);
+                }
+            }
             drop(rt.submit(&built.plan)?);
             refresh(&o, &rt, &mut r)?;
         }
         while rt.pending_frames() > 0 {
-            retire(&mut rt, o.profile && measuring, &mut gpu_times)?;
+            retire(&mut rt, o.profile && measuring, &mut phases[4..])?;
         }
         let elapsed = started.elapsed();
         if measuring {
             #[cfg(feature = "memory-profiling")]
             let memory = sashiko_renderer_core::measurement::Snapshot::now().since(memory);
             intervals.sort_by(f64::total_cmp);
-            gpu_times.sort_by(f64::total_cmp);
+            for series in &mut phases {
+                series.sort_by(f64::total_cmp);
+            }
             let percentile = |p: usize| intervals[(intervals.len() * p).div_ceil(100) - 1];
             let mut report = json!({"route":o.route.name(),"api":o.api,"objects":o.objects,
                 "visibility_percent":o.visible,"moving_objects":o.moving,"groups":o.groups,"workers":o.workers,"native":o.native,"graph_jobs":o.graph_jobs,
                 "warmup":o.warmup,"frames":frames,"fps":frames as f64/elapsed.as_secs_f64(),
-                "p95_ms":percentile(95),"p99_ms":percentile(99),"gpu_p50_ms":gpu_times.get(gpu_times.len()/2),
+                "p95_ms":percentile(95),"p99_ms":percentile(99),"gpu_p50_ms":phases[7].get(phases[7].len()/2),
                 "template_upload_bytes":if o.route == Route::Gpu{scene.layout.template_transfer_bytes()}else{0},
                 "bounds_upload_bytes":if o.route == Route::Gpu {o.moving*32}else{0}});
+            if o.profile {
+                let mut profile = serde_json::Map::new();
+                let names = [
+                    "update_geometry",
+                    "visibility",
+                    "raster_graph",
+                    "compile",
+                    "prepare",
+                    "record",
+                    "submit",
+                    "gpu",
+                ];
+                for (name, series) in names.into_iter().zip(&phases) {
+                    profile.insert(name.into(), json!(series[series.len() / 2]));
+                }
+                report["phase_p50_ms"] = profile.into();
+            }
             #[cfg(feature = "memory-profiling")]
             {
                 report["memory"] = json!({"rust":memory.rust.map(|e|e.calls),"vma":memory.vma_host.map(|e|e.calls),"native":memory.native,"overflowed":memory.overflowed});
@@ -658,7 +703,7 @@ pub fn run() -> Result<(), Failure> {
                 for h in built.readback.unwrap() {
                     let mut bytes = vec![0; done.readback_len(h)?];
                     done.readback_into(h, &mut bytes)?;
-                    if bytes.chunks_exact(8).all(|v| v == &bytes[..8]) {
+                    if bytes.as_chunks::<8>().0.iter().all(|v| v == &bytes[..8]) {
                         return Err("empty or constant frame".into());
                     }
                     hashes.push(format!("{:x}", Sha256::digest(bytes)));
@@ -683,12 +728,20 @@ pub fn run() -> Result<(), Failure> {
     validation::check_validation(rt)
 }
 
-fn retire(rt: &mut Runtime, profile: bool, times: &mut Vec<f64>) -> Result<(), Failure> {
+fn retire(rt: &mut Runtime, profile: bool, phases: &mut [Vec<f64>]) -> Result<(), Failure> {
     let done = rt.wait_frame(WAIT)?.ok_or("frame timed out")?;
     if profile {
-        match done.metrics().ok_or("missing metrics")?.gpu {
+        let metrics = done.metrics().ok_or("missing metrics")?;
+        for (series, duration) in
+            phases
+                .iter_mut()
+                .zip([metrics.cpu_prepare, metrics.cpu_record, metrics.cpu_submit])
+        {
+            series.push(duration.as_secs_f64() * 1000.);
+        }
+        match metrics.gpu {
             sashiko_renderer_core::GpuTiming::Available { elapsed, .. } => {
-                times.push(elapsed.as_secs_f64() * 1000.)
+                phases[3].push(elapsed.as_secs_f64() * 1000.)
             }
             _ => return Err("GPU timing unavailable".into()),
         }
