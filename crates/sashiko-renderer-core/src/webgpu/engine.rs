@@ -46,10 +46,17 @@ impl Health {
             *failure = Some((kind, message));
         }
         drop(failure);
-        for slot in self.wakers.lock().expect("WebGPU wakers").iter() {
-            if let Some(waker) = slot.lock().expect("WebGPU waker").take() {
-                waker.wake();
-            }
+        // Waking can synchronously run caller code. Never hold a slot or the
+        // observer list's mutex across that boundary.
+        let pending: Vec<_> = self
+            .wakers
+            .lock()
+            .expect("WebGPU wakers")
+            .iter()
+            .filter_map(|slot| slot.lock().expect("WebGPU waker").take())
+            .collect();
+        for waker in pending {
+            waker.wake();
         }
     }
     fn check(&self) -> Result<(), Error> {
@@ -335,7 +342,8 @@ impl Engine {
         let wake = Arc::clone(&result.waker);
         self.queue.on_submitted_work_done(move || {
             completed.fetch_max(serial, Ordering::AcqRel);
-            if let Some(waker) = wake.lock().expect("WebGPU waker").take() {
+            let pending = wake.lock().expect("WebGPU waker").take();
+            if let Some(waker) = pending {
                 waker.wake();
             }
         });
