@@ -264,7 +264,7 @@ Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受�
 スキニングを使うメッシュは、ロード時に `MeshData::skinned_pbr` に頂点と各頂点の最大 4 関節分の重みを渡す。
 個体ごとに `meshes.create_pose(mesh)` でポーズを作り、`actor.set_pose(mesh, Some(pose))` で結ぶ。
 ゲーム側でアニメーションを評価したら、逆バインド変換を含むモデル空間の最終行列を `meshes.set_joint_transforms(pose, &palette)` に一度渡す。
-現在は CPU で頂点を変形し、そのフレームで使うポーズごとに一つの頂点バッファをアップロードする。各材質スロット・カメラ・影が同じ頂点を読む。LOD 用モデル境界にはアニメーション全体を含める。
+既定の CPU 経路は、使用するポーズごとに変形済み頂点を転送する。Compute を選ぶにはメッシュ登録前に `MeshData::with_compute_skin()` を呼ぶ。バインド頂点は常駐し、各フレームはパレットだけを転送する。どちらも各材質スロット・カメラ・影がポーズの頂点を共有する。ポーズごとのカリング境界は Renderer が更新する。モデルの LOD 選択に渡す境界にはアニメーション全体を含める。[スキニングの容量と計測](../design/animation.md#gpu-スキニングとマルチパス)
 
 既存エンジンのビューポートでは、ホストが用意した Graph と描画先をそのまま使える。次の例で `drawing` は初期化済みの `SceneRenderer`、`host_target` は同じ Graph に作った表示リニア RGBA8 ターゲットである。
 
