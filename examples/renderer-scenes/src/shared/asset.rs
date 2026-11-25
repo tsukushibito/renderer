@@ -63,6 +63,11 @@ pub(crate) enum Pixels {
         byte_length: usize,
     },
     Owned(Vec<u8>),
+    #[cfg(all(target_arch = "wasm32", feature = "webgpu"))]
+    Http {
+        object: super::web_assets::Object,
+        maximum_alpha: Option<u8>,
+    },
 }
 
 impl Pixels {
@@ -72,6 +77,8 @@ impl Pixels {
     fn read(&self) -> Result<Vec<u8>> {
         match self {
             Pixels::Owned(bytes) => Ok(bytes.clone()),
+            #[cfg(all(target_arch = "wasm32", feature = "webgpu"))]
+            Pixels::Http { .. } => Err(invalid("HTTP images require asynchronous loading")),
             Pixels::File {
                 path,
                 sha256,
@@ -116,6 +123,24 @@ impl TextureImage {
     pub fn load_bytes(&self) -> Result<Vec<u8>> {
         self.pixels.read()
     }
+    #[cfg(all(target_arch = "wasm32", feature = "webgpu"))]
+    pub async fn load_web_bytes(&self) -> Result<Vec<u8>> {
+        if let Pixels::Http {
+            object,
+            maximum_alpha,
+        } = &self.pixels
+        {
+            let bytes = object.fetch().await?;
+            if let Some(expected) = maximum_alpha
+                && bytes.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).max() != Some(*expected)
+            {
+                return Err(invalid("RGBA alpha summary differs from pixel contents"));
+            }
+            Ok(bytes)
+        } else {
+            self.load_bytes()
+        }
+    }
     pub fn format(&self) -> ImageFormat {
         match &self.compressed {
             Some(info) => info.format,
@@ -158,6 +183,10 @@ impl TextureImage {
             return info
                 .maximum_alpha
                 .ok_or_else(|| invalid("base texture lacks alpha metadata"));
+        }
+        #[cfg(all(target_arch = "wasm32", feature = "webgpu"))]
+        if let Pixels::Http { maximum_alpha, .. } = &self.pixels {
+            return maximum_alpha.ok_or_else(|| invalid("missing base texture alpha summary"));
         }
         Ok(self
             .load_bytes()?
@@ -492,7 +521,11 @@ fn image_blob(root: &Path, record: &Value) -> Result<Pixels> {
     })
 }
 
-fn image(root: &Path, record: &Value, id: usize) -> Result<TextureImage> {
+fn image(
+    blob: &impl Fn(&Value) -> Result<Pixels>,
+    record: &Value,
+    id: usize,
+) -> Result<TextureImage> {
     if integer(&record["id"])? != id {
         return Err(invalid("image ids must be dense and ordered"));
     }
@@ -550,7 +583,7 @@ fn image(root: &Path, record: &Value, id: usize) -> Result<TextureImage> {
         _ => return Err(invalid("normal encoding disagrees with format")),
     };
     let mut maximum_alpha = None;
-    let pixels = image_blob(root, record)?;
+    let pixels = blob(record)?;
     let byte_length = integer(&record["byte_length"])?;
     let mut mips = Vec::with_capacity(records.len());
     let mut cursor = 0;
@@ -598,7 +631,7 @@ fn image(root: &Path, record: &Value, id: usize) -> Result<TextureImage> {
             {
                 return Err(invalid("invalid decoded CPU bake mip"));
             }
-            image_blob(root, mip)?
+            blob(mip)?
         };
         Some(CompressedImage {
             format,
@@ -946,11 +979,27 @@ impl Scene {
             .ok_or_else(|| invalid("manifest has no parent"))?;
         let manifest_bytes = std::fs::read(&manifest)?;
         let doc: Value = serde_json::from_slice(&manifest_bytes)?;
+        Self::decode(
+            &manifest_bytes,
+            &doc,
+            force_opaque,
+            |name| read_blob(root, &doc[name]),
+            |record| image_blob(root, record),
+        )
+    }
+
+    pub(super) fn decode(
+        manifest_bytes: &[u8],
+        doc: &Value,
+        force_opaque: bool,
+        mut read: impl FnMut(&str) -> Result<Vec<u8>>,
+        image_source: impl Fn(&Value) -> Result<Pixels>,
+    ) -> Result<Self> {
         if integer(&doc["schema_version"])? != 1 || integer(&doc["vertex_stride"])? != 48 {
             return Err(invalid("unsupported cooked scene schema or vertex stride"));
         }
-        let vertices = read_blob(root, &doc["vertices"])?;
-        let indices = read_blob(root, &doc["indices"])?;
+        let vertices = read("vertices")?;
+        let indices = read("indices")?;
         if integer(&doc["vertices"]["count"])?.checked_mul(48) != Some(vertices.len())
             || integer(&doc["indices"]["count"])?.checked_mul(4) != Some(indices.len())
         {
@@ -959,9 +1008,9 @@ impl Scene {
         let image_records = array(&doc["images"])?;
         let mut images = Vec::with_capacity(image_records.len() + 4);
         for (id, record) in image_records.iter().enumerate() {
-            images.push(image(root, record, id)?);
+            images.push(image(&image_source, record, id)?);
         }
-        let textures = texture_bindings(&doc)?;
+        let textures = texture_bindings(doc)?;
         if textures
             .iter()
             .any(|binding| binding.image >= image_records.len())
@@ -984,11 +1033,11 @@ impl Scene {
         if materials.is_empty() {
             return Err(invalid("scene has no materials"));
         }
-        let mut primitives = validate_geometry(&doc, &vertices, &indices, materials.len())?;
+        let mut primitives = validate_geometry(doc, &vertices, &indices, materials.len())?;
         let lightmap_uv = if doc["lightmap_uv"].is_null() {
             Vec::new()
         } else {
-            let blob = read_blob(root, &doc["lightmap_uv"])?;
+            let blob = read("lightmap_uv")?;
             if !blob.len().is_multiple_of(8)
                 || !blob
                     .as_chunks::<4>()
@@ -1039,7 +1088,7 @@ impl Scene {
             return Err(invalid("scene source identity must be an object"));
         }
         source["cooked_manifest_sha256"] =
-            Value::String(format!("{:x}", Sha256::digest(&manifest_bytes)));
+            Value::String(format!("{:x}", Sha256::digest(manifest_bytes)));
         if let Some(format) = doc.pointer("/recipe/texture_policy/reflection_probes") {
             if !matches!(format.as_str(), Some("bc6h" | "rgba32f")) {
                 return Err(invalid("unknown reflection probe cook format"));
@@ -1054,8 +1103,8 @@ impl Scene {
         source["material_texture_bytes"] = Value::from(
             source_images
                 .iter()
-                .map(TextureImage::byte_length)
-                .sum::<usize>(),
+                .map(|image| image.byte_length() as u64)
+                .sum::<u64>(),
         );
         source["primitive_count"] = Value::from(primitives.len());
         source["triangle_count"] = Value::from(triangle_count);
