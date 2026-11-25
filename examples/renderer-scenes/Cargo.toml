@@ -7,9 +7,6 @@ publish = false
 default-run = "renderer-scenes"
 description = "Reference scene applications for Bistro and Sponza"
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
 [features]
 default = []
 bake-tool = ["dep:sashiko-lighting-bake", "dep:serde", "dep:half"]
