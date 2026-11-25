@@ -1,11 +1,11 @@
 //! Per-execution secondary buffers. A scoped job exclusively records one pool.
 use super::{MemoryOwner, RuntimeError, StoragePool, VulkanRuntime, storage::reserved};
+use crate::jobs::RendererJobs;
 use ash::vk;
-use sashiko_jobs::JobSystem;
 use std::{num::NonZeroUsize, sync::Arc};
 
 pub(super) struct Recorder {
-    pub jobs: JobSystem,
+    pub jobs: RendererJobs,
     pub storage: StoragePool<BatchCommands>,
     pub capacity: usize,
 }
@@ -30,7 +30,7 @@ impl VulkanRuntime {
     /// Graphs with more live raster batches than the budget use inline recording.
     pub fn prepare_raster_recording(
         &mut self,
-        jobs: JobSystem,
+        jobs: impl Into<RendererJobs>,
         max_batches: NonZeroUsize,
     ) -> Result<(), RuntimeError> {
         self.owner
@@ -69,7 +69,7 @@ impl VulkanRuntime {
             |_| {},
         )?;
         self.secondary = Some(Recorder {
-            jobs,
+            jobs: jobs.into(),
             storage,
             capacity,
         });

@@ -540,66 +540,69 @@ impl GraphWork {
         let physical = &data.physical;
         let descriptors = &data.raster_descriptors;
         let slots = &data.raster_programs;
-        recorder.jobs.scope(|scope| {
-            scope.for_each_chunk_mut(lanes, std::num::NonZeroUsize::MIN, |index, lanes| {
-                let lane = &mut lanes[0];
-                let PreparedOperation::Raster {
-                    colors,
-                    depth,
-                    sample_count,
-                    ..
-                } = &passes[lane.pass].operation
-                else {
-                    unreachable!()
-                };
-                let mut formats =
-                    [vk::Format::UNDEFINED; crate::program::MAX_RASTER_COLOR_ATTACHMENTS];
-                let mut extent = vk::Extent2D::default();
-                for (format, target) in formats.iter_mut().zip(plan.raster_attachments(colors)) {
-                    let image = physical[target.view.image().index]
-                        .as_ref()
-                        .unwrap()
-                        .image();
-                    *format = image.format;
-                    extent = image.extent;
-                }
-                let depth_format = depth.map_or(vk::Format::UNDEFINED, |target| {
-                    let image = physical[plan.raster_attachment(target).view.image().index]
-                        .as_ref()
-                        .unwrap()
-                        .image();
-                    extent = image.extent;
-                    image.format
-                });
-                let mut rendering = vk::CommandBufferInheritanceRenderingInfo::default()
-                    .color_attachment_formats(&formats[..colors.len()])
-                    .depth_attachment_format(depth_format)
-                    .rasterization_samples(crate::backends::vulkan::resources::sample_count_flags(
-                        *sample_count,
-                    ));
-                let inheritance =
-                    vk::CommandBufferInheritanceInfo::default().push_next(&mut rendering);
-                let batch = &plan.raster_batches(&(lane.batch..lane.batch + 1))[0];
-                let sets = &descriptors[lane.descriptors..lane.descriptors + batch.draws.len()];
-                lane.error = lane
-                    .record(&inheritance, |command| {
-                        // SAFETY: This batch exclusively owns its secondary, and the Graph
-                        // retains exactly the operands validated for this rendering scope.
-                        unsafe {
-                            programs.set_raster_regions(command, batch.regions, extent);
-                            record_batch(
-                                command,
-                                programs,
-                                slots[index],
-                                *sample_count,
-                                plan,
-                                batch,
-                                sets,
-                                physical,
-                            );
-                        }
-                    })
-                    .err();
+        recorder.jobs.with(|team| {
+            team.scope(|scope| {
+                scope.for_each_chunk_mut(lanes, std::num::NonZeroUsize::MIN, |index, lanes| {
+                    let lane = &mut lanes[0];
+                    let PreparedOperation::Raster {
+                        colors,
+                        depth,
+                        sample_count,
+                        ..
+                    } = &passes[lane.pass].operation
+                    else {
+                        unreachable!()
+                    };
+                    let mut formats =
+                        [vk::Format::UNDEFINED; crate::program::MAX_RASTER_COLOR_ATTACHMENTS];
+                    let mut extent = vk::Extent2D::default();
+                    for (format, target) in formats.iter_mut().zip(plan.raster_attachments(colors))
+                    {
+                        let image = physical[target.view.image().index]
+                            .as_ref()
+                            .unwrap()
+                            .image();
+                        *format = image.format;
+                        extent = image.extent;
+                    }
+                    let depth_format = depth.map_or(vk::Format::UNDEFINED, |target| {
+                        let image = physical[plan.raster_attachment(target).view.image().index]
+                            .as_ref()
+                            .unwrap()
+                            .image();
+                        extent = image.extent;
+                        image.format
+                    });
+                    let mut rendering = vk::CommandBufferInheritanceRenderingInfo::default()
+                        .color_attachment_formats(&formats[..colors.len()])
+                        .depth_attachment_format(depth_format)
+                        .rasterization_samples(
+                            crate::backends::vulkan::resources::sample_count_flags(*sample_count),
+                        );
+                    let inheritance =
+                        vk::CommandBufferInheritanceInfo::default().push_next(&mut rendering);
+                    let batch = &plan.raster_batches(&(lane.batch..lane.batch + 1))[0];
+                    let sets = &descriptors[lane.descriptors..lane.descriptors + batch.draws.len()];
+                    lane.error = lane
+                        .record(&inheritance, |command| {
+                            // SAFETY: This batch exclusively owns its secondary, and the Graph
+                            // retains exactly the operands validated for this rendering scope.
+                            unsafe {
+                                programs.set_raster_regions(command, batch.regions, extent);
+                                record_batch(
+                                    command,
+                                    programs,
+                                    slots[index],
+                                    *sample_count,
+                                    plan,
+                                    batch,
+                                    sets,
+                                    physical,
+                                );
+                            }
+                        })
+                        .err();
+                })
             })
         });
         for lane in lanes {
