@@ -1,5 +1,5 @@
 [graph]
-targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 all-features = true
 
 [advisories]
@@ -23,6 +23,12 @@ ignore = true
 [[licenses.exceptions]]
 name = "bevy_mikktspace"
 version = "=1.0.0"
+allow = ["Zlib"]
+
+# hashbrown in the browser GPU dependency graph uses this Zlib-licensed hasher.
+[[licenses.exceptions]]
+name = "foldhash"
+version = "=0.2.0"
 allow = ["Zlib"]
 
 # The optional pinned Tracy client bundles the upstream BSD-3-Clause native

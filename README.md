@@ -65,6 +65,8 @@ native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md
 cargo run --locked -p sashiko-renderer-core --no-default-features --example graph_composition
 ```
 
+Windows の Chrome と Edge では、WebGPU を使って Bistro と Sponza を表示できます。[ブラウザビューアーの起動と操作](docs/guides/examples.md#webgpu-scenes)
+
 小さなPBRシーン、ヘッドレス描画、Windows表示、2つのBistroサンプルは[Examplesガイド](docs/guides/examples.md)から実行できます。
 
 課題管理には [Beads](https://github.com/gastownhall/beads) を使用します。
