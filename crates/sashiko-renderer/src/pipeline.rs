@@ -19,6 +19,7 @@ use std::{
     ops::Range,
 };
 
+mod classification;
 mod geometry;
 mod history;
 pub use geometry::{GeometryPipeline, Technique};
@@ -154,6 +155,7 @@ pub struct StandardPipeline {
     transforms: Vec<Transform>,
     transform_indices: HashMap<[[u32; 4]; 3], u32>,
     connected: Vec<Draw>,
+    classification: classification::Classification,
     order: Vec<(f64, usize, [bool; pbr::CASCADE_COUNT])>,
     forward: ForwardDraws,
 }
@@ -287,6 +289,7 @@ impl StandardPipeline {
             transforms: Vec::with_capacity(limits.max_transforms),
             transform_indices: HashMap::with_capacity(limits.max_transforms),
             connected: Vec::with_capacity(max),
+            classification: classification::Classification::new(max),
             order: Vec::with_capacity(max),
             forward: ForwardDraws {
                 opaque: Vec::with_capacity(max),
@@ -320,7 +323,8 @@ impl StandardPipeline {
         materials: &Materials,
         frame: GeometryDrawInput<'_>,
     ) -> Result<SceneImages, GraphError> {
-        self.declare(graph, materials, frame, GeometryPipeline::draw_hdr)
+        self.classify_connected(materials, &frame)?;
+        self.declare_classified(graph, materials, frame, GeometryPipeline::draw_hdr)
     }
 
     /// Read coherent Deferred material planes and depth before Forward opaque draws.
@@ -336,15 +340,27 @@ impl StandardPipeline {
                 "G-buffer access requires Deferred",
             ));
         }
-        self.declare(graph, materials, frame, |recipe, graph, frame| {
-            let GeometryPipeline::Deferred(recipe) = recipe else {
-                unreachable!()
-            };
-            recipe.add_scene_with_gbuffer(graph, frame, consume)
+        self.classify_connected(materials, &frame)?;
+        self.declare_classified(graph, materials, frame, |recipe, graph, frame| {
+            recipe.draw_hdr_with_gbuffer(graph, frame, consume)
         })
     }
 
-    fn declare(
+    fn classify_connected(
+        &mut self,
+        materials: &Materials,
+        frame: &GeometryDrawInput<'_>,
+    ) -> Result<(), GraphError> {
+        self.classification.run(
+            frame.draws,
+            materials,
+            frame.view,
+            self.config.shadows.is_some(),
+            frame.lights,
+        )
+    }
+
+    fn declare_classified(
         &mut self,
         graph: &mut Graph,
         materials: &Materials,
@@ -369,13 +385,6 @@ impl StandardPipeline {
             self.config.shadows.is_some()
                 && shadow_history.is_none_or(|history| !history.is_reused(i))
         });
-        if draws.len() > self.limits.max_draws {
-            return Err(GraphError::capacity_error(
-                sashiko_renderer_core::graph::GraphCapacityKind::Draws,
-                self.limits.max_draws,
-                Some(draws.len()),
-            ));
-        }
         let rect_lights = if rect_target.is_some_and(|t| t.reused()) {
             &[]
         } else {
@@ -416,33 +425,16 @@ impl StandardPipeline {
             Ok(draw)
         };
         for (i, draw) in draws.iter().enumerate() {
-            let instance = materials.get(draw.material)?;
-            let blend = instance.alpha_mode() == AlphaMode::Blend;
-            let casts_shadow = draw.casts_shadow
-                && match instance {
-                    MaterialInstance::Pbr(_) => !blend,
-                    MaterialInstance::Custom(m) => m.definition().shadow().is_some(),
-                    MaterialInstance::Unlit(_) => true,
-                };
-            let bounds = draw.world_bounds(instance);
-            let visible = draw.camera_visible && bounds.is_none_or(|b| view.visible(b));
-            let cascades = std::array::from_fn(|i| {
-                render_shadow[i]
-                    && casts_shadow
-                    && bounds.is_none_or(|b| view.cascade_overlaps(i, b) != Some(false))
-            });
-            let rect = casts_shadow
-                && rect_lights
-                    .iter()
-                    .filter_map(LocalLight::shadow_emitter)
-                    .any(|light| bounds.is_none_or(|b| pbr::rect_shadows::affects(light, b)));
-            if !visible && !cascades.contains(&true) && !rect {
+            let result = self.classification.results[i];
+            let cascades = std::array::from_fn(|i| result.cascades[i] && render_shadow[i]);
+            let rect = result.rectangle && !rect_lights.is_empty();
+            if !result.camera && !cascades.contains(&true) && !rect {
                 continue;
             }
-            if blend && visible {
-                let depth = draw.view_depth(view)?;
+            if let Some(depth) = result.sort_depth {
                 self.order.push((depth, i, cascades));
             } else {
+                let instance = materials.get(draw.material)?;
                 let draw = resolve_pose(graph, i)?;
                 self.record(
                     graph,
@@ -450,17 +442,29 @@ impl StandardPipeline {
                     defaults,
                     &draw,
                     instance,
-                    visible,
+                    result.camera,
+                    result.bounds,
                     cascades,
                     if rect { rect_lights } else { &[] },
                     rect_target,
                 )?;
             }
         }
-        self.order
-            .sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        {
+            #[cfg(feature = "tracy")]
+            let _span = tracy_client::Client::running().map(|client| {
+                client.span(
+                    tracy_client::span_location!("renderer.scene.transparent_sort"),
+                    0,
+                )
+            });
+            self.order
+                .sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        }
         for index in 0..self.order.len() {
-            let draw = resolve_pose(graph, self.order[index].1)?;
+            let (_, source, cascades) = self.order[index];
+            let result = self.classification.results[source];
+            let draw = resolve_pose(graph, source)?;
             self.record(
                 graph,
                 view,
@@ -468,8 +472,9 @@ impl StandardPipeline {
                 &draw,
                 materials.get(draw.material)?,
                 true,
-                self.order[index].2,
-                if draw.casts_shadow { rect_lights } else { &[] },
+                result.bounds,
+                cascades,
+                if result.rectangle { rect_lights } else { &[] },
                 rect_target,
             )?;
         }
@@ -512,6 +517,7 @@ impl StandardPipeline {
         draw: &Draw,
         instance: &MaterialInstance,
         visible: bool,
+        bounds: Option<Bounds>,
         cascades: [bool; pbr::CASCADE_COUNT],
         rect_lights: &[LocalLight],
         rect_target: Option<pbr::rect_shadows::Targets<'_>>,
@@ -642,10 +648,7 @@ impl StandardPipeline {
                 .filter_map(LocalLight::shadow_emitter)
                 .enumerate()
             {
-                if draw
-                    .world_bounds(instance)
-                    .is_some_and(|b| !pbr::rect_shadows::affects(light, b))
-                {
+                if bounds.is_some_and(|b| !pbr::rect_shadows::affects(light, b)) {
                     continue;
                 }
                 for face in 0..pbr::rect_shadows::FACES {

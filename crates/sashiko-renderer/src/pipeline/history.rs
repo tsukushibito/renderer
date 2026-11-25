@@ -1,4 +1,4 @@
-use super::*;
+use super::{classification::Visibility, *};
 use crate::mesh::MeshHandle;
 use sashiko_renderer_core::graph::GraphCapacityKind;
 
@@ -15,19 +15,19 @@ struct Caster {
     coverage: Option<(sashiko_renderer_core::graph::ResourceKey, u64)>,
     external: bool,
 }
-pub(super) struct History<const N: usize = { pbr::CASCADE_COUNT }> {
-    pub(super) maps: pbr::MapHistory<N>,
-    casters: [Vec<Caster>; N],
-    pub(super) revisions: [u64; N],
+pub(super) struct History {
+    pub(super) maps: pbr::MapHistory<{ pbr::CASCADE_COUNT }>,
+    casters: [Vec<Caster>; pbr::CASCADE_COUNT],
+    pub(super) revisions: [u64; pbr::CASCADE_COUNT],
     capacity: usize,
 }
 
-impl<const N: usize> History<N> {
+impl History {
     pub(super) fn new(max_shadow_casters: usize) -> Self {
         Self {
             maps: pbr::MapHistory::default(),
             casters: std::array::from_fn(|_| Vec::with_capacity(max_shadow_casters)),
-            revisions: [0; N],
+            revisions: [0; pbr::CASCADE_COUNT],
             capacity: max_shadow_casters,
         }
     }
@@ -35,20 +35,27 @@ impl<const N: usize> History<N> {
     pub(super) fn observe(
         &mut self,
         graph: &mut Graph,
-        overlaps: impl Fn(usize, Bounds) -> bool,
         input: SceneInput<'_>,
-        draws: &[Draw],
+        results: &[Visibility],
     ) -> Result<(), GraphError> {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.scene.cascade_history"),
+                0,
+            )
+        });
         // Compare complete ordered caster lists. Hash collisions cannot authorize reuse.
         // Advance the revision before changing any cached records, including on failure.
-        let mut counts = [0; N];
-        let mut changed = [false; N];
-        for (object, draw) in input.objects.iter().zip(draws) {
-            let Some((state, bounds)) = observe_caster(graph, input, object, draw)? else {
+        let mut counts = [0; pbr::CASCADE_COUNT];
+        let mut changed = [false; pbr::CASCADE_COUNT];
+        for (object, result) in input.objects.iter().zip(results) {
+            if !result.caster {
                 continue;
-            };
-            for i in 0..N {
-                if bounds.is_some_and(|b| !overlaps(i, b)) {
+            }
+            let state = observe_caster(graph, input, object)?;
+            for (i, overlaps) in result.cascades.iter().enumerate() {
+                if !overlaps {
                     continue;
                 }
                 let index = counts[i];
@@ -94,15 +101,11 @@ fn observe_caster(
     graph: &mut Graph,
     input: SceneInput<'_>,
     object: &RenderObject,
-    draw: &Draw,
-) -> Result<Option<(Caster, Option<Bounds>)>, GraphError> {
-    if !draw.casts_shadow {
-        return Ok(None);
-    }
+) -> Result<Caster, GraphError> {
     let material = input.materials.get(object.material)?;
     let mut coverage = None;
     let external = match material {
-        MaterialInstance::Pbr(p) if material.alpha_mode() != AlphaMode::Blend => {
+        MaterialInstance::Pbr(p) => {
             if let Some(image) = p.coverage_image() {
                 // Even an offscreen caster in a cached tile depends on this snapshot.
                 graph.import_image("caster coverage", image)?;
@@ -113,14 +116,12 @@ fn observe_caster(
             }
         }
         MaterialInstance::Unlit(_) => false,
-        MaterialInstance::Custom(m) => match m.definition().shadow() {
-            Some(program) => !program.bindings().is_empty(),
-            None => return Ok(None),
-        },
-        _ => return Ok(None),
+        MaterialInstance::Custom(m) => m
+            .definition()
+            .shadow()
+            .is_some_and(|p| !p.bindings().is_empty()),
     };
-    let bounds = draw.world_bounds(material);
-    let state = Caster {
+    Ok(Caster {
         coverage,
         external,
         mesh: object.mesh,
@@ -139,8 +140,7 @@ fn observe_caster(
         material_revision: input.materials.revision(object.material)?,
         transform: object.transform,
         tint: object.tint,
-    };
-    Ok(Some((state, bounds)))
+    })
 }
 
 pub(super) struct RectangleHistory {
@@ -163,22 +163,31 @@ impl RectangleHistory {
         &'a mut self,
         graph: &mut Graph,
         input: SceneInput<'a>,
-        draws: &[Draw],
+        results: &[Visibility],
     ) -> Result<Option<pbr::RectShadowFrame<'a>>, GraphError> {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.scene.rectangle_history"),
+                0,
+            )
+        });
         self.maps.require_idle()?;
         self.pending.clear();
         self.changed.clear();
-        for (object, draw) in input.objects.iter().zip(draws) {
-            if let Some(new) = observe_caster(graph, input, object, draw)? {
-                if self.pending.len() == self.pending.capacity() {
-                    return Err(GraphError::capacity_error(
-                        GraphCapacityKind::Draws,
-                        self.pending.capacity(),
-                        Some(self.pending.len() + 1),
-                    ));
-                }
-                self.pending.push(new);
+        for (object, result) in input.objects.iter().zip(results) {
+            if !result.caster {
+                continue;
             }
+            if self.pending.len() == self.pending.capacity() {
+                return Err(GraphError::capacity_error(
+                    GraphCapacityKind::Draws,
+                    self.pending.capacity(),
+                    Some(self.pending.len() + 1),
+                ));
+            }
+            self.pending
+                .push((observe_caster(graph, input, object)?, result.bounds));
         }
         for i in 0..self.pending.len().max(self.accepted.len()) {
             let old = self.accepted.get(i);

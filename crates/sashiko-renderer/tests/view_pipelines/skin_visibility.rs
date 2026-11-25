@@ -69,7 +69,14 @@ fn check(api: RuntimeConfig) -> PipelineResult<()> {
         resolution: 32,
         ..Default::default()
     });
-    let mut group = CameraGroup::standard(camera, Technique::Forward, cfg);
+    let mut group = CameraGroup::custom(camera, move |_, limits, definitions| {
+        let mut standard = StandardPipeline::new(Technique::Forward, cfg, limits, definitions)?;
+        standard.set_scene_jobs(
+            sashiko_jobs::JobSystem::new(4.try_into().unwrap())?.into(),
+            std::num::NonZeroUsize::MIN,
+        );
+        Ok(standard)
+    });
     group.add_view(second)?;
     let mut setup = RendererSetup::new(group).prepare(SceneAssets::new(
         &mut meshes,

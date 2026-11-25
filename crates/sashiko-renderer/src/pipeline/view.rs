@@ -233,51 +233,63 @@ impl StandardPipeline {
             environment.diffuse_lighting = pbr::DiffuseLighting::SurfacePages { blend };
         }
         let prepared = self.prepare_view(camera.camera, input.sun, input.bounds, environment)?;
-        self.connected.clear();
-        for obj in input.objects {
-            // Classify using the current deformed bounds before requesting vertices.
-            let mut mesh = obj.select_range(input.meshes.import(graph, obj.mesh)?)?;
-            if let Some(id) = obj.pose {
-                mesh.bounds = input.meshes.pose_metadata(id, obj.mesh)?.0;
-            }
-            let lightmap = match (obj.placement(), input.surfaces) {
-                (Some(id), Some((baked, _))) if !baked.pages.is_empty() => {
-                    match baked.placements.get(&id).copied() {
-                        Some(address) => {
-                            let uv = input.meshes.import_lightmap_uvs(graph, obj.mesh)?;
-                            let image = crate::material::texture_view(
-                                graph,
-                                baked.pages[address.page].snapshot(),
-                            )?;
-                            Some(pbr::DrawLightmap::new(uv, image, address))
-                        }
-                        None if baked.complete => {
-                            return Err(GraphError::invalid_input("unknown baked placement"));
-                        }
-                        None => None,
-                    }
-                }
-                _ => None,
-            };
-            self.connected.push(Draw {
-                lightmap,
-                transform: (obj.transform != Transform::IDENTITY).then_some(obj.transform),
-                sort_center: obj.sort_center.unwrap_or_else(|| mesh.bounds.center()),
-                camera_visible: obj.camera_visible,
-                casts_shadow: obj.casts_shadow,
-                tint: obj.tint,
-                ..Draw::new(mesh, obj.material)
+        {
+            #[cfg(feature = "tracy")]
+            let _span = tracy_client::Client::running().map(|client| {
+                client.span(
+                    tracy_client::span_location!("renderer.scene.connect_meshes"),
+                    0,
+                )
             });
+            self.connected.clear();
+            for obj in input.objects {
+                // Classify using the current deformed bounds before requesting vertices.
+                let mut mesh = obj.select_range(input.meshes.import(graph, obj.mesh)?)?;
+                if let Some(id) = obj.pose {
+                    mesh.bounds = input.meshes.pose_metadata(id, obj.mesh)?.0;
+                }
+                let lightmap = match (obj.placement(), input.surfaces) {
+                    (Some(id), Some((baked, _))) if !baked.pages.is_empty() => {
+                        match baked.placements.get(&id).copied() {
+                            Some(address) => {
+                                let uv = input.meshes.import_lightmap_uvs(graph, obj.mesh)?;
+                                let image = crate::material::texture_view(
+                                    graph,
+                                    baked.pages[address.page].snapshot(),
+                                )?;
+                                Some(pbr::DrawLightmap::new(uv, image, address))
+                            }
+                            None if baked.complete => {
+                                return Err(GraphError::invalid_input("unknown baked placement"));
+                            }
+                            None => None,
+                        }
+                    }
+                    _ => None,
+                };
+                self.connected.push(Draw {
+                    lightmap,
+                    transform: (obj.transform != Transform::IDENTITY).then_some(obj.transform),
+                    sort_center: obj.sort_center.unwrap_or_else(|| mesh.bounds.center()),
+                    camera_visible: obj.camera_visible,
+                    casts_shadow: obj.casts_shadow,
+                    tint: obj.tint,
+                    ..Draw::new(mesh, obj.material)
+                });
+            }
         }
+        self.classification.run(
+            &self.connected,
+            input.materials,
+            &prepared,
+            self.config.shadows.is_some(),
+            input.lights,
+        )?;
+        let results = &self.classification.results[..self.connected.len()];
         let shadow = if let Some(history) = &mut view.history
             && prepared.shadow_matrices().is_some()
         {
-            history.observe(
-                graph,
-                |i, b| prepared.cascade_overlaps(i, b) != Some(false),
-                input,
-                &self.connected,
-            )?;
+            history.observe(graph, input, results)?;
             Some(
                 history
                     .maps
@@ -290,7 +302,7 @@ impl StandardPipeline {
             let history = view.rect_history.as_mut().ok_or_else(|| {
                 GraphError::capacity_error(pbr::SceneLimits::SHADOWED_RECT_LIGHTS, 0, Some(1))
             })?;
-            history.begin(graph, input, &self.connected)?
+            history.begin(graph, input, results)?
         } else {
             None
         };
@@ -300,12 +312,13 @@ impl StandardPipeline {
         frame.shadow_history = shadow.as_ref();
         frame.lights = input.lights;
         frame.scene = Some(input);
-        let scene = match consume {
-            Some(callback) => {
-                self.draw_connected_hdr_with_gbuffer(graph, input.materials, frame, callback)
-            }
-            None => self.draw_connected_hdr(graph, input.materials, frame),
-        };
+        let scene =
+            self.declare_classified(graph, input.materials, frame, |recipe, graph, frame| {
+                match consume {
+                    Some(callback) => recipe.draw_hdr_with_gbuffer(graph, frame, callback),
+                    None => recipe.draw_hdr(graph, frame),
+                }
+            });
         self.connected = connected;
         Ok(StandardViewOutput {
             scene: scene?,
