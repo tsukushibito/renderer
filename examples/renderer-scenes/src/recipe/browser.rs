@@ -35,7 +35,7 @@ fn device_requirements(budget: &Budget) -> Result<(wgpu::Features, wgpu::Limits)
     if budget
         .images
         .iter()
-        .any(|(desc, _)| desc.format.block_extent() != [1, 1])
+        .any(|(desc, _)| desc.format.is_block_compressed())
     {
         features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
     }
