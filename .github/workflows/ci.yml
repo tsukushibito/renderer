@@ -344,16 +344,6 @@ jobs:
       - name: Test windowed event-loop contracts without a GPU
         if: runner.os == 'Windows' && matrix.backend == 'vulkan,d3d12,presentation'
         run: cargo test --locked -p sashiko-renderer-core --example windowed --no-default-features --features vulkan,d3d12,presentation
-      - name: Check optimized backend execution with and without development validation
-        if: runner.os == 'Linux' && matrix.backend == 'vulkan'
-        shell: pwsh
-        run: &release-tests |
-          foreach ($development in @($false, $true)) {
-            $features = $env:BACKEND
-            if ($development) { $features += ',development-validation,graph-diagnostics' }
-            cargo test --locked -p sashiko-renderer-core --lib --release --no-default-features --features $features -- backends:: runtime:: presentation:: program::
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
       - name: Test optimized Rust pipeline preparation and composition
         if: runner.os == 'Linux' && matrix.backend == 'cpu'
         shell: pwsh
@@ -413,11 +403,36 @@ jobs:
             cargo check --locked --workspace --all-targets --no-default-features --features $features
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+
+  linux-vulkan-release:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    env:
+      BACKEND: vulkan
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - run: rustup show active-toolchain
+      - name: Cache release and Tracy dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Check optimized backend execution with and without development validation
+        shell: pwsh
+        run: &release-tests |
+          foreach ($development in @($false, $true)) {
+            $features = $env:BACKEND
+            if ($development) { $features += ',development-validation,graph-diagnostics' }
+            cargo test --locked -p sashiko-renderer-core --lib --release --no-default-features --features $features -- backends:: runtime:: presentation:: program::
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Check optional Tracy instrumentation in shipping and development configurations
-        if: runner.os == 'Linux' && matrix.backend == 'vulkan'
         shell: pwsh
         env:
-          TRACY_CONFIGS: ${{ matrix.backend }},tracy ${{ matrix.backend }},tracy,development-validation,graph-diagnostics
+          TRACY_CONFIGS: vulkan,tracy vulkan,tracy,development-validation,graph-diagnostics
         run: &tracy-tests |
           foreach ($features in $env:TRACY_CONFIGS.Split(' ')) {
             cargo clippy --locked --workspace --all-targets --no-default-features --features $features -- -D warnings
@@ -426,16 +441,61 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
-  windows-backend-tests:
+  windows-workspace-tests:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
+    runs-on: windows-2022
+    name: Windows release workspace / ${{ matrix.targets }}
+    strategy:
+      fail-fast: false
+      matrix:
+        targets: [unit, integration]
+    env:
+      CARGO_INCREMENTAL: "0"
+      FEATURES: vulkan,d3d12,presentation,development-validation,graph-diagnostics
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - run: rustup show active-toolchain
+      - name: Cache workspace test dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.targets }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test workspace integration targets
+        if: matrix.targets == 'integration'
+        run: cargo test --locked --release --workspace --no-default-features --features $env:FEATURES --test '*'
+      - name: Test workspace unit targets
+        if: matrix.targets == 'unit'
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $options = @('--locked', '--no-default-features', '--features', $env:FEATURES)
+          $metadata = cargo metadata --format-version 1 @options | ConvertFrom-Json
+          $targets = @('--lib', '--bins')
+          # Cargo --tests also includes examples and benches explicitly opted in to testing.
+          foreach ($package in $metadata.packages) {
+            if ($package.id -notin $metadata.workspace_members) { continue }
+            $enabled = ($metadata.resolve.nodes | Where-Object id -eq $package.id).features
+            foreach ($target in $package.targets) {
+              if (!$target.test -or $target.kind[0] -notin @('example', 'bench')) { continue }
+              if ($target.'required-features' | Where-Object { $_ -notin $enabled }) { continue }
+              $targets += @("--$($target.kind[0])", $target.name)
+            }
+          }
+          cargo test --workspace --release @options @targets
+
+  windows-backend-tests:
+    # Let the long workspace and browser suites acquire runners first.
+    # A formatting failure still leaves all backend checks available.
+    needs: [changes, format]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' }}
     name: windows-2022 / ${{ matrix.backend }} / ${{ matrix.suite }}
     runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { backend: "vulkan,d3d12,presentation", suite: release }
           - { backend: "vulkan,d3d12,presentation", suite: release-shipping }
           - { backend: "vulkan,d3d12,presentation", suite: diagnostics }
           - { backend: vulkan, suite: release }
@@ -463,12 +523,9 @@ jobs:
         run: rustup show active-toolchain
       - *cargo-cache
       - name: Test optimized shipping and development builds
-        if: matrix.suite == 'release' && matrix.backend != 'vulkan,d3d12,presentation'
+        if: matrix.suite == 'release'
         shell: pwsh
         run: *release-tests
-      - name: Test optimized workspace with both native backends and development validation
-        if: matrix.suite == 'release' && matrix.backend == 'vulkan,d3d12,presentation'
-        run: cargo test --locked --workspace --release --no-default-features --features vulkan,d3d12,presentation,development-validation,graph-diagnostics --tests
       - name: Test optimized shipping backend execution
         if: matrix.suite == 'release-shipping'
         run: |
