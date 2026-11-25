@@ -211,3 +211,28 @@ fn missing_argument_slots_and_foreign_inputs_fail_before_declaration() {
         .unwrap();
     assert_eq!(foreign.kind(), GraphErrorKind::WrongOwner);
 }
+
+#[test]
+fn dirty_bounds_upload_uses_padded_group_offset_and_preserves_other_commands() {
+    let prepared = prepared(&[2, 3]);
+    let mut bytes = vec![0x5a; prepared.bounds_desc().size as usize];
+    let before = bytes.clone();
+    let range = prepared
+        .encode_group_bounds(&mut bytes, 1, 1..3, |i| WorldBounds {
+            min: [i as f32; 3],
+            max: [2.; 3],
+            enabled: true,
+        })
+        .unwrap();
+    assert_eq!(range, 65 * 32..67 * 32);
+    assert_eq!(&bytes[..range.start], &before[..range.start]);
+    assert_eq!(&bytes[range.end..], &before[range.end..]);
+    assert_eq!(&bytes[range.start..range.start + 4], &1f32.to_le_bytes());
+    let encoded = bytes.clone();
+    assert!(
+        prepared
+            .encode_group_bounds(&mut bytes, 1, 2..4, |_| panic!("invalid range"))
+            .is_err()
+    );
+    assert_eq!(bytes, encoded);
+}
