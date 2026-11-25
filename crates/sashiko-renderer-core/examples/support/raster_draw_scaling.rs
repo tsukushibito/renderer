@@ -8,6 +8,7 @@ use std::{
     ffi::OsString,
     fs::File,
     io::Write,
+    num::NonZeroUsize,
     ops::Range,
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -41,6 +42,9 @@ use sha2::{Digest, Sha256};
 type Failure = Box<dyn Error>;
 const EXTENT: u32 = 512;
 const IN_FLIGHT: usize = 2;
+// At the two-target workload's 4 MiB per pass across both in-flight slots,
+// 32 passes reserve 128 MiB of RGBA8 image payload, plus native overhead.
+const MAX_PASSES: usize = 32;
 const WAIT: Duration = Duration::from_secs(30);
 const STAGING_BYTES: u64 = 8 * 1024 * 1024;
 const STRICT: bool = cfg!(feature = "development-validation");
@@ -142,6 +146,15 @@ impl Options {
                     .ok_or_else(|| format!("missing value for {flag}"))
             };
             match flag.as_str() {
+                "--help" | "-h" => {
+                    println!(
+                        "raster_draw_scaling --api <vulkan|d3d12> --draws <1024|10000|50000> --words <0|20> --report <path>\n\
+                         [--passes <1..={MAX_PASSES}>] [--batches-per-pass <positive count>] [--topology <independent|chain>]\n\
+                         [--workers <0 for direct, or 1 through available logical CPU count>]\n\
+                         [--warmup <count>] [--frames <count>] [--profile] [--capture <stem>]"
+                    );
+                    std::process::exit(0);
+                }
                 "--api" => {
                     api = Some(match value()?.as_str() {
                         "vulkan" => Api::Vulkan,
@@ -179,8 +192,19 @@ impl Options {
         if frames == 0 && (capture.is_none() || warmup != 0) {
             return Err("zero measured frames require --capture and --warmup 0".into());
         }
-        if passes == 0 || batches_per_pass == 0 || passes > draws / batches_per_pass {
+        if !(1..=MAX_PASSES).contains(&passes) {
+            return Err(format!(
+                "--passes must be 1..={MAX_PASSES} (128 MiB image payload at two targets and two in-flight frames)"
+            ).into());
+        }
+        if batches_per_pass == 0 || passes > draws / batches_per_pass {
             return Err("each requested pass and batch must contain at least one draw".into());
+        }
+        if workers > 1 {
+            let available = std::thread::available_parallelism()?.get();
+            if workers > available {
+                return Err(format!("--workers must be 0 or 1..={available} on this host (includes the calling thread)").into());
+            }
         }
         Ok(Self {
             api: api.ok_or("missing --api")?,
@@ -564,8 +588,8 @@ impl Scene {
             program,
             parameters,
             layout: Layout::new(options),
-            preparation: (options.workers != 0)
-                .then(|| DrawPreparation::new(options.workers, options.draws))
+            preparation: NonZeroUsize::new(options.workers)
+                .map(|workers| DrawPreparation::new(workers, options.draws))
                 .transpose()?,
             outputs: Vec::with_capacity(options.passes),
             readbacks: Vec::with_capacity(options.passes * options.color_count()),
@@ -830,9 +854,8 @@ fn measure(
     scene: &mut Scene,
     resident: &ResidentScene,
     frames: usize,
-    collect: bool,
-) -> Result<(Vec<Sample>, u64), Failure> {
-    let mut samples: Vec<Sample> = Vec::with_capacity(if collect { frames } else { 0 });
+    mut samples: Option<&mut Vec<Sample>>,
+) -> Result<u64, Failure> {
     let mut queue = VecDeque::<(usize, Pending)>::with_capacity(IN_FLIGHT);
     let mut last_start = Instant::now();
     let mut first_start = last_start;
@@ -840,7 +863,7 @@ fn measure(
         if queue.len() == IN_FLIGHT {
             let (previous, mut pending) = queue.pop_front().unwrap();
             let completed = pending.wait()?;
-            if collect {
+            if let Some(samples) = &mut samples {
                 samples[previous].metrics = completed.metrics();
             }
         }
@@ -854,7 +877,7 @@ fn measure(
         let compiled = Instant::now();
         let pending = runtime.submit(&plan)?;
         let submitted = Instant::now();
-        if collect {
+        if let Some(samples) = &mut samples {
             samples.push(Sample {
                 active_ns: ns(submitted.duration_since(started)),
                 build_ns: ns(built.duration_since(started)),
@@ -872,16 +895,16 @@ fn measure(
     }
     while let Some((frame, mut pending)) = queue.pop_front() {
         let completed = pending.wait()?;
-        if collect {
+        if let Some(samples) = &mut samples {
             samples[frame].metrics = completed.metrics();
         }
     }
-    if let Some(first) = samples.first_mut() {
+    if let Some(first) = samples.and_then(|samples| samples.first_mut()) {
         // Use completed frame throughput for the entire measurement, including drain.
         // The first sample has no previous start in this cohort.
         first.interval_ns = 0;
     }
-    Ok((samples, ns(first_start.elapsed())))
+    Ok(ns(first_start.elapsed()))
 }
 
 /// The grid places the single covered pixel for each ordinal at the even x/y
@@ -973,6 +996,8 @@ fn capture(
 
 pub fn run() -> Result<(), Failure> {
     let options = Options::parse()?;
+    let mut samples = Vec::new();
+    samples.try_reserve_exact(options.frames)?;
     let capacity = options.capacity();
     let mut scene = Scene::new(&options)?;
     let buffers = scene.buffers();
@@ -990,15 +1015,15 @@ pub fn run() -> Result<(), Failure> {
         &mut scene,
         &resident,
         options.warmup,
-        false,
+        None,
     )?;
-    let (samples, wall_ns) = measure(
+    let wall_ns = measure(
         &mut runtime,
         &mut pool,
         &mut scene,
         &resident,
         options.frames,
-        true,
+        Some(&mut samples),
     )?;
     let captures = options
         .capture
