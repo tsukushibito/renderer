@@ -10,7 +10,7 @@ use std::time::Duration;
 fn descendants_chunks_and_scope_borrows() {
     for n in [1, 2, 4] {
         let mut jobs = JobSystem::new(n.try_into().unwrap()).unwrap();
-        for len in [0, 1, 8, 13, 512] {
+        for len in [0, 1, 8, 13, 512, 515] {
             let mut a = vec![0; len];
             let mut b = vec![0; len];
             let count = AtomicUsize::new(0);
@@ -18,6 +18,7 @@ fn descendants_chunks_and_scope_borrows() {
                 s.spawn(|| s.for_each_mut(&mut a, |v| *v += 1));
                 s.for_each_chunk_mut(&mut b, 8.try_into().unwrap(), |start, chunk| {
                     assert_eq!(start % 8, 0);
+                    assert_eq!(chunk.len(), 8.min(len - start));
                     for (i, v) in chunk.iter_mut().enumerate() {
                         *v += start + i + 1;
                     }
@@ -33,6 +34,27 @@ fn descendants_chunks_and_scope_borrows() {
             assert!(b.into_iter().eq(1..=len));
         }
     }
+}
+
+#[test]
+fn range_callback_panic_propagates_and_the_pool_can_run_another_batch() {
+    let mut jobs = JobSystem::new(4.try_into().unwrap()).unwrap();
+    let mut values = [0u8; 129];
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        jobs.scope(|s| {
+            s.for_each_chunk_mut(&mut values, 3.try_into().unwrap(), |start, _| {
+                if start == 33 {
+                    panic!("range callback");
+                }
+            })
+        });
+    }));
+    assert_eq!(
+        result.unwrap_err().downcast_ref::<&str>(),
+        Some(&"range callback")
+    );
+    jobs.scope(|s| s.for_each_mut(&mut values, |v| *v += 1));
+    assert_eq!(values, [1; 129]);
 }
 #[test]
 fn unwind_drains_and_system_can_be_reused() {

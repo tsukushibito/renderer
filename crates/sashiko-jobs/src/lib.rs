@@ -237,22 +237,49 @@ impl<'s, 'env: 's> JobScope<'s, 'env> {
         let size = size.get();
         #[cfg(any(not(target_arch = "wasm32"), feature = "web-threads"))]
         if let Some(pool) = self.scheduler.filter(|_| items.len() > size) {
-            self.spawn(move || {
-                scoped(Some(pool), |children| {
-                    let chunks = items.len().div_ceil(size);
-                    let width = chunks.div_ceil(pool.helpers + 1).saturating_mul(size);
-                    let mut ranges = items.chunks_mut(width).enumerate();
-                    // Keep one range on the participant that is already running.
-                    let (last, local) = ranges.next_back().unwrap();
-                    for (i, range) in ranges {
-                        submit_range(children, pool, i * width, range, size, &visit);
-                    }
-                    visit_range(last * width, local, size, &visit);
-                })
-            });
+            self.spawn(move || parallel_ranges(pool, items, size, &visit));
             return;
         }
         self.group.capture(|| visit_range(0, items, size, &visit));
+    }
+}
+
+#[cfg(any(not(target_arch = "wasm32"), feature = "web-threads"))]
+fn parallel_ranges<T: Send>(
+    pool: &scheduler::Scheduler,
+    items: &mut [T],
+    size: usize,
+    visit: &(impl Fn(usize, &mut [T]) + Sync),
+) {
+    let chunks = items.len().div_ceil(size);
+    let participants = pool.helpers + 1;
+    if pool.helpers > 1 && chunks / 4 >= participants {
+        // Leave a second range per participant for uneven work, without publishing
+        // a separate scheduler job for every range.
+        let width = chunks.div_ceil(participants * 2).saturating_mul(size);
+        let remaining = Mutex::new(items.chunks_mut(width).enumerate());
+        let run = &|| loop {
+            // Release the batch-local lock before invoking user code.
+            let next = remaining.lock().unwrap().next();
+            let Some((i, range)) = next else { break };
+            visit_range(i * width, range, size, visit);
+        };
+        scoped(Some(pool), |workers| {
+            for _ in 0..pool.helpers {
+                workers.spawn(run);
+            }
+            run();
+        });
+    } else {
+        let width = chunks.div_ceil(participants).saturating_mul(size);
+        let mut ranges = items.chunks_mut(width).enumerate();
+        let (last, local) = ranges.next_back().unwrap();
+        scoped(Some(pool), |children| {
+            for (i, range) in ranges {
+                submit_range(children, pool, i * width, range, size, visit);
+            }
+            visit_range(last * width, local, size, visit);
+        });
     }
 }
 
