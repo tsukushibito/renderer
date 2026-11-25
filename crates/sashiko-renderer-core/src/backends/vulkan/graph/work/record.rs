@@ -529,7 +529,7 @@ impl GraphWork {
                 .flatten()
                 .filter(|batch| batch.indirect.is_none())
                 .map(|batch| batch.draws.len());
-            if !recorder.team.large_enough(sizes) {
+            if !recorder.team.large_enough(8, sizes) {
                 return Ok(());
             }
         }

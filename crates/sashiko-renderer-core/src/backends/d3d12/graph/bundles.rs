@@ -146,6 +146,7 @@ pub(super) fn record(
         }
     }
     if !team.large_enough(
+        16,
         slot.bundles[..end]
             .iter()
             .enumerate()

@@ -44,8 +44,7 @@ impl From<JobSystem> for RendererJobs {
 }
 
 /// Native recording is selected independently of CPU scene and Graph work.
-/// The automatic cohort is the balanced 50k-draw, sixteen-batch workload
-/// measured on both backends. Explicit recording remains available for tuning.
+/// Each backend supplies the smallest balanced workload verified for its recorder.
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(crate) struct RecordingTeam {
     pub jobs: RendererJobs,
@@ -54,13 +53,12 @@ pub(crate) struct RecordingTeam {
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 impl RecordingTeam {
-    pub const BATCHES: usize = 16;
     pub const DRAWS_PER_BATCH: usize = 3_125;
     pub const POOL_CAPACITY: usize = 64;
 
     /// A balanced split at the target batch size can produce pieces as small
     /// as half that size. Ignore tiny batches when estimating useful work.
-    pub fn large_enough(&self, batches: impl Iterator<Item = usize>) -> bool {
+    pub fn large_enough(&self, min_batches: usize, batches: impl Iterator<Item = usize>) -> bool {
         if !self.automatic {
             return true;
         }
@@ -70,8 +68,8 @@ impl RecordingTeam {
                 (count + 1, sum.saturating_add(n))
             });
         self.jobs.parallelism().get() >= 4
-            && count >= Self::BATCHES
-            && draws >= Self::DRAWS_PER_BATCH * Self::BATCHES
+            && count >= min_batches
+            && draws >= Self::DRAWS_PER_BATCH * min_batches
     }
 }
 
@@ -100,9 +98,11 @@ mod tests {
             jobs: RendererJobs::new(JobSystem::new(NonZeroUsize::new(4).unwrap()).unwrap()),
             automatic: true,
         };
-        assert!(team.large_enough([3_125; 16].into_iter().chain([1])));
-        assert!(!team.large_enough([12_500; 4].into_iter()));
-        assert!(!team.large_enough([64; 16].into_iter()));
-        assert!(!team.large_enough([50_000].into_iter().chain([1; 15])));
+        assert!(team.large_enough(16, [3_125; 16].into_iter().chain([1])));
+        assert!(team.large_enough(8, [3_125; 8].into_iter()));
+        assert!(!team.large_enough(16, [3_125; 8].into_iter()));
+        assert!(!team.large_enough(8, [12_500; 4].into_iter()));
+        assert!(!team.large_enough(16, [64; 16].into_iter()));
+        assert!(!team.large_enough(8, [50_000].into_iter().chain([1; 15])));
     }
 }
