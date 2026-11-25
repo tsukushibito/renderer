@@ -31,11 +31,14 @@ def generate(module, directory, args, recipe):
         name.startswith(("pbr", "deferred_", "gbuffer", "toon"))
     ):
         shader = recipe[name]
+        # The CPU writes columns as consecutive HLSL rows. Set the default
+        # explicitly for matrix arrays as well as individual row_major members.
         run([args.slang, STANDARD / shader["source"], "-entry", "main", "-stage", "fragment",
-             "-target", "wgsl", "-D__spirv__=1", *["-D" + d for d in shader["defines"]], "-o", out])
+             "-target", "wgsl", "-matrix-layout-row-major", "-D__spirv__=1",
+             *["-D" + d for d in shader["defines"]], "-o", out])
     elif name == "frustum_visibility.comp":
         run([args.slang, STANDARD / recipe[name]["source"], "-entry", "main",
-             "-stage", "compute", "-target", "wgsl", "-o", out])
+             "-stage", "compute", "-target", "wgsl", "-matrix-layout-row-major", "-o", out])
     elif module.parent == CORE and name.endswith(".comp"):
         # The storage buffer shader only writes. WebGPU exposes read_write
         # as the declaration and has no write-only storage buffer type.

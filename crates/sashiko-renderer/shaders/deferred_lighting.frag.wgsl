@@ -19,14 +19,9 @@ struct SLANG_ParameterGroup_Reconstruction_std140_0
 
 @binding(2) @group(1) var emissive_occlusion_image_0 : texture_2d<f32>;
 
-struct _MatrixStorage_float4x4_ColMajorstd140_0
-{
-    @align(16) data_1 : array<vec4<f32>, i32(4)>,
-};
-
 struct _Array_std140_matrixx3Cfloatx2C4x2C4x3E4_0
 {
-    @align(16) data_2 : array<_MatrixStorage_float4x4_ColMajorstd140_0, i32(4)>,
+    @align(16) data_1 : array<_MatrixStorage_float4x4std140_0, i32(4)>,
 };
 
 struct CameraData_std140_0
@@ -783,7 +778,7 @@ fn cascade_visibility_0( cascade_1 : u32,  position_2 : vec3<f32>,  geometric_no
     var _S90 : u32 = min(cascade_1, u32(3));
     var slope_0 : f32 = 1.0f - max(dot(geometric_normal_1, light_0), 0.0f);
     var texel_world_0 : f32 = camera_0.shadow_texel_world_0[_S90];
-    var clip_0 : vec4<f32> = (((mat4x4<f32>(camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(0)][i32(0)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(1)][i32(0)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(2)][i32(0)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(3)][i32(0)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(0)][i32(1)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(1)][i32(1)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(2)][i32(1)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(3)][i32(1)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(0)][i32(2)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(1)][i32(2)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(2)][i32(2)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(3)][i32(2)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(0)][i32(3)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(1)][i32(3)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(2)][i32(3)], camera_0.shadow_view_projection_0.data_2[_S90].data_1[i32(3)][i32(3)])) * (vec4<f32>(position_2 + geometric_normal_1 * vec3<f32>((camera_0.shadow_texel_world_0[_S90] * camera_0.shadow_bias_0.z * slope_0)), 1.0f))));
+    var clip_0 : vec4<f32> = (((mat4x4<f32>(camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(0)][i32(0)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(0)][i32(1)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(0)][i32(2)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(0)][i32(3)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(1)][i32(0)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(1)][i32(1)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(1)][i32(2)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(1)][i32(3)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(2)][i32(0)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(2)][i32(1)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(2)][i32(2)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(2)][i32(3)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(3)][i32(0)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(3)][i32(1)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(3)][i32(2)], camera_0.shadow_view_projection_0.data_1[_S90].data_0[i32(3)][i32(3)])) * (vec4<f32>(position_2 + geometric_normal_1 * vec3<f32>((camera_0.shadow_texel_world_0[_S90] * camera_0.shadow_bias_0.z * slope_0)), 1.0f))));
     var _S91 : f32 = clip_0.w;
     if(!(_S91 > 9.99999968265522539e-21f))
     {
