@@ -229,6 +229,11 @@ impl RasterPass<'_, '_> {
         I: IntoIterator<Item = D>,
         D: Borrow<RasterDraw>,
     {
+        let started = self
+            .graph
+            .raster_metrics
+            .as_ref()
+            .map(|_| std::time::Instant::now());
         Self::require_indexed_program(program)?;
         self.validate_attachments(program)?;
         let graph = &mut *self.graph;
@@ -258,6 +263,14 @@ impl RasterPass<'_, '_> {
                 constant_words_per_draw: program.parameter_size() as usize / size_of::<u32>(),
                 indirect: None,
             });
+        }
+        if let Some(started) = started {
+            graph
+                .data_mut()
+                .raster_metrics
+                .as_mut()
+                .unwrap()
+                .streaming_capture += started.elapsed();
         }
         Ok(())
     }
@@ -402,7 +415,19 @@ impl Graph {
                 )
             });
             let has_shader_accesses = graph.accesses.len() != first_access;
+            let started = graph
+                .raster_metrics
+                .as_ref()
+                .map(|_| std::time::Instant::now());
             graph.append_raster_buffer_accesses()?;
+            if let Some(started) = started {
+                graph
+                    .data_mut()
+                    .raster_metrics
+                    .as_mut()
+                    .unwrap()
+                    .finalize_reads += started.elapsed();
+            }
             let plan = graph.append_attachments(attachments)?;
             // Only shader-accessed images can overlap a color, depth or resolve
             // target. Vertex and index inputs are read-only buffers.
