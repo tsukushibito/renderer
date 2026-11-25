@@ -160,3 +160,64 @@ fn measure_animation() -> PipelineResult<()> {
     }
     Ok(())
 }
+
+/// Alternate execution order each tick so both policies sample the same mixed clips and times.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore = "release animation timing and isolated process-wide counters"]
+fn measure_palette_jobs() -> PipelineResult<()> {
+    use sashiko_renderer::core::jobs::{JobSystem, RendererJobs};
+    let catalog = CharacterCatalog::open(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/survivor/characters/catalog.json"),
+    )?;
+    let model = catalog.load(catalog.id("primary").unwrap())?;
+    let teams = [
+        RendererJobs::new(JobSystem::inline()),
+        JobSystem::new(4.try_into()?)?.into(),
+    ];
+    let rate = 60.try_into()?;
+    for count in [1, 4, 5, 8, 9, 16, 32, 64, 256] {
+        let mut batch = model.prepare_palette_batch(&["walk", "jog"], count)?;
+        let mut requests = vec![PaletteRequest { clip: 0, tick: 0 }; count];
+        let mut times = [[0u128; 256]; 2];
+        let mut run = |tick: usize, mode: usize| -> PipelineResult<u128> {
+            let start = Instant::now();
+            for (i, r) in requests.iter_mut().enumerate() {
+                *r = PaletteRequest {
+                    clip: i % 2,
+                    tick: (tick + i * 13) as u64,
+                };
+            }
+            for palette in batch.evaluate(&requests, rate, &teams[mode])? {
+                black_box(palette);
+            }
+            Ok(start.elapsed().as_nanos())
+        };
+        for tick in 0..32 {
+            run(tick, 0)?;
+            run(tick, 1)?;
+        }
+        let before = Snapshot::now();
+        let [inline, shared] = &mut times;
+        for (tick, (inline_ns, shared_ns)) in inline.iter_mut().zip(shared).enumerate() {
+            let mut order = [(0, inline_ns), (1, shared_ns)];
+            if tick % 2 == 1 {
+                order.swap(0, 1);
+            }
+            for (mode, ns) in order {
+                *ns = run(32 + tick, mode)?;
+            }
+        }
+        let delta = Snapshot::now().since(before);
+        assert!(delta.is_allocation_free(), "{count}: {delta:?}");
+        for (participants, mut ns) in [1, 4].into_iter().zip(times) {
+            ns.sort_unstable();
+            println!(
+                "palette_jobs,{count},{participants},{},{}",
+                ns[127], ns[243]
+            );
+        }
+    }
+    Ok(())
+}

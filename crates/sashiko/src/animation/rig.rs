@@ -1,6 +1,8 @@
 //! Convert cooked skin matrices into skeleton poses at the asset boundary.
+mod palette_batch;
 use super::{AnimatedModel, AnimationClip, Clip, Transform, floats};
 use glam::{DMat4, Mat4};
+pub use palette_batch::{PaletteBatch, PaletteRequest};
 use sashiko_animation::{
     Clip as PoseClip, LocalPose, Playback, PoseBatch, PoseWorkspace, Skeleton,
 };
@@ -177,7 +179,7 @@ fn write_palette(
     workspace: &PoseWorkspace,
     inverse: &[Mat4],
     palette: &mut [Transform],
-) -> PipelineResult<()> {
+) -> Result<(), sashiko_renderer::core::graph::GraphError> {
     for (i, (dest, &inverse_bind)) in palette.iter_mut().zip(inverse).enumerate() {
         let model = workspace.joint(i).expect("full skeleton workspace");
         let cols = (model * inverse_bind).to_cols_array_2d();
