@@ -3148,6 +3148,17 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn ExecuteBundle<P0>(&self, pcommandlist: P0)
+    where
+        P0: windows_core::Param<Self>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).ExecuteBundle)(
+                windows_core::Interface::as_raw(self),
+                pcommandlist.param().abi(),
+            );
+        }
+    }
     pub unsafe fn SetDescriptorHeaps(&self, ppdescriptorheaps: &[Option<ID3D12DescriptorHeap>]) {
         unsafe {
             (windows_core::Interface::vtable(self).SetDescriptorHeaps)(
@@ -3492,7 +3503,7 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
     pub SetPipelineState: unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void),
     pub ResourceBarrier:
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, *const D3D12_RESOURCE_BARRIER),
-    ExecuteBundle: usize,
+    pub ExecuteBundle: unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void),
     pub SetDescriptorHeaps:
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, *const *mut core::ffi::c_void),
     pub SetComputeRootSignature:

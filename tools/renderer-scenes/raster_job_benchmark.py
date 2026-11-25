@@ -21,6 +21,7 @@ CONDITIONS = {
     "chain": (4, 1, "chain"),
     "in-pass": (1, 4, "independent"),
     "mixed": (4, 4, "independent"),
+    "in-pass-16": (1, 16, "independent"),
 }
 
 
@@ -31,19 +32,20 @@ def write_json(path, value):
 def make_plan(args):
     profiles = {"both": [False, True], "off": [False], "on": [True]}[args.profile]
     groups = list(itertools.product(args.apis, args.draws, args.words, args.conditions, profiles))
+    teams = list(itertools.product(args.workers, args.native_workers))
     runs = []
     for repeat in range(args.repeats):
-        offset = repeat % len(args.workers)
+        offset = repeat % len(teams)
         # Rotate worker counts within matched groups. Reverse group order every other run.
         for api, draws, words, condition, profile in (reversed(groups) if repeat % 2 else groups):
             passes, batches, topology = CONDITIONS[condition]
-            for workers in args.workers[offset:] + args.workers[:offset]:
+            for workers, native_workers in teams[offset:] + teams[:offset]:
                 mode = "profile" if profile else "ordinary"
-                group = f"{api}-{draws}-{words}-{condition}-w{workers}-{mode}"
+                group = f"{api}-{draws}-{words}-{condition}-w{workers}-n{native_workers}-{mode}"
                 runs.append({
                     "group": group, "name": f"{group}-r{repeat + 1}", "api": api,
                     "draws": draws, "words": words, "passes": passes, "batches_per_pass": batches,
-                    "topology": topology, "workers": workers, "profile": profile,
+                    "topology": topology, "workers": workers, "native_workers": native_workers, "profile": profile,
                     "frames": args.frames, "warmup": args.warmup,
                 })
     return runs
@@ -68,6 +70,7 @@ def run_process(exe, root, run, policy, devices):
     for field in ("api", "draws", "words", "passes", "batches_per_pass", "topology",
                   "workers", "warmup", "frames"):
         command.extend(["--" + field.replace("_", "-"), str(run[field])])
+    command.extend(["--native-workers", str(run["native_workers"])])
     command.extend(["--report", str(pending)])
     if run["profile"]:
         command.append("--profile")
@@ -96,6 +99,8 @@ def run_metrics(run, report):
                   "warmup", "frames", "profile"):
         if report[field] != run[field]:
             raise ValueError(f"{run['name']}: expected {field}={run[field]}, got {report[field]}")
+    if report.get("native_workers", 0) != run.get("native_workers", 0):
+        raise ValueError(f"{run['name']}: native recording team mismatch")
     samples = report["samples"]
     if len(samples) != run["frames"] or report["wall_ns"] <= 0 or samples[0]["interval_ns"] != 0:
         raise ValueError(f"{run['name']}: unexpected measurement window or samples")
@@ -164,6 +169,7 @@ def main():
     parser.add_argument("--conditions", nargs="+", choices=CONDITIONS, default=list(CONDITIONS))
     parser.add_argument("--workers", nargs="+", type=int, default=[0, 1, 4],
                         help="0 direct, 1 serial packets, >1 participants including caller")
+    parser.add_argument("--native-workers", nargs="+", type=int, default=[0], help="0 direct, 1 serial native batches, >1 native recording team size")
     parser.add_argument("--warmup", type=int, default=120)
     parser.add_argument("--frames", type=int, default=600)
     parser.add_argument("--repeats", type=int, default=3)
@@ -173,9 +179,9 @@ def main():
     if args.summarize:
         summarize(output)
         return
-    if not args.exe or args.warmup < 0 or args.frames < 3 or args.repeats < 1 or min(args.workers) < 0:
+    if not args.exe or args.warmup < 0 or args.frames < 3 or args.repeats < 1 or min(args.workers + args.native_workers) < 0:
         parser.error("supply --exe, frames >= 3, repeats >= 1 and nonnegative workers and warmup")
-    for values in (args.apis, args.draws, args.words, args.conditions, args.workers):
+    for values in (args.apis, args.draws, args.words, args.conditions, args.workers, args.native_workers):
         if len(set(values)) != len(values):
             parser.error("repeated values would duplicate a measurement condition")
     exe = args.exe.resolve(strict=True)

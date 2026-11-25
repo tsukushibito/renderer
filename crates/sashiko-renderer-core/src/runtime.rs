@@ -372,6 +372,31 @@ impl Runtime {
         }
     }
 
+    /// Preallocate per-execution native command buffers and use the given team
+    /// to record eligible Raster batches. Call at a working-set change boundary.
+    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+    pub fn prepare_raster_recording(
+        &mut self,
+        jobs: sashiko_jobs::JobSystem,
+        max_batches: std::num::NonZeroUsize,
+    ) -> Result<(), ExecutionError> {
+        match &mut self.inner {
+            #[cfg(feature = "vulkan")]
+            RuntimeInner::Vulkan(runtime) => runtime
+                .prepare_raster_recording(jobs, max_batches)
+                .map_err(Into::into),
+            #[cfg(all(feature = "d3d12", windows))]
+            RuntimeInner::D3D12(runtime) => runtime
+                .prepare_raster_recording(jobs, max_batches)
+                .map_err(Into::into),
+            #[cfg(sashiko_webgpu)]
+            RuntimeInner::WebGpu(_) => Err(ExecutionError::webgpu(
+                ExecutionErrorKind::Unsupported,
+                "native raster recording is unavailable",
+            )),
+        }
+    }
+
     /// Change profiling for subsequent Graph submissions. Enabling profiling
     /// may prepare native queries at this explicit configuration boundary.
     pub fn set_profiling(&mut self, enabled: bool) -> Result<(), ExecutionError> {

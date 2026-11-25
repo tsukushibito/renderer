@@ -6,18 +6,13 @@ use std::sync::{Arc, Mutex};
 
 use ash::vk;
 
-use super::{PhysicalLease, RuntimeError};
+use super::{PhysicalLease, RuntimeError, native};
 use crate::backends::vulkan::{
     managed::{ComputePipeline, descriptor_type},
     memory::MemoryOwner,
 };
 use crate::graph::BindingOperands;
 use crate::program::{BindingType, ManagedProgram, ProgramId};
-
-fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeError {
-    owner.device.observe_result(result);
-    RuntimeError::native(operation, owner.device.name(), result)
-}
 
 struct PreparedProgram {
     managed: ManagedProgram,

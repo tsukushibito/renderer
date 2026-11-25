@@ -9,6 +9,7 @@ use std::{mem::ManuallyDrop, sync::Arc, time::Duration};
 use crate::graph::{CompiledGraph, PassHandle};
 
 mod bounded;
+pub(super) mod bundles;
 mod raster;
 mod transition_batch;
 
@@ -114,7 +115,11 @@ impl D3D12Runtime {
     /// and ordering come from the shared immutable compiled Graph.
     pub fn prepare(&self, graph: &CompiledGraph) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
         Ok(D3D12PreparedGraph {
-            work: bounded::prepare(&self.pool, graph)?,
+            work: bounded::prepare(
+                &self.pool,
+                graph,
+                self.recording_jobs.as_ref().map(|(jobs, _)| jobs),
+            )?,
         })
     }
 

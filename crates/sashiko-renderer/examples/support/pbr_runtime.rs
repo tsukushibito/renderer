@@ -65,6 +65,17 @@ pub fn render(
     bloom: Bloom,
     caster_revisions: &[[u64; CASCADE_COUNT]],
 ) -> Result<Vec<CapturedFrame>, Box<dyn Error>> {
+    render_configured(api, settings, copy_hdr, bloom, caster_revisions, |_| Ok(()))
+}
+
+pub fn render_configured(
+    api: Api,
+    settings: Settings,
+    copy_hdr: bool,
+    bloom: Bloom,
+    caster_revisions: &[[u64; CASCADE_COUNT]],
+    configure: impl FnOnce(&mut Runtime) -> Result<(), Box<dyn Error>>,
+) -> Result<Vec<CapturedFrame>, Box<dyn Error>> {
     let frames = caster_revisions
         .len()
         .max(settings.frame_lights.len())
@@ -95,6 +106,7 @@ pub fn render(
     })?;
     let mut pool = GraphPool::new(limits.graph, frames)?;
     let mut runtime = Runtime::new(api.config(), limits, preparation.working_set())?;
+    configure(&mut runtime)?;
     #[cfg(test)]
     if let Placement::SampleMaps { base, emission } = settings.placement {
         runtime.prepare_samplers(&[base, emission])?;

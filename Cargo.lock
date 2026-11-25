@@ -1837,6 +1837,7 @@ name = "sashiko-renderer"
 version = "0.1.0"
 dependencies = [
  "raw-window-handle",
+ "sashiko-jobs",
  "sashiko-renderer-core",
  "serde_json",
  "sha2",

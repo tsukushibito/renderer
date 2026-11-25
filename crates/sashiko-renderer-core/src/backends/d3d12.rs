@@ -196,10 +196,26 @@ pub struct D3D12Runtime {
     // Drop pending frames before the last runtime pool owner. Their existing
     // Drop path detaches any unresolved work for conservative pool teardown.
     frames: frames::QueuedFrames,
+    recording_jobs: Option<(
+        std::sync::Mutex<sashiko_jobs::JobSystem>,
+        std::num::NonZeroUsize,
+    )>,
     device: Arc<DeviceOwner>,
     pool: Arc<frame::FramePool>,
 }
 impl D3D12Runtime {
+    /// Prepare one bundle per eligible logical raster batch per execution slot.
+    /// Indirect draws and batches using image/sampler tables stay on the direct list.
+    pub fn prepare_raster_recording(
+        &mut self,
+        jobs: sashiko_jobs::JobSystem,
+        max_batches: std::num::NonZeroUsize,
+    ) -> Result<(), D3D12RuntimeError> {
+        self.pool.prepare_bundles(max_batches.get())?;
+        self.recording_jobs = Some((std::sync::Mutex::new(jobs), max_batches));
+        Ok(())
+    }
+
     pub(crate) fn check_texture_support(
         &self,
         desc: crate::graph::ImageDesc,
@@ -280,6 +296,7 @@ impl D3D12Runtime {
         let frames = frames::QueuedFrames::new(pool.capacity().executions)?;
         Ok(Self {
             frames,
+            recording_jobs: None,
             device,
             pool,
         })
@@ -357,6 +374,9 @@ impl D3D12Runtime {
             programs,
             compute_programs,
         )?;
+        if let Some((_, batches)) = &self.recording_jobs {
+            pool.prepare_bundles(batches.get())?;
+        }
         if self.pool.profiling_enabled() {
             pool.set_profiling(true)?;
         }

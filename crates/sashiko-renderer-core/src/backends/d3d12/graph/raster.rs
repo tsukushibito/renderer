@@ -450,14 +450,14 @@ pub(super) fn record(
             0,
         )
     });
-    let (batches, colors, depth) = match &graph.passes[pass].operation {
+    let (batches, first_batch, colors, depth) = match &graph.passes[pass].operation {
         Operation::Raster {
             batches,
             colors,
             depth,
             ..
-        } => (graph.raster_batches(batches), colors, depth),
-        Operation::AttachmentPass { colors, depth, .. } => (&[][..], colors, depth),
+        } => (graph.raster_batches(batches), batches.start, colors, depth),
+        Operation::AttachmentPass { colors, depth, .. } => (&[][..], 0, colors, depth),
         _ => unreachable!(),
     };
     let sample_count = target_samples(graph, colors, *depth);
@@ -571,7 +571,7 @@ pub(super) fn record(
     let mut bound_pipeline: Option<&RasterPipeline> = None;
     let mut bound_heaps = false;
     let mut regions = None;
-    for batch in batches {
+    for (offset, batch) in batches.iter().enumerate() {
         if regions != Some(batch.regions) {
             let (view, clip) = batch.regions.resolve(extent[0], extent[1]);
             let viewport = D3D12_VIEWPORT {
@@ -595,6 +595,33 @@ pub(super) fn record(
                 slot.list.RSSetScissorRects(&[rect]);
             }
             regions = Some(batch.regions);
+        }
+        if let Some(bundle) = slot
+            .bundles
+            .get(first_batch + offset)
+            .filter(|b| b.pipeline.is_some())
+        {
+            // Earlier uploads/copies in this Graph have now established the index
+            // contents. A failed proof cancels the entire unsubmitted recording.
+            let pipeline = &programs[bundle.pipeline.unwrap()];
+            for draw in graph.raster_draws(&batch.draws) {
+                if let Some(indexed) = &draw.indexed {
+                    validate_indices(
+                        &mut slot.provenance[slot.resource_map[indexed.indices]],
+                        indexed.first_index,
+                        indexed.index_count,
+                        graph.resources[indexed.vertices].desc.units()
+                            / u64::from(pipeline.managed.vertex_stride()),
+                    )?;
+                }
+            }
+            // SAFETY: The scoped recording closed this retained bundle. Targets
+            // and raster regions come from this pass; the bundle sets all other state.
+            unsafe {
+                slot.list.ExecuteBundle(&*bundle.list);
+            }
+            bound_pipeline = None;
+            continue;
         }
         let pipeline = match bound_pipeline {
             Some(pipeline) if pipeline.managed.identity() == batch.program => pipeline,
@@ -629,7 +656,20 @@ pub(super) fn record(
             }
             bound_heaps = true;
         }
-        record_draws(slot, owner, graph, batch, program, indexed_indirect)?;
+        record_draws(
+            &slot.list,
+            &slot.buffers,
+            &slot.resource_map,
+            owner,
+            graph,
+            batch,
+            program,
+            indexed_indirect,
+            slot.raster.as_mut(),
+            |index, first, count, vertices| {
+                validate_indices(&mut slot.provenance[index], first, count, vertices)
+            },
+        )?;
     }
     record_resolves(
         graph,
@@ -641,19 +681,53 @@ pub(super) fn record(
     Ok(())
 }
 
-fn record_draws(
-    slot: &mut ExecutionSlot,
+fn validate_indices(
+    provenance: &mut crate::graph::provenance::BufferProvenance,
+    first: u32,
+    count: u32,
+    vertices: u64,
+) -> Result<(), D3D12RuntimeError> {
+    provenance
+        .validate_index_range(first, count, vertices, u32::MAX)
+        .map_err(|error| {
+            use crate::graph::provenance::IndexError;
+            match error {
+                IndexError::Capacity(error) => D3D12RuntimeError::capacity_with(
+                    "generic index range summary capacity exhausted",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::GraphMetadata,
+                        CapacityRecovery::Reconfigure,
+                        Some(error.capacity as u64),
+                        Some(error.required as u64),
+                    ),
+                ),
+                IndexError::UnknownContents => {
+                    D3D12RuntimeError::unsupported("Raster index range lacks a valid bounds proof")
+                }
+                IndexError::VertexBounds { .. } | IndexError::DeviceLimit { .. } => {
+                    D3D12RuntimeError::invalid("Raster index exceeds the vertex buffer range")
+                }
+            }
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn record_draws(
+    list: &ID3D12GraphicsCommandList,
+    buffers: &[super::super::registry::PhysicalRef],
+    resource_map: &[usize],
     owner: &DeviceOwner,
     graph: &CompiledGraph,
     batch: &RasterBatchOperands,
     program: &ManagedRasterProgram,
     indexed_indirect: Option<&IndexedIndirectSignature>,
+    mut storage: Option<&mut RasterStorage>,
+    mut validate: impl FnMut(usize, u32, u32, u64) -> Result<(), D3D12RuntimeError>,
 ) -> Result<(), D3D12RuntimeError> {
-    let storage = slot.raster.as_mut().unwrap();
     let indirect = batch.indirect.as_ref().map(|command| {
         let signature = indexed_indirect
             .expect("preflight checked the encoder that owns this prepared signature");
-        let buffer = slot.buffers[slot.resource_map[command.buffer]].raw();
+        let buffer = buffers[resource_map[command.buffer]].raw();
         (signature, buffer, command.command_count)
     });
     let fully_clipped = batch
@@ -683,56 +757,31 @@ fn record_draws(
                 )
             });
             if let Some(indexed) = &draw.indexed {
-                let vertex = slot.resource_map[indexed.vertices];
-                let index = slot.resource_map[indexed.indices];
+                let vertex = resource_map[indexed.vertices];
+                let index = resource_map[indexed.indices];
                 let vertex_bytes = graph.resources[indexed.vertices].desc.units();
-                slot.provenance[index]
-                    .validate_index_range(
-                        indexed.first_index,
-                        indexed.index_count,
-                        vertex_bytes / u64::from(program.vertex_stride()),
-                        u32::MAX,
-                    )
-                    .map_err(|error| {
-                        use crate::graph::provenance::IndexError;
-                        match error {
-                            IndexError::Capacity(error) => D3D12RuntimeError::capacity_with(
-                                "generic index range summary capacity exhausted",
-                                RuntimeCapacityError::new(
-                                    RuntimeCapacityKind::GraphMetadata,
-                                    CapacityRecovery::Reconfigure,
-                                    Some(error.capacity as u64),
-                                    Some(error.required as u64),
-                                ),
-                            ),
-                            IndexError::UnknownContents => D3D12RuntimeError::unsupported(
-                                "Raster index range lacks a valid bounds proof",
-                            ),
-                            IndexError::VertexBounds { .. } | IndexError::DeviceLimit { .. } => {
-                                D3D12RuntimeError::invalid(
-                                    "Raster index exceeds the vertex buffer range",
-                                )
-                            }
-                        }
-                    })?;
+                validate(
+                    index,
+                    indexed.first_index,
+                    indexed.index_count,
+                    vertex_bytes / u64::from(program.vertex_stride()),
+                )?;
                 // SAFETY: The retained buffers cover the immutable Graph ranges
-                // and the validated indices fit the declared vertex stream.
+                // and the index bounds proof is required before submission.
                 unsafe {
                     let vertices = D3D12_VERTEX_BUFFER_VIEW {
-                        BufferLocation: slot.buffers[vertex].raw().GetGPUVirtualAddress(),
+                        BufferLocation: buffers[vertex].raw().GetGPUVirtualAddress(),
                         SizeInBytes: vertex_bytes as u32,
                         StrideInBytes: program.vertex_stride(),
                     };
                     let indices = D3D12_INDEX_BUFFER_VIEW {
-                        BufferLocation: slot.buffers[index].raw().GetGPUVirtualAddress(),
+                        BufferLocation: buffers[index].raw().GetGPUVirtualAddress(),
                         SizeInBytes: graph.resources[indexed.indices].desc.units() as u32,
                         Format: DXGI_FORMAT_R32_UINT,
                     };
                     if let Some(id) = indexed.secondary_vertices {
                         let second = D3D12_VERTEX_BUFFER_VIEW {
-                            BufferLocation: slot.buffers[slot.resource_map[id]]
-                                .raw()
-                                .GetGPUVirtualAddress(),
+                            BufferLocation: buffers[resource_map[id]].raw().GetGPUVirtualAddress(),
                             SizeInBytes: u32::try_from(graph.resources[id].desc.units()).map_err(
                                 |_| {
                                     D3D12RuntimeError::invalid(
@@ -742,18 +791,18 @@ fn record_draws(
                             )?,
                             StrideInBytes: program.descriptor().secondary_vertex_stride,
                         };
-                        slot.list.IASetVertexBuffers(0, Some(&[vertices, second]));
+                        list.IASetVertexBuffers(0, Some(&[vertices, second]));
                     } else {
-                        slot.list.IASetVertexBuffers(0, Some(&[vertices]));
+                        list.IASetVertexBuffers(0, Some(&[vertices]));
                     }
-                    slot.list.IASetIndexBuffer(Some(&indices));
+                    list.IASetIndexBuffer(Some(&indices));
                 }
             }
             if !parameters.is_empty() {
                 // SAFETY: These initialized words match the bound Program's
                 // byte count and stage/register ABI.
                 unsafe {
-                    slot.list.SetGraphicsRoot32BitConstants(
+                    list.SetGraphicsRoot32BitConstants(
                         INLINE_ROOT,
                         parameters.len() as u32,
                         parameters.as_ptr().cast(),
@@ -787,23 +836,24 @@ fn record_draws(
                         // resources remain pinned by the exclusive execution lease.
                         unsafe {
                             let address = D3D12_GPU_VIRTUAL_ADDRESS(
-                                slot.buffers[slot.resource_map[*resource]]
+                                buffers[resource_map[*resource]]
                                     .raw()
                                     .GetGPUVirtualAddress()
                                     .0
                                     + range.offset,
                             );
                             if layout.kind == BindingType::Uniform {
-                                slot.list.SetGraphicsRootConstantBufferView(root, address);
+                                list.SetGraphicsRootConstantBufferView(root, address);
                             } else {
-                                slot.list.SetGraphicsRootShaderResourceView(root, address);
+                                list.SetGraphicsRootShaderResourceView(root, address);
                             }
                         }
                     }
                     BindingOperands::ImageView(view) => {
+                        let storage = storage.as_deref_mut().expect("prepared descriptor tables");
                         let descriptor = storage.raster_srv(
                             owner,
-                            slot.resource_map[view.image().index],
+                            resource_map[view.image().index],
                             view.mip_level(),
                             view.mip_level_count(),
                         )?;
@@ -811,7 +861,7 @@ fn record_draws(
                         // image/View, and this execution owns its descriptor heap
                         // through actual GPU completion or unsubmitted cancel.
                         unsafe {
-                            slot.list.SetGraphicsRootDescriptorTable(
+                            list.SetGraphicsRootDescriptorTable(
                                 root,
                                 storage.texture_gpu(descriptor),
                             );
@@ -821,9 +871,12 @@ fn record_draws(
                         // SAFETY: The prepared immutable sampler and
                         // its descriptor table match the trusted Program's layout.
                         unsafe {
-                            slot.list.SetGraphicsRootDescriptorTable(
+                            list.SetGraphicsRootDescriptorTable(
                                 root,
-                                storage.sampler_gpu(*sampler)?,
+                                storage
+                                    .as_ref()
+                                    .expect("prepared sampler table")
+                                    .sampler_gpu(*sampler)?,
                             );
                         }
                     }
@@ -850,7 +903,7 @@ fn record_draws(
             // The fullscreen Program accepts vertex IDs 0..3 without a layout.
             unsafe {
                 if let Some((signature, commands, count)) = indirect {
-                    slot.list.ExecuteIndirect(
+                    list.ExecuteIndirect(
                         signature.raw(),
                         count,
                         commands,
@@ -859,7 +912,7 @@ fn record_draws(
                         0,
                     );
                 } else if let Some(indexed) = &draw.indexed {
-                    slot.list.DrawIndexedInstanced(
+                    list.DrawIndexedInstanced(
                         indexed.index_count,
                         indexed.instance_count,
                         indexed.first_index,
@@ -867,7 +920,7 @@ fn record_draws(
                         0,
                     );
                 } else {
-                    slot.list.DrawInstanced(3, 1, 0, 0);
+                    list.DrawInstanced(3, 1, 0, 0);
                 }
             }
         }

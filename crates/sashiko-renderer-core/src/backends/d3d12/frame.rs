@@ -158,6 +158,7 @@ pub(super) fn object<T>(
 pub(super) struct ExecutionSlot {
     allocator: NativeObject<ID3D12CommandAllocator>,
     pub(super) list: NativeObject<ID3D12GraphicsCommandList>,
+    pub(super) bundles: Vec<super::graph::bundles::Bundle>,
     fence: NativeObject<ID3D12Fence>,
     next_value: u64,
     pub(super) buffers: Vec<super::registry::PhysicalRef>,
@@ -264,6 +265,7 @@ impl ExecutionSlot {
             ),
             allocator,
             list,
+            bundles: Vec::new(),
             fence,
             next_value: 1,
             buffers,
@@ -482,6 +484,42 @@ impl FramePool {
             owner,
         }))
     }
+    pub(super) fn prepare_bundles(&self, count: usize) -> Result<(), D3D12RuntimeError> {
+        self.owner.ensure_active()?;
+        self.reap()?;
+        let mut state = self.state();
+        if !state
+            .executions
+            .iter()
+            .all(|entry| matches!(entry, ExecutionEntry::Available(_)))
+        {
+            return Err(D3D12RuntimeError::capacity_with(
+                "return executions before preparing raster bundles",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::ExecutionSlots,
+                    CapacityRecovery::ReleaseOwners,
+                    None,
+                    None,
+                ),
+            ));
+        }
+        let mut prepared = reserved(state.executions.len())?;
+        for _ in &state.executions {
+            let mut bundles = reserved(count)?;
+            for _ in 0..count {
+                bundles.push(super::graph::bundles::Bundle::new(&self.owner)?);
+            }
+            prepared.push(bundles);
+        }
+        for (entry, bundles) in state.executions.iter_mut().zip(prepared) {
+            let ExecutionEntry::Available(slot) = entry else {
+                unreachable!()
+            };
+            slot.bundles = bundles;
+        }
+        Ok(())
+    }
+
     pub(super) fn profiling_enabled(&self) -> bool {
         self.profiling.load(Ordering::Relaxed)
     }
@@ -964,6 +1002,9 @@ pub(super) struct FrameWork {
     profile: Option<super::metrics::WorkProfile>,
 }
 impl FrameWork {
+    pub(super) fn poison_recording(&mut self) {
+        self.phase = Phase::Poisoned;
+    }
     pub(super) fn begin_profile(&mut self, started: Option<Instant>) {
         self.profile = started.map(super::metrics::WorkProfile::new);
     }

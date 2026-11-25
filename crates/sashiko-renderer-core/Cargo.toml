@@ -19,12 +19,13 @@ graph-diagnostics = []
 memory-profiling = []
 # Optional explicit CPU zones; independent of native layers and GPU timestamps.
 tracy = ["dep:tracy-client"]
-vulkan = ["dep:ash", "dep:vk-mem", "dep:tracing"]
+vulkan = ["dep:sashiko-jobs", "dep:ash", "dep:vk-mem", "dep:tracing"]
 presentation = ["dep:raw-window-handle", "dep:windows-sys"]
-d3d12 = ["dep:windows-core"]
+d3d12 = ["dep:sashiko-jobs", "dep:windows-core"]
 webgpu = ["dep:wgpu", "dep:web-sys"]
 
 [dependencies]
+sashiko-jobs = { version = "0.1.0", path = "../sashiko-jobs", optional = true }
 ash = { workspace = true, optional = true }
 vk-mem = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }

@@ -39,6 +39,7 @@ pub use interop::{VulkanExternalDevice, VulkanImageState};
 mod metrics;
 #[cfg(all(feature = "presentation", windows))]
 mod presentation;
+mod secondary;
 mod snapshots;
 mod storage;
 use cache::{CacheIndex, CacheTarget, RecycleQueue, ResourceLease};
@@ -61,6 +62,11 @@ use working_set::PhysicalPlan;
 type LoweringCapture = Option<String>;
 #[cfg(not(feature = "graph-diagnostics"))]
 type LoweringCapture = ();
+
+fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeError {
+    owner.device.observe_result(result);
+    RuntimeError::native(operation, owner.device.name(), result)
+}
 
 /// Explicit bounds; acquisition never waits or exceeds the configured capacities.
 #[derive(Clone, Copy, Debug)]
@@ -333,6 +339,7 @@ pub struct VulkanRuntime {
     #[cfg(any(test, feature = "vulkan-diagnostics"))]
     diagnostics: DiagnosticsHandle,
     execution: ExecutionPool,
+    secondary: Option<secondary::Recorder>,
     upload: SharedStaging,
     readback: SharedStaging,
     programs: Option<Arc<ShaderPrograms>>,
@@ -1053,6 +1060,7 @@ impl VulkanRuntime {
                     .context("reserving bounded frame bookkeeping")
             })?,
             timestamp_pool: None,
+            secondary: None,
             profiling_enabled: false,
             id,
             serial: 0,
@@ -1830,6 +1838,10 @@ impl VulkanRuntime {
         // Slots become externally named only for an actual export. The local
         // payload leases already prevent reuse throughout this transaction.
         let record_started = cpu_pending.as_ref().map(|_| Instant::now());
+        let mut work = work;
+        if let Some(recorder) = &mut self.secondary {
+            work.record_secondaries(recorder)?;
+        }
         let recorded = reservation.record(work)?;
         if let (Some(cpu), Some(started)) = (&cpu_pending, record_started) {
             cpu.lock().unwrap_or_else(|error| error.into_inner())[0] = started.elapsed();

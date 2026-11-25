@@ -567,6 +567,24 @@ mod gpu {
             &[[0; 4], [0; 4], [0, 0, 1, 0]],
         )
         .unwrap();
+        let parallel = super::runtime::render_configured(
+            api,
+            Settings::new(SampleCount::X1),
+            true,
+            Bloom::Tent,
+            &[[0; 4], [0; 4], [0, 0, 1, 0]],
+            |runtime| {
+                let team = sashiko_jobs::JobSystem::new(std::num::NonZeroUsize::new(4).unwrap())?;
+                runtime.prepare_raster_recording(team, std::num::NonZeroUsize::new(64).unwrap())?;
+                Ok(())
+            },
+        )
+        .unwrap();
+        for (direct, recorded) in draws.iter().zip(&parallel) {
+            assert_eq!(direct.output, recorded.output);
+            assert_eq!(direct.reused, recorded.reused);
+            assert_eq!(direct.shadow_passes, recorded.shadow_passes);
+        }
         assert_eq!(draws[0].reused, [false; 4]);
         assert_eq!(draws[1].reused, [true; 4]);
         assert_eq!(draws[2].reused, [true, true, false, true]);

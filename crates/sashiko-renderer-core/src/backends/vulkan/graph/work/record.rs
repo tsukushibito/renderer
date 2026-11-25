@@ -222,69 +222,50 @@ impl TransferPayload for GraphWork {
                         let plan = self.plan.as_ref().unwrap();
                         let programs = self.programs.as_ref().unwrap();
                         let attachments = rendering_attachments(self, colors, *depth);
-                        programs.begin_raster(command, &attachments);
-                        let mut regions = None;
-                        let mut descriptor_start = pass.raster_descriptors.start;
-                        for (batch, &slot) in plan
-                            .raster_batches(batches)
-                            .iter()
-                            .zip(&self.raster_programs[pass.raster_programs.clone()])
+                        if let Some(secondary) = &self.secondary
+                            && !pass.raster_programs.is_empty()
                         {
-                            if regions != Some(batch.regions) {
-                                programs.set_raster_regions(
-                                    command,
-                                    batch.regions,
-                                    attachments.extent,
-                                );
-                                regions = Some(batch.regions);
-                            }
-                            let draw_operands = plan.raster_draws(&batch.draws);
-                            let descriptor_end = descriptor_start + draw_operands.len();
-                            let descriptor_sets =
-                                &self.raster_descriptors[descriptor_start..descriptor_end];
-                            descriptor_start = descriptor_end;
-                            let indirect = batch.indirect.map(|args| NativeIndexedDraw::Indirect {
-                                buffer: self.resource(args.buffer).buffer().handle,
-                                command_count: args.command_count,
-                            });
-                            let draws = draw_operands
-                                .iter()
-                                .zip(descriptor_sets)
-                                .zip(plan.raster_constants(batch))
-                                .map(|((draw, &sets), parameters)| {
-                                    let geometry = match &draw.indexed {
-                                        None => NativeRasterGeometry::Fullscreen,
-                                        Some(indexed) => {
-                                            let vertices = self.resource(indexed.vertices).buffer();
-                                            let indices = self.resource(indexed.indices).buffer();
-                                            let command =
-                                                indirect.unwrap_or(NativeIndexedDraw::Direct {
-                                                    first_index: indexed.first_index,
-                                                    index_count: indexed.index_count,
-                                                    instance_count: indexed.instance_count,
-                                                });
-                                            NativeRasterGeometry::Indexed {
-                                                vertices: vertices.handle,
-                                                secondary_vertices: indexed
-                                                    .secondary_vertices
-                                                    .map(|id| self.resource(id).buffer().handle),
-                                                indices: indices.handle,
-                                                command,
-                                            }
-                                        }
-                                    };
-                                    NativeRasterDraw {
-                                        geometry,
-                                        parameters,
-                                        sets,
-                                    }
-                                });
-                            programs.record_raster_batch(
+                            let info = attachments
+                                .info()
+                                .flags(vk::RenderingFlags::CONTENTS_SECONDARY_COMMAND_BUFFERS);
+                            device.raw().cmd_begin_rendering(command, &info);
+                            device.raw().cmd_execute_commands(
                                 command,
-                                programs.raster_program(slot),
-                                *sample_count,
-                                draws,
+                                &secondary.handles[pass.raster_programs.clone()],
                             );
+                        } else {
+                            programs.begin_raster(command, &attachments);
+                            let mut regions = None;
+                            let mut descriptor_start = pass.raster_descriptors.start;
+                            for (batch, &slot) in plan
+                                .raster_batches(batches)
+                                .iter()
+                                .zip(&self.raster_programs[pass.raster_programs.clone()])
+                            {
+                                if regions != Some(batch.regions) {
+                                    programs.set_raster_regions(
+                                        command,
+                                        batch.regions,
+                                        attachments.extent,
+                                    );
+                                    regions = Some(batch.regions);
+                                }
+                                let draw_operands = plan.raster_draws(&batch.draws);
+                                let descriptor_end = descriptor_start + draw_operands.len();
+                                let descriptor_sets =
+                                    &self.raster_descriptors[descriptor_start..descriptor_end];
+                                descriptor_start = descriptor_end;
+                                record_batch(
+                                    command,
+                                    programs,
+                                    slot,
+                                    *sample_count,
+                                    plan,
+                                    batch,
+                                    descriptor_sets,
+                                    &self.physical,
+                                );
+                            }
                         }
                         device.raw().cmd_end_rendering(command);
                     }
@@ -383,6 +364,7 @@ impl TransferPayload for GraphWork {
                 range.as_mut().unwrap().establish_contents();
             }
         }
+        self.secondary.take();
         self.bindings.take();
         self.compute.take();
         self.programs.take();
@@ -471,4 +453,161 @@ fn image_copy(image: &DeviceImage, offset: u64, mip: u32) -> vk::BufferImageCopy
             height: (image.extent.height >> mip).max(1),
             depth: 1,
         })
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn record_batch(
+    command: vk::CommandBuffer,
+    programs: &super::ShaderPrograms,
+    slot: super::RasterProgramSlot,
+    sample_count: crate::graph::SampleCount,
+    plan: &crate::graph::CompiledGraph,
+    batch: &crate::graph::RasterBatchOperands,
+    descriptor_sets: &[[vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS]],
+    physical: &[Option<super::super::PhysicalLease>],
+) {
+    let draw_operands = plan.raster_draws(&batch.draws);
+    let indirect = batch.indirect.map(|args| NativeIndexedDraw::Indirect {
+        buffer: physical[args.buffer].as_ref().unwrap().buffer().handle,
+        command_count: args.command_count,
+    });
+    let draws = draw_operands
+        .iter()
+        .zip(descriptor_sets)
+        .zip(plan.raster_constants(batch))
+        .map(|((draw, &sets), parameters)| {
+            let geometry = match &draw.indexed {
+                None => NativeRasterGeometry::Fullscreen,
+                Some(indexed) => {
+                    let vertices = physical[indexed.vertices].as_ref().unwrap().buffer();
+                    let indices = physical[indexed.indices].as_ref().unwrap().buffer();
+                    let command = indirect.unwrap_or(NativeIndexedDraw::Direct {
+                        first_index: indexed.first_index,
+                        index_count: indexed.index_count,
+                        instance_count: indexed.instance_count,
+                    });
+                    NativeRasterGeometry::Indexed {
+                        vertices: vertices.handle,
+                        secondary_vertices: indexed
+                            .secondary_vertices
+                            .map(|id| physical[id].as_ref().unwrap().buffer().handle),
+                        indices: indices.handle,
+                        command,
+                    }
+                }
+            };
+            NativeRasterDraw {
+                geometry,
+                parameters,
+                sets,
+            }
+        });
+    // SAFETY: Caller owns the recording and supplies the prepared batch and live operands.
+    unsafe {
+        programs.record_raster_batch(command, programs.raster_program(slot), sample_count, draws)
+    };
+}
+
+impl GraphWork {
+    pub(in crate::backends::vulkan::graph) fn record_secondaries(
+        &mut self,
+        recorder: &mut super::super::secondary::Recorder,
+    ) -> Result<(), super::RuntimeError> {
+        let count = self.raster_programs.len();
+        if count == 0 || count > recorder.capacity {
+            return Ok(());
+        }
+        let mut commands = recorder.storage.acquire()?;
+        let plan = self.plan.as_ref().unwrap();
+        let programs = self.programs.as_ref().unwrap();
+        let data = &**self;
+        for (pass_index, pass) in data.passes.iter().enumerate() {
+            if let PreparedOperation::Raster { batches, .. } = &pass.operation {
+                let mut descriptors = pass.raster_descriptors.start;
+                for (lane, batch) in commands.lanes[pass.raster_programs.clone()]
+                    .iter_mut()
+                    .zip(batches.clone())
+                {
+                    lane.pass = pass_index;
+                    lane.batch = batch;
+                    lane.descriptors = descriptors;
+                    descriptors += plan.raster_batches(&(batch..batch + 1))[0].draws.len();
+                }
+            }
+        }
+        let lanes = &mut commands.lanes[..count];
+        let passes = &data.passes;
+        let physical = &data.physical;
+        let descriptors = &data.raster_descriptors;
+        let slots = &data.raster_programs;
+        recorder.jobs.scope(|scope| {
+            scope.for_each_chunk_mut(lanes, std::num::NonZeroUsize::MIN, |index, lanes| {
+                let lane = &mut lanes[0];
+                let PreparedOperation::Raster {
+                    colors,
+                    depth,
+                    sample_count,
+                    ..
+                } = &passes[lane.pass].operation
+                else {
+                    unreachable!()
+                };
+                let mut formats =
+                    [vk::Format::UNDEFINED; crate::program::MAX_RASTER_COLOR_ATTACHMENTS];
+                let mut extent = vk::Extent2D::default();
+                for (format, target) in formats.iter_mut().zip(plan.raster_attachments(colors)) {
+                    let image = physical[target.view.image().index]
+                        .as_ref()
+                        .unwrap()
+                        .image();
+                    *format = image.format;
+                    extent = image.extent;
+                }
+                let depth_format = depth.map_or(vk::Format::UNDEFINED, |target| {
+                    let image = physical[plan.raster_attachment(target).view.image().index]
+                        .as_ref()
+                        .unwrap()
+                        .image();
+                    extent = image.extent;
+                    image.format
+                });
+                let mut rendering = vk::CommandBufferInheritanceRenderingInfo::default()
+                    .color_attachment_formats(&formats[..colors.len()])
+                    .depth_attachment_format(depth_format)
+                    .rasterization_samples(crate::backends::vulkan::resources::sample_count_flags(
+                        *sample_count,
+                    ));
+                let inheritance =
+                    vk::CommandBufferInheritanceInfo::default().push_next(&mut rendering);
+                let batch = &plan.raster_batches(&(lane.batch..lane.batch + 1))[0];
+                let sets = &descriptors[lane.descriptors..lane.descriptors + batch.draws.len()];
+                lane.error = lane
+                    .record(&inheritance, |command| {
+                        // SAFETY: This batch exclusively owns its secondary, and the Graph
+                        // retains exactly the operands validated for this rendering scope.
+                        unsafe {
+                            programs.set_raster_regions(command, batch.regions, extent);
+                            record_batch(
+                                command,
+                                programs,
+                                slots[index],
+                                *sample_count,
+                                plan,
+                                batch,
+                                sets,
+                                physical,
+                            );
+                        }
+                    })
+                    .err();
+            })
+        });
+        for lane in lanes {
+            if let Some(error) = lane.error.take() {
+                return Err(error);
+            }
+        }
+        self.secondary = Some(commands);
+        Ok(())
+    }
 }

@@ -314,6 +314,10 @@ fn compare(captures: &[Capture], mut read: impl FnMut(PassHandle, &mut [u8])) {
 }
 
 pub fn run() -> Result<(), Box<dyn Error>> {
+    run_with_recording(None)
+}
+
+pub fn run_with_recording(budget: Option<std::num::NonZeroUsize>) -> Result<(), Box<dyn Error>> {
     let strict = cfg!(feature = "development-validation");
     let mut vk = VulkanRuntime::new_with_validation(
         RuntimeConfig {
@@ -382,6 +386,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         &resources,
     )?;
     vk.prepare_raster_programs(&programs)?;
+    if let Some(budget) = budget {
+        let workers = std::num::NonZeroUsize::new(4).unwrap();
+        vk.prepare_raster_recording(sashiko_jobs::JobSystem::new(workers)?, budget)?;
+        dx.prepare_raster_recording(sashiko_jobs::JobSystem::new(workers)?, budget)?;
+    }
     let mut pool = GraphPool::new(CAPACITY, 1)?;
     for scene in [Scene::Opaque, Scene::Ordered] {
         let (plan, captures) = build(&mut pool, &programs, scene)?;
@@ -396,11 +405,25 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             1
         );
         let mut vk_pending = vk.submit(&plan)?;
+        if let Some(budget) = budget.filter(|n| n.get() >= CAPACITY.draws) {
+            let error = vk
+                .prepare_raster_recording(sashiko_jobs::JobSystem::inline(), budget)
+                .unwrap_err();
+            assert_eq!(
+                error.capacity().unwrap().recovery,
+                sashiko_renderer_core::capacity::CapacityRecovery::ReleaseOwners
+            );
+        }
         let mut vk_result = vk_pending.wait(WAIT)?.expect("Vulkan completion");
         compare(&captures, |pass, bytes| {
             vk_result.readback_into(pass, bytes).unwrap()
         });
         drop((vk_result, vk_pending));
+        if budget.is_some() {
+            let cancelled = dx.prepare(&plan)?;
+            assert!(dx.prepare(&plan).is_err(), "only one prepared slot");
+            drop(cancelled);
+        }
         let mut dx_pending = dx.submit(&plan)?;
         drop(plan);
         let mut dx_result = dx_pending.wait(WAIT)?.expect("D3D12 completion");

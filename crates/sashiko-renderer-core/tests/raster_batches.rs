@@ -11,3 +11,11 @@ fn ordered_mrt_gpu() {
     }
     fixture::run().unwrap();
 }
+
+#[test]
+#[ignore = "requires Vulkan and D3D12 hardware and requested native layers"]
+fn native_batches_preserve_blend_order_and_cancelled_slot_reuse() {
+    for budget in [1, 4] {
+        fixture::run_with_recording(std::num::NonZeroUsize::new(budget)).unwrap();
+    }
+}

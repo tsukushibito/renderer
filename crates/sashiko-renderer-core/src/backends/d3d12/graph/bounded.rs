@@ -519,6 +519,7 @@ fn requirements_inner(
 pub(super) fn prepare(
     pool: &Arc<FramePool>,
     graph: &CompiledGraph,
+    jobs: Option<&std::sync::Mutex<sashiko_jobs::JobSystem>>,
 ) -> Result<FrameWork, D3D12RuntimeError> {
     #[cfg(feature = "tracy")]
     let _span = tracy_client::Client::running().map(|client| {
@@ -582,6 +583,13 @@ pub(super) fn prepare(
             )
         });
         work.begin_recording_metrics();
+        if let Some(jobs) = jobs
+            && let Err(error) =
+                super::bundles::record(work.slot_mut(), &owner, graph, &pool.raster_programs, jobs)
+        {
+            work.poison_recording();
+            return Err(error);
+        }
         for &pass in &graph.order {
             match &graph.passes[pass].operation {
                 Operation::UploadBuffer { dst, offset, .. } => {

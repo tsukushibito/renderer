@@ -39,6 +39,11 @@ use sashiko_renderer_core::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+#[cfg(feature = "memory-profiling")]
+#[global_allocator]
+static ALLOCATOR: sashiko_renderer_core::measurement::CountingAllocator<std::alloc::System> =
+    sashiko_renderer_core::measurement::CountingAllocator::new(std::alloc::System);
+
 type Failure = Box<dyn Error>;
 const EXTENT: u32 = 512;
 const IN_FLIGHT: usize = 2;
@@ -126,6 +131,7 @@ struct Options {
     batches_per_pass: usize,
     topology: Topology,
     workers: usize,
+    native_workers: usize,
     report: PathBuf,
     warmup: usize,
     frames: usize,
@@ -139,6 +145,7 @@ impl Options {
         let (mut api, mut draws, mut words, mut report) = (None, None, None, None);
         let (mut warmup, mut frames, mut profile, mut capture) = (120, 600, false, None);
         let (mut passes, mut batches_per_pass, mut workers) = (1usize, 1usize, 0usize);
+        let mut native_workers = 0usize;
         let mut topology = Topology::Independent;
         while let Some(flag) = args.next() {
             let mut value = || {
@@ -151,7 +158,7 @@ impl Options {
                         "raster_draw_scaling --api <vulkan|d3d12> --draws <1024|10000|50000> --words <0|20> --report <path>\n\
                          [--passes <1..={MAX_PASSES}>] [--batches-per-pass <positive count>] [--topology <independent|chain>]\n\
                          [--workers <0 for direct, or 1 through available logical CPU count>]\n\
-                         [--warmup <count>] [--frames <count>] [--profile] [--capture <stem>]"
+                         [--native-workers <0 for direct, or scoped recording team size>] [--warmup <count>] [--frames <count>] [--profile] [--capture <stem>]"
                     );
                     std::process::exit(0);
                 }
@@ -166,6 +173,7 @@ impl Options {
                 "--words" => words = Some(value()?.parse::<usize>()?),
                 "--passes" => passes = value()?.parse()?,
                 "--batches-per-pass" => batches_per_pass = value()?.parse()?,
+                "--native-workers" => native_workers = value()?.parse()?,
                 "--workers" => workers = value()?.parse()?,
                 "--topology" => {
                     topology = match value()?.as_str() {
@@ -200,10 +208,10 @@ impl Options {
         if batches_per_pass == 0 || passes > draws / batches_per_pass {
             return Err("each requested pass and batch must contain at least one draw".into());
         }
-        if workers > 1 {
+        if workers.max(native_workers) > 1 {
             let available = std::thread::available_parallelism()?.get();
-            if workers > available {
-                return Err(format!("--workers must be 0 or 1..={available} on this host (includes the calling thread)").into());
+            if workers.max(native_workers) > available {
+                return Err(format!("--workers and --native-workers must each be 0 or 1..={available} on this host (includes the calling thread)").into());
             }
         }
         Ok(Self {
@@ -214,6 +222,7 @@ impl Options {
             batches_per_pass,
             topology,
             workers,
+            native_workers,
             report: report.ok_or("missing --report")?,
             warmup,
             frames,
@@ -326,6 +335,12 @@ impl Runtime {
                     &classes,
                 )?;
                 runtime.prepare_raster_programs(&[program])?;
+                if let Some(workers) = NonZeroUsize::new(options.native_workers) {
+                    runtime.prepare_raster_recording(
+                        sashiko_jobs::JobSystem::new(workers)?,
+                        NonZeroUsize::new(options.passes * options.batches_per_pass).unwrap(),
+                    )?;
+                }
                 if options.profile {
                     runtime.set_profiling(true)?;
                 }
@@ -365,6 +380,12 @@ impl Runtime {
                     &[program.into()],
                     &[],
                 )?;
+                if let Some(workers) = NonZeroUsize::new(options.native_workers) {
+                    runtime.prepare_raster_recording(
+                        sashiko_jobs::JobSystem::new(workers)?,
+                        NonZeroUsize::new(options.passes * options.batches_per_pass).unwrap(),
+                    )?;
+                }
                 if options.profile {
                     runtime.set_profiling(true)?;
                 }
@@ -855,8 +876,10 @@ fn measure(
     resident: &ResidentScene,
     frames: usize,
     mut samples: Option<&mut Vec<Sample>>,
-) -> Result<u64, Failure> {
+) -> Result<(u64, Option<Value>), Failure> {
     let mut queue = VecDeque::<(usize, Pending)>::with_capacity(IN_FLIGHT);
+    #[cfg(feature = "memory-profiling")]
+    let before = sashiko_renderer_core::measurement::Snapshot::now();
     let mut last_start = Instant::now();
     let mut first_start = last_start;
     for frame in 0..frames {
@@ -904,7 +927,18 @@ fn measure(
         // The first sample has no previous start in this cohort.
         first.interval_ns = 0;
     }
-    Ok(ns(first_start.elapsed()))
+    let wall = ns(first_start.elapsed());
+    #[cfg(feature = "memory-profiling")]
+    let memory = {
+        let delta = sashiko_renderer_core::measurement::Snapshot::now().since(before);
+        Some(
+            json!({"rust_calls": delta.rust.map(|e| e.calls), "vma_host_calls": delta.vma_host.map(|e| e.calls),
+            "native_events": delta.native, "overflowed": delta.overflowed}),
+        )
+    };
+    #[cfg(not(feature = "memory-profiling"))]
+    let memory = None;
+    Ok((wall, memory))
 }
 
 /// The grid places the single covered pixel for each ordinal at the even x/y
@@ -1017,7 +1051,7 @@ pub fn run() -> Result<(), Failure> {
         options.warmup,
         None,
     )?;
-    let wall_ns = measure(
+    let (wall_ns, memory) = measure(
         &mut runtime,
         &mut pool,
         &mut scene,
@@ -1048,11 +1082,11 @@ pub fn run() -> Result<(), Failure> {
         &json!({
             "device": identity, "draws": options.draws, "words": options.words,
             "passes": options.passes, "batches_per_pass": options.batches_per_pass,
-            "topology": options.topology.name(), "workers": options.workers,
+            "topology": options.topology.name(), "workers": options.workers, "native_workers": options.native_workers,
             "packet_capacity_bytes": scene.preparation.as_ref().map_or(0, DrawPreparation::packet_capacity_bytes),
             "draws_per_pass": (0..options.passes).map(|p| scene.layout.pass_draws(p).len()).collect::<Vec<_>>(),
             "extent": EXTENT, "in_flight": IN_FLIGHT, "warmup": options.warmup,
-            "frames": options.frames, "profile": options.profile, "wall_ns": wall_ns,
+            "frames": options.frames, "profile": options.profile, "wall_ns": wall_ns, "memory": memory,
             "samples": samples.iter().map(Sample::json).collect::<Vec<_>>(),
             "captures": captures, "validation": validation,
         }),
