@@ -2,6 +2,10 @@
 use glam::{DVec3, Mat4, Quat, Vec3};
 use std::{num::NonZeroU32, sync::Arc};
 
+mod sync;
+pub use sync::PhaseMap;
+mod blend;
+pub use blend::{BlendLine, BlendSpace, JointMask, LocalBuffer};
 mod batch;
 pub use batch::{PoseBatch, PoseSample};
 mod playback;
@@ -106,6 +110,7 @@ pub struct ClipTimeline {
     hz: NonZeroU32,
     looping: bool,
     markers: Vec<Marker>,
+    sync: Vec<Marker>,
     root: Vec<DVec3>,
 }
 impl Clip {
@@ -148,6 +153,9 @@ impl Clip {
             timeline,
         })
     }
+    pub fn timeline(&self) -> &ClipTimeline {
+        &self.timeline
+    }
     pub fn skeleton(&self) -> &Arc<Skeleton> {
         &self.skeleton
     }
@@ -164,9 +172,59 @@ impl Clip {
     }
     pub fn sample_at(&self, tick: u64, rate: NonZeroU32) -> PoseSample<'_> {
         PoseSample {
-            clip: self,
+            skeleton: &self.skeleton,
             local: self.pose(tick, rate),
             blend: None,
+        }
+    }
+    /// Interpolate neighboring local frames at a fixed-clock display time.
+    pub fn interpolated_at(&self, tick: u64, rate: NonZeroU32) -> PoseSample<'_> {
+        let units = u128::from(tick) * u128::from(self.timeline.hz.get());
+        let divisor = u128::from(rate.get());
+        let frame = units / divisor;
+        let count = self.timeline.frames as u128;
+        let index = if self.timeline.looping {
+            frame % count
+        } else {
+            frame.min(count - 1)
+        };
+        self.frame_sample(index as usize, (units % divisor) as f32 / divisor as f32)
+    }
+
+    /// Display frame position relative to the start, useful for synchronized clips.
+    pub fn sample_phase(&self, phase: f64) -> Result<PoseSample<'_>, AnimationError> {
+        if !(0.0..=1.0).contains(&phase) {
+            return Err(Invalid("phase outside [0, 1]"));
+        }
+        let frame = phase * self.timeline.frames as f64;
+        let index = frame as usize;
+        if index >= self.timeline.frames {
+            return Ok(self.frame_sample(
+                if self.timeline.looping {
+                    0
+                } else {
+                    self.timeline.frames - 1
+                },
+                0.,
+            ));
+        }
+        Ok(self.frame_sample(index, frame.fract() as f32))
+    }
+
+    fn frame_sample(&self, index: usize, fraction: f32) -> PoseSample<'_> {
+        let joints = self.skeleton.joint_count();
+        let frame = |i: usize| &self.local[i * joints..(i + 1) * joints];
+        let next = if index + 1 < self.timeline.frames {
+            index + 1
+        } else if self.timeline.looping {
+            0
+        } else {
+            index
+        };
+        PoseSample {
+            skeleton: &self.skeleton,
+            local: frame(index),
+            blend: (fraction > 0. && next != index).then(|| (frame(next), fraction)),
         }
     }
     /// Stateless display sampling permits seeking and repeated rendering.
@@ -206,6 +264,7 @@ impl ClipTimeline {
             hz,
             looping,
             markers,
+            sync: Vec::new(),
             root,
         })
     }
@@ -214,63 +273,84 @@ impl ClipTimeline {
     }
 }
 
+struct JointSlot {
+    joint: usize,
+    parent: Option<usize>,
+}
+
+struct Layout {
+    slots: Vec<JointSlot>,
+    by_joint: Vec<Option<usize>>,
+}
+
 #[derive(Clone)]
 pub struct PoseWorkspace {
     skeleton: Arc<Skeleton>,
-    order: Vec<usize>,
+    layout: Arc<Layout>,
     matrices: Vec<Mat4>,
-    selected: Vec<bool>,
 }
 impl PoseWorkspace {
     pub fn all(skeleton: &Arc<Skeleton>) -> Self {
+        Self::prepare(skeleton, skeleton.order.iter().copied())
+    }
+    fn prepare(skeleton: &Arc<Skeleton>, order: impl Iterator<Item = usize>) -> Self {
+        let mut by_joint = vec![None; skeleton.joint_count()];
+        let slots: Vec<_> = order
+            .enumerate()
+            .map(|(slot, joint)| {
+                let parent =
+                    skeleton.parents[joint].map(|p| by_joint[p].expect("parent precedes child"));
+                by_joint[joint] = Some(slot);
+                JointSlot { joint, parent }
+            })
+            .collect();
         Self {
             skeleton: skeleton.clone(),
-            order: skeleton.order.clone(),
-            selected: vec![true; skeleton.joint_count()],
-            matrices: vec![Mat4::IDENTITY; skeleton.joint_count()],
+            matrices: vec![Mat4::IDENTITY; slots.len()],
+            layout: Arc::new(Layout { slots, by_joint }),
         }
     }
     pub fn subset(skeleton: &Arc<Skeleton>, requested: &[usize]) -> Result<Self, AnimationError> {
-        let mut out = Self::all(skeleton);
-        out.selected.fill(false);
-        for &i in requested {
-            let mut next = Some(i);
+        let mut selected = vec![false; skeleton.joint_count()];
+        for &joint in requested {
+            let mut next = Some(joint);
             while let Some(j) = next {
-                let selected = out
-                    .selected
+                let mark = selected
                     .get_mut(j)
                     .ok_or(Invalid("unknown requested joint"))?;
-                if *selected {
+                if *mark {
                     break;
                 }
-                *selected = true;
+                *mark = true;
                 next = skeleton.parents[j];
             }
         }
-        out.order.retain(|&j| out.selected[j]);
-        Ok(out)
+        Ok(Self::prepare(
+            skeleton,
+            skeleton.order.iter().copied().filter(|&j| selected[j]),
+        ))
     }
     pub fn joint(&self, joint: usize) -> Option<Mat4> {
-        self.selected
-            .get(joint)
-            .filter(|&&s| s)
-            .map(|_| self.matrices[joint])
+        self.layout
+            .by_joint
+            .get(joint)?
+            .map(|slot| self.matrices[slot])
     }
     fn evaluate(
         &mut self,
-        clip: &Clip,
+        skeleton: &Arc<Skeleton>,
         local: &[LocalPose],
         target: Option<(&[LocalPose], f32)>,
     ) -> Result<(), AnimationError> {
-        if !Arc::ptr_eq(&self.skeleton, &clip.skeleton) {
+        if !Arc::ptr_eq(&self.skeleton, skeleton) {
             return Err(Invalid("pose and clip skeletons differ"));
         }
-        for &i in &self.order {
+        for (i, slot) in self.layout.slots.iter().enumerate() {
+            let j = slot.joint;
             let p = target
-                .map_or(local[i], |(to, t)| local[i].blend(to[i], t))
+                .map_or(local[j], |(to, t)| local[j].blend(to[j], t))
                 .matrix();
-            self.matrices[i] =
-                self.skeleton.parents[i].map_or(p, |parent| self.matrices[parent] * p);
+            self.matrices[i] = slot.parent.map_or(p, |parent| self.matrices[parent] * p);
         }
         Ok(())
     }

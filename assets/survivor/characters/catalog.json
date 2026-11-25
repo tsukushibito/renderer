@@ -34,6 +34,16 @@
               "frame": 60,
               "id": 1
             }
+          ],
+          "sync_markers": [
+            {
+              "frame": 20,
+              "id": 1
+            },
+            {
+              "frame": 60,
+              "id": 2
+            }
           ]
         },
         "jog": {
@@ -45,6 +55,16 @@
             {
               "frame": 42,
               "id": 1
+            }
+          ],
+          "sync_markers": [
+            {
+              "frame": 14,
+              "id": 1
+            },
+            {
+              "frame": 42,
+              "id": 2
             }
           ]
         }
@@ -83,6 +103,16 @@
               "frame": 60,
               "id": 1
             }
+          ],
+          "sync_markers": [
+            {
+              "frame": 20,
+              "id": 1
+            },
+            {
+              "frame": 60,
+              "id": 2
+            }
           ]
         },
         "jog": {
@@ -94,6 +124,16 @@
             {
               "frame": 42,
               "id": 1
+            }
+          ],
+          "sync_markers": [
+            {
+              "frame": 14,
+              "id": 1
+            },
+            {
+              "frame": 42,
+              "id": 2
             }
           ]
         }

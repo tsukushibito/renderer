@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 mod rig;
 use rig::Rig;
 pub use rig::{PaletteBatch, PaletteRequest, PaletteWorkspace, PhaseAnimation, PreparedAnimation};
-pub use sashiko_animation::{ClipTimeline, Playback};
+pub use sashiko_animation::{
+    Clip as PoseClip, ClipTimeline, LocalBuffer, PhaseMap, Playback, PoseSample,
+};
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
@@ -46,6 +48,8 @@ struct Tracks {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     events: Vec<ClipEvent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    sync_markers: Vec<ClipEvent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     root_translation: Vec<[f64; 3]>,
 }
 
@@ -83,6 +87,16 @@ impl TimelineAsset {
                 .iter()
                 .copied()
                 .map(glam::DVec3::from_array)
+                .collect(),
+        )?
+        .with_sync_markers(
+            self.tracks
+                .sync_markers
+                .iter()
+                .map(|e| sashiko_animation::Marker {
+                    frame: e.frame,
+                    id: e.id,
+                })
                 .collect(),
         )?)
     }
@@ -248,7 +262,7 @@ impl CharacterCatalog {
 
 pub struct AnimatedModel {
     content: [Digest; 2],
-    pub model: SkinnedModel,
+    model: SkinnedModel,
     color: Vec<u8>,
     extent: [u32; 2],
     clips: BTreeMap<String, Clip>,
@@ -256,6 +270,15 @@ pub struct AnimatedModel {
 }
 
 impl AnimatedModel {
+    pub fn has_skeleton(&self) -> bool {
+        self.model.skeleton.is_some()
+    }
+
+    /// Validated mesh and skin paired with this catalog entry.
+    pub fn model(&self) -> &SkinnedModel {
+        &self.model
+    }
+
     /// Digests of the exact skin and color bytes consumed during preparation.
     pub fn content_digests(&self) -> [Digest; 2] {
         self.content
@@ -321,7 +344,7 @@ pub struct SkinnedModel {
     indices: Vec<u32>,
     joints: usize,
     frames: usize,
-    poses: Vec<Transform>,
+    poses: std::sync::Arc<[Transform]>,
     skeleton: Option<Rig>,
 }
 
@@ -416,7 +439,7 @@ impl SkinnedModel {
             weights,
             joints,
             frames,
-            poses,
+            poses: poses.into(),
         })
     }
 

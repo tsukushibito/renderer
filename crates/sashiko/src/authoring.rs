@@ -21,7 +21,7 @@ pub fn clip_pose(
         .ok_or("unknown clip")?
         .sample(tick, rate);
     let mut vertices = Vec::new();
-    for (vertex, skin) in model.model.vertices() {
+    for (vertex, skin) in model.model().vertices() {
         let mut position = [0.; 3];
         for (joint, weight) in skin.joints.into_iter().zip(skin.weights) {
             if weight > 0. {
@@ -36,7 +36,7 @@ pub fn clip_pose(
         }
         vertices.push(position);
     }
-    Ok(json!({ "vertices": vertices, "indices": model.model.indices() }))
+    Ok(json!({ "vertices": vertices, "indices": model.model().indices() }))
 }
 
 #[derive(Deserialize)]

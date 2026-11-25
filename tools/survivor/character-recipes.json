@@ -1,7 +1,7 @@
 {
   "primary": {
     "id": "00000000000000000000000000000001",
-    "tracks": {"walk": {"events": [{"frame": 20, "id": 1}, {"frame": 60, "id": 1}]}, "jog": {"events": [{"frame": 14, "id": 1}, {"frame": 42, "id": 1}]}},
+    "tracks": {"walk": {"events": [{"frame": 20, "id": 1}, {"frame": 60, "id": 1}], "sync_markers": [{"frame": 20, "id": 1}, {"frame": 60, "id": 2}]}, "jog": {"events": [{"frame": 14, "id": 1}, {"frame": 42, "id": 1}], "sync_markers": [{"frame": 14, "id": 1}, {"frame": 42, "id": 2}]}},
     "model": "Superhero_Male_FullBody.fbx",
     "animation": "UAL1_Standard.fbx",
     "albedo": "T_Superhero_Male_Ligh.png",
@@ -18,7 +18,7 @@
   },
   "alternate": {
     "id": "00000000000000000000000000000002",
-    "tracks": {"walk": {"events": [{"frame": 20, "id": 1}, {"frame": 60, "id": 1}]}, "jog": {"events": [{"frame": 14, "id": 1}, {"frame": 42, "id": 1}]}},
+    "tracks": {"walk": {"events": [{"frame": 20, "id": 1}, {"frame": 60, "id": 1}], "sync_markers": [{"frame": 20, "id": 1}, {"frame": 60, "id": 2}]}, "jog": {"events": [{"frame": 14, "id": 1}, {"frame": 42, "id": 1}], "sync_markers": [{"frame": 14, "id": 1}, {"frame": 42, "id": 2}]}},
     "model": "Superhero_Female_FullBody.fbx",
     "animation": "UAL1_Standard.fbx",
     "albedo": "T_Superhero_Female_Dark_BaseColor.png",

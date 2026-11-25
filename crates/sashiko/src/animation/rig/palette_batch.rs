@@ -1,190 +1,178 @@
 use super::*;
+use sashiko_animation::PoseSample;
 use sashiko_renderer::core::jobs::RendererJobs;
 
-/// Index into the clip names supplied at preparation, and its independent display time.
+/// A recorded mesh palette, or an index in the supplied slice of resolved local poses.
 #[derive(Clone, Copy)]
-pub struct PaletteRequest {
-    pub clip: usize,
-    pub tick: u64,
+pub enum PaletteRequest {
+    Frame { clip: usize, tick: u64 },
+    Phase { clip: usize, phase: f64 },
+    Sample(usize),
 }
 
-/// Fixed-capacity output for independent samples of one animated model.
 pub struct PaletteBatch {
     capacity: usize,
+    sample_capacity: usize,
     joints: usize,
-    data: BatchData,
+    descriptors: Vec<Clip>,
+    cooked: Arc<[Transform]>,
+    groups: Vec<Group>,
+    inverse: Option<Arc<[Mat4]>>,
 }
-
-enum BatchData {
-    Rigged {
-        clips: Vec<PoseClip>,
-        inverse: Arc<[Mat4]>,
-        groups: Vec<Group>,
-    },
-    Legacy(Vec<(Clip, Vec<Transform>)>),
-}
-
 struct Group {
     batch: PoseBatch,
     palettes: Vec<Transform>,
     error: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
-
 impl AnimatedModel {
-    /// Prepare the named clips and all evaluation/output storage before the frame loop.
+    /// Set sample_capacity to zero for direct-only evaluation, including legacy skins.
     pub fn prepare_palette_batch(
         &self,
         names: &[&str],
         capacity: usize,
+        sample_capacity: usize,
     ) -> PipelineResult<PaletteBatch> {
+        if sample_capacity > capacity {
+            return Err("sample capacity exceeds palette capacity".into());
+        }
+        let descriptors = names
+            .iter()
+            .map(|&n| {
+                self.clips
+                    .get(n)
+                    .copied()
+                    .ok_or_else(|| format!("unknown clip {n}"))
+            })
+            .collect::<Result<_, _>>()?;
         let joints = self.model.joints;
-        let source = |name: &str| {
-            self.clip(name)
-                .ok_or_else(|| format!("unknown clip {name}"))
-        };
-        let data = if let Some(rig) = &self.model.skeleton {
-            let clips = names
-                .iter()
-                .map(|&name| rig.clip(source(name)?, self.timelines[name].clone()))
-                .collect::<PipelineResult<_>>()?;
+        let mut groups = Vec::new();
+        let mut inverse = None;
+        if sample_capacity > 0 {
+            let rig = self
+                .model
+                .skeleton
+                .as_ref()
+                .ok_or("a skeleton is required for composed palettes")?;
             let layout = PoseWorkspace::all(&rig.skeleton);
-            let groups = (0..capacity)
-                .step_by(4)
-                .map(|start| {
-                    let lanes = (capacity - start).min(4);
-                    Group {
-                        batch: PoseBatch::new(&layout, lanes),
-                        palettes: vec![Transform::IDENTITY; lanes * joints],
-                        error: None,
-                    }
-                })
-                .collect();
-            BatchData::Rigged {
-                clips,
-                inverse: rig.inverse_bind.clone(),
-                groups,
+            inverse = Some(rig.inverse_bind.clone());
+            for start in (0..sample_capacity).step_by(4) {
+                let lanes = (sample_capacity - start).min(4);
+                groups.push(Group {
+                    batch: PoseBatch::new(&layout, lanes),
+                    palettes: vec![Transform::IDENTITY; lanes * joints],
+                    error: None,
+                });
             }
-        } else {
-            BatchData::Legacy(
-                names
-                    .iter()
-                    .map(|&name| {
-                        let asset = source(name)?;
-                        Ok((asset.clip, asset.poses.to_vec()))
-                    })
-                    .collect::<PipelineResult<_>>()?,
-            )
-        };
+        }
         Ok(PaletteBatch {
             capacity,
+            sample_capacity,
             joints,
-            data,
+            descriptors,
+            cooked: self.model.poses.clone(),
+            groups,
+            inverse,
         })
     }
 }
-
-impl Group {
-    fn evaluate(
-        &mut self,
-        requests: &[PaletteRequest],
-        clips: &[PoseClip],
-        rate: NonZeroU32,
-        inverse: &[Mat4],
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let sample = |r: PaletteRequest| clips[r.clip].sample_at(r.tick, rate);
-        let mut samples = [sample(requests[0]); 4];
-        for (dest, r) in samples.iter_mut().skip(1).zip(&requests[1..]) {
-            *dest = sample(*r);
-        }
-        let poses = self.batch.evaluate(&samples[..requests.len()])?;
-        for (pose, out) in poses
-            .iter()
-            .zip(self.palettes.chunks_exact_mut(inverse.len()))
-        {
-            write_palette(pose, inverse, out)?;
-        }
-        Ok(())
-    }
-}
-
 impl PaletteBatch {
-    /// Evaluate on the host's shared team and return complete palettes in request order.
-    /// Legacy assets borrow cooked palettes. Empty and small batches stay on the caller.
+    /// Compute each supplied pose once; requests may reuse it and interleave cooked frames.
     pub fn evaluate<'a>(
         &'a mut self,
         requests: &'a [PaletteRequest],
+        samples: &[PoseSample<'_>],
         rate: NonZeroU32,
         jobs: &RendererJobs,
     ) -> PipelineResult<impl ExactSizeIterator<Item = &'a [Transform]> + 'a> {
-        if requests.len() > self.capacity {
-            return Err("palette batch capacity exceeded".into());
+        if requests.len() > self.capacity || samples.len() > self.sample_capacity {
+            return Err("palette capacity exceeded".into());
         }
-        let clips = match &self.data {
-            BatchData::Rigged { clips, .. } => clips.len(),
-            BatchData::Legacy(clips) => clips.len(),
-        };
-        if requests.iter().any(|r| r.clip >= clips) {
-            return Err("unknown palette batch clip index".into());
+        for r in requests {
+            match *r {
+                PaletteRequest::Phase { phase, .. } if !(0.0..=1.0).contains(&phase) => {
+                    return Err("invalid palette phase".into());
+                }
+                PaletteRequest::Frame { clip, .. } | PaletteRequest::Phase { clip, .. }
+                    if clip >= self.descriptors.len() =>
+                {
+                    return Err("unknown clip index".into());
+                }
+                PaletteRequest::Sample(i) if i >= samples.len() => {
+                    return Err("unknown pose sample".into());
+                }
+                _ => {}
+            }
         }
-        if let BatchData::Rigged {
-            clips,
-            inverse,
-            groups,
-        } = &mut self.data
-        {
-            let active = &mut groups[..requests.len().div_ceil(4)];
-            let run = |i: usize, group: &mut Group| {
+        if !samples.is_empty() {
+            let inverse = self
+                .inverse
+                .as_ref()
+                .expect("capacity established at preparation");
+            let groups = &mut self.groups[..samples.len().div_ceil(4)];
+            let run = |i: usize, g: &mut Group| {
                 let start = i * 4;
-                group.error = group
-                    .evaluate(
-                        &requests[start..requests.len().min(start + 4)],
-                        clips,
-                        rate,
-                        inverse,
-                    )
-                    .err();
+                g.error = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+                    let poses = g
+                        .batch
+                        .evaluate(&samples[start..(start + 4).min(samples.len())])?;
+                    for (pose, out) in poses.iter().zip(g.palettes.chunks_exact_mut(inverse.len()))
+                    {
+                        write_palette(pose, inverse, out)?;
+                    }
+                    Ok(())
+                })()
+                .err();
             };
-            // First consistent p95 win on the 62-joint Survivor rig: four full SIMD groups.
-            if requests.len() >= 16
-                && requests.len().saturating_mul(self.joints) >= 16 * 62
+            if samples.len() >= 16
+                && samples.len().saturating_mul(self.joints) >= 16 * 62
                 && jobs.parallelism().get() > 1
             {
                 jobs.with(|team| {
                     team.scope(|scope| {
-                        scope.for_each_chunk_mut(active, std::num::NonZeroUsize::MIN, |i, part| {
+                        scope.for_each_chunk_mut(groups, std::num::NonZeroUsize::MIN, |i, part| {
                             run(i, &mut part[0])
-                        });
+                        })
                     })
                 });
             } else {
-                for (i, group) in active.iter_mut().enumerate() {
-                    run(i, group);
+                for (i, g) in groups.iter_mut().enumerate() {
+                    run(i, g);
                 }
             }
-            if let Some(error) = active.iter_mut().find_map(|g| g.error.take()) {
-                return Err(error);
+            if let Some(e) = groups.iter_mut().find_map(|g| g.error.take()) {
+                return Err(e);
             }
         }
-        let data = &self.data;
-        let joints = self.joints;
-        Ok(requests.iter().enumerate().map(move |(i, r)| match data {
-            BatchData::Rigged { groups, .. } => {
-                let start = (i % 4) * joints;
-                &groups[i / 4].palettes[start..start + joints]
-            }
-            BatchData::Legacy(clips) => {
-                let (clip, poses) = &clips[r.clip];
+        let batch = &*self;
+        Ok(requests.iter().map(move |r| match *r {
+            PaletteRequest::Frame { clip, tick } => {
+                let clip = batch.descriptors[clip];
+                let first = clip.first * batch.joints;
                 AnimationClip {
-                    clip: *clip,
-                    joints,
-                    poses,
+                    clip,
+                    joints: batch.joints,
+                    poses: &batch.cooked[first..],
                 }
-                .sample(r.tick, rate)
+                .sample(tick, rate)
+            }
+            PaletteRequest::Phase { clip, phase } => {
+                let clip = batch.descriptors[clip];
+                let index = (phase * clip.frames as f64) as usize;
+                let frame = if clip.looping {
+                    index % clip.frames
+                } else {
+                    index.min(clip.frames - 1)
+                };
+                let start = (clip.first + frame) * batch.joints;
+                &batch.cooked[start..start + batch.joints]
+            }
+            PaletteRequest::Sample(i) => {
+                let start = i % 4 * batch.joints;
+                &batch.groups[i / 4].palettes[start..start + batch.joints]
             }
         }))
     }
 }
-
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
@@ -192,6 +180,58 @@ mod tests {
     use sashiko_renderer::core::jobs::JobSystem;
     use std::path::Path;
 
+    #[test]
+    fn interleave_shared_cooked_and_composed_outputs() -> PipelineResult<()> {
+        let catalog = CharacterCatalog::open(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../assets/survivor/characters/catalog.json"),
+        )?;
+        let mut model = catalog.load(catalog.id("primary").unwrap())?;
+        let clip = model.prepare_pose_clip("walk")?;
+        let capacity = 20;
+        let requests: Vec<_> = (0..capacity)
+            .map(|i| {
+                if i % 3 == 0 {
+                    PaletteRequest::Frame {
+                        clip: 0,
+                        tick: i as u64,
+                    }
+                } else {
+                    PaletteRequest::Sample(capacity - 1 - i)
+                }
+            })
+            .collect();
+        let rate = 60.try_into()?;
+        let samples: Vec<_> = (0..capacity)
+            .map(|i| clip.interpolated_at(i as u64, rate))
+            .collect();
+        let mut batch = model.prepare_palette_batch(&["walk"], capacity, capacity)?;
+        let serial: RendererJobs = JobSystem::inline().into();
+        let parallel = JobSystem::new(4.try_into()?)?.into();
+        let reference: Vec<_> = batch
+            .evaluate(&requests, &samples, rate, &serial)?
+            .map(<[_]>::to_vec)
+            .collect();
+        let raw = model.clip("walk").unwrap();
+        for (i, (actual, expected)) in batch
+            .evaluate(&requests, &samples, rate, &parallel)?
+            .zip(reference)
+            .enumerate()
+        {
+            assert_eq!(actual, expected);
+            let tick = if i % 3 == 0 { i } else { capacity - 1 - i };
+            let cooked = raw.sample(tick as u64, rate);
+            if i % 3 == 0 {
+                assert!(std::ptr::eq(actual, cooked));
+            }
+            for (a, b) in actual.iter().zip(cooked) {
+                assert!(matrix(*a).abs_diff_eq(matrix(*b), 2e-4));
+            }
+        }
+        model.model.skeleton = None;
+        assert!(model.prepare_palette_batch(&["walk"], 1, 1).is_err());
+        Ok(())
+    }
     #[test]
     fn mixed_clips_keep_order_across_workers_tail_and_retry() -> PipelineResult<()> {
         let catalog = CharacterCatalog::open(
@@ -203,7 +243,7 @@ mod tests {
         let inline = JobSystem::inline().into();
         let shared = JobSystem::new(4.try_into()?)?.into();
         let names = ["jog", "walk"];
-        let requests: [_; 67] = std::array::from_fn(|i| PaletteRequest {
+        let requests: [_; 67] = std::array::from_fn(|i| PaletteRequest::Frame {
             clip: (i / 3) % 2,
             tick: (i * 13) as u64,
         });
@@ -211,24 +251,36 @@ mod tests {
             if legacy {
                 model.model.skeleton = None;
             }
-            let mut batch = model.prepare_palette_batch(&names, requests.len())?;
-            assert!(batch.evaluate(&[requests[0]; 68], rate, &shared).is_err());
+            let mut batch = model.prepare_palette_batch(&names, requests.len(), 0)?;
             assert!(
                 batch
-                    .evaluate(&[PaletteRequest { clip: 2, tick: 0 }], rate, &shared)
+                    .evaluate(&[requests[0]; 68], &[], rate, &shared)
+                    .is_err()
+            );
+            assert!(
+                batch
+                    .evaluate(
+                        &[PaletteRequest::Frame { clip: 2, tick: 0 }],
+                        &[],
+                        rate,
+                        &shared
+                    )
                     .is_err()
             );
             for n in [67, 0, 1, 2, 3, 4, 17, 66] {
                 let input = &requests[..n];
                 let reference: Vec<_> = batch
-                    .evaluate(input, rate, &inline)?
+                    .evaluate(input, &[], rate, &inline)?
                     .map(<[_]>::to_vec)
                     .collect();
-                let actual = batch.evaluate(input, rate, &shared)?;
+                let actual = batch.evaluate(input, &[], rate, &shared)?;
                 assert_eq!(actual.len(), n);
                 for ((palette, expected), r) in actual.zip(&reference).zip(input) {
                     assert_eq!(palette, expected);
-                    let cooked = model.clip(names[r.clip]).unwrap().sample(r.tick, rate);
+                    let PaletteRequest::Frame { clip, tick } = *r else {
+                        unreachable!()
+                    };
+                    let cooked = model.clip(names[clip]).unwrap().sample(tick, rate);
                     if legacy {
                         assert_eq!(palette, cooked);
                     }

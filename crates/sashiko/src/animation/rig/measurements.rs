@@ -178,21 +178,24 @@ fn measure_palette_jobs() -> PipelineResult<()> {
     ];
     let rate = 60.try_into()?;
     for count in [1, 4, 5, 8, 9, 16, 32, 64, 256] {
-        let mut batch = model.prepare_palette_batch(&["walk", "jog"], count)?;
-        let mut requests = vec![PaletteRequest { clip: 0, tick: 0 }; count];
+        let mut batch = model.prepare_palette_batch(&["walk", "jog"], count, 0)?;
+        let mut requests = vec![PaletteRequest::Frame { clip: 0, tick: 0 }; count];
         let mut times = [[0u128; 256]; 2];
         let mut run = |tick: usize, mode: usize| -> PipelineResult<u128> {
             let start = Instant::now();
-            for (i, r) in requests.iter_mut().enumerate() {
-                *r = PaletteRequest {
-                    clip: i % 2,
-                    tick: (tick + i * 13) as u64,
-                };
+            // Amortize timer resolution over changing frame requests.
+            for tick in tick * 64..(tick + 1) * 64 {
+                for (i, r) in requests.iter_mut().enumerate() {
+                    *r = PaletteRequest::Frame {
+                        clip: i % 2,
+                        tick: (tick + i * 13) as u64,
+                    };
+                }
+                for palette in batch.evaluate(&requests, &[], rate, &teams[mode])? {
+                    black_box(palette);
+                }
             }
-            for palette in batch.evaluate(&requests, rate, &teams[mode])? {
-                black_box(palette);
-            }
-            Ok(start.elapsed().as_nanos())
+            Ok(start.elapsed().as_nanos() / 64)
         };
         for tick in 0..32 {
             run(tick, 0)?;
@@ -219,5 +222,78 @@ fn measure_palette_jobs() -> PipelineResult<()> {
             );
         }
     }
+    Ok(())
+}
+
+#[test]
+#[ignore = "release animation timing and isolated process-wide counters"]
+fn measure_composed_and_sparse_poses() -> PipelineResult<()> {
+    use sashiko_animation::{ClipTimeline, LocalBuffer};
+    use sashiko_renderer::core::jobs::{JobSystem, RendererJobs};
+    let catalog = CharacterCatalog::open(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/survivor/characters/catalog.json"),
+    )?;
+    let model = catalog.load(catalog.id("primary").unwrap())?;
+    let walk = model.prepare_pose_clip("walk")?;
+    let jog = model.prepare_pose_clip("jog")?;
+    let rate = 60.try_into()?;
+    let jobs = RendererJobs::new(JobSystem::inline());
+    let mut mix = LocalBuffer::new(walk.skeleton());
+    let mut batch = model.prepare_palette_batch(&["walk", "jog"], 9, 1)?;
+    measure("eight_cooked_one_blended", |tick| {
+        let mut requests = std::array::from_fn::<_, 9, _>(|i| PaletteRequest::Frame {
+            clip: i % 2,
+            tick: tick + 13 * i as u64,
+        });
+        requests[8] = PaletteRequest::Sample(0);
+        mix.mix(&[
+            (walk.interpolated_at(tick, rate), 0.5),
+            (jog.interpolated_at(tick, rate), 0.5),
+        ])
+        .unwrap();
+        for p in batch
+            .evaluate(&requests, &[mix.sample()], rate, &jobs)
+            .unwrap()
+        {
+            black_box(p);
+        }
+    });
+    let rig = Skeleton::new((0usize..128).map(|i| i.checked_sub(1)).collect())?;
+    let before = Snapshot::now();
+    let root = PoseWorkspace::subset(&rig, &[0])?;
+    let mut sparse = PoseBatch::new(&root, 256);
+    let allocated = Snapshot::now().since(before).rust;
+    println!(
+        "root_only_128x256_live_bytes,{}",
+        allocated[0].bytes + allocated[1].bytes - allocated[3].bytes
+    );
+    let timeline = ClipTimeline::new(
+        2,
+        rate,
+        false,
+        vec![],
+        vec![glam::DVec3::ZERO, glam::DVec3::X, glam::DVec3::X * 2.],
+    )?;
+    let clip = PoseClip::from_timeline(
+        rig,
+        vec![
+            LocalPose {
+                translation: glam::Vec3::ONE,
+                rotation: glam::Quat::IDENTITY,
+                scale: glam::Vec3::ONE
+            };
+            256
+        ],
+        timeline,
+    )?;
+    measure("root_only_128x256", |tick| {
+        black_box(sparse.evaluate(&[clip.sample_at(tick, rate); 256]).unwrap());
+    });
+    measure("one_million_tick_one_shot_fade", |_| {
+        let mut p = Playback::new(&clip, rate);
+        p.crossfade(&clip, 1_000_000.try_into().unwrap()).unwrap();
+        black_box(p.advance_to(1_000_000, &mut []).unwrap());
+    });
     Ok(())
 }

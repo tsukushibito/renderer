@@ -18,6 +18,19 @@ impl Track<'_> {
     fn elapsed(self, tick: u64) -> u64 {
         tick - self.start
     }
+    fn motion_end(self, rate: NonZeroU32) -> u64 {
+        let timeline = &self.clip.timeline;
+        if timeline.root.is_empty() {
+            return self.start;
+        }
+        if timeline.looping {
+            return u64::MAX;
+        }
+        let duration = (timeline.frames as u128 * u128::from(rate.get()))
+            .div_ceil(u128::from(timeline.hz.get()));
+        self.start
+            .saturating_add(u64::try_from(duration).unwrap_or(u64::MAX))
+    }
     fn displacement(self, from: u64, to: u64, rate: NonZeroU32) -> DVec3 {
         self.clip
             .timeline
@@ -68,6 +81,59 @@ impl ClipTimeline {
         })
     }
 
+    pub fn frames(&self) -> usize {
+        self.frames
+    }
+    pub fn sample_rate(&self) -> NonZeroU32 {
+        self.hz
+    }
+    pub fn is_looping(&self) -> bool {
+        self.looping
+    }
+    pub fn markers(&self) -> &[Marker] {
+        &self.markers
+    }
+
+    /// Gameplay events and translation on (from, to]. Capacity failure preserves output.
+    pub fn interval(
+        &self,
+        from: u64,
+        to: u64,
+        rate: NonZeroU32,
+        events: &mut [u32],
+    ) -> Result<Advance, AnimationError> {
+        let event_count = self.write_events(from, to, rate, events)?;
+        Ok(Advance {
+            translation: self.displacement(from, to, rate),
+            event_count,
+        })
+    }
+
+    fn write_events(
+        &self,
+        from: u64,
+        to: u64,
+        rate: NonZeroU32,
+        events: &mut [u32],
+    ) -> Result<usize, AnimationError> {
+        if to < from {
+            return Err(Invalid("reversed event interval"));
+        }
+        let (first, required) = self.event_range(from, to, rate);
+        if required > events.len() as u128 {
+            return Err(AnimationError::EventCapacity { required });
+        }
+        let count = required as usize;
+        for (dest, marker) in events[..count].iter_mut().zip(
+            self.markers[first..]
+                .iter()
+                .chain(self.markers.iter().cycle()),
+        ) {
+            *dest = marker.id;
+        }
+        Ok(count)
+    }
+
     fn displacement(&self, from: u64, to: u64, rate: NonZeroU32) -> DVec3 {
         if self.root.is_empty() || from == to {
             return DVec3::ZERO;
@@ -112,6 +178,18 @@ impl<'a> Playback<'a> {
             rate,
         }
     }
+    pub fn tick(&self) -> u64 {
+        self.tick
+    }
+    pub fn is_transitioning(&self) -> bool {
+        self.transition.is_some()
+    }
+    /// The active one-shot has displayed its last frame for its full duration.
+    pub fn is_finished(&self) -> bool {
+        let timeline = &self.active.clip.timeline;
+        !timeline.looping
+            && timeline.frame(self.active.elapsed(self.tick), self.rate) >= timeline.frames as u128
+    }
     /// Begin the target at zero. Finish the current fade before starting another.
     pub fn crossfade(
         &mut self,
@@ -121,6 +199,9 @@ impl<'a> Playback<'a> {
         if self.transition.is_some() || !Arc::ptr_eq(&target.skeleton, &self.active.clip.skeleton) {
             return Err(Invalid("incompatible or overlapping crossfade"));
         }
+        self.tick
+            .checked_add(duration.get())
+            .ok_or(Invalid("transition end exceeds simulation clock"))?;
         self.transition = Some(Transition {
             source: self.active,
             duration,
@@ -138,24 +219,25 @@ impl<'a> Playback<'a> {
             return Err(Invalid("playback cannot advance backwards"));
         }
         let target = self.active;
-        let (first, required) = target.clip.timeline.event_range(
+        let timeline = &target.clip.timeline;
+        let event_count = timeline.write_events(
             target.elapsed(self.tick),
             target.elapsed(tick),
             self.rate,
-        );
-        let markers = &target.clip.timeline.markers;
-        if required > events.len() as u128 {
-            return Err(AnimationError::EventCapacity { required });
-        }
-        let mut delta = target.displacement(self.tick, tick, self.rate);
+            events,
+        )?;
+        let mut delta;
         if let Some(fade) = &self.transition {
-            let fade_end = target.start.saturating_add(fade.duration.get()).min(tick);
+            let fade_end = (target.start + fade.duration.get()).min(tick);
+            delta = target.displacement(fade_end, tick, self.rate);
             // Integrate the displacement on each fixed step. Blending absolute
             // positions would make a walk-to-idle transition slide backwards.
             if !(target.clip.timeline.root.is_empty() && fade.source.clip.timeline.root.is_empty())
             {
-                delta = target.displacement(fade_end, tick, self.rate);
-                for step in self.tick..fade_end {
+                let moving_end = target
+                    .motion_end(self.rate)
+                    .max(fade.source.motion_end(self.rate));
+                for step in self.tick..fade_end.min(moving_end) {
                     let weight = (target.elapsed(step) as f64 + 0.5) / fade.duration.get() as f64;
                     let source_step = fade.source.displacement(step, step + 1, self.rate);
                     let target_step = target.displacement(step, step + 1, self.rate);
@@ -165,17 +247,13 @@ impl<'a> Playback<'a> {
             if target.elapsed(tick) >= fade.duration.get() {
                 self.transition = None;
             }
-        }
-        for (dest, marker) in events[..required as usize]
-            .iter_mut()
-            .zip(markers[first..].iter().chain(markers.iter().cycle()))
-        {
-            *dest = marker.id;
+        } else {
+            delta = target.displacement(self.tick, tick, self.rate);
         }
         self.tick = tick;
         Ok(Advance {
             translation: delta,
-            event_count: required as usize,
+            event_count,
         })
     }
 
@@ -190,13 +268,13 @@ impl<'a> Playback<'a> {
             let local = source.pose(fade.source.elapsed(self.tick), self.rate);
             if elapsed == 0 {
                 return PoseSample {
-                    clip: source,
+                    skeleton: &source.skeleton,
                     local,
                     blend: None,
                 };
             }
             return PoseSample {
-                clip: source,
+                skeleton: &source.skeleton,
                 local,
                 blend: Some((
                     target.pose(elapsed, self.rate),

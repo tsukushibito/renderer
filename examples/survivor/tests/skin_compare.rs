@@ -123,7 +123,7 @@ fn compare(mut api: RuntimeConfig, vertex: bool, views: usize, crowd: Crowd) -> 
     )?;
     let model = catalog.load(catalog.id("primary").unwrap())?;
     let clip = model.clip("walk").unwrap();
-    let skin = model.model.mesh_data()?.prepare_compute_skin()?;
+    let skin = model.model().mesh_data()?.prepare_compute_skin()?;
     // Current raster formats accept float attributes. Convert the normalized
     // compute input once at load so both paths see exactly the same weights.
     let mut vs = Vec::new();
@@ -133,7 +133,7 @@ fn compare(mut api: RuntimeConfig, vertex: bool, views: usize, crowd: Crowd) -> 
             .as_chunks::<72>()
             .0
             .iter()
-            .take(model.model.vertices().count())
+            .take(model.model().vertices().count())
         {
             vs.extend_from_slice(&record[..48]);
             for idx in record[48..56].as_chunks::<2>().0 {
@@ -144,7 +144,7 @@ fn compare(mut api: RuntimeConfig, vertex: bool, views: usize, crowd: Crowd) -> 
     }
     let input = if vertex { &vs[..] } else { skin.bind_bytes() };
     let indices: Vec<_> = model
-        .model
+        .model()
         .indices()
         .iter()
         .flat_map(|i| i.to_le_bytes())
@@ -259,7 +259,7 @@ fn compare(mut api: RuntimeConfig, vertex: bool, views: usize, crowd: Crowd) -> 
                 indices,
                 bindings,
                 first_index: 0,
-                index_count: model.model.indices().len() as u32,
+                index_count: model.model().indices().len() as u32,
                 instance_count: 1,
                 secondary_vertices: None,
                 parameters: Default::default(),

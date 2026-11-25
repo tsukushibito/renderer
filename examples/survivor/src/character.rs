@@ -1,5 +1,7 @@
 //! Game asset selection and shared crowd pose slots.
-use sashiko::animation::{AnimatedModel, CharacterCatalog, PaletteBatch, PaletteRequest};
+use sashiko::animation::{
+    AnimatedModel, CharacterCatalog, LocalBuffer, PaletteBatch, PaletteRequest, PoseClip,
+};
 use sashiko_renderer::{
     core::jobs::RendererJobs,
     material::{MaterialHandle, Materials},
@@ -16,7 +18,7 @@ pub(super) struct Actor {
     pub texture: usize,
     pub material: MaterialHandle,
     clip: usize,
-    requested: bool,
+    requested: u8,
 }
 
 struct ModelPoses {
@@ -26,8 +28,8 @@ struct ModelPoses {
 }
 
 impl ModelPoses {
-    fn request(&mut self, clip: usize, tick: u64, pose: SkinPoseId) {
-        self.requests.push(PaletteRequest { clip, tick });
+    fn request(&mut self, request: PaletteRequest, pose: SkinPoseId) {
+        self.requests.push(request);
         self.targets.push(pose);
     }
 }
@@ -38,7 +40,8 @@ pub(super) struct Cast {
     pub actors: Vec<Actor>,
     subjects: Vec<[usize; 2]>,
     pub player_pose: SkinPoseId,
-    last_player_sample: Option<(bool, u64)>,
+    last_player_sample: Option<(f64, f64, f32)>,
+    player_gaits: Option<(PoseClip, Option<PoseClip>, LocalBuffer)>,
     poses: Vec<ModelPoses>,
     player_clips: [usize; 2],
 }
@@ -70,7 +73,7 @@ impl Cast {
                     loaded
                 } else {
                     let model = catalog.load(id)?;
-                    let data = model.model.mesh_data()?;
+                    let data = model.model().mesh_data()?;
                     let mesh = meshes.create(if compute_skin {
                         data.with_compute_skin()?
                     } else {
@@ -102,7 +105,7 @@ impl Cast {
                     texture,
                     material,
                     clip: clip_index,
-                    requested: false,
+                    requested: 0,
                 });
                 actors_by_clip.insert((id, clip), index);
                 index
@@ -135,6 +138,20 @@ impl Cast {
         } else {
             walk
         };
+        let model = &models[player_model];
+        let player_gaits = if model.has_skeleton() {
+            let walk_index = walk;
+            let walk = model.prepare_pose_clip("walk")?;
+            let jog = if jog != walk_index {
+                Some(model.prepare_pose_clip("jog")?)
+            } else {
+                None
+            };
+            let mixer = LocalBuffer::new(walk.skeleton());
+            Some((walk, jog, mixer))
+        } else {
+            None
+        };
         let poses = models
             .iter()
             .enumerate()
@@ -143,7 +160,11 @@ impl Cast {
                 let capacity = actors.iter().filter(|a| a.texture == index).count() * WALK_PHASES
                     + usize::from(index == player_model);
                 Ok(ModelPoses {
-                    batch: model.prepare_palette_batch(&names, capacity)?,
+                    batch: model.prepare_palette_batch(
+                        &names,
+                        capacity,
+                        usize::from(index == player_model && player_gaits.is_some()),
+                    )?,
                     requests: Vec::with_capacity(capacity),
                     targets: Vec::with_capacity(capacity),
                 })
@@ -151,6 +172,7 @@ impl Cast {
             .collect::<PipelineResult<_>>()?;
         Ok(Self {
             player_pose,
+            player_gaits,
             last_player_sample: None,
             player_clips: [walk, jog],
             poses,
@@ -177,31 +199,62 @@ impl Cast {
         }
         for enemy in &game.enemies {
             let index = self.subjects[enemy.archetype][usize::from(enemy.dashing)];
-            self.actors[index].requested = true;
+            self.actors[index].requested |= 1 << (enemy.id % WALK_PHASES as u64);
         }
         for actor in &mut self.actors {
-            if !std::mem::take(&mut actor.requested) {
-                continue;
-            }
+            let requested = std::mem::take(&mut actor.requested);
             for (phase, pose) in actor.poses.into_iter().enumerate() {
+                if requested & (1 << phase) == 0 {
+                    continue;
+                }
                 self.poses[actor.texture].request(
-                    actor.clip,
-                    game.tick.wrapping_add(phase as u64 * 13),
+                    PaletteRequest::Frame {
+                        clip: actor.clip,
+                        tick: game.tick.wrapping_add(phase as u64 * 13),
+                    },
                     pose,
                 );
             }
         }
-        let player = (game.locomotion.jogging(), game.locomotion.tick());
+        let player = game.locomotion.sample();
+        let player_model = self.actors[0].texture;
+        let mut resolved = None;
         if self.last_player_sample != Some(player) {
-            self.poses[self.actors[0].texture].request(
-                self.player_clips[usize::from(player.0)],
-                player.1,
-                self.player_pose,
-            );
+            let (walk_phase, jog_phase, weight) = player;
+            let dominant = usize::from(weight >= 0.5);
+            let phase = [walk_phase, jog_phase][dominant];
+            let mut request = PaletteRequest::Phase {
+                clip: self.player_clips[dominant],
+                phase,
+            };
+            if let Some((walk, jog, mixer)) = &mut self.player_gaits {
+                let run = jog.as_ref().unwrap_or(walk);
+                if weight > 0. && weight < 1. {
+                    mixer.mix(&[
+                        (walk.sample_phase(walk_phase)?, 1. - weight),
+                        (run.sample_phase(jog_phase)?, weight),
+                    ])?;
+                    resolved = Some(mixer.sample());
+                } else {
+                    let clip = if dominant == 0 { &*walk } else { run };
+                    if (phase * clip.timeline().frames() as f64).fract() != 0. {
+                        resolved = Some(clip.sample_phase(phase)?);
+                    }
+                }
+                if resolved.is_some() {
+                    request = PaletteRequest::Sample(0);
+                }
+            }
+            self.poses[player_model].request(request, self.player_pose);
         }
         let rate = crate::TICK_HZ.try_into().expect("positive update rate");
-        for model in &mut self.poses {
-            let palettes = model.batch.evaluate(&model.requests, rate, jobs)?;
+        for (i, model) in self.poses.iter_mut().enumerate() {
+            let samples = if i == player_model {
+                resolved.as_slice()
+            } else {
+                &[]
+            };
+            let palettes = model.batch.evaluate(&model.requests, samples, rate, jobs)?;
             for (&pose, palette) in model.targets.iter().zip(palettes) {
                 meshes.set_joint_transforms(pose, palette)?;
             }
@@ -228,7 +281,7 @@ mod tests {
                 meshes: 1,
                 retired_mesh_versions: 0,
             })?;
-            let mesh = meshes.create(subject.model.mesh_data()?)?;
+            let mesh = meshes.create(subject.model().mesh_data()?)?;
             let pose = meshes.create_pose(mesh)?;
             let frames = clip.frames() as u64;
             for tick in [0, frames / 4, frames / 2, frames - 1] {
@@ -239,7 +292,7 @@ mod tests {
             for tick in 0..frames {
                 let palette = palette_at(tick);
                 let sole = subject
-                    .model
+                    .model()
                     .vertices()
                     .map(|(v, weights)| {
                         weights
@@ -337,7 +390,7 @@ mod tests {
                             );
                         }
                     }
-                    for (v, w) in model.model.vertices().step_by(71) {
+                    for (v, w) in model.model().vertices().step_by(71) {
                         let position = |palette: &[sashiko_renderer::pbr::Transform]| {
                             let mut p = [0.; 3];
                             for (&j, weight) in w.joints.iter().zip(w.weights) {

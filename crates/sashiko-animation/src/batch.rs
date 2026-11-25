@@ -5,14 +5,14 @@ use glam::Vec4;
 /// Read-only display sample. Resolving or evaluating it does not advance simulation time.
 #[derive(Clone, Copy)]
 pub struct PoseSample<'a> {
-    pub(super) clip: &'a Clip,
+    pub(super) skeleton: &'a Arc<Skeleton>,
     pub(super) local: &'a [LocalPose],
     pub(super) blend: Option<(&'a [LocalPose], f32)>,
 }
 
 impl PoseSample<'_> {
     pub fn evaluate(self, out: &mut PoseWorkspace) -> Result<(), AnimationError> {
-        out.evaluate(self.clip, self.local, self.blend)
+        out.evaluate(self.skeleton, self.local, self.blend)
     }
 }
 
@@ -44,10 +44,9 @@ impl PoseBatch {
         let (groups, tail) = requests.as_chunks::<4>();
         let (dest, remainder) = outputs.as_chunks_mut::<4>();
         for (group, lanes) in groups.iter().zip(dest) {
-            for &i in &lanes[0].order {
-                let local = Affine4::from_joint(group, i);
-                self.world[i] =
-                    self.skeleton.parents[i].map_or(local, |p| self.world[p].compose(local));
+            for (i, slot) in lanes[0].layout.slots.iter().enumerate() {
+                let local = Affine4::from_joint(group, slot.joint);
+                self.world[i] = slot.parent.map_or(local, |p| self.world[p].compose(local));
                 let matrices = self.world[i].unpack();
                 // The evaluation order only borrows lane zero's order, not its matrices.
                 lanes[0].matrices[i] = matrices[0];
@@ -67,7 +66,7 @@ impl PoseBatch {
         }
         if requests
             .iter()
-            .any(|r| !Arc::ptr_eq(&r.clip.skeleton, &self.skeleton))
+            .any(|r| !Arc::ptr_eq(r.skeleton, &self.skeleton))
         {
             return Err(Invalid("incompatible batch skeleton"));
         }
@@ -81,7 +80,10 @@ impl PoseBatch {
         requests: &[PoseSample<'_>],
         jobs: &sashiko_jobs::JobScope<'_, '_>,
     ) -> Result<&[PoseWorkspace], AnimationError> {
-        let joints = self.outputs.first().map_or(0, |pose| pose.order.len());
+        let joints = self
+            .outputs
+            .first()
+            .map_or(0, |pose| pose.layout.slots.len());
         if jobs.parallelism().get() == 1
             || requests.len() < 8
             || requests.len().saturating_mul(joints) <= 128
@@ -92,10 +94,9 @@ impl PoseBatch {
         let outputs = &mut self.outputs[..requests.len()];
         let (groups, tail) = requests.as_chunks::<4>();
         let (dest, remainder) = outputs.as_chunks_mut::<4>();
-        let rig = &self.skeleton;
         jobs.scope(|s| {
             s.for_each_chunk_mut(dest, std::num::NonZeroUsize::MIN, |i, part| {
-                evaluate_independent_group(rig, &groups[i], &mut part[0]);
+                evaluate_independent_group(&groups[i], &mut part[0]);
             });
             for (sample, out) in tail.iter().zip(remainder) {
                 sample.evaluate(out)?;
@@ -109,14 +110,10 @@ impl PoseBatch {
 // A packed affine fits in three of the four lane matrices. Keep intermediate
 // worlds there until all parents have been read, then unpack in place. Each
 // group owns its scratch even when stolen, without per-group heap allocations.
-fn evaluate_independent_group(
-    rig: &Skeleton,
-    group: &[PoseSample<'_>; 4],
-    lanes: &mut [PoseWorkspace; 4],
-) {
-    for &i in &lanes[0].order {
-        let local = Affine4::from_joint(group, i);
-        let world = rig.parents[i].map_or(local, |p| {
+fn evaluate_independent_group(group: &[PoseSample<'_>; 4], lanes: &mut [PoseWorkspace; 4]) {
+    for (i, slot) in lanes[0].layout.slots.iter().enumerate() {
+        let local = Affine4::from_joint(group, slot.joint);
+        let world = slot.parent.map_or(local, |p| {
             let rows = std::array::from_fn(|r: usize| {
                 let m = lanes[r].matrices[p];
                 [m.x_axis, m.y_axis, m.z_axis, m.w_axis]
@@ -127,7 +124,7 @@ fn evaluate_independent_group(
             lanes[r].matrices[i] = Mat4::from_cols(x, y, z, w);
         }
     }
-    for &i in &lanes[0].order {
+    for i in 0..lanes[0].matrices.len() {
         let packed = Affine4(std::array::from_fn(|r: usize| {
             let m = lanes[r].matrices[i];
             [m.x_axis, m.y_axis, m.z_axis, m.w_axis]
@@ -173,8 +170,8 @@ impl Affine4 {
             for axis in 0..3 {
                 let end_scale = Vec4::from_array(ends.map(|p| p.scale[axis]));
                 let end_pos = Vec4::from_array(ends.map(|p| p.translation[axis]));
-                scale[axis] += (end_scale - scale[axis]) * weight;
-                pos[axis] += (end_pos - pos[axis]) * weight;
+                scale[axis] = scale[axis] * (Vec4::ONE - weight) + end_scale * weight;
+                pos[axis] = pos[axis] * (Vec4::ONE - weight) + end_pos * weight;
             }
             // Compute shortest-arc weights per lane; all quaternion components
             // and the hierarchy below are combined with packed arithmetic.

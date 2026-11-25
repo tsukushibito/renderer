@@ -91,6 +91,18 @@ fn matrix(transform: Transform) -> DMat4 {
 }
 
 impl AnimatedModel {
+    /// Extract local frames only for clips the caller will interpolate or combine.
+    pub fn prepare_pose_clip(&self, name: &str) -> PipelineResult<PoseClip> {
+        let source = self
+            .clip(name)
+            .ok_or_else(|| format!("unknown clip {name}"))?;
+        self.model
+            .skeleton
+            .as_ref()
+            .ok_or("a skeleton is required for local pose evaluation")?
+            .clip(source, self.timelines[name].clone())
+    }
+
     /// Resolve once for all display phases that use this clip.
     pub fn prepare_animation(&self, name: &str) -> PipelineResult<PreparedAnimation> {
         let source = self

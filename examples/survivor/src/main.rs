@@ -131,7 +131,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             },
             scenario,
             seed,
-            rules_version: 1,
+            rules_version: 2,
             visual: None,
             locomotion: None,
         })
@@ -139,7 +139,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (mut initial, mut replay) = if let Some(path) = args.get_one::<PathBuf>("replay") {
         let replay = Replay::<RunStart, Input>::read(fs::File::open(path)?, requested, rate())?;
         let init = replay.initial;
-        if init.rules_version != 1 {
+        if init.rules_version != 2 {
             return Err("replay uses an incompatible game rules version".into());
         }
         if explicit_arena
@@ -190,8 +190,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         .cloned()
         .map(Ok)
         .unwrap_or_else(survivor::catalog_path)?;
-    if initial.locomotion.is_none() && !args.get_flag("headless") {
-        let catalog = sashiko::animation::CharacterCatalog::open(&catalog_path)?;
+    if initial.locomotion.is_none() {
+        let catalog = if args.get_flag("headless") {
+            sashiko::animation::CharacterCatalog::parse(
+                std::path::Path::new("catalog.json"),
+                include_bytes!("../../../assets/survivor/characters/catalog.json"),
+            )?
+        } else {
+            sashiko::animation::CharacterCatalog::open(&catalog_path)?
+        };
         initial.locomotion = Some(survivor::LocomotionClips::load(&catalog, &character)?);
     }
     if let Some(clips) = &initial.locomotion {
@@ -338,7 +345,7 @@ mod tests {
             arena,
             seed: 506,
             scenario: Scenario::Early,
-            rules_version: 1,
+            rules_version: 2,
             visual: None,
             locomotion: None,
         };

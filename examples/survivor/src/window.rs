@@ -162,7 +162,7 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
             |game, input| {
                 let events = game.step(input);
                 if let Some(sound) = &mut self.sound {
-                    sound.update(game);
+                    sound.update(game, events.footsteps);
                 }
                 self.profile.observe(events.kills)
             },
