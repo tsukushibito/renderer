@@ -362,6 +362,8 @@ pub(crate) static MESH: RasterProgramDescriptor = RasterProgramDescriptor {
     shaders: embedded_raster_shaders!(
         "../../shaders/mesh.vert.spv",
         Some(include_bytes!("../../shaders/mesh.frag.spv")),
+        "../../shaders/mesh.vert.wgsl",
+        Some(include_bytes!("../../shaders/mesh.frag.wgsl")),
         "../../shaders/dxil/mesh.vert.dxil",
         Some(include_bytes!("../../shaders/dxil/mesh.frag.dxil")),
         Some(D3D12InlineConstantBinding {
@@ -404,6 +406,8 @@ static TEXTURED_MESH: RasterProgramDescriptor = RasterProgramDescriptor {
     shaders: embedded_raster_shaders!(
         "../../shaders/textured.vert.spv",
         Some(include_bytes!("../../shaders/textured.frag.spv")),
+        "../../shaders/textured.vert.wgsl",
+        Some(include_bytes!("../../shaders/textured.frag.wgsl")),
         "../../shaders/dxil/textured.vert.dxil",
         Some(include_bytes!("../../shaders/dxil/textured.frag.dxil")),
         Some(D3D12InlineConstantBinding {
@@ -430,6 +434,8 @@ static DEPTH_ONLY: RasterProgramDescriptor = RasterProgramDescriptor {
     },
     shaders: embedded_raster_shaders!(
         "../../shaders/mesh.vert.spv",
+        None,
+        "../../shaders/mesh.vert.wgsl",
         None,
         "../../shaders/dxil/mesh.vert.dxil",
         None,
@@ -469,7 +475,7 @@ impl ManagedRasterProgram {
     /// Import a statically owned graphics asset without Renderer effect variants.
     ///
     /// # Safety
-    /// Each supplied backend must have valid Vulkan 1.3/SPIR-V 1.3 or D3D12 SM6.0
+    /// Each supplied backend must have valid Vulkan 1.3/SPIR-V 1.3, D3D12 SM6.0 or WGSL
     /// vertex and optional fragment shaders for `entry = "main"`, as selected by
     /// its slot, using only enabled backend features. Stage interfaces, descriptor slots, vertex attributes,
     /// inline parameters and outputs must exactly match this complete descriptor.
@@ -502,6 +508,9 @@ impl ManagedRasterProgram {
     /// specify `inline_constants` if the size is nonzero and leave it `None`
     /// otherwise. DXIL represents this block as that CBV register and space,
     /// with no overlapping Uniform binding.
+    /// WGSL uses a uniform at group 0, binding 255 for the inline block, with
+    /// the same byte offsets and no overlapping binding. Nearest-only samplers
+    /// paired with unfilterable float/depth views must be declared in its metadata.
     /// Inline members must not be dynamically indexed: D3D12 root constants
     /// permit only static/literal indexing. Use Uniform/StorageRead for arrays
     /// that require dynamic indexing.
@@ -568,7 +577,7 @@ impl ManagedRasterProgram {
                 inline_constants: dxil.inline_constants,
             },
         );
-        if shaders.vulkan.is_none() && shaders.d3d12.is_none() {
+        if shaders.is_empty() {
             return Err(ShaderImportError::MissingBinaries);
         }
         let requires_fragment = !descriptor.color_outputs.is_empty()
@@ -580,6 +589,29 @@ impl ManagedRasterProgram {
                 .bindings
                 .iter()
                 .any(|slot| slot.stages.contains(ShaderStages::FRAGMENT));
+        #[cfg(feature = "webgpu")]
+        if let Some(stages) = &shaders.wgsl {
+            validate_stages(
+                stages,
+                requires_fragment,
+                binary::valid_wgsl,
+                ShaderImportError::InvalidWgsl,
+            )?;
+            if shaders.nonfiltering.iter().any(|&(g, b)| {
+                !descriptor.bindings.iter().any(|slot| {
+                    slot.group == g && slot.binding == b && slot.kind == BindingType::Sampler
+                })
+            }) || (descriptor.parameters.size != 0
+                && descriptor
+                    .bindings
+                    .iter()
+                    .any(|slot| slot.group == 0 && slot.binding == super::WEBGPU_INLINE_BINDING))
+            {
+                return Err(ShaderImportError::InvalidDescriptor(
+                    "WebGPU binding layout",
+                ));
+            }
+        }
         if let Some(spirv) = &shaders.vulkan {
             validate_stages(
                 spirv,
@@ -758,6 +790,22 @@ impl ManagedRasterProgram {
     fn is_prepassed(&self) -> bool {
         self.requires_depth_load()
     }
+    /// WGSL modules for this immutable raster program.
+    #[cfg(feature = "webgpu")]
+    pub fn wgsl(&self) -> Option<RasterShaderStages<&str>> {
+        let stages = self.descriptor().shaders.wgsl?;
+        Some(RasterShaderStages {
+            vertex: std::str::from_utf8(stages.vertex).ok()?,
+            fragment: stages.fragment.map(std::str::from_utf8).transpose().ok()?,
+        })
+    }
+
+    /// Nearest-only WebGPU sampler bindings, including manual depth comparisons.
+    #[cfg(feature = "webgpu")]
+    pub fn webgpu_nonfiltering_samplers(&self) -> &[(u32, u32)] {
+        self.descriptor().shaders.nonfiltering
+    }
+
     #[cfg(feature = "vulkan")]
     pub(crate) fn spirv(&self) -> Option<RasterShaderStages<&[u8]>> {
         self.descriptor().shaders.vulkan
@@ -771,6 +819,33 @@ impl ManagedRasterProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "webgpu")]
+    #[test]
+    fn owned_wgsl_preserves_stages_and_nearest_sampler_layout() {
+        let stages = TEXTURED_MESH.shaders.wgsl.unwrap();
+        let descriptor = RasterProgramDescriptor {
+            shaders: ShaderBinaries::webgpu(stages, &[(1, 1)]),
+            ..TEXTURED_MESH
+        };
+        // SAFETY: The shipped textured-mesh ABI is unchanged, and the sampler
+        // restriction is compatible with its ordinary float texture sampling.
+        let loaded =
+            unsafe { ManagedRasterProgram::from_trusted_owned_descriptor(descriptor) }.unwrap();
+        assert_eq!(loaded.wgsl().unwrap().vertex.as_bytes(), stages.vertex);
+        assert_eq!(
+            loaded.wgsl().unwrap().fragment.map(str::as_bytes),
+            stages.fragment
+        );
+        assert_eq!(loaded.webgpu_nonfiltering_samplers(), &[(1, 1)]);
+        assert!(
+            ManagedRasterProgram::depth_only()
+                .wgsl()
+                .unwrap()
+                .fragment
+                .is_none()
+        );
+    }
 
     #[test]
     fn prepassed_programs_keep_shader_abis_but_have_distinct_depth_contracts() {

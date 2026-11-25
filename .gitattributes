@@ -2,6 +2,9 @@
 /crates/sashiko-renderer-core/src/backends/d3d12/bindings.rs text eol=lf
 /.beads/hooks/* text eol=lf
 
+# Browser shader text is byte-compared with reproducible regeneration.
+*.wgsl text eol=lf
+
 # DXIL regeneration hashes configs and byte-compares canonical generated text.
 /crates/sashiko-renderer-core/shaders/*.json text eol=lf
 /crates/sashiko-renderer-core/shaders/dxil/*.hlsl text eol=lf

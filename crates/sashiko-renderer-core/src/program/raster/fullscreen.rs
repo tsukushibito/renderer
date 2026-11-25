@@ -14,6 +14,16 @@ pub const fn fullscreen_triangle_shaders(
     d3d12_inline_constants: Option<D3D12InlineConstantBinding>,
 ) -> ShaderBinaries<RasterShaderStages, D3D12RasterShaders> {
     ShaderBinaries {
+        #[cfg(feature = "webgpu")]
+        wgsl: match fragments.wgsl {
+            Some(fragment) => Some(RasterShaderStages {
+                vertex: include_bytes!("../../../shaders/composite.vert.wgsl"),
+                fragment: Some(fragment),
+            }),
+            None => None,
+        },
+        #[cfg(feature = "webgpu")]
+        nonfiltering: fragments.nonfiltering,
         vulkan: match fragments.vulkan {
             #[cfg(feature = "vulkan")]
             Some(fragment) => Some(RasterShaderStages {

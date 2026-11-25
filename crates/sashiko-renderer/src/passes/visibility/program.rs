@@ -52,10 +52,7 @@ static VISIBILITY: ComputeProgramDescriptor = ComputeProgramDescriptor {
             MASK_GROUP_BYTES,
         ],
     },
-    shaders: packaged_shaders!(
-        include_bytes!("../../../shaders/frustum_visibility.comp.spv"),
-        include_bytes!("../../../shaders/dxil/frustum_visibility.comp.dxil"),
-    ),
+    shaders: packaged_shaders!(module: "frustum_visibility.comp"),
 };
 
 pub const fn visibility_program() -> ManagedProgram {
