@@ -56,7 +56,7 @@ WebGPU を有効にした Chromium と対応する ChromeDriver を用意し、
 ```powershell
 rustup target add wasm32-unknown-unknown
 $env:CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER = "wasm-bindgen-test-runner"
-cargo test --locked --release --target wasm32-unknown-unknown -p sashiko-renderer-core --features webgpu --test webgpu_runtime -- --ignored
+cargo test --locked --release --target wasm32-unknown-unknown -p sashiko-renderer-core --features webgpu --test webgpu_runtime -- --include-ignored
 ```
 
 WebDriver を使わずにインストール済みのブラウザで実行するには、同じコマンドに
