@@ -150,10 +150,7 @@ pub(super) fn open(
     Ok((runtime, presenter))
 }
 
-#[cfg(any(
-    all(windows, feature = "presentation"),
-    all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
-))]
+#[cfg(all(windows, feature = "presentation"))]
 pub(super) fn resize(
     runtime: &mut Runtime,
     options: &Options,
@@ -167,22 +164,7 @@ pub(super) fn resize(
         &Budget::frame_images(options, prepared),
         prepared,
     )?;
-    #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
-    {
-        let width = u64::from(options.width);
-        let readback = ((width * 8).next_multiple_of(256) + (width * 4).next_multiple_of(256) * 2)
-            * u64::from(options.height)
-            + 4096;
-        Ok(runtime.prepare_fitted_working_set(
-            &preparation,
-            budget.upload_bytes as u64,
-            readback,
-        )?)
-    }
-    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")))]
-    {
-        Ok(runtime.prepare_working_set(preparation.working_set())?)
-    }
+    Ok(runtime.prepare_working_set(preparation.working_set())?)
 }
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
@@ -298,20 +280,25 @@ pub(super) async fn wait_upload(
 }
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
+pub(super) fn canvas_preparation(budget: &Budget) -> Result<Preparation, Error> {
+    let prepared = budget.prepared.as_ref().ok_or("missing prepared scene")?;
+    prepare_set(
+        false,
+        &budget.buffers,
+        &budget.samplers,
+        &budget.images,
+        prepared,
+    )
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
 pub(super) async fn canvas_runtime(
     canvas: &sashiko_renderer_core::webgpu::CanvasTarget,
     options: &Options,
     budget: &Budget,
 ) -> Result<Runtime, Error> {
     use sashiko_renderer_core::runtime::WebGpuConfig;
-    let prepared = budget.prepared.as_ref().ok_or("missing prepared scene")?;
-    let preparation = prepare_set(
-        false,
-        &budget.buffers,
-        &budget.samplers,
-        &budget.images,
-        prepared,
-    )?;
+    let preparation = canvas_preparation(budget)?;
     Ok(Runtime::from_webgpu_device(
         canvas.device(),
         canvas.queue(),

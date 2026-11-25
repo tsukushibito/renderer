@@ -175,18 +175,12 @@ impl Budget {
             })
     }
 
-    #[cfg(any(
-        all(windows, feature = "presentation"),
-        all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
-    ))]
+    #[cfg(all(windows, feature = "presentation"))]
     pub fn resized_buffers(&self, prepared: &PreparedSet) -> Vec<(u64, usize)> {
         Self::frame_buffers(prepared).collect()
     }
 
-    #[cfg(any(
-        all(windows, feature = "presentation"),
-        all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")
-    ))]
+    #[cfg(all(windows, feature = "presentation"))]
     pub fn prepare_frame(
         &self,
         options: &Options,

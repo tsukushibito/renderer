@@ -150,6 +150,7 @@ async fn load(
         on_progress,
     )
     .await?;
+    environment.release_pixels();
     scene.vertices = Vec::new();
     scene.indices = Vec::new();
     scene.lightmap_uv = Vec::new();
@@ -164,7 +165,7 @@ async fn load(
         resident,
         pool,
         workspace,
-        budget,
+        environment,
         scene,
         conditions,
         options,
@@ -182,7 +183,7 @@ pub struct SceneSession {
     resident: Resident,
     pool: GraphPool,
     workspace: Workspace,
-    budget: Budget,
+    environment: Environment,
     scene: Scene,
     conditions: Conditions,
     options: Options,
@@ -323,12 +324,27 @@ impl SceneSession {
     }
 
     fn reconfigure(&mut self, options: Options) -> Result<(), Error> {
-        let prepared =
-            self.budget
-                .prepare_frame(&options, &self.scene, self.conditions.background)?;
+        // Registered materials may have the same descriptor as a new framebuffer.
+        // Include them in the total so that resize preserves idle capacity for the frame.
+        let mut budget = Budget::new(
+            &self.scene,
+            &self.environment,
+            &options,
+            self.conditions.background,
+        )?;
+        let preparation = backend::canvas_preparation(&budget)?;
+        let pool = GraphPool::new(budget.graph, options.inflight + 1)?;
         self.workspace.clear_shadow_reuse(&mut self.runtime)?;
-        backend::resize(&mut self.runtime, &options, &self.budget, &prepared)?;
-        self.workspace = Workspace::new(&self.scene, prepared);
+        self.runtime.prepare_fitted_working_set(
+            &preparation,
+            budget.upload_bytes as u64,
+            budget.readback_bytes,
+        )?;
+        self.workspace = Workspace::new(
+            &self.scene,
+            budget.prepared.take().ok_or("missing prepared pipeline")?,
+        );
+        self.pool = pool;
         self.workspace.enable_shadow_reuse();
         self.options = options;
         Ok(())
