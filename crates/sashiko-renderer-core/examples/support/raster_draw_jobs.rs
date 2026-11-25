@@ -54,6 +54,10 @@ impl DrawPreparation {
     pub(super) fn draws(&self, range: Range<usize>) -> &[RasterDraw] {
         &self.packets[range]
     }
+
+    pub(super) fn packet_capacity_bytes(&self) -> usize {
+        self.packets.capacity() * size_of::<RasterDraw>()
+    }
 }
 
 fn fill_batch(
