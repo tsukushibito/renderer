@@ -1838,11 +1838,13 @@ name = "sashiko-renderer"
 version = "0.1.0"
 dependencies = [
  "raw-window-handle",
+ "sashiko-example-support",
  "sashiko-jobs",
  "sashiko-renderer-core",
  "serde_json",
  "sha2",
  "tracy-client",
+ "winit",
 ]
 
 [[package]]
