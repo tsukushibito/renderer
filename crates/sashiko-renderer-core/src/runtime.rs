@@ -377,7 +377,7 @@ impl Runtime {
     #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub fn prepare_raster_recording(
         &mut self,
-        jobs: sashiko_jobs::JobSystem,
+        jobs: impl Into<crate::jobs::RendererJobs>,
         max_batches: std::num::NonZeroUsize,
     ) -> Result<(), ExecutionError> {
         match &mut self.inner {
