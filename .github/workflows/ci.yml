@@ -147,10 +147,12 @@ jobs:
         run: cargo check --locked --release --lib -p renderer-scenes --target wasm32-unknown-unknown --features webgpu
       - name: Build the validation-enabled viewer
         run: python -B tools/renderer-scenes/build_web.py --out build/webgpu --development-validation
-      - name: Run the packaged fixture on Edge with SwiftShader
-        run: |
-          python -m pip install numpy==1.26.4 Pillow==11.1.0 psutil==7.0.0 playwright==1.49.1
-          python -B tools/renderer-scenes/verify_web.py build/webgpu --channel msedge --software --output build/webgpu-result
+      - name: Install browser verification dependencies
+        run: python -m pip install numpy==1.26.4 Pillow==11.1.0 psutil==7.0.0 playwright==1.49.1
+      - name: Test the public WebGPU runtime on Edge with SwiftShader
+        run: python -B tools/run_webgpu_tests.py --channel msedge --software --development-validation
+      - name: Run the packaged viewer on Edge with SwiftShader
+        run: python -B tools/renderer-scenes/verify_web.py build/webgpu --channel msedge --software --output build/webgpu-result
       - uses: actions/upload-artifact@v4
         if: always()
         with:

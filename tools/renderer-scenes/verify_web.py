@@ -137,14 +137,22 @@ def attach(page, url, width, height):
 def advance(page, count):
     return page.evaluate(
         """async count => {
-        const intervals = [];
+        const intervals = [], submissionIntervals = [];
+        let submitted = 0, previous;
         for (let i=0; i<count; ++i) {
             const start = performance.now();
             const time = await new Promise(requestAnimationFrame);
-            await view.frame(time);
-            intervals.push(performance.now()-start);
+            const visible = await view.frame(time);
+            const end = performance.now();
+            intervals.push(end-start);
+            if (visible) {
+                ++submitted;
+                if (previous !== undefined) submissionIntervals.push(end-previous);
+                previous = end;
+            }
         }
-        return intervals;
+        return {raf_intervals_ms:intervals, submitted_frames:submitted,
+            skipped_frames:count-submitted, submission_intervals_ms:submissionIntervals};
     }""",
         count,
     )
@@ -284,7 +292,7 @@ def run_views(page, args, result):
                 advance(page, 2)
                 result["timing"][name] = {
                     "attach_and_first_frames_ms": (perf_counter() - started) * 1000,
-                    "frame_intervals_ms": advance(page, 24),
+                    **advance(page, 24),
                 }
                 for mode in light_modes(scene):
                     if scene == "sponza":
