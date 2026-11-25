@@ -77,6 +77,36 @@ fn load_image(
     height: u32,
     levels: usize,
 ) -> Result<Image> {
+    let name = record["path"]
+        .as_str()
+        .ok_or_else(|| invalid("missing IBL relative image path"))?;
+    let relative = Path::new(name);
+    require(
+        !relative.as_os_str().is_empty()
+            && relative
+                .components()
+                .all(|part| matches!(part, Component::Normal(_))),
+        "IBL image path must contain only normal relative components",
+    )?;
+    let path = root.join(relative).canonicalize()?;
+    require(
+        path.starts_with(root),
+        "IBL image path escapes manifest directory",
+    )?;
+    require(
+        std::fs::metadata(&path)?.len() == u64::try_from(integer(&record["byte_length"])?)?,
+        "IBL image file has wrong byte length",
+    )?;
+    decode_image(record, width, height, levels, || Ok(std::fs::read(path)?))
+}
+
+pub(super) fn decode_image(
+    record: &Value,
+    width: u32,
+    height: u32,
+    levels: usize,
+    read: impl FnOnce() -> Result<Vec<u8>>,
+) -> Result<Image> {
     exact(
         &record["format"],
         json!("rgba16f-le"),
@@ -114,27 +144,7 @@ fn load_image(
         integer(&record["byte_length"])? == end,
         "IBL packed byte length disagrees with mip shapes",
     )?;
-    let name = record["path"]
-        .as_str()
-        .ok_or_else(|| invalid("missing IBL relative image path"))?;
-    let relative = Path::new(name);
-    require(
-        !relative.as_os_str().is_empty()
-            && relative
-                .components()
-                .all(|part| matches!(part, Component::Normal(_))),
-        "IBL image path must contain only normal relative components",
-    )?;
-    let path = root.join(relative).canonicalize()?;
-    require(
-        path.starts_with(root),
-        "IBL image path escapes manifest directory",
-    )?;
-    require(
-        std::fs::metadata(&path)?.len() == u64::try_from(end)?,
-        "IBL image file has wrong byte length",
-    )?;
-    let bytes = std::fs::read(path)?;
+    let bytes = read()?;
     require(bytes.len() == end, "IBL image changed length during load")?;
     exact(
         &record["sha256"],
@@ -170,7 +180,16 @@ impl Environment {
             .parent()
             .ok_or_else(|| invalid("IBL manifest directory missing"))?;
         let bytes = std::fs::read(&path)?;
-        let mut value: Value = serde_json::from_slice(&bytes)?;
+        Self::decode(&bytes, |record, w, h, levels| {
+            load_image(root, record, w, h, levels)
+        })
+    }
+
+    pub(super) fn decode(
+        bytes: &[u8],
+        mut load_image: impl FnMut(&Value, u32, u32, usize) -> Result<Image>,
+    ) -> Result<Self> {
+        let mut value: Value = serde_json::from_slice(bytes)?;
         exact(
             &value["schema_version"],
             json!(1),
@@ -267,9 +286,9 @@ impl Environment {
             json!("1.26.4"),
             "IBL decoder NumPy mismatch",
         )?;
-        let diffuse = load_image(root, &value["images"]["diffuse"], 128, 64, 1)?;
-        let specular = load_image(root, &value["images"]["specular"], 1024, 512, 11)?;
-        let brdf = load_image(root, &value["images"]["brdf"], 256, 256, 1)?;
+        let diffuse = load_image(&value["images"]["diffuse"], 128, 64, 1)?;
+        let specular = load_image(&value["images"]["specular"], 1024, 512, 11)?;
+        let brdf = load_image(&value["images"]["brdf"], 256, 256, 1)?;
         value["manifest_sha256"] = json!(format!("{:x}", Sha256::digest(bytes)));
         Ok(Self {
             lightmaps: Vec::new(),
