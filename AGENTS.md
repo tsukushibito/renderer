@@ -42,6 +42,21 @@ This repository uses **Beads (`bd`)** for issue tracking. Read
 - After integration and push are confirmed, remove task-owned worktrees and
   branches only when they contain no uncommitted or unmerged work to preserve.
 
+# CI execution time
+
+- Aim for full CI on `main` to finish within **5 minutes with warm caches**.
+  Measure wall time from workflow start until the last required check finishes,
+  including time spent waiting for runners.
+- Before changing a workflow or a script it runs, use a recent comparable run
+  to identify which jobs determine completion time. Preserve required platform,
+  feature and test coverage. Reuse existing builds and pinned tools, and account
+  for runner availability when splitting jobs or adding matrix entries.
+- After the change, compare actual GitHub Actions runs with equivalent coverage.
+  If cache keys or setup changed, report the first run and a warm run separately.
+  Record run links, elapsed times and the limiting job in the Beads issue.
+  Investigate regressions even within the five-minute target. If a slowdown is
+  necessary for coverage, document its cost and the reason for keeping it.
+
 # Vulkan implementation and review
 
 - Before Vulkan-related implementation or review, including Graph lowering and
