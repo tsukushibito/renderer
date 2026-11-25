@@ -676,6 +676,113 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn generated_runs_preserve_order_holes_and_constants_after_rollback() {
+        use crate::graph::RasterConstants;
+        use crate::jobs::{JobSystem, RendererJobs};
+        use std::num::NonZeroUsize;
+        for participants in [0, 1, 4] {
+            let mut pool = GraphPool::new(
+                GraphCapacity {
+                    draws: 9,
+                    raster_constant_words: Some(9 * 20),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+            if let Some(count) = NonZeroUsize::new(participants) {
+                pool.set_raster_jobs(
+                    RendererJobs::new(JobSystem::new(count).unwrap()),
+                    NonZeroUsize::MIN,
+                );
+            }
+            pool.set_generated_batch_size(4.try_into().unwrap());
+            let mut graph = pool.begin().unwrap();
+            let base = uploaded_draw(&mut graph, "mesh");
+            let alternate = uploaded_draw(&mut graph, "alternate mesh");
+            let indices = graph.buffer("sparse", BufferDesc { size: 48 }).unwrap();
+            graph.upload_buffer("prefix", indices, 0, &[0; 12]).unwrap();
+            graph.upload_buffer("far", indices, 24, &[0; 24]).unwrap();
+            let image = graph.image("output", ImageDesc::rgba8(2, 2)).unwrap();
+            let colors = [Attachment {
+                view: graph.image_view(image, 0, 0).unwrap(),
+                load: LoadOp::Clear([0.; 4]),
+                store: StoreOp::Store,
+            }];
+            let attachments = RasterAttachments {
+                colors: &colors,
+                depth: None,
+                color_resolves: &[],
+            };
+            let program = ManagedRasterProgram::mesh();
+            let starts = [0, 6, 9, 9, 6, 0, 9, 6, 0];
+            let draw_at = |n: usize| RasterDraw {
+                first_index: starts[n],
+                indices,
+                instance_count: n as u32 + 1,
+                parameters: RasterConstants::new(&[n as u32; 20]).unwrap(),
+                ..if n == 4 { alternate } else { base }
+            };
+            let err = graph
+                .raster("reject", attachments, |pass| {
+                    // Errors caught by the pass author must still poison this pass.
+                    let _ = pass.draw_generated(&program, 9, |n| {
+                        let mut draw = draw_at(n);
+                        if n == 8 {
+                            draw.index_count = 1;
+                        }
+                        draw
+                    });
+                    Ok(())
+                })
+                .unwrap_err();
+            assert_eq!(err.resource_name(), Some("sparse"));
+            assert_eq!(err.pass_name(), Some("reject"));
+            let pass = graph
+                .raster("retry", attachments, |p| {
+                    p.draw_generated(&program, 9, draw_at)
+                })
+                .unwrap();
+            graph.export_image(image).unwrap();
+            let plan = graph.compile().unwrap();
+            assert!(
+                plan.accesses(pass.index)
+                    .iter()
+                    .filter(|a| a.purpose == AccessPurpose::Index)
+                    .map(|a| a.range.clone())
+                    .eq([0..12, 24..48])
+            );
+            let Operation::Raster { batches, draws, .. } = &plan.passes[pass.index].operation
+            else {
+                panic!("raster")
+            };
+            assert!(
+                plan.raster_batches(batches)
+                    .iter()
+                    .map(|b| b.draws.len())
+                    .eq([3, 3, 3])
+            );
+            for (n, (out, words)) in plan
+                .raster_draws(draws)
+                .iter()
+                .zip(
+                    plan.raster_batches(batches)
+                        .iter()
+                        .flat_map(|b| plan.raster_constants(b)),
+                )
+                .enumerate()
+            {
+                assert_eq!(words, &[n as u32; 20]);
+                let indexed = out.indexed.unwrap();
+                assert_eq!(indexed.first_index, starts[n]);
+                assert_eq!(indexed.instance_count, n as u32 + 1);
+                assert_eq!(indexed.vertices, draw_at(n).vertices.index);
+            }
+        }
+    }
+
     #[test]
     fn ranged_index_draw_cannot_consume_a_hole_between_uploads() {
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();

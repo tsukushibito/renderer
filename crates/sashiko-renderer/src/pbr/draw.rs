@@ -598,11 +598,15 @@ impl Batch {
                     }
                 }
                 Command::Indexed(_) => {
-                    pass.draw(program, batch.iter().filter_map(Command::indexed))?;
+                    pass.draw_generated(program, batch.len(), |i| {
+                        batch[i].indexed().expect("ordered indexed run")
+                    })?;
                 }
                 Command::Instanced(_) => {
                     let program = instances.expect("instanced draws have a prepared program");
-                    pass.draw(program, batch.iter().filter_map(Command::indexed))?;
+                    pass.draw_generated(program, batch.len(), |i| {
+                        batch[i].indexed().expect("ordered indexed run")
+                    })?;
                 }
                 Command::Indirect { .. } => {
                     for &command in batch {

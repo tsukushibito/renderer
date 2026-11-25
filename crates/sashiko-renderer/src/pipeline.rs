@@ -43,8 +43,11 @@ struct ForwardCommand {
     draw: RasterDraw,
 }
 impl ForwardCommand {
-    fn record(&self, pass: &mut RasterPass<'_, '_>) -> Result<(), GraphError> {
-        pass.draw(&self.program, [self.draw])
+    fn record_runs(commands: &[Self], pass: &mut RasterPass<'_, '_>) -> Result<(), GraphError> {
+        for run in commands.chunk_by(|a, b| a.program.same(&b.program)) {
+            pass.draw_generated(&run[0].program, run.len(), |i| &run[i].draw)?;
+        }
+        Ok(())
     }
 }
 
@@ -64,30 +67,21 @@ impl ForwardDraws {
         !self.opaque.is_empty()
     }
     pub(crate) fn draw_opaque(&self, pass: &mut RasterPass<'_, '_>) -> Result<(), GraphError> {
-        for command in &self.opaque {
-            command.record(pass)?
-        }
-        Ok(())
+        ForwardCommand::record_runs(&self.opaque, pass)
     }
     pub(crate) fn draw_rect_shadow(
         &self,
         pass: &mut RasterPass<'_, '_>,
         face: usize,
     ) -> Result<(), GraphError> {
-        for cmd in &self.rect_shadow[face] {
-            cmd.record(pass)?;
-        }
-        Ok(())
+        ForwardCommand::record_runs(&self.rect_shadow[face], pass)
     }
     pub(crate) fn draw_shadow(
         &self,
         pass: &mut RasterPass<'_, '_>,
         cascade: usize,
     ) -> Result<(), GraphError> {
-        for command in &self.shadow[cascade] {
-            command.record(pass)?
-        }
-        Ok(())
+        ForwardCommand::record_runs(&self.shadow[cascade], pass)
     }
     pub(crate) fn draw_color(
         &self,
@@ -95,11 +89,15 @@ impl ForwardDraws {
         mut pbr: impl FnMut(&mut RasterPass<'_, '_>, Range<usize>) -> Result<(), GraphError>,
     ) -> Result<(), GraphError> {
         let mut start = 0;
-        for (before, cmd) in &self.blend {
+        for run in self
+            .blend
+            .chunk_by(|a, b| a.0 == b.0 && a.1.program.same(&b.1.program))
+        {
+            let (before, cmd) = &run[0];
             if start < *before {
                 pbr(pass, start..*before)?;
             }
-            cmd.record(pass)?;
+            pass.draw_generated(&cmd.program, run.len(), |i| &run[i].1.draw)?;
             start = *before;
         }
         if start < self.pbr_blends {
