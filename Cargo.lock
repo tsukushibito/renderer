@@ -1751,12 +1751,20 @@ dependencies = [
  "glam",
  "hound",
  "raw-window-handle",
+ "sashiko-animation",
  "sashiko-asset",
  "sashiko-renderer",
  "serde",
  "serde_json",
  "windows-sys 0.61.2",
  "winit",
+]
+
+[[package]]
+name = "sashiko-animation"
+version = "0.1.0"
+dependencies = [
+ "glam",
 ]
 
 [[package]]

@@ -1,15 +1,16 @@
 //! Load-time skin preparation and deterministic playback of sampled model-space poses.
 use sashiko_asset::{AssetId, Digest};
 use serde::{Deserialize, Serialize};
-mod transition;
+mod rig;
+use rig::Rig;
+pub use rig::{PaletteWorkspace, PreparedAnimation};
+pub use sashiko_animation::Playback;
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
     num::NonZeroU32,
     path::{Component, Path, PathBuf},
 };
-pub use transition::Crossfade;
-use transition::Skeleton;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -225,7 +226,7 @@ pub struct SkinnedModel {
     joints: usize,
     frames: usize,
     poses: Vec<Transform>,
-    skeleton: Option<Skeleton>,
+    skeleton: Option<Rig>,
 }
 
 fn record_bytes<'a>(input: &mut &'a [u8], count: usize, stride: usize) -> PipelineResult<&'a [u8]> {
@@ -265,7 +266,7 @@ impl SkinnedModel {
         let all_joints = frames.checked_mul(joints).ok_or("walk clip overflow")?;
         let matrices = record_bytes(&mut data, all_joints, 48)?;
         let skeleton = if has_skeleton {
-            Some(Skeleton::decode(record_bytes(&mut data, joints, 52)?)?)
+            Some(Rig::decode(record_bytes(&mut data, joints, 52)?)?)
         } else {
             None
         };
@@ -343,6 +344,41 @@ impl SkinnedModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_skin_prepares_direct_palette_playback() -> PipelineResult<()> {
+        let bytes = include_bytes!("../../../assets/survivor/characters/primary.skin");
+        assert_eq!(&bytes[..8], b"SURSKIN2");
+        let joints = u32::from_le_bytes(bytes[16..20].try_into()?) as usize;
+        let mut legacy = bytes[..bytes.len() - joints * 52].to_vec();
+        legacy[..8].copy_from_slice(b"SURSKIN1");
+        let mesh = SkinnedModel::decode(&legacy)?;
+        let rate = NonZeroU32::new(60).unwrap();
+        let clips = BTreeMap::from([(
+            "legacy".into(),
+            Clip {
+                first: 1,
+                frames: 2,
+                hz: rate,
+                looping: true,
+            },
+        )]);
+        let model = AnimatedModel {
+            model: mesh,
+            clips,
+            content: [Digest::of(&legacy); 2],
+            color: vec![],
+            extent: [0, 0],
+        };
+        let mut prepared = model.prepare_animation("legacy")?;
+        assert!(prepared.rigged().is_none());
+        for tick in [0, 1, 2, u64::MAX] {
+            assert_eq!(
+                prepared.sample(tick, rate)?,
+                model.clip("legacy").unwrap().sample(tick, rate)
+            );
+        }
+        Ok(())
+    }
     #[test]
     fn clip_clock_resamples_and_holds_or_loops_without_overflow() {
         let hz = NonZeroU32::new(60).unwrap();
