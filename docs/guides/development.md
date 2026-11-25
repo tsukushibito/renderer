@@ -1762,6 +1762,12 @@ python tools/renderer-scenes/raster_job_benchmark.py --exe target/release/exampl
 
 `--conditions in-pass` でパス内4バッチに絞れる。`--profile off` は完了フレーム/秒を測る通常走、`--profile on` はネイティブ記録・GPU 時間を取得する診断走に使う。`build_excluding_packet_p50_ms` は各フレームの `build_ns` から命令の別配列への生成・合流にかかった `packet_prepare_ns` を差し引いて集計した値である。直接登録の値にはインラインの命令生成も含まれる。[5万描画の比較結果](../verification/current.md#raster-jobs)
 
+ネイティブ記録を比較する場合は `--workers 0` で入力生成を固定し、`--native-workers 0 1 4` を変える。0 は元の直接記録、1 は同じ二次バッファ／バンドルを1人で記録、4 は呼び出し元を含む4人で記録する。一つの実行ファイルを使い、画像照合、通常の FPS、`--profile on` の記録・GPU 計時は別プロセスで測る。`memory-profiling` 付き実行ファイルでは `memory` に計測ループの Rust 確保・ゼロ初期化確保・再確保・解放、VMA host callback、native event の各累積差分も出る。配列の順序は `measurement::{RustEvent, HostEvent, NativeEvent}` に対応する。[ネイティブ記録の比較結果](../verification/current.md#native-raster-jobs)
+
+```powershell
+python tools/renderer-scenes/raster_job_benchmark.py --exe target/release/examples/raster_draw_scaling.exe --output .tools/native-record --workers 0 --native-workers 0 1 4 --conditions in-pass independent mixed --draws 50000 --words 0 20 --warmup 80 --frames 360 --repeats 3 --profile both
+```
+
 `frame_loop`は`--draws 0..1024`、`--layout overlap|grid`、`--extent WIDTHxHEIGHT`、
 `--mesh-layout shared|distinct`を受け付けます。
 指定しなければ従来の1 draw・128×96・history/custom有効の負荷です。

@@ -695,6 +695,8 @@ Aアクセスに対してO(A log A)の処理とO(A)の予約済みscratchを使�
 private builderが保証した入力のcompile再点検は`development-validation`へ分離する。
 producer・初期化・culling・live hazard／topological計画・最終内容の確定は製品でも実行する。
 
+<a id="raster-recording"></a>
+
 ### 多数の描画をパス間・パス内で準備する
 
 CPU で描画コマンドを作れる時点は、その入力が揃った時点である。例えば影マップの書き込みとそれを読む本描画は GPU 上で順序を持つが、両方の描画引数と資源ハンドルが確定していれば、CPU はそれぞれの描画列を並行して用意できる。GPU の読み戻しで描画数を決める場合は、その値の取得が CPU 側にも必要になる。
@@ -702,6 +704,10 @@ CPU で描画コマンドを作れる時点は、その入力が揃った時点�
 パス内でも、順序が決まった描画列を連続するバッチに分け、各ジョブが事前確保した自分の範囲に書ける。合流後に Graph の所有者がパス順・バッチ順に `RasterPass::draw` を呼ぶ。これにより透明物の描画順、同じ画像を上書きする順序、失敗したパスの取り消しを既存の規則で扱える。ジョブの完了順は描画順に影響しない。
 
 性能判断には[大量描画の専用シーン](../guides/development.md#raster-draw-scaling)を使う。実描画総数を固定し、単一の重いパス、複数の独立パス、順序依存を付けた同じパス群で比較する。パス内のバッチ分割も独立に変え、準備と合流の短縮が Graph 登録・コンパイル・ネイティブ記録・GPU 完了を含む処理量にどれだけ残るかを測る。各 API のネイティブ記録まで分ける場合は、確定済みの状態遷移・バリアを元の命令位置に保ち、記録先を排他所有して実際の GPU 完了後に再利用する。[CPU 並列記録の設計条件](../guides/rendergraph-best-practices.md#scheduling)
+
+初期化時に `Runtime::prepare_raster_recording(jobs, max_batches)` を呼ぶと、上記の入力生成とは独立にネイティブ記録を分担できる。ジョブは Graph に登録された連続バッチを単位とする。1回の `RasterPass::draw` に全件を渡せば1バッチであり、重いパスでは順序を保った複数の呼び出しで範囲を渡す。ホストを含めた参加人数と、同時提出に備える1実行枠あたりの記録先の数は独立に指定する。
+
+Vulkan は二次コマンドバッファを実行する。D3D12 は DIRECT リストでバリア・クリア・描画領域・resolve を記録し、専用 allocator と BUNDLE リストに記録した draw を `ExecuteBundle` で実行する。BUNDLE が PSO・root signature・primitive topology を明示する。D3D12 の対象は予算内のバッチ番号で、直接描画の定数・ルートバッファ・頂点・インデックスに対応する。可変の画像 descriptor 表、sampler、indirect を使うバッチは同じ DIRECT リストへ直接記録する。インデックス内容の検査はバンドル実行を登録する前に Graph の更新順で行い、失敗時は未投入の全体を取り消す。GPU の実行順は両 API とも従来の Graph 順とバッチ順を使う。キュー投入は1回で、記録済み draw をホストが再発行する処理はない。[Microsoft のバンドル仕様](https://learn.microsoft.com/en-us/windows/win32/direct3d12/recording-command-lists-and-bundles)
 
 ## GPU状態と所有
 

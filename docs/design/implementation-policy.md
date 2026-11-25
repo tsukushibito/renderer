@@ -2051,6 +2051,8 @@ Graphのproducer→consumer間でnative依存を設定し、実行の途中にCP
 
 ### D3D12のDeviceとGraph実行
 
+ネイティブ描画の並列記録を有効にした実行枠は専用 allocator と bundle を保持する。適用するバッチ、資源遷移、インデックス内容の保証、直接記録との比較は[RenderGraph のパス内・パス間記録](rendergraph.md#raster-recording)と[実機検証](../verification/current.md#native-raster-jobs)を参照する。
+
 Windows限定の`D3D12Runtime`が、hardware adapter、Device、単一DIRECT queueと明示終了を所有する。
 adapterのvendor／device IDとLUID、照会した能力をnative型なしで公開する。
 CPUだけのGraph構築とLinuxのVulkan経路には、D3D12のnative依存を追加しない。

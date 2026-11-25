@@ -655,6 +655,8 @@ VMAは空blockを保持し得るので、解放数や論理byte減少をprocess 
 reset失敗やDevice停止・lossでは再貸出しない。通常予約で失った枠を暗黙に再作成しない。
 貸出中のleaseがpool状態を保持し、idle資源からpoolへの循環参照は作らない。
 
+`prepare_raster_recording` でジョブチームと1実行あたりのバッチ予算を渡すと、実行枠ごとにその数の専用プールと二次コマンドバッファを準備する。各ジョブは1バッチのプールを排他使用し、動的レンダリングの色・深度形式とサンプル数を継承して、viewport・scissor・pipeline・descriptor・draw を自分のバッファに記録する。一次側が従来のバリアと attachment の load/store を担当し、各パスの二次バッファを元の順で一括実行する。レンダリングの開始・終了、クリア、キュー投入の数は増えない。貸出は取消または Fence 完了まで保持し、次回の記録はプールの reset 成功後に開始する。生存バッチ数が予算を超える Graph は全体を直接記録する。予算と並列度の選択は[実測値](../verification/current.md#native-raster-jobs)に基づく。[Khronos の並列記録例](https://docs.vulkan.org/samples/latest/samples/performance/command_buffer_usage/README.html)
+
 `TransferPool`はUpload／Readback各1本の固定容量bufferを共有する。
 実buffer/allocationの所有はVMAへ任せ、内部領域は準備済みfree-range配列で配置・分割・結合する。
 `RuntimeConfig::staging_ranges`は同時range lease数の上限（既定256）で、byte容量と独立に不足を返す。
