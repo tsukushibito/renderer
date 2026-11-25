@@ -2,6 +2,8 @@
 use glam::{DVec3, Mat4, Quat, Vec3};
 use std::{num::NonZeroU32, sync::Arc};
 
+mod batch;
+pub use batch::{PoseBatch, PoseSample};
 mod playback;
 pub use playback::{Advance, Playback};
 
@@ -164,6 +166,13 @@ impl Clip {
         let start = i as usize * joints;
         &self.local[start..start + joints]
     }
+    pub fn sample_at(&self, tick: u64, rate: NonZeroU32) -> PoseSample<'_> {
+        PoseSample {
+            clip: self,
+            local: self.pose(tick, rate),
+            blend: None,
+        }
+    }
     /// Stateless display sampling permits seeking and repeated rendering.
     pub fn evaluate_at(
         &self,
@@ -171,10 +180,11 @@ impl Clip {
         rate: NonZeroU32,
         out: &mut PoseWorkspace,
     ) -> Result<(), AnimationError> {
-        out.evaluate(self, self.pose(tick, rate), None)
+        self.sample_at(tick, rate).evaluate(out)
     }
 }
 
+#[derive(Clone)]
 pub struct PoseWorkspace {
     skeleton: Arc<Skeleton>,
     order: Vec<usize>,

@@ -185,6 +185,8 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
         if let Some(samples) = self.measured {
             let game = &self.app.game;
             samples.push(Sample {
+                #[cfg(feature = "memory-profiling")]
+                pose_bytes: self.visual.take_pose_bytes(),
                 interval,
                 update: self.update_time,
                 draw: self.draw_time,

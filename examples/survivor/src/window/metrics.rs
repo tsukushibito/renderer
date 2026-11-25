@@ -8,6 +8,8 @@ use std::{
 };
 
 pub(super) struct Sample {
+    #[cfg(feature = "memory-profiling")]
+    pub pose_bytes: u64,
     pub interval: Duration,
     pub update: Duration,
     pub draw: Duration,
@@ -51,10 +53,13 @@ impl Measurements {
             .transpose()?
             .map(|v| v.skip(warmup));
         let mut csv = BufWriter::new(File::create(path)?);
-        writeln!(
+        write!(
             csv,
             "frame,interval_ms,update_ms,draw_ms,active,visible,drawn,shots,drops,graph_gpu_ms,present_gpu_ms,graph_prepare_ms,graph_record_ms,graph_submit_ms,graph_retire_ms,tick,pulse,rapid_level,pierce_level,pulse_level"
         )?;
+        #[cfg(feature = "memory-profiling")]
+        write!(csv, ",recorded_pose_bytes")?;
+        writeln!(csv)?;
         for (index, sample) in self.samples.iter().enumerate().skip(warmup) {
             write!(
                 csv,
@@ -85,12 +90,15 @@ impl Measurements {
                 write!(csv, ",,,,,")?;
             }
             let [rapid, pierce, pulse] = sample.upgrades;
-            writeln!(
+            write!(
                 csv,
                 ",{},{},{rapid},{pierce},{pulse}",
                 sample.tick,
                 u8::from(sample.pulse)
             )?;
+            #[cfg(feature = "memory-profiling")]
+            write!(csv, ",{}", sample.pose_bytes)?;
+            writeln!(csv)?;
         }
         csv.flush()?;
         Ok(())

@@ -1,7 +1,9 @@
 //! Convert cooked skin matrices into skeleton poses at the asset boundary.
 use super::{AnimatedModel, AnimationClip, Clip, Transform, floats};
 use glam::{DMat4, Mat4};
-use sashiko_animation::{Clip as PoseClip, LocalPose, Playback, PoseWorkspace, Skeleton};
+use sashiko_animation::{
+    Clip as PoseClip, LocalPose, Playback, PoseBatch, PoseWorkspace, Skeleton,
+};
 use sashiko_renderer::pipeline::PipelineResult;
 use std::{num::NonZeroU32, sync::Arc};
 
@@ -121,15 +123,15 @@ pub struct PaletteWorkspace {
     inverse_bind: Arc<[Mat4]>,
     palette: Vec<Transform>,
 }
-enum PreparedData {
-    Rigged(Box<Rigged>),
+enum PreparedData<R> {
+    Rigged(Box<R>),
     Legacy {
         descriptor: Clip,
         joints: usize,
         poses: Vec<Transform>,
     },
 }
-pub struct PreparedAnimation(PreparedData);
+pub struct PreparedAnimation(PreparedData<Rigged>);
 
 impl PreparedAnimation {
     /// Borrow the immutable clip and its independent mesh output for stateful playback.
@@ -166,19 +168,92 @@ impl PaletteWorkspace {
     }
 
     fn palette(&mut self) -> PipelineResult<&[Transform]> {
-        for (i, (dest, &inverse_bind)) in self
-            .palette
-            .iter_mut()
-            .zip(self.inverse_bind.iter())
-            .enumerate()
-        {
-            let model = self.workspace.joint(i).expect("full skeleton workspace");
-            let cols = (model * inverse_bind).to_cols_array_2d();
-            *dest = Transform::new(std::array::from_fn(|row| cols.map(|c| c[row])))?;
-        }
+        write_palette(&self.workspace, &self.inverse_bind, &mut self.palette)?;
         Ok(&self.palette)
+    }
+}
+fn write_palette(
+    workspace: &PoseWorkspace,
+    inverse: &[Mat4],
+    palette: &mut [Transform],
+) -> PipelineResult<()> {
+    for (i, (dest, &inverse_bind)) in palette.iter_mut().zip(inverse).enumerate() {
+        let model = workspace.joint(i).expect("full skeleton workspace");
+        let cols = (model * inverse_bind).to_cols_array_2d();
+        *dest = Transform::new(std::array::from_fn(|row| cols.map(|c| c[row])))?;
+    }
+    Ok(())
+}
+
+/// Four display times of one clip, with independently writable mesh palettes.
+pub struct PhaseAnimation(PreparedData<FourPhases>);
+struct FourPhases {
+    clip: PoseClip,
+    batch: PoseBatch,
+    inverse: Arc<[Mat4]>,
+    palettes: [Vec<Transform>; 4],
+}
+impl PreparedAnimation {
+    pub fn into_four_phases(self) -> PhaseAnimation {
+        let data = match self.0 {
+            PreparedData::Legacy {
+                descriptor,
+                joints,
+                poses,
+            } => PreparedData::Legacy {
+                descriptor,
+                joints,
+                poses,
+            },
+            PreparedData::Rigged(rig) => PreparedData::Rigged(Box::new(FourPhases {
+                batch: PoseBatch::new(&rig.output.workspace, 4),
+                palettes: std::array::from_fn(|_| {
+                    vec![Transform::IDENTITY; rig.clip.skeleton().joint_count()]
+                }),
+                inverse: rig.output.inverse_bind,
+                clip: rig.clip,
+            })),
+        };
+        PhaseAnimation(data)
+    }
+}
+impl PhaseAnimation {
+    pub fn sample(
+        &mut self,
+        ticks: [u64; 4],
+        rate: NonZeroU32,
+    ) -> PipelineResult<[&[Transform]; 4]> {
+        match &mut self.0 {
+            PreparedData::Legacy {
+                descriptor,
+                joints,
+                poses,
+            } => {
+                let clip = AnimationClip {
+                    clip: *descriptor,
+                    joints: *joints,
+                    poses,
+                };
+                Ok(ticks.map(|tick| clip.sample(tick, rate)))
+            }
+            PreparedData::Rigged(rig) => {
+                let FourPhases {
+                    clip,
+                    batch,
+                    inverse,
+                    palettes,
+                } = &mut **rig;
+                let requests = ticks.map(|t| clip.sample_at(t, rate));
+                for (out, pose) in palettes.iter_mut().zip(batch.evaluate(&requests)?) {
+                    write_palette(pose, inverse, out)?;
+                }
+                Ok(palettes.each_ref().map(Vec::as_slice))
+            }
+        }
     }
 }
 
 #[cfg(all(test, feature = "memory-profiling"))]
 mod measurements;
+#[cfg(test)]
+mod precision;

@@ -81,6 +81,11 @@ pub(super) struct Pose {
 }
 
 impl Meshes {
+    /// Bytes of posed vertex uploads recorded since the previous observation.
+    #[cfg(feature = "memory-profiling")]
+    pub fn take_recorded_pose_bytes(&self) -> u64 {
+        self.recorded_pose_bytes.swap(0, Ordering::Relaxed)
+    }
     pub(crate) fn pose_count(&self) -> usize {
         self.poses.len()
     }
@@ -280,6 +285,10 @@ impl FramePoses {
                 },
             )?;
             graph.upload_buffer(UPLOAD, vertices, 0, &pose.bytes)?;
+            #[cfg(feature = "memory-profiling")]
+            meshes
+                .recorded_pose_bytes
+                .fetch_add(pose.bytes.len() as u64, Ordering::Relaxed);
             self.streams.insert(
                 id,
                 PosedStream {

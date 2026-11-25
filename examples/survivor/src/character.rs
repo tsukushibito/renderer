@@ -1,5 +1,5 @@
 //! Game asset selection and shared crowd pose slots.
-use sashiko::animation::{AnimatedModel, CharacterCatalog, PreparedAnimation};
+use sashiko::animation::{AnimatedModel, CharacterCatalog, PhaseAnimation};
 use sashiko_renderer::{
     material::{MaterialHandle, Materials},
     mesh::{MeshHandle, Meshes, SkinPoseId},
@@ -32,7 +32,7 @@ pub(super) struct Actor {
     pub poses: [SkinPoseId; WALK_PHASES],
     pub texture: usize,
     pub material: MaterialHandle,
-    animation: PreparedAnimation,
+    animation: PhaseAnimation,
 }
 
 pub(super) struct Cast {
@@ -74,7 +74,7 @@ impl Cast {
                     loaded.insert(id, (texture, mesh));
                     (texture, mesh)
                 };
-                let animation = models[texture].prepare_animation(clip)?;
+                let animation = models[texture].prepare_animation(clip)?.into_four_phases();
                 let poses = [
                     meshes.create_pose(mesh)?,
                     meshes.create_pose(mesh)?,
@@ -111,15 +111,13 @@ impl Cast {
 
     pub fn animate(&mut self, tick: u64, meshes: &mut Meshes) -> PipelineResult<()> {
         for actor in &mut self.actors {
-            for (phase, pose) in actor.poses.iter().enumerate() {
-                let time = tick.wrapping_add(phase as u64 * 13);
-                meshes.set_joint_transforms(
-                    *pose,
-                    actor.animation.sample(
-                        time,
-                        crate::TICK_HZ.try_into().expect("positive update rate"),
-                    )?,
-                )?;
+            let ticks = std::array::from_fn(|phase| tick.wrapping_add(phase as u64 * 13));
+            let palettes = actor.animation.sample(
+                ticks,
+                crate::TICK_HZ.try_into().expect("positive update rate"),
+            )?;
+            for (pose, palette) in actor.poses.iter().zip(palettes) {
+                meshes.set_joint_transforms(*pose, palette)?;
             }
         }
         Ok(())

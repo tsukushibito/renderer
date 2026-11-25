@@ -3,7 +3,7 @@ use sashiko_asset::{AssetId, Digest};
 use serde::{Deserialize, Serialize};
 mod rig;
 use rig::Rig;
-pub use rig::{PaletteWorkspace, PreparedAnimation};
+pub use rig::{PaletteWorkspace, PhaseAnimation, PreparedAnimation};
 pub use sashiko_animation::Playback;
 use std::{
     collections::{BTreeMap, HashSet},
@@ -377,6 +377,13 @@ mod tests {
                 model.clip("legacy").unwrap().sample(tick, rate)
             );
         }
+        let mut phases = prepared.into_four_phases();
+        let ticks = [0, 13, 26, u64::MAX];
+        let reference = model.clip("legacy").unwrap();
+        assert_eq!(
+            phases.sample(ticks, rate)?,
+            ticks.map(|t| reference.sample(t, rate))
+        );
         Ok(())
     }
     #[test]

@@ -46,6 +46,20 @@ fn measure_animation() -> PipelineResult<()> {
             );
             let mut other =
                 model.prepare_animation(if clip_name == "walk" { "jog" } else { "walk" })?;
+            let mut phases = model.prepare_animation(clip_name)?.into_four_phases();
+            let label = format!("{name},{clip_name},4");
+            measure(&format!("{label},survivor_scalar"), |tick| {
+                for offset in [0, 13, 26, 39] {
+                    black_box(prepared.sample(tick + offset, rate).unwrap());
+                }
+            });
+            measure(&format!("{label},survivor_batch"), |tick| {
+                black_box(
+                    phases
+                        .sample([tick, tick + 13, tick + 26, tick + 39], rate)
+                        .unwrap(),
+                );
+            });
             let (clip, output) = prepared.rigged().unwrap();
             let (target, _) = other.rigged().unwrap();
             let mut meshes = Meshes::new(MeshCapacity {
@@ -89,6 +103,49 @@ fn measure_animation() -> PipelineResult<()> {
                             .unwrap();
                         black_box(output.palette().unwrap());
                     }
+                });
+                let before = Snapshot::now();
+                let mut batch = PoseBatch::new(&output.workspace, count as usize);
+                let heap = Snapshot::now().since(before).rust;
+                println!(
+                    "workspace,{label},{}",
+                    heap[0].bytes + heap[1].bytes - heap[3].bytes
+                );
+                let mut requests = vec![clip.sample_at(0, rate); count as usize];
+                for with_palette in [false, true] {
+                    let stage = if with_palette {
+                        "batch_palette"
+                    } else {
+                        "batch_pose"
+                    };
+                    measure(&format!("{label},{stage}"), |tick| {
+                        for (i, r) in requests.iter_mut().enumerate() {
+                            *r = clip.sample_at(tick + i as u64 * 13, rate);
+                        }
+                        let poses = batch.evaluate(&requests).unwrap();
+                        if with_palette {
+                            for pose in poses {
+                                write_palette(pose, &output.inverse_bind, &mut output.palette)
+                                    .unwrap();
+                                black_box(&output.palette);
+                            }
+                        } else {
+                            black_box(poses);
+                        }
+                    });
+                }
+                // Give the second run exactly the same progression as the scalar fade.
+                for (i, p) in players.iter_mut().enumerate() {
+                    *p = Playback::new(clip, rate);
+                    p.advance_to(i as u64 * 13, &mut []).unwrap();
+                    p.crossfade(target, 1024.try_into().unwrap()).unwrap();
+                }
+                measure(&format!("{label},batch_fade"), |tick| {
+                    for (i, (p, r)) in players.iter_mut().zip(&mut requests).enumerate() {
+                        p.advance_to(i as u64 * 13 + tick, &mut []).unwrap();
+                        *r = p.sample();
+                    }
+                    black_box(batch.evaluate(&requests).unwrap());
                 });
                 let reference = model.clip(clip_name).unwrap();
                 measure(&format!("{label},skin"), |tick| {

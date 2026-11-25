@@ -404,6 +404,10 @@ impl Visual {
         hud::paint(&mut self.hud, game, extent);
         &self.hud
     }
+    #[cfg(feature = "memory-profiling")]
+    pub fn take_pose_bytes(&self) -> u64 {
+        self.meshes.take_recorded_pose_bytes()
+    }
     pub fn visible_enemies(&self) -> usize {
         self.visible
     }

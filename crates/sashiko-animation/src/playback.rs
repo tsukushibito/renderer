@@ -151,23 +151,30 @@ impl<'a> Playback<'a> {
     }
 
     pub fn evaluate_pose(&self, out: &mut PoseWorkspace) -> Result<(), AnimationError> {
+        self.sample().evaluate(out)
+    }
+    pub fn sample(&self) -> PoseSample<'a> {
         let target = self.active.clip;
         let elapsed = self.active.elapsed(self.tick);
         if let Some(fade) = &self.transition {
             let source = fade.source.clip;
             let local = source.pose(fade.source.elapsed(self.tick), self.rate);
             if elapsed == 0 {
-                return out.evaluate(source, local, None);
+                return PoseSample {
+                    clip: source,
+                    local,
+                    blend: None,
+                };
             }
-            return out.evaluate(
-                source,
+            return PoseSample {
+                clip: source,
                 local,
-                Some((
+                blend: Some((
                     target.pose(elapsed, self.rate),
                     elapsed as f32 / fade.duration.get() as f32,
                 )),
-            );
+            };
         }
-        target.evaluate_at(elapsed, self.rate, out)
+        target.sample_at(elapsed, self.rate)
     }
 }

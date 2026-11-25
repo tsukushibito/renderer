@@ -171,6 +171,8 @@ impl Asset {
 
 /// Owns mesh identities, CPU geometry and GPU registrations for one runtime.
 pub struct Meshes {
+    #[cfg(feature = "memory-profiling")]
+    recorded_pose_bytes: std::sync::atomic::AtomicU64,
     poses: HashMap<SkinPoseId, skin::Pose>,
     registry: MeshRegistry,
     assets: HashMap<MeshHandle, Asset>,
@@ -214,6 +216,8 @@ impl Meshes {
             .try_reserve(capacity.meshes)
             .map_err(|_| MeshError::capacity_exhausted("unable to reserve mesh assets"))?;
         Ok(Self {
+            #[cfg(feature = "memory-profiling")]
+            recorded_pose_bytes: 0.into(),
             poses: HashMap::new(),
             registry,
             assets,
