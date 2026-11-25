@@ -57,15 +57,9 @@ macro_rules! descriptor {
             bindings: &appended::<_, $bindings>($base.bindings, transform_binding($tier)),
             binding_bytes: &appended::<_, $bindings>($base.binding_bytes, $tier.bytes() as u64),
             shaders: packaged_shaders!(
-                vulkan: (
-                    include_bytes!(concat!("../../../shaders/", $vertex, ".vert.spv")),
-                    Some(include_bytes!(concat!("../../../shaders/", $fragment, ".frag.spv"))),
-                ),
-                d3d12: (
-                    include_bytes!(concat!("../../../shaders/dxil/", $vertex, ".vert.dxil")),
-                    Some(include_bytes!(concat!("../../../shaders/dxil/", $fragment, ".frag.dxil"))),
-                ),
+                raster: (concat!($vertex, ".vert"), concat!($fragment, ".frag")),
                 inline_constants: Some(sashiko_renderer_core::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
+                nonfiltering: $base.shaders.webgpu_nonfiltering_samplers(),
             ),
             ..$base
         }

@@ -38,15 +38,9 @@ pub(in crate::passes::pbr) static GBUFFER: RasterProgramDescriptor = RasterProgr
     ],
     sampling_pairs: &[pair(1, 0, 4), pair(1, 1, 5), pair(1, 2, 6), pair(1, 3, 7)],
     shaders: packaged_shaders!(
-        vulkan: (
-            include_bytes!("../../../../shaders/gbuffer.vert.spv"),
-            Some(include_bytes!("../../../../shaders/gbuffer.frag.spv")),
-        ),
-        d3d12: (
-            include_bytes!("../../../../shaders/dxil/gbuffer.vert.dxil"),
-            Some(include_bytes!("../../../../shaders/dxil/gbuffer.frag.dxil")),
-        ),
+        raster: ("gbuffer.vert", "gbuffer.frag"),
         inline_constants: None,
+        nonfiltering: &[],
     ),
     ..OPAQUE
 };
@@ -117,10 +111,7 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         pair(3, 3, 4),
     ],
     shaders: fullscreen_triangle_shaders(
-        packaged_shaders!(
-            include_bytes!("../../../../shaders/deferred_lighting.frag.spv"),
-            include_bytes!("../../../../shaders/dxil/deferred_lighting.frag.dxil"),
-        ),
+        packaged_shaders!(module: "deferred_lighting.frag", folder: "", nonfiltering: &[(1, 4), (3, 4)]),
         None,
     ),
     entry: "main",
@@ -151,10 +142,7 @@ static LOCAL_LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         bytes
     },
     shaders: fullscreen_triangle_shaders(
-        packaged_shaders!(
-            include_bytes!("../../../../shaders/deferred_local_lights.frag.spv"),
-            include_bytes!("../../../../shaders/dxil/deferred_local_lights.frag.dxil"),
-        ),
+        packaged_shaders!(module: "deferred_local_lights.frag", folder: "", nonfiltering: &[(1, 4), (3, 4)]),
         None,
     ),
     ..LIGHTING

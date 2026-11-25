@@ -53,9 +53,9 @@ fn program(stride: u32) -> Result<ManagedRasterProgram, GraphError> {
             require_load: false,
         },
         shaders: packaged_shaders!(
-            vulkan: (include_bytes!("../shaders/pick.vert.spv"), Some(include_bytes!("../shaders/pick.frag.spv"))),
-            d3d12: (include_bytes!("../shaders/dxil/pick.vert.dxil"), Some(include_bytes!("../shaders/dxil/pick.frag.dxil"))),
+            raster: ("pick.vert", "pick.frag"),
             inline_constants: Some(sashiko_renderer_core::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
+            nonfiltering: &[],
         ),
     };
     static UNLIT: RasterProgramDescriptor = RasterProgramDescriptor {

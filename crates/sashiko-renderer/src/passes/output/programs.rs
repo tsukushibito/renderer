@@ -28,9 +28,9 @@ pub(super) const fn sdr(output: SdrOutput) -> ManagedRasterProgram {
 }
 
 macro_rules! output_shaders {
-    ($spirv:literal, $dxil:literal, $inline_constants:expr) => {
+    ($name:literal, $inline_constants:expr) => {
         fullscreen_triangle_shaders(
-            packaged_shaders!(include_bytes!($spirv), include_bytes!($dxil)),
+            packaged_shaders!(module: $name, folder: "output/", nonfiltering: &[]),
             $inline_constants,
         )
     };
@@ -71,34 +71,18 @@ static SDR_SRGB: RasterProgramDescriptor = RasterProgramDescriptor {
     }],
     blend: BlendState::Replace,
     depth: DepthState::Disabled,
-    shaders: output_shaders!(
-        "../../../shaders/output/sdr.frag.spv",
-        "../../../shaders/output/dxil/sdr.frag.dxil",
-        None
-    ),
+    shaders: output_shaders!("sdr.frag", None),
 };
 static SDR_LINEAR: RasterProgramDescriptor = RasterProgramDescriptor {
-    shaders: output_shaders!(
-        "../../../shaders/output/sdr_linear.frag.spv",
-        "../../../shaders/output/dxil/sdr_linear.frag.dxil",
-        None
-    ),
+    shaders: output_shaders!("sdr_linear.frag", None),
     ..SDR_SRGB
 };
 static SDR_FXAA_SRGB: RasterProgramDescriptor = RasterProgramDescriptor {
-    shaders: output_shaders!(
-        "../../../shaders/output/sdr_fxaa.frag.spv",
-        "../../../shaders/output/dxil/sdr_fxaa.frag.dxil",
-        None
-    ),
+    shaders: output_shaders!("sdr_fxaa.frag", None),
     ..SDR_SRGB
 };
 static SDR_FXAA_LINEAR: RasterProgramDescriptor = RasterProgramDescriptor {
-    shaders: output_shaders!(
-        "../../../shaders/output/sdr_fxaa_linear.frag.spv",
-        "../../../shaders/output/dxil/sdr_fxaa_linear.frag.dxil",
-        None
-    ),
+    shaders: output_shaders!("sdr_fxaa_linear.frag", None),
     ..SDR_SRGB
 };
 static TONE_NEUTRAL: RasterProgramDescriptor = RasterProgramDescriptor {
@@ -108,8 +92,7 @@ static TONE_NEUTRAL: RasterProgramDescriptor = RasterProgramDescriptor {
     },
     color_outputs: &[ImageFormat::Rgba16Float],
     shaders: output_shaders!(
-        "../../../shaders/output/tone_neutral.frag.spv",
-        "../../../shaders/output/dxil/tone_neutral.frag.dxil",
+        "tone_neutral.frag",
         Some(sashiko_renderer_core::program::D3D12InlineConstantBinding {
             register: 0,
             space: 0

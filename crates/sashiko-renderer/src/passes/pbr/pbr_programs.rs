@@ -177,15 +177,9 @@ pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         require_load: false,
     },
     shaders: packaged_shaders!(
-        vulkan: (
-            include_bytes!("../../../shaders/pbr.vert.spv"),
-            Some(include_bytes!("../../../shaders/pbr.frag.spv")),
-        ),
-        d3d12: (
-            include_bytes!("../../../shaders/dxil/pbr.vert.dxil"),
-            Some(include_bytes!("../../../shaders/dxil/pbr.frag.dxil")),
-        ),
+        raster: ("pbr.vert", "pbr.frag"),
         inline_constants: None,
+        nonfiltering: &[(3, 4)],
     ),
 };
 pub(super) static BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
@@ -238,15 +232,9 @@ pub(super) static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
         require_load: false,
     },
     shaders: packaged_shaders!(
-        vulkan: (
-            include_bytes!("../../../shaders/shadow.vert.spv"),
-            Some(include_bytes!("../../../shaders/shadow.frag.spv")),
-        ),
-        d3d12: (
-            include_bytes!("../../../shaders/dxil/shadow.vert.dxil"),
-            Some(include_bytes!("../../../shaders/dxil/shadow.frag.dxil")),
-        ),
+        raster: ("shadow.vert", "shadow.frag"),
         inline_constants: Some(sashiko_renderer_core::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
+        nonfiltering: &[],
     ),
 };
 /// HDR PBR Program for opaque and alpha-mask geometry.
@@ -285,15 +273,9 @@ static INSTANCING: RasterProgramDescriptor = RasterProgramDescriptor {
         stages: ShaderStages::VERTEX,
     },
     shaders: packaged_shaders!(
-        vulkan: (
-            include_bytes!("../../../shaders/pbr_instancing.vert.spv"),
-            Some(include_bytes!("../../../shaders/pbr.frag.spv")),
-        ),
-        d3d12: (
-            include_bytes!("../../../shaders/dxil/pbr_instancing.vert.dxil"),
-            Some(include_bytes!("../../../shaders/dxil/pbr.frag.dxil")),
-        ),
+        raster: ("pbr_instancing.vert", "pbr.frag"),
         inline_constants: Some(sashiko_renderer_core::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
+        nonfiltering: &[(3, 4)],
     ),
     ..OPAQUE
 };
@@ -335,9 +317,9 @@ pub(crate) fn lightmapped_program(
                 vertex_attributes: &attributes(false),
                 parameters: RasterParameterLayout { size: $size, stages: ShaderStages::VERTEX },
                 shaders: packaged_shaders!(
-                    vulkan: (include_bytes!(concat!("../../../shaders/", $vs, ".spv")), Some(include_bytes!(concat!("../../../shaders/", $fs, ".spv")))),
-                    d3d12: (include_bytes!(concat!("../../../shaders/dxil/", $vs, ".dxil")), Some(include_bytes!(concat!("../../../shaders/dxil/", $fs, ".dxil")))),
+                    raster: ($vs, $fs),
                     inline_constants: Some(sashiko_renderer_core::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
+                    nonfiltering: $base.shaders.webgpu_nonfiltering_samplers(),
                 ),
                 ..$base
             };

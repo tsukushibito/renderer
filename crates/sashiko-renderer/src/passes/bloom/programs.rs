@@ -43,10 +43,7 @@ macro_rules! bloom_program {
                     },
                     bytes: $bytes,
                 },
-                shaders: packaged_shaders!(
-                    include_bytes!(concat!("../../../shaders/", $shader, ".spv")),
-                    include_bytes!(concat!("../../../shaders/dxil/", $shader, ".dxil")),
-                ),
+        shaders: packaged_shaders!(module: $shader),
             };
             // SAFETY: The paired artifacts implement the declared ABI. Each invocation
             // guards its destination coordinate, reads only clamped coordinates in

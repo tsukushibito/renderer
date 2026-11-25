@@ -83,15 +83,9 @@ pub(in crate::passes::pbr) static REFERENCE_OPAQUE: RasterProgramDescriptor =
         bindings: &pbr_bindings::<23>(),
         binding_bytes: &pbr_bytes::<23>(),
         shaders: packaged_shaders!(
-            vulkan: (
-                include_bytes!("../../../../shaders/pbr.vert.spv"),
-                Some(include_bytes!("../../../../shaders/pbr_all_lights.frag.spv")),
-            ),
-            d3d12: (
-                include_bytes!("../../../../shaders/dxil/pbr.vert.dxil"),
-                Some(include_bytes!("../../../../shaders/dxil/pbr_all_lights.frag.dxil")),
-            ),
+            raster: ("pbr.vert", "pbr_all_lights.frag"),
             inline_constants: None,
+            nonfiltering: &[(3, 4)],
         ),
         ..OPAQUE
     };
@@ -104,15 +98,9 @@ pub(in crate::passes::pbr) static TILED_OPAQUE: RasterProgramDescriptor = Raster
     bindings: &pbr_bindings::<24>(),
     binding_bytes: &pbr_bytes::<24>(),
     shaders: packaged_shaders!(
-        vulkan: (
-            include_bytes!("../../../../shaders/pbr.vert.spv"),
-            Some(include_bytes!("../../../../shaders/pbr_forward_plus.frag.spv")),
-        ),
-        d3d12: (
-            include_bytes!("../../../../shaders/dxil/pbr.vert.dxil"),
-            Some(include_bytes!("../../../../shaders/dxil/pbr_forward_plus.frag.dxil")),
-        ),
+        raster: ("pbr.vert", "pbr_forward_plus.frag"),
         inline_constants: None,
+        nonfiltering: &[(3, 4)],
     ),
     ..OPAQUE
 };

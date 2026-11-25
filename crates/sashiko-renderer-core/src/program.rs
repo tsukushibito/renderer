@@ -32,6 +32,10 @@ pub use raster::{
 pub struct ShaderBinaries<V, D = V> {
     vulkan: Option<V>,
     d3d12: Option<D>,
+    #[cfg(feature = "webgpu")]
+    wgsl: Option<V>,
+    #[cfg(feature = "webgpu")]
+    nonfiltering: &'static [(u32, u32)],
 }
 
 impl<V, D> ShaderBinaries<V, D> {
@@ -39,6 +43,10 @@ impl<V, D> ShaderBinaries<V, D> {
         Self {
             vulkan: Some(spirv),
             d3d12: None,
+            #[cfg(feature = "webgpu")]
+            wgsl: None,
+            #[cfg(feature = "webgpu")]
+            nonfiltering: &[],
         }
     }
 
@@ -46,6 +54,10 @@ impl<V, D> ShaderBinaries<V, D> {
         Self {
             vulkan: None,
             d3d12: Some(dxil),
+            #[cfg(feature = "webgpu")]
+            wgsl: None,
+            #[cfg(feature = "webgpu")]
+            nonfiltering: &[],
         }
     }
 
@@ -53,6 +65,10 @@ impl<V, D> ShaderBinaries<V, D> {
         Self {
             vulkan: Some(spirv),
             d3d12: Some(dxil),
+            #[cfg(feature = "webgpu")]
+            wgsl: None,
+            #[cfg(feature = "webgpu")]
+            nonfiltering: &[],
         }
     }
 
@@ -61,24 +77,74 @@ impl<V, D> ShaderBinaries<V, D> {
         Self {
             vulkan: None,
             d3d12: None,
+            #[cfg(feature = "webgpu")]
+            wgsl: None,
+            #[cfg(feature = "webgpu")]
+            nonfiltering: &[],
         }
+    }
+
+    /// WebGPU source and the sampler coordinates that require nearest-only bindings
+    /// (including samplers paired with depth views). The bytes contain UTF-8 WGSL.
+    #[cfg(feature = "webgpu")]
+    pub const fn webgpu(wgsl: V, nonfiltering: &'static [(u32, u32)]) -> Self {
+        Self {
+            vulkan: None,
+            d3d12: None,
+            wgsl: Some(wgsl),
+            nonfiltering,
+        }
+    }
+
+    #[cfg(feature = "webgpu")]
+    #[doc(hidden)]
+    pub const fn with_webgpu(mut self, wgsl: V, nonfiltering: &'static [(u32, u32)]) -> Self
+    where
+        V: Copy,
+        D: Copy,
+    {
+        self.wgsl = Some(wgsl);
+        self.nonfiltering = nonfiltering;
+        self
+    }
+
+    /// Samplers paired with unfilterable float/depth views in this WGSL asset.
+    #[cfg(feature = "webgpu")]
+    pub const fn webgpu_nonfiltering_samplers(&self) -> &'static [(u32, u32)] {
+        self.nonfiltering
     }
 
     fn map<U, E>(
         self,
-        vulkan: impl FnOnce(V) -> U,
+        mut stage: impl FnMut(V) -> U,
         d3d12: impl FnOnce(D) -> E,
     ) -> ShaderBinaries<U, E> {
         ShaderBinaries {
-            vulkan: self.vulkan.map(vulkan),
+            vulkan: self.vulkan.map(&mut stage),
             d3d12: self.d3d12.map(d3d12),
+            #[cfg(feature = "webgpu")]
+            wgsl: self.wgsl.map(stage),
+            #[cfg(feature = "webgpu")]
+            nonfiltering: self.nonfiltering,
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        #[cfg(feature = "webgpu")]
+        if self.wgsl.is_some() {
+            return false;
+        }
+        self.vulkan.is_none() && self.d3d12.is_none()
     }
 
     fn as_ref(&self) -> ShaderBinaries<&V, &D> {
         ShaderBinaries {
             vulkan: self.vulkan.as_ref(),
             d3d12: self.d3d12.as_ref(),
+            #[cfg(feature = "webgpu")]
+            wgsl: self.wgsl.as_ref(),
+            #[cfg(feature = "webgpu")]
+            nonfiltering: self.nonfiltering,
         }
     }
 }
@@ -90,6 +156,8 @@ pub enum ShaderImportError {
     InvalidDescriptor(&'static str),
     InvalidSpirv(ShaderStages),
     InvalidDxil(ShaderStages),
+    #[cfg(feature = "webgpu")]
+    InvalidWgsl(ShaderStages),
 }
 
 impl std::fmt::Display for ShaderImportError {
@@ -97,6 +165,8 @@ impl std::fmt::Display for ShaderImportError {
         match self {
             Self::MissingBinaries => f.write_str("runtime Program has no shader binaries"),
             Self::InvalidDescriptor(reason) => write!(f, "invalid Program descriptor: {reason}"),
+            #[cfg(feature = "webgpu")]
+            Self::InvalidWgsl(stage) => write!(f, "invalid {stage:?} WGSL source"),
             Self::InvalidSpirv(stage) => write!(f, "invalid {stage:?} SPIR-V module"),
             Self::InvalidDxil(stage) => write!(f, "invalid {stage:?} DXIL container"),
         }
@@ -217,24 +287,57 @@ macro_rules! __renderer_embedded_shader_binaries {
 #[doc(inline)]
 pub use crate::__renderer_embedded_shader_binaries as embedded_shader_binaries;
 
+/// Include browser shaders only in builds selecting WebGPU, even when used
+/// through another crate that has no feature of its own.
+#[cfg(feature = "webgpu")]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __renderer_with_wgsl {
+    ($native:expr, $wgsl:expr, $nonfiltering:expr) => {
+        $crate::program::ShaderBinaries::with_webgpu($native, $wgsl, $nonfiltering)
+    };
+}
+#[cfg(not(feature = "webgpu"))]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __renderer_with_wgsl {
+    ($native:expr, $wgsl:expr, $nonfiltering:expr) => {
+        $native
+    };
+}
+#[doc(inline)]
+pub use crate::__renderer_with_wgsl as with_wgsl;
+
+/// Binding in group zero reserved for inline raster parameters on WebGPU.
+#[cfg(feature = "webgpu")]
+pub const WEBGPU_INLINE_BINDING: u32 = 255;
+
 macro_rules! embedded_raster_shaders {
     (
         $vertex_spirv:literal, $fragment_spirv:expr,
+        $vertex_wgsl:literal, $fragment_wgsl:expr,
         $vertex_dxil:literal, $fragment_dxil:expr,
         $inline_constants:expr $(,)?
     ) => {
-        $crate::program::embedded_shader_binaries!(
-            $crate::program::RasterShaderStages {
-                vertex: include_bytes!($vertex_spirv),
-                fragment: $fragment_spirv,
-            },
-            $crate::program::D3D12RasterShaders {
-                stages: $crate::program::RasterShaderStages {
-                    vertex: include_bytes!($vertex_dxil),
-                    fragment: $fragment_dxil,
+        $crate::program::with_wgsl!(
+            $crate::program::embedded_shader_binaries!(
+                $crate::program::RasterShaderStages {
+                    vertex: include_bytes!($vertex_spirv),
+                    fragment: $fragment_spirv,
                 },
-                inline_constants: $inline_constants,
+                $crate::program::D3D12RasterShaders {
+                    stages: $crate::program::RasterShaderStages {
+                        vertex: include_bytes!($vertex_dxil),
+                        fragment: $fragment_dxil,
+                    },
+                    inline_constants: $inline_constants,
+                },
+            ),
+            $crate::program::RasterShaderStages {
+                vertex: include_bytes!($vertex_wgsl),
+                fragment: $fragment_wgsl,
             },
+            &[]
         )
     };
 }
@@ -340,7 +443,11 @@ struct OwnedComputeProgram {
     workgroups: OwnedDispatchWorkgroups,
     bytes: Box<[u64]>,
     #[cfg_attr(
-        not(any(feature = "vulkan", all(feature = "d3d12", windows))),
+        not(any(
+            feature = "vulkan",
+            feature = "webgpu",
+            all(feature = "d3d12", windows)
+        )),
         expect(
             dead_code,
             reason = "the CPU-only build retains but never prepares shader bytes"
@@ -503,9 +610,13 @@ static UNIFORM_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
             min_size: 16,
         },
     ],
-    shaders: embedded_shader_binaries!(
-        include_bytes!("../shaders/uniform.comp.spv"),
-        include_bytes!("../shaders/dxil/uniform.comp.dxil"),
+    shaders: with_wgsl!(
+        embedded_shader_binaries!(
+            include_bytes!("../shaders/uniform.comp.spv"),
+            include_bytes!("../shaders/dxil/uniform.comp.dxil"),
+        ),
+        include_bytes!("../shaders/uniform.comp.wgsl"),
+        &[]
     ),
 };
 
@@ -532,9 +643,13 @@ static STORAGE_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
             min_size: 16,
         },
     ],
-    shaders: embedded_shader_binaries!(
-        include_bytes!("../shaders/storage_read.comp.spv"),
-        include_bytes!("../shaders/dxil/storage_read.comp.dxil"),
+    shaders: with_wgsl!(
+        embedded_shader_binaries!(
+            include_bytes!("../shaders/storage_read.comp.spv"),
+            include_bytes!("../shaders/dxil/storage_read.comp.dxil"),
+        ),
+        include_bytes!("../shaders/storage_read.comp.wgsl"),
+        &[]
     ),
 };
 
@@ -583,9 +698,13 @@ static INDEXED_INDIRECT_ENCODER: ComputeProgramDescriptor = ComputeProgramDescri
             min_size: INDIRECT_COMMAND_BYTES * INDIRECT_GROUP_SIZE as u64,
         },
     ],
-    shaders: embedded_shader_binaries!(
-        include_bytes!("../shaders/indexed_indirect.comp.spv"),
-        include_bytes!("../shaders/dxil/indexed_indirect.comp.dxil"),
+    shaders: with_wgsl!(
+        embedded_shader_binaries!(
+            include_bytes!("../shaders/indexed_indirect.comp.spv"),
+            include_bytes!("../shaders/dxil/indexed_indirect.comp.dxil"),
+        ),
+        include_bytes!("../shaders/indexed_indirect.comp.wgsl"),
+        &[]
     ),
 };
 
@@ -619,9 +738,13 @@ static SAMPLED_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
             min_size: 16,
         },
     ],
-    shaders: embedded_shader_binaries!(
-        include_bytes!("../shaders/sampled.comp.spv"),
-        include_bytes!("../shaders/dxil/sampled.comp.dxil"),
+    shaders: with_wgsl!(
+        embedded_shader_binaries!(
+            include_bytes!("../shaders/sampled.comp.spv"),
+            include_bytes!("../shaders/dxil/sampled.comp.dxil"),
+        ),
+        include_bytes!("../shaders/sampled.comp.wgsl"),
+        &[]
     ),
 };
 
@@ -655,9 +778,13 @@ static SAMPLED_FLOAT_READBACK: ComputeProgramDescriptor = ComputeProgramDescript
             min_size: 64,
         },
     ],
-    shaders: embedded_shader_binaries!(
-        include_bytes!("../shaders/sampled_float.comp.spv"),
-        include_bytes!("../shaders/dxil/sampled_float.comp.dxil"),
+    shaders: with_wgsl!(
+        embedded_shader_binaries!(
+            include_bytes!("../shaders/sampled_float.comp.spv"),
+            include_bytes!("../shaders/dxil/sampled_float.comp.dxil"),
+        ),
+        include_bytes!("../shaders/sampled_float.comp.wgsl"),
+        &[]
     ),
 };
 
@@ -667,7 +794,7 @@ impl ManagedProgram {
     ///
     /// # Safety
     ///
-    /// Each supplied binary must be a valid Vulkan 1.3/SPIR-V 1.3 or D3D12 SM6.0
+    /// Each supplied module must be valid Vulkan 1.3/SPIR-V 1.3, D3D12 SM6.0 or WGSL
     /// compute shader, as selected by its slot, for `entry = "main"` and exactly
     /// the declared nonzero local size. Its complete descriptor interface must match the unique,
     /// manifest-ordered `bindings`; descriptor arrays, push constants and
@@ -754,8 +881,16 @@ impl ManagedProgram {
             descriptor.workgroup_size,
         )?;
         let shaders = descriptor.shaders.map(Into::into, Into::into);
-        if shaders.vulkan.is_none() && shaders.d3d12.is_none() {
+        if shaders.is_empty() {
             return Err(ShaderImportError::MissingBinaries);
+        }
+        #[cfg(feature = "webgpu")]
+        if shaders
+            .wgsl
+            .as_deref()
+            .is_some_and(|bytes| !binary::valid_wgsl(bytes, binary::Stage::Compute))
+        {
+            return Err(ShaderImportError::InvalidWgsl(ShaderStages::COMPUTE));
         }
         if shaders
             .vulkan
@@ -867,6 +1002,16 @@ impl ManagedProgram {
         self.identity() == other.identity()
     }
 
+    /// WGSL from this immutable program, available when packaged for WebGPU.
+    #[cfg(feature = "webgpu")]
+    pub fn wgsl(&self) -> Option<&str> {
+        let bytes = match &self.manifest {
+            ProgramAsset::Embedded(descriptor) => descriptor.shaders.wgsl?,
+            ProgramAsset::Loaded(program) => program.descriptor.shaders.wgsl.as_deref()?,
+        };
+        std::str::from_utf8(bytes).ok()
+    }
+
     #[cfg(feature = "vulkan")]
     pub(crate) fn spirv(&self) -> Option<&[u8]> {
         match &self.manifest {
@@ -890,8 +1035,13 @@ mod tests {
 
     #[test]
     fn embedded_program_keeps_only_enabled_backend_formats() {
-        const BINARIES: ShaderBinaries<&[u8]> =
-            embedded_shader_binaries!(b"spirv".as_slice(), b"dxil".as_slice());
+        const BINARIES: ShaderBinaries<&[u8]> = with_wgsl!(
+            embedded_shader_binaries!(b"spirv".as_slice(), b"dxil".as_slice()),
+            b"wgsl".as_slice(),
+            &[]
+        );
+        #[cfg(feature = "webgpu")]
+        assert_eq!(BINARIES.wgsl, Some(b"wgsl".as_slice()));
         assert_eq!(
             BINARIES.vulkan,
             cfg!(feature = "vulkan").then_some(b"spirv".as_slice())
