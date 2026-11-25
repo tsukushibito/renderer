@@ -46,6 +46,8 @@ impl LocalQueue {
 pub(crate) struct Scheduler {
     #[cfg(feature = "scheduler-metrics")]
     pub(crate) counters: [AtomicUsize; 4],
+    #[cfg(all(feature = "scheduler-metrics", not(target_arch = "wasm32")))]
+    pub(crate) join_wait_ns: std::sync::atomic::AtomicU64,
     queues: Vec<LocalQueue>,
     gate: Mutex<()>,
     wake: Condvar,
@@ -74,6 +76,8 @@ impl Scheduler {
         Ok(Self {
             #[cfg(feature = "scheduler-metrics")]
             counters: Default::default(),
+            #[cfg(all(feature = "scheduler-metrics", not(target_arch = "wasm32")))]
+            join_wait_ns: Default::default(),
             queues,
             gate: Mutex::new(()),
             wake: Condvar::new(),
@@ -182,7 +186,24 @@ impl Scheduler {
             // slip between the empty scan and the condition-variable wait.
             let task = if done() { None } else { self.take(lane) };
             if task.is_none() && !done() {
+                // A joining thread also executes ready work. Only measure the
+                // time it actually enters a wait for outstanding jobs.
+                #[cfg(feature = "tracy")]
+                let _span = joining.then(|| {
+                    tracy_client::Client::running().map(|client| {
+                        client.span(tracy_client::span_location!("jobs.join.wait"), 0)
+                    })
+                });
+                #[cfg(all(feature = "scheduler-metrics", not(target_arch = "wasm32")))]
+                let waiting = joining.then(std::time::Instant::now);
                 drop(self.wake.wait(gate).unwrap());
+                #[cfg(all(feature = "scheduler-metrics", not(target_arch = "wasm32")))]
+                if let Some(start) = waiting {
+                    self.join_wait_ns.fetch_add(
+                        start.elapsed().as_nanos() as u64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                }
             } else {
                 drop(gate);
             }

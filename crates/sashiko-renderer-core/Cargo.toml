@@ -18,7 +18,7 @@ graph-diagnostics = []
 # Allocation/native event counters; independent of validation and optimization.
 memory-profiling = []
 # Optional explicit CPU zones; independent of native layers and GPU timestamps.
-tracy = ["dep:tracy-client"]
+tracy = ["dep:tracy-client", "sashiko-jobs/tracy"]
 vulkan = ["dep:ash", "dep:vk-mem", "dep:tracing"]
 presentation = ["dep:raw-window-handle", "dep:windows-sys"]
 d3d12 = ["dep:windows-core"]

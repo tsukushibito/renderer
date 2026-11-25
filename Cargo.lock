@@ -1807,6 +1807,7 @@ name = "sashiko-jobs"
 version = "0.1.0"
 dependencies = [
  "sashiko-renderer-core",
+ "tracy-client",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

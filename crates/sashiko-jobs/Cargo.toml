@@ -8,7 +8,11 @@ publish = false
 
 [features]
 scheduler-metrics = []
+tracy = ["dep:tracy-client"]
 web-threads = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
+
+[dependencies]
+tracy-client = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { version = "0.2", optional = true }

@@ -44,6 +44,10 @@ pub struct SchedulerCounts {
     pub stolen: usize,
     pub empty_victim_probes: usize,
     pub work_wake_requests: usize,
+    /// Cumulative wall time spent parked while joining a scope (native only).
+    /// Nested joins on different participants may overlap.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub join_wait_ns: u64,
 }
 
 impl JobSystem {
@@ -90,6 +94,11 @@ impl JobSystem {
                 stolen,
                 empty_victim_probes,
                 work_wake_requests,
+                #[cfg(not(target_arch = "wasm32"))]
+                join_wait_ns: team
+                    .scheduler
+                    .join_wait_ns
+                    .load(std::sync::atomic::Ordering::Relaxed),
             };
         }
         SchedulerCounts::default()
