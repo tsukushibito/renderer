@@ -30,7 +30,6 @@ pub use view::{StandardViewOutput, StandardViewState, StandardViewTimings};
 
 #[derive(Clone, Copy)]
 struct StandardJobPolicy {
-    opaque_pbr: bool,
     updating_shadows: bool,
 }
 

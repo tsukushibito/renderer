@@ -504,7 +504,7 @@ impl StandardPipeline {
                 && if let Some(reused) = update.reused_shadows() {
                     policy.updating_shadows && reused.contains(&false)
                 } else {
-                    self.opaque.is_empty() || policy.opaque_pbr
+                    self.opaque.is_empty()
                 };
         }
         Ok((

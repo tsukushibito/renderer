@@ -1582,6 +1582,589 @@
         }
       },
       "captures": {}
+    },
+    "routed-final": {
+      "binary_sha256": "e9218290edb911bbaa006f20395901923dd52cb28cb20e34efa6fd7404c18494",
+      "serial_binary_sha256": "e9218290edb911bbaa006f20395901923dd52cb28cb20e34efa6fd7404c18494",
+      "cpu_affinity_mask": 4095,
+      "devices": {
+        "vulkan": {
+          "api": "vulkan",
+          "device": "NVIDIA GeForce RTX 3060",
+          "driver": 2559967232,
+          "luid": [88, 233, 0, 0, 0, 0, 0, 0]
+        },
+        "d3d12": {
+          "api": "d3d12",
+          "device": "NVIDIA GeForce RTX 3060",
+          "driver": 9007199255790656,
+          "luid": [88, 233, 0, 0, 0, 0, 0, 0]
+        }
+      },
+      "options": {
+        "apis": ["vulkan", "d3d12"],
+        "objects": [50000],
+        "visible": [10, 50, 100],
+        "workloads": ["opaque"],
+        "stages": ["serial", "auto"],
+        "participants": 4,
+        "extent": "512x512",
+        "native": false,
+        "profile": false,
+        "present": false,
+        "capture": false,
+        "memory": false,
+        "strict": false,
+        "frames": 600,
+        "warmup": 120,
+        "repeats": 3
+      },
+      "groups": {
+        "vulkan-50000-10-opaque": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 198.18207, "interval_p95_ms": 5.75255, "interval_p99_ms": 7.72296, "process_logical_cpus": 0.99607, "host_logical_cpus": 0.99261, "build_p50_ms": 4.56475, "bind_p50_ms": 0.2438, "view_p50_ms": 4.30715, "compile_p50_ms": 0.0041, "input_update_p50_ms": 0.0008},
+              "fps": [192.507, 198.378, 198.182],
+              "p95_ms": [6.66086, 5.65671, 5.75255]
+            },
+            "auto": {
+              "median": {"completed_fps": 274.43056, "interval_p95_ms": 4.68989, "interval_p99_ms": 5.53848, "process_logical_cpus": 1.43646, "host_logical_cpus": 0.97194, "build_p50_ms": 3.0853, "bind_p50_ms": 0.2599, "view_p50_ms": 2.8073, "compile_p50_ms": 0.0045, "input_update_p50_ms": 0.0009},
+              "fps": [288.216, 273.931, 274.431],
+              "p95_ms": [4.08654, 4.68989, 4.87063]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 38.47, "p95_change_percent": -18.47, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": true}
+          }
+        },
+        "vulkan-50000-50-opaque": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 106.9211, "interval_p95_ms": 10.21165, "interval_p99_ms": 12.60244, "process_logical_cpus": 0.99403, "host_logical_cpus": 0.99343, "build_p50_ms": 7.77035, "bind_p50_ms": 0.3022, "view_p50_ms": 7.43995, "compile_p50_ms": 0.0049, "input_update_p50_ms": 0.0009},
+              "fps": [106.921, 108.994, 106.552],
+              "p95_ms": [10.21165, 9.4717, 10.34472]
+            },
+            "auto": {
+              "median": {"completed_fps": 142.32666, "interval_p95_ms": 8.7872, "interval_p99_ms": 10.29321, "process_logical_cpus": 1.38991, "host_logical_cpus": 0.90437, "build_p50_ms": 5.9897, "bind_p50_ms": 0.2993, "view_p50_ms": 5.6741, "compile_p50_ms": 0.0053, "input_update_p50_ms": 0.0012},
+              "fps": [147.422, 142.327, 139.814],
+              "p95_ms": [7.85111, 8.7872, 9.12701]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 33.11, "p95_change_percent": -13.95, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": true}
+          }
+        },
+        "vulkan-50000-100-opaque": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 73.0577, "interval_p95_ms": 15.17567, "interval_p99_ms": 17.74484, "process_logical_cpus": 0.9981, "host_logical_cpus": 0.99433, "build_p50_ms": 10.80835, "bind_p50_ms": 0.3273, "view_p50_ms": 10.4593, "compile_p50_ms": 0.005, "input_update_p50_ms": 0.001},
+              "fps": [72.452, 73.058, 73.486],
+              "p95_ms": [15.53659, 14.79579, 15.17567]
+            },
+            "auto": {
+              "median": {"completed_fps": 93.98705, "interval_p95_ms": 13.13373, "interval_p99_ms": 15.36804, "process_logical_cpus": 1.38446, "host_logical_cpus": 0.92644, "build_p50_ms": 8.75885, "bind_p50_ms": 0.3209, "view_p50_ms": 8.418, "compile_p50_ms": 0.0054, "input_update_p50_ms": 0.0013},
+              "fps": [95.79, 93.867, 93.987],
+              "p95_ms": [12.60217, 13.13373, 13.53314]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 28.65, "p95_change_percent": -13.46, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": true}
+          }
+        },
+        "d3d12-50000-10-opaque": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 146.91433, "interval_p95_ms": 7.35671, "interval_p99_ms": 10.14669, "process_logical_cpus": 0.9871, "host_logical_cpus": 0.9871, "build_p50_ms": 4.87315, "bind_p50_ms": 0.31995, "view_p50_ms": 4.53925, "compile_p50_ms": 0.0045, "input_update_p50_ms": 0.0009},
+              "fps": [146.363, 146.914, 147.49],
+              "p95_ms": [7.35671, 7.35075, 7.40333]
+            },
+            "auto": {
+              "median": {"completed_fps": 176.8131, "interval_p95_ms": 7.02844, "interval_p99_ms": 8.87063, "process_logical_cpus": 1.31875, "host_logical_cpus": 0.96007, "build_p50_ms": 3.53735, "bind_p50_ms": 0.3157, "view_p50_ms": 3.19815, "compile_p50_ms": 0.0049, "input_update_p50_ms": 0.0012},
+              "fps": [180.858, 176.813, 170.68],
+              "p95_ms": [6.28864, 7.02844, 7.80368]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 20.35, "p95_change_percent": -4.46, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": true}
+          }
+        },
+        "d3d12-50000-50-opaque": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 91.59643, "interval_p95_ms": 11.89088, "interval_p99_ms": 14.3541, "process_logical_cpus": 0.99266, "host_logical_cpus": 0.99266, "build_p50_ms": 7.91035, "bind_p50_ms": 0.3415, "view_p50_ms": 7.5574, "compile_p50_ms": 0.005, "input_update_p50_ms": 0.0011},
+              "fps": [91.596, 92.745, 89.867],
+              "p95_ms": [11.91979, 11.42208, 11.89088]
+            },
+            "auto": {
+              "median": {"completed_fps": 104.76706, "interval_p95_ms": 12.2292, "interval_p99_ms": 15.65726, "process_logical_cpus": 1.27895, "host_logical_cpus": 0.96555, "build_p50_ms": 6.16295, "bind_p50_ms": 0.333, "view_p50_ms": 5.81075, "compile_p50_ms": 0.0052, "input_update_p50_ms": 0.0013},
+              "fps": [104.767, 105.333, 102.53],
+              "p95_ms": [12.2292, 11.92285, 12.64055]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 14.38, "p95_change_percent": 2.85, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": false}
+          }
+        },
+        "d3d12-50000-100-opaque": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 66.02002, "interval_p95_ms": 16.98523, "interval_p99_ms": 19.60418, "process_logical_cpus": 0.99384, "host_logical_cpus": 0.99384, "build_p50_ms": 10.70045, "bind_p50_ms": 0.3468, "view_p50_ms": 10.3308, "compile_p50_ms": 0.0052, "input_update_p50_ms": 0.0012},
+              "fps": [66.02, 66.13, 64.904],
+              "p95_ms": [16.98523, 16.59004, 17.98595]
+            },
+            "auto": {
+              "median": {"completed_fps": 81.47262, "interval_p95_ms": 14.17577, "interval_p99_ms": 16.80678, "process_logical_cpus": 1.56255, "host_logical_cpus": 0.96112, "build_p50_ms": 8.5669, "bind_p50_ms": 0.3356, "view_p50_ms": 8.21215, "compile_p50_ms": 0.0053, "input_update_p50_ms": 0.0014},
+              "fps": [82.107, 81.473, 80.216],
+              "p95_ms": [14.11577, 14.39857, 14.17577]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 23.41, "p95_change_percent": -16.54, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": true}
+          }
+        }
+      },
+      "captures": {}
+    },
+    "routed-historical": {
+      "binary_sha256": "e9218290edb911bbaa006f20395901923dd52cb28cb20e34efa6fd7404c18494",
+      "serial_binary_sha256": "82c90f08f43208e0001c657956d6f92719bb75aa3a0479fec9be3b49592ca1bb",
+      "cpu_affinity_mask": 4095,
+      "devices": {
+        "vulkan": {
+          "api": "vulkan",
+          "device": "NVIDIA GeForce RTX 3060",
+          "driver": 2559967232,
+          "luid": [88, 233, 0, 0, 0, 0, 0, 0]
+        },
+        "d3d12": {
+          "api": "d3d12",
+          "device": "NVIDIA GeForce RTX 3060",
+          "driver": 9007199255790656,
+          "luid": [88, 233, 0, 0, 0, 0, 0, 0]
+        }
+      },
+      "options": {
+        "apis": ["vulkan", "d3d12"],
+        "objects": [50000],
+        "visible": [50],
+        "workloads": ["opaque"],
+        "stages": ["serial", "auto"],
+        "participants": 4,
+        "extent": "512x512",
+        "native": false,
+        "profile": false,
+        "present": false,
+        "capture": false,
+        "memory": false,
+        "strict": false,
+        "frames": 600,
+        "warmup": 120,
+        "repeats": 3
+      },
+      "groups": {
+        "vulkan-50000-50-opaque": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 71.24157, "interval_p95_ms": 16.05819, "interval_p99_ms": 19.64655, "process_logical_cpus": 0.9928, "host_logical_cpus": 0.99256, "build_p50_ms": 9.6786, "bind_p50_ms": 1.5308, "view_p50_ms": 8.1233, "compile_p50_ms": 0.0051, "input_update_p50_ms": 0.0009},
+              "fps": [70.93, 71.242, 71.393],
+              "p95_ms": [16.5305, 15.6799, 16.05819]
+            },
+            "auto": {
+              "median": {"completed_fps": 146.28194, "interval_p95_ms": 7.93567, "interval_p99_ms": 9.86067, "process_logical_cpus": 1.47419, "host_logical_cpus": 0.90786, "build_p50_ms": 5.8906, "bind_p50_ms": 0.29995, "view_p50_ms": 5.5736, "compile_p50_ms": 0.0051, "input_update_p50_ms": 0.0011},
+              "fps": [148.982, 146.282, 144.411],
+              "p95_ms": [7.38886, 7.93567, 8.46259]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 105.33, "p95_change_percent": -50.58, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": true}
+          }
+        },
+        "d3d12-50000-50-opaque": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 77.43004, "interval_p95_ms": 14.39762, "interval_p99_ms": 16.65054, "process_logical_cpus": 0.99541, "host_logical_cpus": 0.99338, "build_p50_ms": 9.67685, "bind_p50_ms": 1.5034, "view_p50_ms": 8.14015, "compile_p50_ms": 0.0053, "input_update_p50_ms": 0.0011},
+              "fps": [76.989, 77.43, 78.008],
+              "p95_ms": [14.41829, 14.39762, 13.16916]
+            },
+            "auto": {
+              "median": {"completed_fps": 105.19649, "interval_p95_ms": 11.90909, "interval_p99_ms": 14.46397, "process_logical_cpus": 1.21452, "host_logical_cpus": 0.96702, "build_p50_ms": 6.2151, "bind_p50_ms": 0.3401, "view_p50_ms": 5.84185, "compile_p50_ms": 0.0053, "input_update_p50_ms": 0.0013},
+              "fps": [107.46, 104.308, 105.196],
+              "p95_ms": [11.40625, 12.32876, 11.90909]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 35.86, "p95_change_percent": -17.28, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": true}
+          }
+        }
+      },
+      "captures": {}
+    },
+    "routed-phases": {
+      "binary_sha256": "7028ec443d94e938154ce14bd37e69fd188a94f2cc4f42c00ed7e1d4bdfdafd4",
+      "serial_binary_sha256": "7028ec443d94e938154ce14bd37e69fd188a94f2cc4f42c00ed7e1d4bdfdafd4",
+      "cpu_affinity_mask": 4095,
+      "devices": {
+        "vulkan": {
+          "api": "vulkan",
+          "device": "NVIDIA GeForce RTX 3060",
+          "driver": 2559967232,
+          "luid": [88, 233, 0, 0, 0, 0, 0, 0]
+        },
+        "d3d12": {
+          "api": "d3d12",
+          "device": "NVIDIA GeForce RTX 3060",
+          "driver": 9007199255790656,
+          "luid": [88, 233, 0, 0, 0, 0, 0, 0]
+        }
+      },
+      "options": {
+        "apis": ["vulkan", "d3d12"],
+        "objects": [50000],
+        "visible": [50],
+        "workloads": ["opaque"],
+        "stages": ["serial", "auto"],
+        "participants": 4,
+        "extent": "512x512",
+        "native": false,
+        "profile": true,
+        "present": false,
+        "capture": false,
+        "memory": false,
+        "strict": false,
+        "frames": 180,
+        "warmup": 60,
+        "repeats": 3
+      },
+      "groups": {
+        "vulkan-50000-50-opaque": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 109.98243, "interval_p95_ms": 9.94125, "interval_p99_ms": 12.58128, "join_wait_per_frame_ms": 0.0, "process_logical_cpus": 0.98637, "host_logical_cpus": 0.98637, "build_p50_ms": 7.53265, "bind_p50_ms": 0.34035, "view_p50_ms": 7.1748, "mesh_connect_p50_ms": 1.38795, "classify_p50_ms": 2.1697, "shadow_history_p50_ms": 0.0001, "transparent_sort_p50_ms": 0.0, "streaming_capture_p50_ms": 0.75455, "generated_capture_p50_ms": 0.0, "generated_merge_p50_ms": 0.0, "finalize_reads_p50_ms": 0.0004, "compile_p50_ms": 0.005, "input_update_p50_ms": 0.0023, "prepare_p50_ms": 0.16505, "record_p50_ms": 1.11985, "submit_p50_ms": 0.0448, "retire_p50_ms": 0.0095, "gpu_p50_ms": 0.43478},
+              "fps": [108.22, 109.982, 111.043],
+              "p95_ms": [10.5746, 9.94125, 9.71776]
+            },
+            "auto": {
+              "median": {"completed_fps": 150.98779, "interval_p95_ms": 8.02958, "interval_p99_ms": 9.8166, "join_wait_per_frame_ms": 0.57917, "process_logical_cpus": 1.60931, "host_logical_cpus": 0.94482, "build_p50_ms": 5.686, "bind_p50_ms": 0.32625, "view_p50_ms": 5.33775, "mesh_connect_p50_ms": 1.40035, "classify_p50_ms": 0.6285, "shadow_history_p50_ms": 0.0001, "transparent_sort_p50_ms": 0.0, "streaming_capture_p50_ms": 0.0004, "generated_capture_p50_ms": 0.4138, "generated_merge_p50_ms": 0.0009, "finalize_reads_p50_ms": 0.0004, "compile_p50_ms": 0.0055, "input_update_p50_ms": 0.0029, "prepare_p50_ms": 0.16685, "record_p50_ms": 0.47755, "submit_p50_ms": 0.0522, "retire_p50_ms": 0.0088, "gpu_p50_ms": 0.44547},
+              "fps": [143.216, 150.988, 151.962],
+              "p95_ms": [9.08336, 7.90532, 8.02958]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 37.28, "p95_change_percent": -19.23, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": null}
+          }
+        },
+        "d3d12-50000-50-opaque": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 94.07407, "interval_p95_ms": 11.58058, "interval_p99_ms": 13.98087, "join_wait_per_frame_ms": 0.0, "process_logical_cpus": 0.9881, "host_logical_cpus": 0.9881, "build_p50_ms": 7.6412, "bind_p50_ms": 0.3384, "view_p50_ms": 7.2857, "mesh_connect_p50_ms": 1.4361, "classify_p50_ms": 2.1826, "shadow_history_p50_ms": 0.0001, "transparent_sort_p50_ms": 0.0, "streaming_capture_p50_ms": 0.76075, "generated_capture_p50_ms": 0.0, "generated_merge_p50_ms": 0.0, "finalize_reads_p50_ms": 0.0004, "compile_p50_ms": 0.0054, "input_update_p50_ms": 0.0009, "prepare_p50_ms": 0.5986, "record_p50_ms": 1.25145, "submit_p50_ms": 0.43905, "retire_p50_ms": 0.4934, "gpu_p50_ms": 0.23654},
+              "fps": [94.074, 93.724, 94.476],
+              "p95_ms": [11.58058, 11.72675, 11.00105]
+            },
+            "auto": {
+              "median": {"completed_fps": 102.53384, "interval_p95_ms": 12.36605, "interval_p99_ms": 16.09914, "join_wait_per_frame_ms": 0.26441, "process_logical_cpus": 1.20453, "host_logical_cpus": 0.96714, "build_p50_ms": 6.2169, "bind_p50_ms": 0.35265, "view_p50_ms": 5.8636, "mesh_connect_p50_ms": 1.5004, "classify_p50_ms": 0.79915, "shadow_history_p50_ms": 0.0002, "transparent_sort_p50_ms": 0.0, "streaming_capture_p50_ms": 0.0005, "generated_capture_p50_ms": 0.47525, "generated_merge_p50_ms": 0.0008, "finalize_reads_p50_ms": 0.0003, "compile_p50_ms": 0.0056, "input_update_p50_ms": 0.0012, "prepare_p50_ms": 0.606, "record_p50_ms": 1.29455, "submit_p50_ms": 0.5015, "retire_p50_ms": 0.5106, "gpu_p50_ms": 0.23654},
+              "fps": [101.287, 102.534, 103.813],
+              "p95_ms": [13.46494, 12.36605, 12.14071]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 8.99, "p95_change_percent": 6.78, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": null}
+          }
+        }
+      },
+      "captures": {}
+    },
+    "routed-materials": {
+      "binary_sha256": "e9218290edb911bbaa006f20395901923dd52cb28cb20e34efa6fd7404c18494",
+      "serial_binary_sha256": "e9218290edb911bbaa006f20395901923dd52cb28cb20e34efa6fd7404c18494",
+      "cpu_affinity_mask": 4095,
+      "devices": {
+        "vulkan": {
+          "api": "vulkan",
+          "device": "NVIDIA GeForce RTX 3060",
+          "driver": 2559967232,
+          "luid": [88, 233, 0, 0, 0, 0, 0, 0]
+        },
+        "d3d12": {
+          "api": "d3d12",
+          "device": "NVIDIA GeForce RTX 3060",
+          "driver": 9007199255790656,
+          "luid": [88, 233, 0, 0, 0, 0, 0, 0]
+        }
+      },
+      "options": {
+        "apis": ["vulkan", "d3d12"],
+        "objects": [50000],
+        "visible": [50],
+        "workloads": ["textured", "blend", "shadow-static", "shadow-dynamic"],
+        "stages": ["serial", "auto"],
+        "participants": 4,
+        "extent": "512x512",
+        "native": false,
+        "profile": false,
+        "present": false,
+        "capture": false,
+        "memory": false,
+        "strict": false,
+        "frames": 600,
+        "warmup": 120,
+        "repeats": 3
+      },
+      "groups": {
+        "vulkan-50000-50-textured": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 72.41513, "interval_p95_ms": 15.48374, "interval_p99_ms": 17.95816, "process_logical_cpus": 0.99571, "host_logical_cpus": 0.99492, "build_p50_ms": 11.3292, "bind_p50_ms": 1.56285, "view_p50_ms": 9.7294, "compile_p50_ms": 0.007, "input_update_p50_ms": 0.001},
+              "fps": [71.949, 73.072, 72.415],
+              "p95_ms": [15.87843, 15.48374, 15.1216]
+            },
+            "auto": {
+              "median": {"completed_fps": 73.40035, "interval_p95_ms": 15.29204, "interval_p99_ms": 18.43414, "process_logical_cpus": 0.99774, "host_logical_cpus": 0.99389, "build_p50_ms": 11.1083, "bind_p50_ms": 1.56325, "view_p50_ms": 9.52865, "compile_p50_ms": 0.0072, "input_update_p50_ms": 0.001},
+              "fps": [72.563, 73.4, 73.821],
+              "p95_ms": [15.63536, 15.29204, 14.86692]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 1.36, "p95_change_percent": -1.24, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": false}
+          }
+        },
+        "vulkan-50000-50-blend": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 73.66422, "interval_p95_ms": 15.26728, "interval_p99_ms": 17.22318, "process_logical_cpus": 0.99411, "host_logical_cpus": 0.99178, "build_p50_ms": 11.23075, "bind_p50_ms": 0.8365, "view_p50_ms": 10.3594, "compile_p50_ms": 0.0082, "input_update_p50_ms": 0.0011},
+              "fps": [73.664, 73.185, 74.413],
+              "p95_ms": [15.19181, 15.26728, 15.52216]
+            },
+            "auto": {
+              "median": {"completed_fps": 74.1485, "interval_p95_ms": 15.24871, "interval_p99_ms": 17.16612, "process_logical_cpus": 0.99444, "host_logical_cpus": 0.99242, "build_p50_ms": 11.0454, "bind_p50_ms": 0.84515, "view_p50_ms": 10.1747, "compile_p50_ms": 0.0082, "input_update_p50_ms": 0.0011},
+              "fps": [75.148, 73.569, 74.149],
+              "p95_ms": [14.51332, 15.5875, 15.24871]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 0.66, "p95_change_percent": -0.12, "paired_fps_wins": 2, "paired_processes": 3, "passes_adoption_rule": false}
+          }
+        },
+        "vulkan-50000-50-shadow-static": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 77.22134, "interval_p95_ms": 14.45208, "interval_p99_ms": 17.04972, "process_logical_cpus": 0.99022, "host_logical_cpus": 0.99022, "build_p50_ms": 10.49095, "bind_p50_ms": 0.3273, "view_p50_ms": 10.14775, "compile_p50_ms": 0.0071, "input_update_p50_ms": 0.001},
+              "fps": [77.129, 77.221, 78.25],
+              "p95_ms": [14.45208, 14.84665, 13.81139]
+            },
+            "auto": {
+              "median": {"completed_fps": 78.54535, "interval_p95_ms": 14.09268, "interval_p99_ms": 16.74275, "process_logical_cpus": 0.99613, "host_logical_cpus": 0.99368, "build_p50_ms": 10.35155, "bind_p50_ms": 0.32615, "view_p50_ms": 10.0128, "compile_p50_ms": 0.0073, "input_update_p50_ms": 0.001},
+              "fps": [79.495, 77.785, 78.545],
+              "p95_ms": [13.6603, 14.72177, 14.09268]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 1.71, "p95_change_percent": -2.49, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": false}
+          }
+        },
+        "vulkan-50000-50-shadow-dynamic": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 70.19848, "interval_p95_ms": 15.20056, "interval_p99_ms": 17.37769, "process_logical_cpus": 0.9963, "host_logical_cpus": 0.9963, "build_p50_ms": 11.0773, "bind_p50_ms": 0.32825, "view_p50_ms": 10.72865, "compile_p50_ms": 0.0122, "input_update_p50_ms": 0.0381},
+              "fps": [71.433, 69.474, 70.198],
+              "p95_ms": [14.94535, 16.85407, 15.20056]
+            },
+            "auto": {
+              "median": {"completed_fps": 83.64912, "interval_p95_ms": 14.82172, "interval_p99_ms": 17.8805, "process_logical_cpus": 1.304, "host_logical_cpus": 0.90184, "build_p50_ms": 9.8095, "bind_p50_ms": 0.3257, "view_p50_ms": 9.4541, "compile_p50_ms": 0.0129, "input_update_p50_ms": 0.039},
+              "fps": [83.649, 86.483, 82.854],
+              "p95_ms": [14.82172, 13.34201, 15.658]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 19.16, "p95_change_percent": -2.49, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": true}
+          }
+        },
+        "d3d12-50000-50-textured": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 51.20238, "interval_p95_ms": 21.76967, "interval_p99_ms": 25.93113, "process_logical_cpus": 0.99414, "host_logical_cpus": 0.99282, "build_p50_ms": 11.1568, "bind_p50_ms": 1.56635, "view_p50_ms": 9.5629, "compile_p50_ms": 0.0076, "input_update_p50_ms": 0.0013},
+              "fps": [51.393, 50.363, 51.202],
+              "p95_ms": [21.30536, 22.94166, 21.76967]
+            },
+            "auto": {
+              "median": {"completed_fps": 51.16353, "interval_p95_ms": 24.63904, "interval_p99_ms": 29.38319, "process_logical_cpus": 1.1131, "host_logical_cpus": 0.9753, "build_p50_ms": 10.1712, "bind_p50_ms": 1.6272, "view_p50_ms": 8.43485, "compile_p50_ms": 0.0076, "input_update_p50_ms": 0.0014},
+              "fps": [51.374, 49.954, 51.164],
+              "p95_ms": [24.5258, 25.503, 24.63904]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": -0.08, "p95_change_percent": 13.18, "paired_fps_wins": 0, "paired_processes": 3, "passes_adoption_rule": false}
+          }
+        },
+        "d3d12-50000-50-blend": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 51.06828, "interval_p95_ms": 22.10946, "interval_p99_ms": 26.68527, "process_logical_cpus": 0.99211, "host_logical_cpus": 0.99211, "build_p50_ms": 11.07685, "bind_p50_ms": 0.8485, "view_p50_ms": 10.20465, "compile_p50_ms": 0.0084, "input_update_p50_ms": 0.0014},
+              "fps": [50.657, 51.068, 51.342],
+              "p95_ms": [22.23269, 22.10946, 22.05389]
+            },
+            "auto": {
+              "median": {"completed_fps": 51.45768, "interval_p95_ms": 21.82787, "interval_p99_ms": 25.15734, "process_logical_cpus": 0.99029, "host_logical_cpus": 0.99013, "build_p50_ms": 11.03975, "bind_p50_ms": 0.8528, "view_p50_ms": 10.1711, "compile_p50_ms": 0.00875, "input_update_p50_ms": 0.0014},
+              "fps": [51.8, 51.458, 51.133],
+              "p95_ms": [20.6268, 21.82787, 22.26157]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 0.76, "p95_change_percent": -1.27, "paired_fps_wins": 2, "paired_processes": 3, "passes_adoption_rule": false}
+          }
+        },
+        "d3d12-50000-50-shadow-static": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 53.27253, "interval_p95_ms": 20.61686, "interval_p99_ms": 25.9186, "process_logical_cpus": 0.9919, "host_logical_cpus": 0.9905, "build_p50_ms": 10.38835, "bind_p50_ms": 0.34585, "view_p50_ms": 10.02385, "compile_p50_ms": 0.0075, "input_update_p50_ms": 0.0013},
+              "fps": [53.646, 53.273, 52.167],
+              "p95_ms": [19.93132, 20.61686, 21.8445]
+            },
+            "auto": {
+              "median": {"completed_fps": 52.91631, "interval_p95_ms": 20.80137, "interval_p99_ms": 24.85328, "process_logical_cpus": 0.99494, "host_logical_cpus": 0.99479, "build_p50_ms": 10.4588, "bind_p50_ms": 0.3472, "view_p50_ms": 10.0938, "compile_p50_ms": 0.0078, "input_update_p50_ms": 0.0013},
+              "fps": [53.604, 52.909, 52.916],
+              "p95_ms": [19.85789, 20.81815, 20.80137]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": -0.67, "p95_change_percent": 0.89, "paired_fps_wins": 1, "paired_processes": 3, "passes_adoption_rule": false}
+          }
+        },
+        "d3d12-50000-50-shadow-dynamic": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 48.86729, "interval_p95_ms": 23.69886, "interval_p99_ms": 27.60972, "process_logical_cpus": 0.98599, "host_logical_cpus": 0.98471, "build_p50_ms": 11.0934, "bind_p50_ms": 0.34525, "view_p50_ms": 10.72835, "compile_p50_ms": 0.0126, "input_update_p50_ms": 0.0392},
+              "fps": [48.796, 48.867, 48.917],
+              "p95_ms": [23.84768, 23.5433, 23.69886]
+            },
+            "auto": {
+              "median": {"completed_fps": 48.4617, "interval_p95_ms": 23.82192, "interval_p99_ms": 27.35317, "process_logical_cpus": 0.98815, "host_logical_cpus": 0.98815, "build_p50_ms": 11.1912, "bind_p50_ms": 0.34595, "view_p50_ms": 10.82155, "compile_p50_ms": 0.013, "input_update_p50_ms": 0.0389},
+              "fps": [48.462, 48.399, 49.229],
+              "p95_ms": [23.82192, 24.06473, 22.84792]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": -0.83, "p95_change_percent": 0.52, "paired_fps_wins": 1, "paired_processes": 3, "passes_adoption_rule": false}
+          }
+        }
+      },
+      "captures": {}
+    },
+    "routed-d3-confirm": {
+      "binary_sha256": "e9218290edb911bbaa006f20395901923dd52cb28cb20e34efa6fd7404c18494",
+      "serial_binary_sha256": "e9218290edb911bbaa006f20395901923dd52cb28cb20e34efa6fd7404c18494",
+      "cpu_affinity_mask": 4095,
+      "devices": {
+        "d3d12": {
+          "api": "d3d12",
+          "device": "NVIDIA GeForce RTX 3060",
+          "driver": 9007199255790656,
+          "luid": [88, 233, 0, 0, 0, 0, 0, 0]
+        }
+      },
+      "options": {
+        "apis": ["d3d12"],
+        "objects": [50000],
+        "visible": [50],
+        "workloads": ["opaque"],
+        "stages": ["serial", "both", "scene-graph-native", "auto"],
+        "participants": 4,
+        "extent": "512x512",
+        "native": false,
+        "profile": false,
+        "present": false,
+        "capture": false,
+        "memory": false,
+        "strict": false,
+        "frames": 600,
+        "warmup": 120,
+        "repeats": 3
+      },
+      "groups": {
+        "d3d12-50000-50-opaque": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 91.70378, "interval_p95_ms": 11.33603, "interval_p99_ms": 12.1649, "process_logical_cpus": 0.99322, "host_logical_cpus": 0.99322, "build_p50_ms": 7.94355, "bind_p50_ms": 0.3417, "view_p50_ms": 7.584, "compile_p50_ms": 0.00495, "input_update_p50_ms": 0.0011},
+              "fps": [91.704, 91.574, 91.903],
+              "p95_ms": [12.12643, 11.33603, 11.26781]
+            },
+            "both": {
+              "median": {"completed_fps": 104.2848, "interval_p95_ms": 12.48391, "interval_p99_ms": 15.31058, "process_logical_cpus": 1.24924, "host_logical_cpus": 0.9599, "build_p50_ms": 6.1893, "bind_p50_ms": 0.3414, "view_p50_ms": 5.8331, "compile_p50_ms": 0.0053, "input_update_p50_ms": 0.0013},
+              "fps": [104.285, 107.816, 104.125],
+              "p95_ms": [12.48391, 9.76329, 12.52421]
+            },
+            "scene-graph-native": {
+              "median": {"completed_fps": 114.69984, "interval_p95_ms": 9.26174, "interval_p99_ms": 10.33511, "process_logical_cpus": 1.41732, "host_logical_cpus": 0.9639, "build_p50_ms": 6.18415, "bind_p50_ms": 0.33865, "view_p50_ms": 5.82625, "compile_p50_ms": 0.0055, "input_update_p50_ms": 0.0012},
+              "fps": [115.308, 114.7, 113.001],
+              "p95_ms": [9.36283, 9.15471, 9.26174]
+            },
+            "auto": {
+              "median": {"completed_fps": 109.32924, "interval_p95_ms": 9.58127, "interval_p99_ms": 10.22676, "process_logical_cpus": 1.21287, "host_logical_cpus": 0.962, "build_p50_ms": 6.1921, "bind_p50_ms": 0.33395, "view_p50_ms": 5.84305, "compile_p50_ms": 0.0053, "input_update_p50_ms": 0.0012},
+              "fps": [111.06, 108.65, 109.329],
+              "p95_ms": [9.58127, 9.71938, 9.57646]
+            }
+          },
+          "comparisons": {
+            "serial_to_both": {"fps_change_percent": 13.72, "p95_change_percent": 10.13, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": false},
+            "serial_to_scene-graph-native": {"fps_change_percent": 25.08, "p95_change_percent": -18.3, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": true},
+            "serial_to_auto": {"fps_change_percent": 19.22, "p95_change_percent": -15.48, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": true},
+            "both_to_scene-graph-native": {"fps_change_percent": 9.99, "p95_change_percent": -25.81, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": true},
+            "both_to_auto": {"fps_change_percent": 4.84, "p95_change_percent": -23.25, "paired_fps_wins": 3, "paired_processes": 3, "passes_adoption_rule": false},
+            "scene-graph-native_to_auto": {"fps_change_percent": -4.68, "p95_change_percent": 3.45, "paired_fps_wins": 0, "paired_processes": 3, "passes_adoption_rule": false}
+          }
+        }
+      },
+      "captures": {}
+    },
+    "final-textured": {
+      "binary_sha256": "e2a1a873de7cd2e0faa3046b9b973d82d7d230cad789342f70f728c668b938ad",
+      "serial_binary_sha256": "e2a1a873de7cd2e0faa3046b9b973d82d7d230cad789342f70f728c668b938ad",
+      "cpu_affinity_mask": 4095,
+      "devices": {
+        "d3d12": {
+          "api": "d3d12",
+          "device": "NVIDIA GeForce RTX 3060",
+          "driver": 9007199255790656,
+          "luid": [88, 233, 0, 0, 0, 0, 0, 0]
+        }
+      },
+      "options": {
+        "apis": ["d3d12"],
+        "objects": [50000],
+        "visible": [50],
+        "workloads": ["textured"],
+        "stages": ["serial", "auto"],
+        "participants": 4,
+        "extent": "512x512",
+        "native": false,
+        "profile": false,
+        "present": false,
+        "capture": false,
+        "memory": false,
+        "strict": false,
+        "frames": 600,
+        "warmup": 120,
+        "repeats": 3
+      },
+      "groups": {
+        "d3d12-50000-50-textured": {
+          "stages": {
+            "serial": {
+              "median": {"completed_fps": 52.96262, "interval_p95_ms": 21.46487, "interval_p99_ms": 24.43493, "process_logical_cpus": 0.99465, "host_logical_cpus": 0.99465, "build_p50_ms": 10.8247, "bind_p50_ms": 1.5047, "view_p50_ms": 9.2892, "compile_p50_ms": 0.0077, "input_update_p50_ms": 0.0012},
+              "fps": [52.963, 52.932, 53.122],
+              "p95_ms": [21.33397, 21.56389, 21.46487]
+            },
+            "auto": {
+              "median": {"completed_fps": 53.28879, "interval_p95_ms": 20.84135, "interval_p99_ms": 24.27879, "process_logical_cpus": 0.99243, "host_logical_cpus": 0.99222, "build_p50_ms": 10.81545, "bind_p50_ms": 1.499, "view_p50_ms": 9.2676, "compile_p50_ms": 0.008, "input_update_p50_ms": 0.0012},
+              "fps": [54.056, 52.881, 53.289],
+              "p95_ms": [18.9134, 21.89299, 20.84135]
+            }
+          },
+          "comparisons": {
+            "serial_to_auto": {"fps_change_percent": 0.62, "p95_change_percent": -2.9, "paired_fps_wins": 2, "paired_processes": 3, "passes_adoption_rule": false}
+          }
+        }
+      },
+      "captures": {}
     }
   }
 }

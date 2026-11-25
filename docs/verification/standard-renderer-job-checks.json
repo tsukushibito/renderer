@@ -36,13 +36,31 @@
   "baseline": "133fc650",
   "scope": "Headless, 512x512, seed 71, 2 frames in flight. In each process, after timing, read SDR, HDR and depth at replay steps 0 and 17; shadow cases also read every cascade. Compare each mode and build to its same-backend serial reference. Compare 50,000 objects / 50% visibility additionally to the pre-job scene and graph implementation. Memory counts include all marked frames and final GPU drain before the readbacks.",
   "counts": {
-    "processes": 90,
-    "readback_planes": 732,
-    "historical_comparisons": 66
+    "processes": 142,
+    "readback_planes": 1172,
+    "historical_comparisons": 110
   },
   "binaries": {
+    "9436bd0d5d2a34d5": {
+      "sha256": "9436bd0d5d2a34d5b0384785730f5e5c8ddf924222887f9bd899fc5d819874eb",
+      "role": "memory",
+      "backend_features": [
+        "vulkan",
+        "d3d12",
+        "presentation"
+      ]
+    },
     "73580e5d2e434258": {
       "sha256": "73580e5d2e434258ed4625acb4121b437ea8729af9f639714a6fc44813f37811",
+      "role": "memory",
+      "backend_features": [
+        "vulkan",
+        "d3d12",
+        "presentation"
+      ]
+    },
+    "8eb841ca30ed7a6a": {
+      "sha256": "8eb841ca30ed7a6ab539b39725d734a9e1d892e74327a9dc87f75d6f2b262bfc",
       "role": "memory",
       "backend_features": [
         "vulkan",
@@ -59,8 +77,26 @@
         "presentation"
       ]
     },
+    "7bd10619127ed53a": {
+      "sha256": "7bd10619127ed53ac2a87d44d552fd1b1bcb00dae8d87a2d17a68fdf0ac3631f",
+      "role": "strict",
+      "backend_features": [
+        "vulkan",
+        "d3d12",
+        "presentation"
+      ]
+    },
     "afdd395a20eeea7e": {
       "sha256": "afdd395a20eeea7e0457644eafcbad19cf1853413b25d190729268d96539b6fe",
+      "role": "strict",
+      "backend_features": [
+        "vulkan",
+        "d3d12",
+        "presentation"
+      ]
+    },
+    "6b9da94fd7f95063": {
+      "sha256": "6b9da94fd7f9506385d72fdb4bf0b0819f2aa75f2fb3125e8b442595b1bd1cb5",
       "role": "strict",
       "backend_features": [
         "vulkan",
@@ -88,6 +124,31 @@
   ],
   "memory_contract": "Every memory result had zero Rust alloc/alloc_zeroed/realloc/dealloc, zero VMA host alloc/realloc/free, zero Renderer native create/destroy/allocate/free, and no counter overflow. Resets count actual native pool/list reuse.",
   "cohorts": [
+    {
+      "directory": "checks-memory-final-textured",
+      "binary": "9436bd0d5d2a34d5",
+      "type": "memory",
+      "warmup": 4,
+      "frames": 4,
+      "rows": [
+        [
+          "d3d12",
+          50000,
+          50,
+          "textured",
+          "auto",
+          8
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "textured",
+          "serial",
+          8
+        ]
+      ]
+    },
     {
       "directory": "checks-memory-large-visible",
       "binary": "73580e5d2e434258",
@@ -404,6 +465,216 @@
       ]
     },
     {
+      "directory": "checks-memory-routed",
+      "binary": "8eb841ca30ed7a6a",
+      "type": "memory",
+      "warmup": 4,
+      "frames": 4,
+      "rows": [
+        [
+          "d3d12",
+          50000,
+          50,
+          "blend",
+          "auto",
+          8
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "blend",
+          "serial",
+          8
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "opaque",
+          "auto",
+          8
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "opaque",
+          "serial",
+          8
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "shadow-dynamic",
+          "auto",
+          8
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "shadow-dynamic",
+          "serial",
+          8
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "shadow-static",
+          "auto",
+          8
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "shadow-static",
+          "serial",
+          8
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "textured",
+          "auto",
+          8
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "textured",
+          "serial",
+          8
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "blend",
+          "auto",
+          8
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "blend",
+          "serial",
+          8
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "opaque",
+          "auto",
+          48
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "opaque",
+          "serial",
+          8
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "shadow-dynamic",
+          "auto",
+          64
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "shadow-dynamic",
+          "serial",
+          8
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "shadow-static",
+          "auto",
+          8
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "shadow-static",
+          "serial",
+          8
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "textured",
+          "auto",
+          8
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "textured",
+          "serial",
+          8
+        ]
+      ]
+    },
+    {
+      "directory": "checks-memory-routed-sparse",
+      "binary": "8eb841ca30ed7a6a",
+      "type": "memory",
+      "warmup": 4,
+      "frames": 4,
+      "rows": [
+        [
+          "d3d12",
+          50000,
+          10,
+          "opaque",
+          "auto",
+          8
+        ],
+        [
+          "d3d12",
+          50000,
+          10,
+          "opaque",
+          "serial",
+          8
+        ],
+        [
+          "vulkan",
+          50000,
+          10,
+          "opaque",
+          "auto",
+          8
+        ],
+        [
+          "vulkan",
+          50000,
+          10,
+          "opaque",
+          "serial",
+          8
+        ]
+      ]
+    },
+    {
       "directory": "checks-memory-small",
       "binary": "73580e5d2e434258",
       "type": "memory",
@@ -514,6 +785,31 @@
           "opaque",
           "serial",
           8
+        ]
+      ]
+    },
+    {
+      "directory": "checks-strict-final-textured",
+      "binary": "7bd10619127ed53a",
+      "type": "strict",
+      "warmup": 4,
+      "frames": 4,
+      "rows": [
+        [
+          "d3d12",
+          50000,
+          50,
+          "textured",
+          "auto",
+          null
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "textured",
+          "serial",
+          null
         ]
       ]
     },
@@ -776,6 +1072,216 @@
       ]
     },
     {
+      "directory": "checks-strict-routed",
+      "binary": "6b9da94fd7f95063",
+      "type": "strict",
+      "warmup": 4,
+      "frames": 4,
+      "rows": [
+        [
+          "d3d12",
+          50000,
+          50,
+          "blend",
+          "auto",
+          null
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "blend",
+          "serial",
+          null
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "opaque",
+          "auto",
+          null
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "opaque",
+          "serial",
+          null
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "shadow-dynamic",
+          "auto",
+          null
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "shadow-dynamic",
+          "serial",
+          null
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "shadow-static",
+          "auto",
+          null
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "shadow-static",
+          "serial",
+          null
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "textured",
+          "auto",
+          null
+        ],
+        [
+          "d3d12",
+          50000,
+          50,
+          "textured",
+          "serial",
+          null
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "blend",
+          "auto",
+          null
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "blend",
+          "serial",
+          null
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "opaque",
+          "auto",
+          null
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "opaque",
+          "serial",
+          null
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "shadow-dynamic",
+          "auto",
+          null
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "shadow-dynamic",
+          "serial",
+          null
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "shadow-static",
+          "auto",
+          null
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "shadow-static",
+          "serial",
+          null
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "textured",
+          "auto",
+          null
+        ],
+        [
+          "vulkan",
+          50000,
+          50,
+          "textured",
+          "serial",
+          null
+        ]
+      ]
+    },
+    {
+      "directory": "checks-strict-routed-sparse",
+      "binary": "6b9da94fd7f95063",
+      "type": "strict",
+      "warmup": 4,
+      "frames": 4,
+      "rows": [
+        [
+          "d3d12",
+          50000,
+          10,
+          "opaque",
+          "auto",
+          null
+        ],
+        [
+          "d3d12",
+          50000,
+          10,
+          "opaque",
+          "serial",
+          null
+        ],
+        [
+          "vulkan",
+          50000,
+          10,
+          "opaque",
+          "auto",
+          null
+        ],
+        [
+          "vulkan",
+          50000,
+          10,
+          "opaque",
+          "serial",
+          null
+        ]
+      ]
+    },
+    {
       "directory": "checks-strict-small",
       "binary": "afdd395a20eeea7e",
       "type": "strict",
@@ -894,6 +1400,7 @@
     "canonicalization": "SHA-256 of sorted-key, minified JSON capture array preserving frame and plane order. SDR/HDR/depth then shadow cascade 0..3. Each plane value is SHA-256 of all bytes.",
     "reference": {
       "d3d12/1024/50/opaque": "67a94985f4803ca680c955dd080edf07d76cc067879351022fa80ad2d7bd5aa4",
+      "d3d12/50000/10/opaque": "aa04fb56d3e7e47efedb6763b0328e43c6693112aca867eef9b9492e6d4c5b0d",
       "d3d12/50000/50/blend": "6fb04716c98e805cb7d23d5b04f2dc548cd469d96b6bb5f3a469333a28a5fea3",
       "d3d12/50000/50/opaque": "26be4b2187c1567f5cce7075a7b727c81b9f5379a8d35d48fb478763f3d2a916",
       "d3d12/50000/50/shadow-dynamic": "f7cf401395a5fb1ad9f5f155169443e9c4bfc44ea6332f296088f2305352ed89",
@@ -901,6 +1408,7 @@
       "d3d12/50000/50/textured": "632a56f4500903f90098b4192f202137861f18c3e79586a674f87c149d074514",
       "d3d12/50000/100/opaque": "7184d8e178cb959979a6f6d3c1e0369261b155a10961c492fc7d23c9ecbc2566",
       "vulkan/1024/50/opaque": "67a94985f4803ca680c955dd080edf07d76cc067879351022fa80ad2d7bd5aa4",
+      "vulkan/50000/10/opaque": "aa04fb56d3e7e47efedb6763b0328e43c6693112aca867eef9b9492e6d4c5b0d",
       "vulkan/50000/50/blend": "6fb04716c98e805cb7d23d5b04f2dc548cd469d96b6bb5f3a469333a28a5fea3",
       "vulkan/50000/50/opaque": "26be4b2187c1567f5cce7075a7b727c81b9f5379a8d35d48fb478763f3d2a916",
       "vulkan/50000/50/shadow-dynamic": "f7cf401395a5fb1ad9f5f155169443e9c4bfc44ea6332f296088f2305352ed89",
