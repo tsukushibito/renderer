@@ -519,7 +519,7 @@ fn requirements_inner(
 pub(super) fn prepare(
     pool: &Arc<FramePool>,
     graph: &CompiledGraph,
-    jobs: Option<&std::sync::Mutex<sashiko_jobs::JobSystem>>,
+    jobs: Option<&crate::jobs::RendererJobs>,
 ) -> Result<FrameWork, D3D12RuntimeError> {
     #[cfg(feature = "tracy")]
     let _span = tracy_client::Client::running().map(|client| {

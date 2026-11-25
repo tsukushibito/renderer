@@ -7,12 +7,12 @@ use super::super::{
     raster::RasterPipeline,
     registry::PhysicalRef,
 };
+use crate::jobs::RendererJobs;
 use crate::{
     graph::{CompiledGraph, Operation, RasterBatchOperands},
     program::BindingType,
 };
-use sashiko_jobs::JobSystem;
-use std::{num::NonZeroUsize, sync::Mutex};
+use std::num::NonZeroUsize;
 
 pub(in crate::backends::d3d12) struct Bundle {
     pub(super) list: NativeObject<ID3D12GraphicsCommandList>,
@@ -108,7 +108,7 @@ pub(super) fn record(
     owner: &DeviceOwner,
     graph: &CompiledGraph,
     programs: &[RasterPipeline],
-    jobs: &Mutex<JobSystem>,
+    jobs: &RendererJobs,
 ) -> Result<(), D3D12RuntimeError> {
     for bundle in &mut slot.bundles {
         bundle.pipeline = None;
@@ -151,9 +151,8 @@ pub(super) fn record(
     let buffers = &slot.buffers;
     let map = &slot.resource_map;
     let bundles = &mut slot.bundles[..end];
-    jobs.lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .scope(|scope| {
+    jobs.with(|team| {
+        team.scope(|scope| {
             scope.for_each_chunk_mut(bundles, NonZeroUsize::MIN, |index, chunk| {
                 let bundle = &mut chunk[0];
                 if let Some(pipeline) = bundle.pipeline {
@@ -163,7 +162,8 @@ pub(super) fn record(
                         .err();
                 }
             })
-        });
+        })
+    });
     for bundle in bundles {
         if let Some(error) = bundle.error.take() {
             return Err(error);
