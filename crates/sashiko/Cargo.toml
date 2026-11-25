@@ -20,7 +20,7 @@ cpal = { version = "0.16", optional = true }
 winit = { version = "0.30", default-features = false, features = ["rwh_06"], optional = true }
 
 [dependencies]
-sashiko-animation = { path = "../sashiko-animation" }
+sashiko-animation = { version = "0.1.0", path = "../sashiko-animation" }
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"], optional = true }
 sashiko-renderer = { version = "0.1.0", path = "../sashiko-renderer", default-features = false }
 hound = "3.5"
