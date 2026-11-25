@@ -170,7 +170,7 @@ impl PreparedVisibility {
     /// size. The callback receives group and command indices in table order.
     pub fn encode_bounds(
         &self,
-        mut destination: &mut [u8],
+        destination: &mut [u8],
         mut bounds: impl FnMut(usize, usize) -> WorldBounds,
     ) -> Result<(), GraphError> {
         if destination.len() as u64 != self.bounds_desc().size {
@@ -179,33 +179,61 @@ impl PreparedVisibility {
             ));
         }
         for (group_index, group) in self.groups.iter().enumerate() {
-            let padded = group.table.padded_count() as usize * VISIBILITY_AABB_BYTES;
-            let active = group.table.command_count() as usize * VISIBILITY_AABB_BYTES;
-            let (records, rest) = destination.split_at_mut(padded);
-            let (records, padding) = records.split_at_mut(active);
-            for (command_index, record) in records
-                .as_chunks_mut::<VISIBILITY_AABB_BYTES>()
-                .0
-                .iter_mut()
-                .enumerate()
-            {
-                let WorldBounds { min, max, enabled } = bounds(group_index, command_index);
-                let words = [
-                    min[0].to_bits(),
-                    min[1].to_bits(),
-                    min[2].to_bits(),
-                    u32::from(enabled),
-                    max[0].to_bits(),
-                    max[1].to_bits(),
-                    max[2].to_bits(),
-                    0,
-                ];
-                record.copy_from_slice(words.map(u32::to_le_bytes).as_flattened());
-            }
-            padding.fill(0);
-            destination = rest;
+            let range = self.encode_group_bounds(
+                destination,
+                group_index,
+                0..group.table.command_count() as usize,
+                |i| bounds(group_index, i),
+            )?;
+            let padding = (group.table.padded_count() - group.table.command_count()) as usize
+                * VISIBILITY_AABB_BYTES;
+            destination[range.end..range.end + padding].fill(0);
         }
         Ok(())
+    }
+
+    /// Update a contiguous set of commands in an already initialized packed bounds
+    /// array. Returns the affected byte range to upload at the same destination offset.
+    /// Other commands and padding keep their previous contents.
+    pub fn encode_group_bounds(
+        &self,
+        destination: &mut [u8],
+        group: usize,
+        commands: std::ops::Range<usize>,
+        mut bounds: impl FnMut(usize) -> WorldBounds,
+    ) -> Result<std::ops::Range<usize>, GraphError> {
+        let group = self
+            .groups
+            .get(group)
+            .ok_or_else(|| GraphError::invalid_input("unknown visibility group"))?;
+        if destination.len() as u64 != self.bounds_desc().size
+            || commands.start > commands.end
+            || commands.end > group.table.command_count() as usize
+        {
+            return Err(GraphError::invalid_input(
+                "invalid packed visibility bounds range",
+            ));
+        }
+        let base = group.mask_offset as usize / VISIBILITY_MASK_BYTES;
+        let bytes = (base + commands.start) * VISIBILITY_AABB_BYTES
+            ..(base + commands.end) * VISIBILITY_AABB_BYTES;
+        for (index, record) in
+            commands.zip(destination[bytes.clone()].chunks_exact_mut(VISIBILITY_AABB_BYTES))
+        {
+            let WorldBounds { min, max, enabled } = bounds(index);
+            let words = [
+                min[0].to_bits(),
+                min[1].to_bits(),
+                min[2].to_bits(),
+                u32::from(enabled),
+                max[0].to_bits(),
+                max[1].to_bits(),
+                max[2].to_bits(),
+                0,
+            ];
+            record.copy_from_slice(words.map(u32::to_le_bytes).as_flattened());
+        }
+        Ok(bytes)
     }
 
     /// Cull all padded slots and encode the enabled groups. The camera begins
