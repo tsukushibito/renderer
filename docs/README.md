@@ -13,6 +13,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | 読みたいこと | 入口 |
 |---|---|
 | ゲームとエンジンの実装をどこで分けるか | [ゲーム制作 API と編集データの責務](design/game-engine.md) |
+| キャラクターの動きを並列評価し、複数の描画パスで使いたい | [アニメーションの責務、GPU スキニングの選択と受け入れ条件](design/animation.md) |
 | 最初のゲームの完成像と直近の実装順を知りたい | [3D 見下ろし型ローグライトサバイバーの制作計画](design/survivor-game.md) |
 | ゲーム用の素材を取り込み、配布・差し替えたい | [Rust での装備の取込と配布](guides/tooling.md#equipment-cook)、[既存エンジンの比較、オフラインと実行時の責務、規模別の受け入れ条件](design/asset-pipeline.md) |
 | Git worktree で大型の素材を扱いたい | [原本の選択取得、変換済みデータの共有、worktree 別の世代管理と受け入れ条件](design/asset-pipeline.md#worktree-storage) |
