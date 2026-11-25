@@ -455,19 +455,16 @@ impl Runtime {
         self.collect_released_images()?;
         match self.inner {
             #[cfg(sashiko_webgpu)]
-            RuntimeInner::WebGpu(ref mut runtime) => {
-                let settings = match self.config {
-                    RuntimeConfig::WebGpu(settings) => settings,
-                    #[cfg(feature = "vulkan")]
-                    _ => unreachable!("runtime owns its backend configuration"),
-                };
-                runtime.prepare(
+            RuntimeInner::WebGpu(ref mut runtime) => match self.config {
+                RuntimeConfig::WebGpu(settings) => runtime.prepare(
                     self.limits,
                     working_set,
                     settings.upload_bytes,
                     settings.readback_bytes,
-                )
-            }
+                ),
+                #[cfg(feature = "vulkan")]
+                _ => unreachable!("runtime owns its backend configuration"),
+            },
             #[cfg(feature = "vulkan")]
             RuntimeInner::Vulkan(ref mut runtime) => {
                 Ok(runtime.prepare_graph_working_set(None, working_set)?)

@@ -262,26 +262,25 @@ impl Runtime {
     ) -> Result<FrameCompletion, ExecutionError> {
         use std::task::Poll;
         self.collect_released_images()?;
-        let runtime = match &mut self.inner {
-            RuntimeInner::WebGpu(runtime) => runtime,
+        match &mut self.inner {
+            RuntimeInner::WebGpu(runtime) => {
+                std::future::poll_fn(|cx| {
+                    // Register before checking readiness so a completion cannot be lost
+                    // between inspecting the frame state and storing the task's waker.
+                    runtime.set_frame_waker(id, cx.waker())?;
+                    match runtime.poll_frame(Some(id))? {
+                        Some(frame) => Poll::Ready(Ok(FrameCompletion::from(frame))),
+                        None => Poll::Pending,
+                    }
+                })
+                .await
+            }
             #[cfg(feature = "vulkan")]
-            RuntimeInner::Vulkan(_) => {
-                return Err(ExecutionError::webgpu(
-                    ExecutionErrorKind::WrongOwner,
-                    "expected a WebGPU runtime",
-                ));
-            }
-        };
-        std::future::poll_fn(|cx| {
-            // Register before checking readiness so a completion cannot be lost
-            // between inspecting the frame state and storing the task's waker.
-            runtime.set_frame_waker(id, cx.waker())?;
-            match runtime.poll_frame(Some(id))? {
-                Some(frame) => Poll::Ready(Ok(FrameCompletion::from(frame))),
-                None => Poll::Pending,
-            }
-        })
-        .await
+            RuntimeInner::Vulkan(_) => Err(ExecutionError::webgpu(
+                ExecutionErrorKind::WrongOwner,
+                "expected a WebGPU runtime",
+            )),
+        }
     }
 
     /// Retire Graph frames within a shared wait budget, discarding their CPU
