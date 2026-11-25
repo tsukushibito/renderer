@@ -109,6 +109,20 @@ impl GeometryPipeline {
         }
     }
 
+    pub(super) fn draw_hdr_with_gbuffer(
+        &mut self,
+        graph: &mut Graph,
+        frame: PbrDrawInput<'_>,
+        consume: impl FnOnce(&mut Graph, crate::pbr::GBuffer) -> Result<(), GraphError>,
+    ) -> Result<SceneImages, GraphError> {
+        let Self::Deferred(recipe) = self else {
+            return Err(GraphError::invalid_input(
+                "G-buffer access requires Deferred",
+            ));
+        };
+        recipe.add_scene_with_gbuffer(graph, frame, consume)
+    }
+
     /// Declare the standard output stage after scene rendering and any
     /// application HDR passes.
     pub fn write_output(
