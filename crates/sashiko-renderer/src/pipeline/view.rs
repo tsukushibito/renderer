@@ -3,7 +3,10 @@ use super::{history::History, *};
 use crate::pbr::ShadowUpdates;
 use sashiko_renderer_core::graph::GraphCapacityKind;
 use sashiko_renderer_core::runtime::{FrameId, FrameSubmission, Runtime};
-use std::num::NonZeroUsize;
+use std::{
+    num::NonZeroUsize,
+    time::{Duration, Instant},
+};
 /// Standard pipeline storage associated with one registered camera.
 pub struct StandardViewState {
     history: Option<History>,
@@ -31,14 +34,37 @@ impl StandardViewState {
     }
 }
 
+/// Host wall time for the StandardPipeline portions of one scene view.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StandardViewTimings {
+    /// Per-object mesh, pose metadata, index range and lightmap connections.
+    pub connect_meshes: Duration,
+    /// World bounds, camera and shadow candidates, and transparent depth keys, including job join.
+    pub classify: Duration,
+    /// Ordered caster history observation and selection of shadow updates for this view.
+    pub shadow_history: Duration,
+    /// Sorting the visible transparent draw keys.
+    pub transparent_sort: Duration,
+    /// Camera-visible objects handed to the opaque and transparent lists.
+    pub visible_objects: usize,
+    /// Objects queued to render each directional shadow cascade in this frame.
+    pub cascade_casters: [usize; pbr::CASCADE_COUNT],
+}
+
 /// Graph-local outputs. Publish shadow history immediately after a successful submission.
 #[must_use]
 pub struct StandardViewOutput {
     pub scene: SceneImages,
+    timings: Option<StandardViewTimings>,
     updates: Option<ShadowUpdates>,
     rect_updates: Option<pbr::RectShadowUpdates>,
 }
 impl StandardViewOutput {
+    /// CPU subphases measured when scene profiling was enabled for this view.
+    pub fn timings(&self) -> Option<StandardViewTimings> {
+        self.timings
+    }
+
     pub fn rendered_rectangle_faces(&self) -> usize {
         self.rect_updates.as_ref().map_or(0, |u| u.rendered_faces())
     }
@@ -94,6 +120,12 @@ impl StandardViewOutput {
 }
 
 impl StandardPipeline {
+    /// Enable optional per-view host timers for subsequent native frames.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_scene_profiling(&mut self, enabled: bool) {
+        self.timings = enabled.then(StandardViewTimings::default);
+    }
+
     pub(super) fn check_object(
         &self,
         input: SceneInput<'_>,
@@ -233,6 +265,14 @@ impl StandardPipeline {
             environment.diffuse_lighting = pbr::DiffuseLighting::SurfacePages { blend };
         }
         let prepared = self.prepare_view(camera.camera, input.sun, input.bounds, environment)?;
+        // Adjacent phases share a boundary. Disabled profiling reads no clocks.
+        let mut clock = self.timings.map(|_| Instant::now());
+        let mut next_phase = || {
+            clock.as_mut().map_or(Duration::ZERO, |previous| {
+                let now = Instant::now();
+                now - std::mem::replace(previous, now)
+            })
+        };
         {
             #[cfg(feature = "tracy")]
             let _span = tracy_client::Client::running().map(|client| {
@@ -278,6 +318,9 @@ impl StandardPipeline {
                 });
             }
         }
+        if let Some(timings) = &mut self.timings {
+            timings.connect_meshes = next_phase();
+        }
         self.classification.run(
             &self.connected,
             input.materials,
@@ -285,6 +328,9 @@ impl StandardPipeline {
             self.config.shadows.is_some(),
             input.lights,
         )?;
+        if let Some(timings) = &mut self.timings {
+            timings.classify = next_phase();
+        }
         let results = &self.classification.results[..self.connected.len()];
         let shadow = if let Some(history) = &mut view.history
             && prepared.shadow_matrices().is_some()
@@ -306,6 +352,9 @@ impl StandardPipeline {
         } else {
             None
         };
+        if let Some(timings) = &mut self.timings {
+            timings.shadow_history = next_phase();
+        }
         let connected = std::mem::take(&mut self.connected);
         let mut frame = GeometryDrawInput::new(&prepared, defaults, &connected);
         frame.rect_target = rect_frame.as_ref().map(|f| f.targets);
@@ -320,8 +369,17 @@ impl StandardPipeline {
                 }
             });
         self.connected = connected;
+        if let Some(timings) = &mut self.timings {
+            timings.visible_objects = self.opaque.len()
+                + self.transparent.len()
+                + self.forward.opaque.len()
+                + self.forward.blend.len();
+            timings.cascade_casters =
+                std::array::from_fn(|i| self.casters[i].len() + self.forward.shadow[i].len());
+        }
         Ok(StandardViewOutput {
             scene: scene?,
+            timings: self.timings,
             rect_updates: rect_frame.map(|f| f.export(graph)).transpose()?,
             updates: shadow.map(|s| s.export(graph)).transpose()?,
         })
