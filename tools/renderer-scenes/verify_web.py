@@ -1,4 +1,5 @@
 """Verify the packaged viewer in Chromium. Full runs require Windows hardware and native references."""
+
 import argparse
 import base64
 from contextlib import contextmanager
@@ -67,6 +68,21 @@ def process_memory(browser):
 
 DEVICE_EVENTS = """
 globalThis.gpuEvidence = {adapters: [], errors: []};
+globalThis.compilationChecks = [];
+if (globalThis.GPUDevice) {
+    const create = GPUDevice.prototype.createShaderModule;
+    GPUDevice.prototype.createShaderModule = function(descriptor) {
+        const module = create.call(this, descriptor);
+        compilationChecks.push(module.getCompilationInfo().then(info => {
+            for (const message of info.messages) {
+                if (message.type !== 'info') {
+                    gpuEvidence.errors.push(`${descriptor.label ?? 'WGSL'}:${message.lineNum} ${message.message}`);
+                }
+            }
+        }));
+        return module;
+    };
+}
 if (globalThis.GPUAdapter) {
     const original = GPUAdapter.prototype.requestDevice;
     GPUAdapter.prototype.requestDevice = async function(...args) {
@@ -90,23 +106,32 @@ if (globalThis.GPUAdapter) {
 def harness(page, base):
     # Load the public API with a host-owned, unscaled canvas. A same-origin
     # document also exercises relative scene and wasm URLs.
-    page.route("**/__verify__", lambda route: route.fulfill(
-        content_type="text/html", body='<link rel="icon" href="data:,"><style>*{margin:0}canvas{display:block}</style><canvas></canvas>'))
+    page.route(
+        "**/__verify__",
+        lambda route: route.fulfill(
+            content_type="text/html",
+            body='<link rel="icon" href="data:,"><style>*{margin:0}canvas{display:block}</style><canvas></canvas>',
+        ),
+    )
     page.goto(base + "__verify__")
 
 
 def attach(page, url, width, height):
     page.set_viewport_size({"width": width, "height": height})
-    page.evaluate("""async ([url,w,h]) => {
+    page.evaluate(
+        """async ([url,w,h]) => {
         const canvas = document.querySelector('canvas');
         canvas.width=w; canvas.height=h;
         const {attachScene} = await import('./viewer.js');
         globalThis.view = await attachScene(canvas, url, {autoResize:false});
-    }""", [url, width, height])
+    }""",
+        [url, width, height],
+    )
 
 
 def advance(page, count):
-    return page.evaluate("""async count => {
+    return page.evaluate(
+        """async count => {
         const intervals = [];
         for (let i=0; i<count; ++i) {
             const start = performance.now();
@@ -115,15 +140,19 @@ def advance(page, count):
             intervals.push(performance.now()-start);
         }
         return intervals;
-    }""", count)
+    }""",
+        count,
+    )
 
 
 def capture(page, directory, width, height):
     directory.mkdir(parents=True, exist_ok=True)
-    result = page.evaluate("""async () => {
+    result = page.evaluate(
+        """async () => {
         const {sdr,hdr,depth,width,height} = await view.capture();
         return {sdr:sdr.toBase64(), hdr:hdr.toBase64(), depth:depth.toBase64(), width,height};
-    }""")
+    }"""
+    )
     if (result["width"], result["height"]) != (width, height):
         raise ValueError("Capture size differs from the host canvas")
     planes = {}
@@ -173,11 +202,18 @@ def verify_inputs(site, scene, report):
 def compare_view(args, site, scene, name, mode, planes):
     path = args.references / f"{name}-{mode}" / "report.json"
     report = json.loads(path.read_text(encoding="utf-8"))
-    if report["runtime"]["api"] != "vulkan" or report["validation"]["mode"] != "strict" or not report["validation"]["clean"]:
+    if (
+        report["runtime"]["api"] != "vulkan"
+        or report["validation"]["mode"] != "strict"
+        or not report["validation"]["clean"]
+    ):
         raise ValueError(f"A validation-clean Vulkan reference is required in {path}")
     if report["identity"]["view"] != name:
         raise ValueError(f"Incorrect reference view in {path}")
-    results = {"native_report_sha256": digest(path), "scene_manifest_sha256": verify_inputs(site, scene, report)}
+    results = {
+        "native_report_sha256": digest(path),
+        "scene_manifest_sha256": verify_inputs(site, scene, report),
+    }
     for key, plane in planes.items():
         native, _ = load_capture(path, report, key)
         results[key] = compare_pixels(native, plane, key, "scene")
@@ -191,12 +227,16 @@ def rectangle_ratio(output, name, width, height, roi):
     for mode in light_modes("sponza"):
         folder = output / f"{name}-{mode}"
         depths.add(digest(folder / "depth.bin"))
-        hdr = np.memmap(folder / "hdr.bin", dtype="<f2", mode="r", shape=(height,width,4))
-        luma[mode] = (hdr[y0:y1,x0:x1,:3].astype(np.float32) @ [0.2126,0.7152,0.0722]).mean()
+        hdr = np.memmap(folder / "hdr.bin", dtype="<f2", mode="r", shape=(height, width, 4))
+        luma[mode] = (hdr[y0:y1, x0:x1, :3].astype(np.float32) @ [0.2126, 0.7152, 0.0722]).mean()
     if len(depths) != 1 or luma["unshadowed"] <= luma["off"]:
         raise ValueError(f"Invalid direct rectangle lighting control at {name}")
     ratio = (luma["shadowed"] - luma["off"]) / (luma["unshadowed"] - luma["off"])
-    return {"roi": roi, "ratio": ratio, "passed": abs(ratio) <= 0.01 if name == "gallery" else abs(ratio-1) <= 0.05}
+    return {
+        "roi": roi,
+        "ratio": ratio,
+        "passed": abs(ratio) <= 0.01 if name == "gallery" else abs(ratio - 1) <= 0.05,
+    }
 
 
 def exercise_controls(page, width, height):
@@ -229,8 +269,8 @@ def exercise_controls(page, width, height):
 def run_views(page, args, result):
     for scene in args.scenes:
         url = "fixture" if scene == "fixture" else f"./scenes/{scene}/scene.json"
-        views = [("fixture", (320,180), None)] if scene == "fixture" else VIEWS[scene]
-        for name, (width,height), roi in views:
+        views = [("fixture", (320, 180), None)] if scene == "fixture" else VIEWS[scene]
+        for name, (width, height), roi in views:
             started = perf_counter()
             attach(page, url, width, height)
             try:
@@ -238,7 +278,7 @@ def run_views(page, args, result):
                     page.evaluate("name => view.preset(name)", name)
                 advance(page, 2)
                 result["timing"][name] = {
-                    "attach_and_first_frames_ms": (perf_counter()-started)*1000,
+                    "attach_and_first_frames_ms": (perf_counter() - started) * 1000,
                     "frame_intervals_ms": advance(page, 24),
                 }
                 for mode in light_modes(scene):
@@ -253,7 +293,9 @@ def run_views(page, args, result):
                         details["native"] = compare_view(args, args.site, scene, name, mode, planes)
                     result["views"][label] = details
                 if roi:
-                    result["rectangle_shadows"][name] = rectangle_ratio(args.output, name, width, height, roi)
+                    result["rectangle_shadows"][name] = rectangle_ratio(
+                        args.output, name, width, height, roi
+                    )
                 exercise_controls(page, width, height)
             finally:
                 page.evaluate("() => view.dispose()")
@@ -263,10 +305,12 @@ def verify_device_loss(page):
     attach(page, "fixture", 320, 180)
     try:
         page.evaluate("async () => { const device=lastSceneDevice; device.destroy(); await device.lost; }")
-        rejected = page.evaluate("""async () => {
+        rejected = page.evaluate(
+            """async () => {
             try { await view.frame(performance.now()); return false; }
             catch (err) { return /lost|destroyed/i.test(String(err)); }
-        }""")
+        }"""
+        )
         if not rejected:
             raise ValueError("Destroyed device did not yield a device loss error to the host")
     finally:
@@ -287,17 +331,22 @@ def sample_page(page, base, scenes):
     for index, scene in enumerate(scenes):
         if index:
             selected.select_option(scene)
-        page.wait_for_function("""() => {
+        page.wait_for_function(
+            """() => {
             const retry = document.querySelector('#retry');
             return !retry.hidden || (document.activeElement?.tagName === 'CANVAS' &&
                 !document.querySelector('#scene').disabled && !document.querySelector('#status').textContent);
-        }""", timeout=600_000)
+        }""",
+            timeout=600_000,
+        )
         if page.locator("#retry").is_visible():
             raise ValueError(page.locator("#status").inner_text())
         if scene != "fixture":
             view = VIEWS[scene][0][0]
             page.locator("#preset").select_option(view)
-            page.wait_for_function("name => new URL(location.href).searchParams.get('view') === name", arg=view)
+            page.wait_for_function(
+                "name => new URL(location.href).searchParams.get('view') === name", arg=view
+            )
             page.locator("#reset").click()
 
 
@@ -307,7 +356,7 @@ def main():
     parser.add_argument("--scenes", nargs="+", choices=["fixture", *VIEWS], default=["fixture"])
     parser.add_argument("--references", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--channel", choices=["chrome","msedge","chromium"], default="chrome")
+    parser.add_argument("--channel", choices=["chrome", "msedge", "chromium"], default="chrome")
     parser.add_argument("--software", action="store_true", help="Use SwiftShader for the CI fixture")
     args = parser.parse_args()
     if any(s != "fixture" for s in args.scenes) and (not args.references or args.software):
@@ -317,7 +366,11 @@ def main():
     result = {"timing": {}, "views": {}, "rectangle_shadows": {}, "browser_errors": errors, "passed": False}
     flags = ["--enable-gpu", "--force-color-profile=srgb"]
     if args.software:
-        flags += ["--enable-unsafe-webgpu","--enable-unsafe-swiftshader","--use-webgpu-adapter=swiftshader"]
+        flags += [
+            "--enable-unsafe-webgpu",
+            "--enable-unsafe-swiftshader",
+            "--use-webgpu-adapter=swiftshader",
+        ]
     try:
         with serve(args.site) as base, sync_playwright() as pw:
             browser = pw.chromium.launch(channel=args.channel, args=flags)
@@ -329,26 +382,47 @@ def main():
                     page = browser.new_page(device_scale_factor=1)
                     page.add_init_script(DEVICE_EVENTS)
                     page.on("pageerror", lambda error: errors.append(str(error)))
-                    page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" or
-                            (msg.type == "warning" and "webgpu" in msg.text.lower()) else None)
+                    page.on(
+                        "console",
+                        lambda msg: (
+                            errors.append(msg.text)
+                            if msg.type == "error"
+                            or (msg.type == "warning" and "webgpu" in msg.text.lower())
+                            else None
+                        ),
+                    )
                     harness(page, base)
                     run_views(page, args, result)
                     verify_device_loss(page)
-                    gpu = result["gpu"] = page.evaluate("gpuEvidence")
+                    gpu = result["gpu"] = page.evaluate(
+                        "async () => { await Promise.all(compilationChecks); return gpuEvidence; }"
+                    )
                     sample_page(page, base, args.scenes)
-                    ui = page.evaluate("gpuEvidence")
+                    ui = page.evaluate(
+                        "async () => { await Promise.all(compilationChecks); return gpuEvidence; }"
+                    )
                     gpu["adapters"].extend(ui["adapters"])
                     gpu["errors"].extend(ui["errors"])
-                    if not gpu["adapters"] or any(a["fallback"] for a in gpu["adapters"]) and not args.software:
+                    if (
+                        not gpu["adapters"]
+                        or any(a["fallback"] for a in gpu["adapters"])
+                        and not args.software
+                    ):
                         raise ValueError(f"Unexpected GPU adapter selection: {gpu['adapters']}")
                     if gpu["errors"] or errors:
                         raise ValueError(f"Browser errors: {gpu['errors'] + errors}")
             finally:
                 browser.close()
-        result["passed"] = all(v["canvas_vs_sdr"]["passed"] for v in result["views"].values()) and all(
-            v["passed"] for v in result["rectangle_shadows"].values()) and all(
-            checks["native"][plane]["passed"] for checks in result["views"].values()
-            if "native" in checks for plane in FORMATS)
+        result["passed"] = (
+            all(v["canvas_vs_sdr"]["passed"] for v in result["views"].values())
+            and all(v["passed"] for v in result["rectangle_shadows"].values())
+            and all(
+                checks["native"][plane]["passed"]
+                for checks in result["views"].values()
+                if "native" in checks
+                for plane in FORMATS
+            )
+        )
     finally:
         (args.output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     if not result["passed"]:
@@ -357,4 +431,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

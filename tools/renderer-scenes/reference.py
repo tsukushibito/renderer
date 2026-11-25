@@ -1,4 +1,5 @@
 """Capture the native Forward reference views and Sponza rectangular-light controls."""
+
 import argparse
 import json
 from pathlib import Path
@@ -29,14 +30,42 @@ def main():
     for view, (width, height), _ in VIEWS[args.scene]:
         for mode in light_modes(args.scene):
             dest = args.output / f"{view}-{mode}"
-            subprocess.run([
-                str(args.binary.resolve()), "--api", "vulkan", "--pipeline", "forward",
-                "--manifest", str(args.manifest), "--ibl-manifest", str(args.ibl_manifest),
-                "--baked-lighting", str(args.baked_lighting), "--reflection-probes",
-                str(args.reflection_probes), "--look", LOOKS[args.scene], "--view", view,
-                "--width", str(width), "--height", str(height), "--inflight", "1",
-                "--warmup", "2", "--frames", "4", "--rect-lights", mode, "--output", str(dest),
-            ], check=True)
+            subprocess.run(
+                [
+                    str(args.binary.resolve()),
+                    "--api",
+                    "vulkan",
+                    "--pipeline",
+                    "forward",
+                    "--manifest",
+                    str(args.manifest),
+                    "--ibl-manifest",
+                    str(args.ibl_manifest),
+                    "--baked-lighting",
+                    str(args.baked_lighting),
+                    "--reflection-probes",
+                    str(args.reflection_probes),
+                    "--look",
+                    LOOKS[args.scene],
+                    "--view",
+                    view,
+                    "--width",
+                    str(width),
+                    "--height",
+                    str(height),
+                    "--inflight",
+                    "1",
+                    "--warmup",
+                    "2",
+                    "--frames",
+                    "4",
+                    "--rect-lights",
+                    mode,
+                    "--output",
+                    str(dest),
+                ],
+                check=True,
+            )
             report = json.loads((dest / "report.json").read_text(encoding="utf-8"))
             validation = report["validation"]
             if validation["mode"] != "strict" or not validation["clean"]:
@@ -45,4 +74,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
