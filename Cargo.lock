@@ -1844,6 +1844,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tracy-client",
+ "winit",
 ]
 
 [[package]]

@@ -1,5 +1,7 @@
 #[path = "scaling_geometry.rs"]
 mod geometry;
+#[path = "scaling_output.rs"]
+mod output;
 #[path = "validation.rs"]
 mod validation;
 
@@ -18,7 +20,7 @@ use sashiko_renderer_core::{
     graph::{ImageDesc, PassHandle},
     jobs::{JobSystem, RendererJobs},
     profiling::GpuTiming,
-    runtime::{FrameId, Runtime, RuntimeConfig},
+    runtime::{FrameId, FrameSubmission, Runtime, RuntimeConfig},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -73,6 +75,7 @@ struct Options {
     extent: [u32; 2],
     profile: bool,
     capture: bool,
+    present: bool,
     report: PathBuf,
 }
 impl Options {
@@ -92,6 +95,7 @@ impl Options {
             extent: [512; 2],
             profile: false,
             capture: false,
+            present: false,
             report: PathBuf::new(),
         };
         while let Some(flag) = args.next() {
@@ -124,6 +128,7 @@ impl Options {
                     let (x, y) = dimensions.split_once('x').ok_or("expected WIDTHxHEIGHT")?;
                     out.extent = [x.parse()?, y.parse()?];
                 }
+                "--present" => out.present = true,
                 "--profile" => out.profile = true,
                 "--capture" => out.capture = true,
                 "--report" => out.report = value()?.into(),
@@ -349,7 +354,7 @@ fn draw(
     opts: &Options,
     step: usize,
     capture: bool,
-) -> PipelineResult<(FrameId, Sample, Capture)> {
+) -> PipelineResult<(FrameSubmission, Sample, Capture)> {
     let mut sample = Sample::default();
     let start = Instant::now();
     scene.update(step, opts)?;
@@ -390,7 +395,7 @@ fn draw(
     let frame = frame.compile()?;
     sample.compile = start.elapsed();
     sample.passes = frame.pass_count();
-    Ok((frame.submit()?.id(), sample, reads))
+    Ok((frame.submit()?, sample, reads))
 }
 
 fn retire(
@@ -423,10 +428,12 @@ fn measure(
     scene: &mut Scene,
     opts: &Options,
     count: usize,
+    output: &mut output::Output,
 ) -> PipelineResult<(Duration, Vec<Sample>, Value)> {
     let mut samples = Vec::with_capacity(count);
     let mut pending = VecDeque::with_capacity(2);
     let mut previous = None;
+    output.begin_measurement();
     #[cfg(feature = "memory-profiling")]
     let before = sashiko_renderer_core::measurement::Snapshot::now();
     let start = Instant::now();
@@ -436,7 +443,10 @@ fn measure(
             retire(renderer, id, &mut samples[i], opts.profile)?;
         }
         let now = Instant::now();
-        let (id, mut sample, _) = draw(renderer, scene, opts, step, false)?;
+        output.prepare_frame()?;
+        let (mut receipt, mut sample, _) = draw(renderer, scene, opts, step, false)?;
+        let id = receipt.id();
+        output.present(renderer.runtime(), &mut receipt)?;
         sample.interval = previous.map_or(Duration::ZERO, |last| now - last);
         previous = Some(now);
         samples.push(sample);
@@ -445,6 +455,7 @@ fn measure(
     for (i, id) in pending.drain(..) {
         retire(renderer, id, &mut samples[i], opts.profile)?;
     }
+    output.drain()?;
     let wall = start.elapsed();
     #[cfg(feature = "memory-profiling")]
     let memory = {
@@ -464,7 +475,9 @@ fn capture(
     // Read two distinct positions to detect a stale-frame/camera replay.
     let mut results = Vec::new();
     for step in [0, 17] {
-        let (id, _, reads) = draw(renderer, scene, opts, step, true)?;
+        let (receipt, _, reads) = draw(renderer, scene, opts, step, true)?;
+        let id = receipt.id();
+        drop(receipt);
         let mut done = renderer
             .runtime()
             .wait_for_frame(id, WAIT)?
@@ -475,7 +488,7 @@ fn capture(
             done.readback_into(read, &mut data)?;
             if planes.is_empty()
                 && opts.visible > 0
-                && !data.chunks_exact(4).any(|p| p[..3] != [0; 3])
+                && !data.as_chunks::<4>().0.iter().any(|p| p[..3] != [0; 3])
             {
                 return Err("all SDR pixels are black with visible geometry".into());
             }
@@ -539,7 +552,7 @@ pub fn run() -> PipelineResult<()> {
     let mut backend = backend(&o.api)?;
     plan.fit_backend(&mut backend)?;
     let backend_limits = format!("{backend:?}");
-    let mut renderer = plan.build(backend)?;
+    let (mut renderer, mut output) = output::Output::build(plan, backend, &o)?;
     let device = identity(renderer.runtime())?;
     let mut texture = None;
     if o.workload == Workload::Textured {
@@ -576,10 +589,10 @@ pub fn run() -> PipelineResult<()> {
     if o.profile {
         renderer.runtime().set_profiling(true)?;
     }
-    measure(&mut renderer, &mut scene, &o, o.warmup)?;
+    measure(&mut renderer, &mut scene, &o, o.warmup, &mut output)?;
     #[cfg(windows)]
     let process_start = sashiko_example_support::clock::Boundary::capture()?;
-    let (wall, samples, memory) = measure(&mut renderer, &mut scene, &o, o.frames)?;
+    let (wall, samples, memory) = measure(&mut renderer, &mut scene, &o, o.frames, &mut output)?;
     #[cfg(windows)]
     let cpu = sashiko_example_support::clock::Boundary::capture()?
         .difference(process_start, sashiko_example_support::clock::frequency()?)?;
@@ -590,6 +603,7 @@ pub fn run() -> PipelineResult<()> {
     } else {
         Value::Null
     };
+    let presentation = output.finish()?;
     let mut runtime = renderer.into_runtime()?;
     scene.meshes.release_gpu(&mut runtime)?;
     scene.materials.clear(&mut runtime)?;
@@ -599,7 +613,7 @@ pub fn run() -> PipelineResult<()> {
         "objects":o.objects,"visible":o.visible,"shadow_casters":scene.objects.iter().filter(|item|item.casts_shadow).count(),"backend_limits":backend_limits,"seed":SEED,"workload":o.workload.name(),"extent":o.extent,"in_flight":2,
         "participants":o.team.get(),"scene_jobs":o.scene,"graph_jobs":o.graph,"native_jobs":o.native,
         "warmup":o.warmup,"frames":o.frames,"profile":o.profile,"wall_ns":wall.as_nanos() as u64,
-        "samples":samples.iter().map(Sample::report).collect::<Vec<_>>(),"memory":memory,"cpu":cpu,"capture":captures,"capture_plane_order":["sdr","hdr","depth","shadow0","shadow1","shadow2","shadow3"]});
+        "presented":o.present,"presentation":presentation,"samples":samples.iter().map(Sample::report).collect::<Vec<_>>(),"memory":memory,"cpu":cpu,"capture":captures,"capture_plane_order":["sdr","hdr","depth","shadow0","shadow1","shadow2","shadow3"]});
     let mut file = std::io::BufWriter::new(std::fs::File::create(o.report)?);
     serde_json::to_writer(&mut file, &report)?;
     std::io::Write::flush(&mut file)?;
