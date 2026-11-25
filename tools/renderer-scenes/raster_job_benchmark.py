@@ -117,6 +117,12 @@ def run_metrics(run, report):
         if any(type(value) is not int or value < 0 for value in values):
             raise ValueError(f"{run['name']}: missing or invalid {phase} timing")
         metrics[phase + "_p50_ms"] = statistics.median(values) / 1e6
+    # Subtract nested timers per frame before taking the median. Direct draws
+    # are generated inside the Graph builder and have no separate packet phase.
+    remaining = [s["build_ns"] - (s["packet_prepare_ns"] or 0) for s in samples]
+    if min(remaining) < 0:
+        raise ValueError(f"{run['name']}: packet preparation exceeds its enclosing build time")
+    metrics["build_excluding_packet_p50_ms"] = statistics.median(remaining) / 1e6
     return metrics
 
 

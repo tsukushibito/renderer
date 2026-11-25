@@ -1750,7 +1750,7 @@ target/release/examples/raster_draw_scaling.exe --api d3d12 --draws 50000 --word
 PコアとHighQoSを読戻した独立processを変更前後交互に起動する。build・画像照合・他のGPU試験が重ならないようにする。
 [計測結果](../verification/current.md#raster-constant-storage)を参照する。
 
-同じ総描画数で CPU のコマンド生成を比較するには `--passes`、`--batches-per-pass`、`--topology independent|chain`、`--workers` を指定する。各パスが専用の同寸法画像を描く。`chain` は同じ GPU の描画内容にパス間の明示的な順序依存を加える。前の画像をサンプリングする GPU 処理は含まない。パス数を変えると画像数とクリア回数も変わるため、ジョブの効果はパス数・バッチ数が等しい条件で比較する。
+同じ総描画数で CPU のコマンド生成を比較するには `--passes`、`--batches-per-pass`、`--topology independent|chain`、`--workers` を指定する。各パスが専用の同寸法画像を描く。最大32パスで、2カラー出力・2フレーム分の画像データは128 MiBになる。`chain` は同じ GPU の描画内容にパス間の明示的な順序依存を加える。前の画像をサンプリングする GPU 処理は含まない。パス数を変えると画像数とクリア回数も変わるため、ジョブの効果はパス数・バッチ数が等しい条件で比較する。
 
 `--workers 0` は Graph 所有者が直接 `RasterPass::draw` に入力を渡す。`1` は同じ描画列を予約済み領域に逐次生成し、`2` 以上はホストを含む指定人数でバッチごとに生成する。いずれも同じバッチ順に Graph へ登録し、バックエンドが通常の経路で記録・投入する。`packet_prepare_ns` は生成開始からジョブの合流までで、`build_ns` と `active_ns` に含まれる。単一パス・単一バッチでは参加人数を増やしても生成するジョブは1個である。
 
@@ -1759,6 +1759,8 @@ PコアとHighQoSを読戻した独立processを変更前後交互に起動す�
 ```powershell
 python tools/renderer-scenes/raster_job_benchmark.py --exe target/release/examples/raster_draw_scaling.exe --output .tools/raster-jobs --draws 50000 --words 0 --workers 0 1 4 --warmup 120 --frames 600 --repeats 3 --profile both
 ```
+
+`--conditions in-pass` でパス内4バッチに絞れる。`--profile off` は完了フレーム/秒を測る通常走、`--profile on` はネイティブ記録・GPU 時間を取得する診断走に使う。`build_excluding_packet_p50_ms` は各フレームの `build_ns` から命令の別配列への生成・合流にかかった `packet_prepare_ns` を差し引いて集計した値である。直接登録の値にはインラインの命令生成も含まれる。[5万描画の比較結果](../verification/current.md#raster-jobs)
 
 `frame_loop`は`--draws 0..1024`、`--layout overlap|grid`、`--extent WIDTHxHEIGHT`、
 `--mesh-layout shared|distinct`を受け付けます。
