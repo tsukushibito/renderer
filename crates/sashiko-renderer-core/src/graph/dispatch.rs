@@ -18,8 +18,38 @@ pub struct RasterBindings {
     program: ProgramId,
     first: usize,
     len: usize,
-    first_access: usize,
-    access_len: usize,
+}
+
+impl RasterBindings {
+    pub(super) fn resolve(
+        bindings: Option<Self>,
+        graph: u64,
+        program: &ManagedRasterProgram,
+    ) -> Result<std::ops::Range<usize>, GraphError> {
+        let Some(bindings) = bindings else {
+            return if program.bindings().is_empty() {
+                Ok(0..0)
+            } else {
+                Err(GraphError::new(
+                    GraphErrorKind::InvalidInput,
+                    "Raster Program requires a validated binding set",
+                ))
+            };
+        };
+        if bindings.graph != graph {
+            return Err(GraphError::new(
+                GraphErrorKind::WrongOwner,
+                "foreign Graph Raster binding set",
+            ));
+        }
+        if bindings.program != program.identity() {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "Raster binding set belongs to a different Program",
+            ));
+        }
+        Ok(bindings.first..bindings.first + bindings.len)
+    }
 }
 
 /// A graph-local descriptor borrowed only during pass construction. Programs
@@ -128,14 +158,18 @@ impl Graph {
             None,
         );
         match result {
-            Ok(owned) => Ok(RasterBindings {
-                graph: self.id,
-                program: program.identity(),
-                first,
-                len: owned.len(),
-                first_access,
-                access_len: self.binding_accesses.len() - first_access,
-            }),
+            Ok(owned) => {
+                if !owned.is_empty() {
+                    let accesses = first_access..self.binding_accesses.len();
+                    self.data_mut().raster_binding_access_ranges[first] = accesses;
+                }
+                Ok(RasterBindings {
+                    graph: self.id,
+                    program: program.identity(),
+                    first,
+                    len: owned.len(),
+                })
+            }
             Err(error) => {
                 let data = self.data_mut();
                 data.bindings.truncate(first);
@@ -160,41 +194,27 @@ impl Graph {
         program: &ManagedRasterProgram,
         bindings: Option<RasterBindings>,
     ) -> Result<std::ops::Range<usize>, GraphError> {
-        let Some(bindings) = bindings else {
-            return if program.bindings().is_empty() {
-                Ok(0..0)
-            } else {
-                Err(GraphError::new(
-                    GraphErrorKind::InvalidInput,
-                    "Raster Program requires a validated binding set",
-                ))
-            };
-        };
-        if bindings.graph != self.id {
-            return Err(GraphError::new(
-                GraphErrorKind::WrongOwner,
-                "foreign Graph Raster binding set",
-            ));
-        }
-        if bindings.program != program.identity() {
-            return Err(GraphError::new(
-                GraphErrorKind::InvalidInput,
-                "Raster binding set belongs to a different Program",
-            ));
-        }
+        let range = RasterBindings::resolve(bindings, self.id, program)?;
+        self.register_raster_binding_reads(&range)?;
+        Ok(range)
+    }
+
+    pub(super) fn register_raster_binding_reads(
+        &mut self,
+        bindings: &std::ops::Range<usize>,
+    ) -> Result<(), GraphError> {
         // Successful creation is the only publisher of these private ranges.
         // Both arenas are append-only for this Graph identity, and rollback
         // removes only unpublished additions after all existing handles. There
         // is no public invalidation operation within the same Graph.
-        let end = bindings.first + bindings.len;
-        let access_end = bindings.first_access + bindings.access_len;
-        if bindings.len != 0 && !self.raster_binding_seen[bindings.first] {
+        if !bindings.is_empty() && !self.raster_binding_seen[bindings.start] {
+            let accesses = self.raster_binding_access_ranges[bindings.start].clone();
             // The trusted Raster contract allows only read-only descriptors
             // and forbids shader side effects/inter-draw synchronization.
             // Creation already validated their immutable ranges and input
             // permissions. Only remaining pass capacity changes on reuse.
             // Compute write footprints keep the separate dispatch path.
-            let required = self.accesses.len().checked_add(bindings.access_len);
+            let required = self.accesses.len().checked_add(accesses.len());
             if required.is_none_or(|required| required > self.capacity.accesses) {
                 return Err(capacity_error(
                     GraphCapacityKind::Accesses,
@@ -204,12 +224,12 @@ impl Graph {
             }
             let data = self.data_mut();
             data.accesses
-                .extend_from_slice(&data.binding_accesses[bindings.first_access..access_end]);
-            data.raster_binding_seen[bindings.first] = true;
+                .extend_from_slice(&data.binding_accesses[accesses]);
+            data.raster_binding_seen[bindings.start] = true;
             // Every nonempty set owns at least one unique binding slot.
-            data.raster_binding_sets.push(bindings.first);
+            data.raster_binding_sets.push(bindings.start);
         }
-        Ok(bindings.first..end)
+        Ok(())
     }
 
     /// Own a managed Compute dispatch and derive its accesses and workgroup
