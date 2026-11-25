@@ -8,10 +8,14 @@ pub fn camera_x(frame: usize) -> f32 {
     ((frame % 64) as f32 - 32.).abs() / 1024. - 0.015625
 }
 
-/// World-space center and half-size. The three benchmark counts are coprime
-/// with the stride, so each grid cell occurs once at every visibility setting.
+/// World-space center and half-size. A coprime stride visits every cell once.
 pub fn placement(index: usize, count: usize, visible_percent: u32, seed: u32) -> [f32; 4] {
-    let cell = (index * 7919 + seed as usize) % count;
+    let stride = if count.is_multiple_of(7919) {
+        count - 1
+    } else {
+        7919
+    };
+    let cell = (index * stride + seed as usize) % count;
     let width = (count - 1).isqrt() + 1;
     let pitch = 1.84 / width as f32;
     let outside = cell >= count * visible_percent as usize / 100;

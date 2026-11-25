@@ -70,6 +70,7 @@ struct Options {
     scene: bool,
     graph: bool,
     native: bool,
+    auto: bool,
     warmup: usize,
     frames: usize,
     extent: [u32; 2],
@@ -90,6 +91,7 @@ impl Options {
             scene: false,
             graph: false,
             native: false,
+            auto: false,
             warmup: 120,
             frames: 600,
             extent: [512; 2],
@@ -120,6 +122,7 @@ impl Options {
                 "--participants" => out.team = value()?.parse()?,
                 "--scene-jobs" => out.scene = true,
                 "--graph-jobs" => out.graph = true,
+                "--auto" => out.auto = true,
                 "--native-jobs" => out.native = true,
                 "--warmup" => out.warmup = value()?.parse()?,
                 "--frames" => out.frames = value()?.parse()?,
@@ -135,14 +138,17 @@ impl Options {
                 _ => return Err(format!("unknown option {flag}").into()),
             }
         }
-        if !matches!(out.objects, 1024 | 10000 | 50000)
+        if out.auto && (out.graph || out.native || out.scene) {
+            return Err("--auto and forced stages are mutually exclusive".into());
+        }
+        if !(1..=50000).contains(&out.objects)
             || out.visible > 100
             || out.frames < 1
             || out.extent.contains(&0)
             || out.extent.iter().any(|n| *n > 4096)
             || out.report.as_os_str().is_empty()
         {
-            return Err("expected 1024/10000/50000 objects, visibility 0..=100, nonempty extent <=4096, --frames >=1 and --report path".into());
+            return Err("expected 1..=50000 objects, visibility 0..=100, nonempty extent <=4096, --frames >=1 and --report path".into());
         }
         Ok(out)
     }
@@ -498,7 +504,7 @@ fn capture(
             let mut data = vec![0; done.readback_len(read)?];
             done.readback_into(read, &mut data)?;
             if planes.is_empty()
-                && opts.visible > 0
+                && opts.objects * opts.visible as usize / 100 > 0
                 && !data.as_chunks::<4>().0.iter().any(|p| p[..3] != [0; 3])
             {
                 return Err("all SDR pixels are black with visible geometry".into());
@@ -512,7 +518,7 @@ fn capture(
 pub fn run() -> PipelineResult<()> {
     let o = Options::parse()?;
     let mut scene = Scene::new(&o)?;
-    let shared = if o.scene || o.graph || o.native {
+    let shared = if o.auto || o.scene || o.graph || o.native {
         Some(RendererJobs::new(JobSystem::new(o.team)?))
     } else {
         None
@@ -593,6 +599,9 @@ pub fn run() -> PipelineResult<()> {
         ))?;
         texture = Some(tex);
     }
+    if o.auto {
+        renderer.prepare_jobs(shared.as_ref().unwrap().clone())?;
+    }
     if o.graph {
         renderer
             .parts_mut()
@@ -650,7 +659,7 @@ pub fn run() -> PipelineResult<()> {
     validation::check_validation(runtime)?;
     let report = json!({"schema":1,"api":o.api,"device":device,"validation":{"strict":cfg!(feature="development-validation"),"clean":true},
         "objects":o.objects,"visible":o.visible,"shadow_casters":scene.objects.iter().filter(|item|item.casts_shadow).count(),"backend_limits":backend_limits,"seed":SEED,"workload":o.workload.name(),"extent":o.extent,"in_flight":2,
-        "participants":o.team.get(),"scene_jobs":o.scene,"graph_jobs":o.graph,"native_jobs":o.native,
+        "participants":o.team.get(),"scene_jobs":o.scene,"graph_jobs":o.graph,"native_jobs":o.native,"auto":o.auto,
         "warmup":o.warmup,"frames":o.frames,"profile":o.profile,"wall_ns":wall.as_nanos() as u64,
         "presented":o.present,"presentation":presentation,"samples":samples.iter().map(Sample::report).collect::<Vec<_>>(),"join_wait_ns":join_wait_ns,"memory":memory,"cpu":cpu,"capture":captures,"capture_plane_order":["sdr","hdr","depth","shadow0","shadow1","shadow2","shadow3"]});
     let mut file = std::io::BufWriter::new(std::fs::File::create(o.report)?);
