@@ -421,6 +421,19 @@ impl Runtime {
         }
     }
 
+    /// Keep the source image alive through completion of the submitted canvas draw.
+    #[cfg(sashiko_webgpu)]
+    pub(crate) fn mark_webgpu_presented(&self, image: &ImportImage) -> Result<(), ExecutionError> {
+        match &self.inner {
+            RuntimeInner::WebGpu(runtime) => runtime.mark_presented(image),
+            #[cfg(feature = "vulkan")]
+            RuntimeInner::Vulkan(_) => Err(ExecutionError::webgpu(
+                ExecutionErrorKind::WrongOwner,
+                "expected a WebGPU runtime",
+            )),
+        }
+    }
+
     /// Access Vulkan-specific change-boundary operations.
     #[cfg(feature = "vulkan")]
     pub fn as_vulkan_mut(&mut self) -> Option<&mut crate::vulkan::VulkanRuntime> {
