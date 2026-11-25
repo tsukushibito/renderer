@@ -29,6 +29,7 @@ raw-window-handle = { version = "0.6", optional = true }
 
 [target.'cfg(windows)'.dev-dependencies]
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
+sashiko-example-support = { version = "0.1.0", path = "../../examples/support" }
 
 [dev-dependencies]
 sashiko-jobs = { version = "0.1.0", path = "../sashiko-jobs" }

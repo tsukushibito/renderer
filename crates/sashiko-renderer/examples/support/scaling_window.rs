@@ -71,6 +71,7 @@ pub(in super::super) struct Display {
     host: Host,
     events: EventLoop<()>,
     profiling: bool,
+    mode: &'static str,
     counters: Counters,
 }
 impl Display {
@@ -127,6 +128,11 @@ impl Display {
                 events,
                 host,
                 profiling: opts.profile,
+                mode: if opts.api == "vulkan" {
+                    "VK_PRESENT_MODE_IMMEDIATE_KHR"
+                } else {
+                    "DXGI Present(0), ALLOW_TEARING"
+                },
                 counters: Counters::default(),
             },
         ))
@@ -224,8 +230,17 @@ impl Display {
         if self.profiling && c.accepted != 0 && c.samples == 0 {
             return Err("no completed presentation samples".into());
         }
+        let monitor = self
+            .host
+            .window
+            .as_ref()
+            .and_then(|w| w.current_monitor())
+            .map(|m| {
+                let s = m.size();
+                [s.width, s.height]
+            });
         Ok(
-            json!({"vsync":false,"extent":[self.host.size.width,self.host.size.height],"accepted":c.accepted,
+            json!({"vsync":false,"mode":self.mode,"monitor_extent":monitor,"extent":[self.host.size.width,self.host.size.height],"accepted":c.accepted,
             "not_ready_retries":c.retries,"completed_profile_samples":c.samples,
             "profile_total_ns":{"acquire":c.cpu_acquire.as_nanos() as u64,"prepare":c.cpu_prepare.as_nanos() as u64,
                 "record":c.cpu_record.as_nanos() as u64,"submit":c.cpu_submit.as_nanos() as u64,"present":c.cpu_present.as_nanos() as u64,

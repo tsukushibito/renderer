@@ -1,7 +1,7 @@
 //! Presentation is optional; both outputs record the same standard camera and SDR pass.
-use super::{Options, PipelineResult, SceneRenderer, backend};
+use super::{Options, PipelineResult, SceneRenderer};
 use sashiko_renderer::pipeline::PreparedSetup;
-use sashiko_renderer_core::runtime::{FrameSubmission, Runtime};
+use sashiko_renderer_core::runtime::{FrameSubmission, Runtime, RuntimeConfig};
 use serde_json::Value;
 
 #[cfg(all(windows, feature = "presentation"))]
@@ -17,9 +17,9 @@ pub(super) enum Output {
 impl Output {
     pub(super) fn build(
         plan: PreparedSetup<'_>,
+        api: RuntimeConfig,
         opts: &Options,
     ) -> PipelineResult<(SceneRenderer, Self)> {
-        let api = backend(&opts.api)?;
         if opts.present {
             #[cfg(all(windows, feature = "presentation"))]
             {

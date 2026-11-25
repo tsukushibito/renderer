@@ -13,7 +13,7 @@ from raster_job_benchmark import ROOT, check_device_and_build, host_policy, writ
 
 STAGES = {"serial": (), "graph": ("graph",), "scene": ("scene",), "both": ("scene", "graph")}
 WORKLOADS = ("opaque", "textured", "blend", "shadow-static", "shadow-dynamic")
-PHASES = ("build", "compile", "input_update", "prepare", "record", "submit", "retire", "gpu")
+PHASES = ("build", "bind", "view", "compile", "input_update", "prepare", "record", "submit", "retire", "gpu")
 
 
 def measurements(exe, args, output, policy):
@@ -31,6 +31,8 @@ def measurements(exe, args, output, policy):
                            "--extent", args.extent, "--participants", str(args.participants),
                            "--report", str(folder / "report.json")]
                 command += [f"--{s}-jobs" for s in STAGES[stage]]
+                if args.present:
+                    command.append("--present")
                 if args.native:
                     command.append("--native-jobs")
                 if args.profile:
@@ -71,6 +73,11 @@ def metrics(report):
     q = statistics.quantiles(intervals, n=100, method="inclusive")
     values = {"completed_fps": len(samples) * 1e9 / report["wall_ns"],
               "interval_p95_ms": q[94], "interval_p99_ms": q[98]}
+    if report.get("cpu"):
+        clocks = report["cpu"]
+        seconds = clocks["qpc_elapsed_ticks"] / clocks["qpc_frequency"]
+        values["process_logical_cpus"] = (clocks["process_kernel_100ns"] + clocks["process_user_100ns"]) * 1e-7 / seconds
+        values["host_logical_cpus"] = (clocks["main_thread_kernel_100ns"] + clocks["main_thread_user_100ns"]) * 1e-7 / seconds
     for phase in PHASES:
         ns = [s[phase + "_ns"] for s in samples]
         if any(v is not None for v in ns):
@@ -91,6 +98,7 @@ def main():
     parser.add_argument("--extent", default="512x512")
     parser.add_argument("--native", action="store_true", help="request native batch recording in all compared stages")
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--present", action="store_true", help="present to a native window with VSync disabled")
     parser.add_argument("--capture", action="store_true", help="compare two frames of SDR/HDR/depth/shadows after timing")
     parser.add_argument("--memory", action="store_true", help="require zero steady-state events from a memory-profiling binary")
     parser.add_argument("--strict", action="store_true", help="require a development-validation binary for correctness")
