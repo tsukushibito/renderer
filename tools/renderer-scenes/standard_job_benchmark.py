@@ -13,7 +13,7 @@ from raster_job_benchmark import ROOT, check_device_and_build, host_policy, writ
 
 STAGES = {"serial": (), "graph": ("graph",), "scene": ("scene",), "both": ("scene", "graph")}
 WORKLOADS = ("opaque", "textured", "blend", "shadow-static", "shadow-dynamic")
-PHASES = ("build", "bind", "view", "compile", "input_update", "prepare", "record", "submit", "retire", "gpu")
+PHASES = ("build", "bind", "view", "mesh_connect", "classify", "shadow_history", "transparent_sort", "compile", "input_update", "prepare", "record", "submit", "retire", "gpu")
 
 
 def measurements(exe, args, output, policy):
@@ -55,13 +55,17 @@ def measurements(exe, args, output, policy):
                 if code:
                     raise RuntimeError(f"{name} exited with {code}; see {folder / 'process.log'}")
                 report = json.loads((folder / "report.json").read_text(encoding="utf-8"))
-                expected = dict(api=api, objects=objects, visible=visible, workload=workload,
+                expected = dict(api=api, presented=args.present, objects=objects, visible=visible, workload=workload,
                                 profile=args.profile, frames=args.frames, warmup=args.warmup, in_flight=2,
                                 extent=list(map(int, args.extent.split("x"))), native_jobs=args.native,
                                 scene_jobs="scene" in STAGES[stage], graph_jobs="graph" in STAGES[stage],
                                 participants=args.participants)
-                if any(report[k] != value for k, value in expected.items()):
+                if any(report.get(k, False if k == "presented" else None) != value for k, value in expected.items()):
                     raise ValueError(f"{name} does not match the requested input")
+                if args.present:
+                    display = report["presentation"]
+                    if display["accepted"] != args.frames or display["vsync"] or display["extent"] != expected["extent"]:
+                        raise ValueError(f"{name}: frame presentation does not match requested conditions")
                 yield key, stage, name, report
 
 
@@ -73,13 +77,15 @@ def metrics(report):
     q = statistics.quantiles(intervals, n=100, method="inclusive")
     values = {"completed_fps": len(samples) * 1e9 / report["wall_ns"],
               "interval_p95_ms": q[94], "interval_p99_ms": q[98]}
+    if report.get("join_wait_ns") is not None:
+        values["join_wait_per_frame_ms"] = report["join_wait_ns"] / len(samples) / 1e6
     if report.get("cpu"):
         clocks = report["cpu"]
         seconds = clocks["qpc_elapsed_ticks"] / clocks["qpc_frequency"]
         values["process_logical_cpus"] = (clocks["process_kernel_100ns"] + clocks["process_user_100ns"]) * 1e-7 / seconds
         values["host_logical_cpus"] = (clocks["main_thread_kernel_100ns"] + clocks["main_thread_user_100ns"]) * 1e-7 / seconds
     for phase in PHASES:
-        ns = [s[phase + "_ns"] for s in samples]
+        ns = [s.get(phase + "_ns") for s in samples]
         if any(v is not None for v in ns):
             values[phase + "_p50_ms"] = statistics.median(ns) / 1e6
     return values

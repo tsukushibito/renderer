@@ -12,7 +12,7 @@ use sashiko_renderer::{
     pbr::{Bounds, PbrVertex, Projection, ShadowSettings, Sun, Technique, Transform, ViewInput},
     pipeline::{
         CameraGroup, CameraView, PipelineResult, RenderObject, RendererSetup, SceneAssets,
-        SceneInput, SceneRenderer, StandardConfig, StandardPipeline, ViewId,
+        SceneInput, SceneRenderer, StandardConfig, StandardPipeline, StandardViewTimings, ViewId,
     },
     unlit_forward::{IDENTITY, Vertex},
 };
@@ -336,12 +336,16 @@ struct Sample {
     compile: Duration,
     passes: usize,
     shadow_reused: Option<[bool; 4]>,
+    scene: Option<StandardViewTimings>,
     times: Option<[Duration; 5]>,
 }
 impl Sample {
     fn report(&self) -> Value {
         let ns = |d: Duration| d.as_nanos() as u64;
         json!({"interval_ns":ns(self.interval),"input_update_ns":ns(self.update),
+            "mesh_connect_ns":self.scene.map(|v|ns(v.connect_meshes)),"classify_ns":self.scene.map(|v|ns(v.classify)),
+            "shadow_history_ns":self.scene.map(|v|ns(v.shadow_history)),"transparent_sort_ns":self.scene.map(|v|ns(v.transparent_sort)),
+            "visible_objects": self.scene.map(|v|v.visible_objects),"cascade_casters":self.scene.map(|v|v.cascade_casters),
             "build_ns":ns(self.build),"bind_ns":ns(self.bind),"view_ns":ns(self.view),"compile_ns":ns(self.compile),"passes":self.passes,
             "shadow_reused":self.shadow_reused,"prepare_ns":self.times.map(|v|ns(v[0])),
             "record_ns":self.times.map(|v|ns(v[1])),"submit_ns":self.times.map(|v|ns(v[2])),
@@ -372,6 +376,13 @@ fn draw(
         .standard_output(camera.id)
         .ok_or("missing standard output")?;
     sample.shadow_reused = standard.reused_shadows();
+    sample.scene = standard.timings();
+    if sample
+        .scene
+        .is_some_and(|s| s.visible_objects != opts.objects * opts.visible as usize / 100)
+    {
+        return Err("camera-visible draw count differs from the generated workload".into());
+    }
     let maps = standard.scene.shadows;
     let output = frame
         .write_output(camera.id, view.color, 1., None)?
@@ -515,9 +526,11 @@ pub fn run() -> PipelineResult<()> {
         });
     }
     let enable_scene = o.scene;
+    let scene_profiling = o.profile;
     let scene_jobs = shared.clone();
     let group = CameraGroup::custom(camera(0, &o)?, move |_, limits, defs| {
         let mut pipeline = StandardPipeline::new(Technique::Forward, config, limits, defs)?;
+        pipeline.set_scene_profiling(scene_profiling);
         if enable_scene {
             pipeline.set_scene_jobs(scene_jobs.unwrap(), NonZeroUsize::MIN);
         }
@@ -580,10 +593,20 @@ pub fn run() -> PipelineResult<()> {
         ))?;
         texture = Some(tex);
     }
+    if o.graph {
+        renderer
+            .parts_mut()
+            .1
+            .set_raster_jobs(shared.as_ref().unwrap().clone(), NonZeroUsize::MIN);
+    }
     if o.native {
+        renderer
+            .parts_mut()
+            .1
+            .set_generated_batch_size(NonZeroUsize::new(o.objects.div_ceil(16)).unwrap());
         renderer.runtime().prepare_raster_recording(
             shared.as_ref().unwrap().clone(),
-            NonZeroUsize::new(16).unwrap(),
+            NonZeroUsize::new(64).unwrap(),
         )?;
     }
     if o.profile {
@@ -592,12 +615,28 @@ pub fn run() -> PipelineResult<()> {
     measure(&mut renderer, &mut scene, &o, o.warmup, &mut output)?;
     #[cfg(windows)]
     let process_start = sashiko_example_support::clock::Boundary::capture()?;
+    #[cfg(all(feature = "scheduler-metrics", not(target_arch = "wasm32")))]
+    let join_wait = || {
+        shared
+            .as_ref()
+            .map_or(0, |j| j.with(|team| team.scheduler_counts().join_wait_ns))
+    };
+    #[cfg(all(feature = "scheduler-metrics", not(target_arch = "wasm32")))]
+    let initial_wait = join_wait();
     let (wall, samples, memory) = measure(&mut renderer, &mut scene, &o, o.frames, &mut output)?;
     #[cfg(windows)]
     let cpu = sashiko_example_support::clock::Boundary::capture()?
         .difference(process_start, sashiko_example_support::clock::frequency()?)?;
     #[cfg(not(windows))]
     let cpu = Value::Null;
+    #[cfg(all(feature = "scheduler-metrics", not(target_arch = "wasm32")))]
+    let join_wait_ns = Some(
+        join_wait()
+            .checked_sub(initial_wait)
+            .ok_or("join wait counter decreased")?,
+    );
+    #[cfg(not(all(feature = "scheduler-metrics", not(target_arch = "wasm32"))))]
+    let join_wait_ns: Option<u64> = None;
     let captures = if o.capture {
         capture(&mut renderer, &mut scene, &o)?
     } else {
@@ -613,7 +652,7 @@ pub fn run() -> PipelineResult<()> {
         "objects":o.objects,"visible":o.visible,"shadow_casters":scene.objects.iter().filter(|item|item.casts_shadow).count(),"backend_limits":backend_limits,"seed":SEED,"workload":o.workload.name(),"extent":o.extent,"in_flight":2,
         "participants":o.team.get(),"scene_jobs":o.scene,"graph_jobs":o.graph,"native_jobs":o.native,
         "warmup":o.warmup,"frames":o.frames,"profile":o.profile,"wall_ns":wall.as_nanos() as u64,
-        "presented":o.present,"presentation":presentation,"samples":samples.iter().map(Sample::report).collect::<Vec<_>>(),"memory":memory,"cpu":cpu,"capture":captures,"capture_plane_order":["sdr","hdr","depth","shadow0","shadow1","shadow2","shadow3"]});
+        "presented":o.present,"presentation":presentation,"samples":samples.iter().map(Sample::report).collect::<Vec<_>>(),"join_wait_ns":join_wait_ns,"memory":memory,"cpu":cpu,"capture":captures,"capture_plane_order":["sdr","hdr","depth","shadow0","shadow1","shadow2","shadow3"]});
     let mut file = std::io::BufWriter::new(std::fs::File::create(o.report)?);
     serde_json::to_writer(&mut file, &report)?;
     std::io::Write::flush(&mut file)?;
