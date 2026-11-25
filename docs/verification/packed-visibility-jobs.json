@@ -1072,6 +1072,42 @@
           "vma": [0, 0, 0]
         }
       }
+    },
+    "boundary": {
+      "binary_sha256": "7353a994f938aa4f9018f6d9659dc121cd22493b7f8bbc2db3012fb415c4bec1",
+      "runs": 6,
+      "objects": 1024,
+      "visible_percent": 50,
+      "moving": 10,
+      "groups": 2,
+      "api": [
+        "vulkan",
+        "d3d12"
+      ],
+      "strategies": [
+        "cpu-all4",
+        "gpu",
+        "direct-all"
+      ],
+      "probe": "After timing, move the prefix across the left clip plane at three camera positions. The first 16 columns of scene HDR are clear, then partially white, then clear. Check raw HDR and depth equality of all strategies; strict native layers clean.",
+      "boundary_hdr_depth_sha256": {
+        "d3d12": [
+          "b71f2bc3852c6445ff559b0a2d124287c94f4702ae527d5d4475bbc1e9f50473",
+          "37b8645f1f285488ad2980f792732ab383b213e8359c8160c8669f332adf8390",
+          "d184d1b4f53e19bee257863b9b659103f530139fb5de7c467b8dbe00910fd842",
+          "7ef92c02ad404f9ced4a779b5dad19e375a34a3ae6fb027992e43c9d011528cd",
+          "e2ddd6d5d3df66d44a3d01e9ebdcd451ccd5733b314ebd348ae1c5884f32d1d4",
+          "6d6f54abcc15cabe51895688d471976a78af21e53434150e6c73efa27db2899a"
+        ],
+        "vulkan": [
+          "b71f2bc3852c6445ff559b0a2d124287c94f4702ae527d5d4475bbc1e9f50473",
+          "37b8645f1f285488ad2980f792732ab383b213e8359c8160c8669f332adf8390",
+          "d184d1b4f53e19bee257863b9b659103f530139fb5de7c467b8dbe00910fd842",
+          "7ef92c02ad404f9ced4a779b5dad19e375a34a3ae6fb027992e43c9d011528cd",
+          "e2ddd6d5d3df66d44a3d01e9ebdcd451ccd5733b314ebd348ae1c5884f32d1d4",
+          "6d6f54abcc15cabe51895688d471976a78af21e53434150e6c73efa27db2899a"
+        ]
+      }
     }
   },
   "profile_implementation": "37867583",

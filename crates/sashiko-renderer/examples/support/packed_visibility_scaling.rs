@@ -692,22 +692,25 @@ pub fn run() -> Result<(), Failure> {
             {
                 report["memory"] = json!({"rust":memory.rust.map(|e|e.calls),"vma":memory.vma_host.map(|e|e.calls),"native":memory.native,"overflowed":memory.overflowed});
             }
-            let mut hashes = Vec::new();
-            for frame in [0, 31, 63] {
-                let built = build(&o, &mut scene, &mut pool, &r, team.as_ref(), frame, true)?;
-                let receipt: FrameSubmission = rt.submit(&built.plan)?;
-                refresh(&o, &rt, &mut r)?;
-                let mut done = rt
-                    .wait_for_frame(receipt.id(), WAIT)?
-                    .ok_or("capture timeout")?;
-                for h in built.readback.unwrap() {
-                    let mut bytes = vec![0; done.readback_len(h)?];
-                    done.readback_into(h, &mut bytes)?;
-                    if bytes.as_chunks::<8>().0.iter().all(|v| v == &bytes[..8]) {
-                        return Err("empty or constant frame".into());
-                    }
-                    hashes.push(format!("{:x}", Sha256::digest(bytes)));
-                }
+            let hashes = capture_hashes(
+                &o,
+                &mut scene,
+                &mut pool,
+                &mut rt,
+                &mut r,
+                team.as_ref(),
+                false,
+            )?;
+            if o.moving > 0 {
+                report["boundary_hdr_depth_sha256"] = json!(capture_hashes(
+                    &o,
+                    &mut scene,
+                    &mut pool,
+                    &mut rt,
+                    &mut r,
+                    team.as_ref(),
+                    true
+                )?);
             }
             report["adapter"] = adapter(&rt);
             report["strict"] = json!(cfg!(feature = "development-validation"));
@@ -726,6 +729,56 @@ pub fn run() -> Result<(), Failure> {
         rt.delete(key)?;
     }
     validation::check_validation(rt)
+}
+
+/// Readbacks run after the final timed GPU drain. The additional moving-object
+/// replay crosses the left clip plane and probes a strip outside the static grid.
+fn capture_hashes(
+    o: &Options,
+    scene: &mut Scene,
+    pool: &mut GraphPool,
+    rt: &mut Runtime,
+    resources: &mut Resources,
+    jobs: Option<&RendererJobs>,
+    boundary: bool,
+) -> Result<Vec<String>, Failure> {
+    let mut hashes = Vec::with_capacity(6);
+    for frame in [0, 31, 63] {
+        if boundary {
+            // Keep one sentinel large enough to cover samples even at 50k candidates.
+            scene.centers[0][1] = 0.;
+            scene.centers[0][3] = 0.02;
+            for center in &mut scene.centers[..o.moving] {
+                center[0] = if frame == 31 { -0.97 } else { -1.18 };
+            }
+        }
+        let built = build(o, scene, pool, resources, jobs, frame, true)?;
+        let receipt: FrameSubmission = rt.submit(&built.plan)?;
+        refresh(o, rt, resources)?;
+        let mut done = rt
+            .wait_for_frame(receipt.id(), WAIT)?
+            .ok_or("capture timeout")?;
+        for (index, h) in built.readback.unwrap().into_iter().enumerate() {
+            let mut bytes = vec![0; done.readback_len(h)?];
+            done.readback_into(h, &mut bytes)?;
+            if bytes.as_chunks::<8>().0.iter().all(|v| v == &bytes[..8]) && !boundary {
+                return Err("empty or constant frame".into());
+            }
+            if boundary && index == 0 && o.objects >= 1024 {
+                let width = SIZE as usize;
+                let lit = bytes
+                    .as_chunks::<8>()
+                    .0
+                    .chunks_exact(width)
+                    .any(|row| row[..width / 32].iter().any(|pixel| pixel[..2] != [0, 0]));
+                if lit != (frame == 31) {
+                    return Err("moving triangle did not cross the clip plane as expected".into());
+                }
+            }
+            hashes.push(format!("{:x}", Sha256::digest(bytes)));
+        }
+    }
+    Ok(hashes)
 }
 
 fn retire(rt: &mut Runtime, profile: bool, phases: &mut [Vec<f64>]) -> Result<(), Failure> {
