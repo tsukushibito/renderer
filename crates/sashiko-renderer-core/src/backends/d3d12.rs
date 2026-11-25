@@ -196,7 +196,7 @@ pub struct D3D12Runtime {
     // Drop pending frames before the last runtime pool owner. Their existing
     // Drop path detaches any unresolved work for conservative pool teardown.
     frames: frames::QueuedFrames,
-    recording_jobs: Option<(crate::jobs::RendererJobs, std::num::NonZeroUsize)>,
+    recording_jobs: Option<(crate::jobs::RecordingTeam, std::num::NonZeroUsize)>,
     device: Arc<DeviceOwner>,
     pool: Arc<frame::FramePool>,
 }
@@ -208,8 +208,22 @@ impl D3D12Runtime {
         jobs: impl Into<crate::jobs::RendererJobs>,
         max_batches: std::num::NonZeroUsize,
     ) -> Result<(), D3D12RuntimeError> {
+        self.prepare_recording_team(
+            crate::jobs::RecordingTeam {
+                jobs: jobs.into(),
+                automatic: false,
+            },
+            max_batches,
+        )
+    }
+
+    pub(crate) fn prepare_recording_team(
+        &mut self,
+        team: crate::jobs::RecordingTeam,
+        max_batches: std::num::NonZeroUsize,
+    ) -> Result<(), D3D12RuntimeError> {
         self.pool.prepare_bundles(max_batches.get())?;
-        self.recording_jobs = Some((jobs.into(), max_batches));
+        self.recording_jobs = Some((team, max_batches));
         Ok(())
     }
 

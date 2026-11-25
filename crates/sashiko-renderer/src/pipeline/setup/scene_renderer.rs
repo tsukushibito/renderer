@@ -22,6 +22,7 @@ impl std::error::Error for RetiredViewError {
 
 /// Prepared views, reusable graph storage and the runtime used for their submissions.
 pub struct SceneRenderer<R: BorrowMut<Runtime> = Runtime> {
+    pub(super) jobs: Option<sashiko_renderer_core::jobs::RendererJobs>,
     pub(crate) limits: SceneLimits,
     pub(crate) definitions: Vec<MaterialDefinition>,
     pub(super) driver: ViewRenderer,
@@ -34,6 +35,30 @@ pub struct SceneRenderer<R: BorrowMut<Runtime> = Runtime> {
     pub(super) transfers: super::candidate::Transfers,
 }
 impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
+    /// Opt into workload-dependent parallel execution at a preparation boundary.
+    /// The host, standard scene, graph and native recorder share the same team.
+    pub fn prepare_jobs(
+        &mut self,
+        jobs: impl Into<sashiko_renderer_core::jobs::RendererJobs>,
+    ) -> PipelineResult<()> {
+        self.driver.check_idle()?;
+        let jobs = jobs.into();
+        self.runtime()
+            .prepare_automatic_raster_recording(jobs.clone())?;
+        self.configure_cpu_jobs(&jobs);
+        self.jobs = Some(jobs);
+        Ok(())
+    }
+
+    fn configure_cpu_jobs(&mut self, jobs: &sashiko_renderer_core::jobs::RendererJobs) {
+        self.driver
+            .set_standard_scene_jobs(jobs, NonZeroUsize::new(10_000).unwrap());
+        self.pool
+            .set_raster_jobs(jobs.clone(), NonZeroUsize::new(3_125).unwrap());
+        self.pool
+            .set_generated_batch_size(NonZeroUsize::new(3_125).unwrap());
+    }
+
     pub(crate) fn mesh_upload_budget(&self) -> u64 {
         self.mesh_budget
     }
@@ -79,6 +104,9 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         let runtime = self.runtime.as_mut().expect("live renderer").borrow_mut();
         prepare(&plan, runtime, &overlap, streaming_transfer)?;
         let mut next = plan.begin_with_runtime(runtime)?.wait()?;
+        if let Some(jobs) = &self.jobs {
+            next.configure_cpu_jobs(jobs);
+        }
         self.retired = Some(std::mem::replace(
             &mut self.driver,
             std::mem::take(&mut next.driver),

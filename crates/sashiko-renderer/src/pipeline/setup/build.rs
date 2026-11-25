@@ -47,6 +47,7 @@ impl<'a, R: BorrowMut<Runtime>> RendererBuild<'a, R> {
             mesh_checkpoint,
             material_checkpoint,
             renderer: Some(SceneRenderer {
+                jobs: None,
                 limits: plan.limits,
                 definitions: plan.definitions,
                 transfers: super::candidate::Transfers::new(runtime.borrow_mut().limits().frames),

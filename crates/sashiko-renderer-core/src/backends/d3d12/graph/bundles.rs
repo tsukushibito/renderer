@@ -7,7 +7,7 @@ use super::super::{
     raster::RasterPipeline,
     registry::PhysicalRef,
 };
-use crate::jobs::RendererJobs;
+use crate::jobs::RecordingTeam;
 use crate::{
     graph::{CompiledGraph, Operation, RasterBatchOperands},
     program::BindingType,
@@ -108,7 +108,7 @@ pub(super) fn record(
     owner: &DeviceOwner,
     graph: &CompiledGraph,
     programs: &[RasterPipeline],
-    jobs: &RendererJobs,
+    team: &RecordingTeam,
 ) -> Result<(), D3D12RuntimeError> {
     for bundle in &mut slot.bundles {
         bundle.pipeline = None;
@@ -145,13 +145,25 @@ pub(super) fn record(
             }
         }
     }
+    if !team.large_enough(
+        slot.bundles[..end]
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.pipeline.is_some())
+            .map(|(i, _)| graph.raster_batches(&(i..i + 1))[0].draws.len()),
+    ) {
+        for bundle in &mut slot.bundles[..end] {
+            bundle.pipeline = None;
+        }
+        return Ok(());
+    }
     if end == 0 {
         return Ok(());
     }
     let buffers = &slot.buffers;
     let map = &slot.resource_map;
     let bundles = &mut slot.bundles[..end];
-    jobs.with(|team| {
+    team.jobs.with(|team| {
         team.scope(|scope| {
             scope.for_each_chunk_mut(bundles, NonZeroUsize::MIN, |index, chunk| {
                 let bundle = &mut chunk[0];

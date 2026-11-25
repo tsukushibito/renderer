@@ -43,6 +43,38 @@ impl From<JobSystem> for RendererJobs {
     }
 }
 
+/// Native recording is selected independently of CPU scene and Graph work.
+/// The automatic cohort is the balanced 50k-draw, sixteen-batch workload
+/// measured on both backends. Explicit recording remains available for tuning.
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+pub(crate) struct RecordingTeam {
+    pub jobs: RendererJobs,
+    pub automatic: bool,
+}
+
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+impl RecordingTeam {
+    pub const BATCHES: usize = 16;
+    pub const DRAWS_PER_BATCH: usize = 3_125;
+    pub const POOL_CAPACITY: usize = 64;
+
+    /// A balanced split at the target batch size can produce pieces as small
+    /// as half that size. Ignore tiny batches when estimating useful work.
+    pub fn large_enough(&self, batches: impl Iterator<Item = usize>) -> bool {
+        if !self.automatic {
+            return true;
+        }
+        let (count, draws) = batches
+            .filter(|&n| n >= Self::DRAWS_PER_BATCH.div_ceil(2))
+            .fold((0, 0usize), |(count, sum), n| {
+                (count + 1, sum.saturating_add(n))
+            });
+        self.jobs.parallelism().get() >= 4
+            && count >= Self::BATCHES
+            && draws >= Self::DRAWS_PER_BATCH * Self::BATCHES
+    }
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;

@@ -78,6 +78,13 @@ impl crate::pipeline::AssetTarget for Renderer {
 }
 
 impl Renderer {
+    /// Prepare shared scene, Graph and command-recording jobs on the host team.
+    pub fn prepare_jobs(
+        &mut self,
+        jobs: impl Into<sashiko_renderer_core::jobs::RendererJobs>,
+    ) -> PipelineResult<()> {
+        self.drawing.prepare_jobs(jobs)
+    }
     fn prepare<'a>(
         camera: CameraView,
         scene_extent: Option<[u32; 2]>,

@@ -517,8 +517,23 @@ impl GraphWork {
         if count == 0 || count > recorder.capacity {
             return Ok(());
         }
-        let mut commands = recorder.storage.acquire()?;
         let plan = self.plan.as_ref().unwrap();
+        if recorder.team.automatic {
+            let sizes = self
+                .passes
+                .iter()
+                .filter_map(|pass| match &pass.operation {
+                    PreparedOperation::Raster { batches, .. } => Some(plan.raster_batches(batches)),
+                    _ => None,
+                })
+                .flatten()
+                .filter(|batch| batch.indirect.is_none())
+                .map(|batch| batch.draws.len());
+            if !recorder.team.large_enough(sizes) {
+                return Ok(());
+            }
+        }
+        let mut commands = recorder.storage.acquire()?;
         let programs = self.programs.as_ref().unwrap();
         let data = &**self;
         for (pass_index, pass) in data.passes.iter().enumerate() {
@@ -540,7 +555,7 @@ impl GraphWork {
         let physical = &data.physical;
         let descriptors = &data.raster_descriptors;
         let slots = &data.raster_programs;
-        recorder.jobs.with(|team| {
+        recorder.team.jobs.with(|team| {
             team.scope(|scope| {
                 scope.for_each_chunk_mut(lanes, std::num::NonZeroUsize::MIN, |index, lanes| {
                     let lane = &mut lanes[0];
