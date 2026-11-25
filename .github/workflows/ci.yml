@@ -248,6 +248,19 @@ jobs:
       - name: Test workspace documentation on Linux CPU
         if: runner.os == 'Linux' && matrix.backend == 'cpu'
         run: cargo test --locked --workspace --doc --no-default-features
+      - name: Build and exercise the Canvas sample
+        if: runner.os == 'Linux' && matrix.backend == 'cpu'
+        run: |
+          rustup target add wasm32-unknown-unknown
+          python examples/survivor-web/build.py
+          node examples/survivor-web/verify.mjs build/survivor-web/survivor.wasm
+      - uses: actions/setup-dotnet@v4
+        if: runner.os == 'Windows' && matrix.backend == 'd3d12,presentation'
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build the WinForms editor and native game
+        if: runner.os == 'Windows' && matrix.backend == 'd3d12,presentation'
+        run: dotnet build examples/survivor-winforms -c Release
       - name: Test windowed event-loop contracts without a GPU
         if: runner.os == 'Windows' && matrix.backend == 'vulkan,d3d12,presentation'
         run: cargo test --locked -p renderer-core --example windowed --no-default-features --features vulkan,d3d12,presentation

@@ -1,6 +1,6 @@
+use crate::{Game, Phase};
 use renderer::canvas::Layer;
 use sashiko::ui::{DisplayFont, Overlay, Rect};
-use survivor::{Game, Phase};
 
 const PALE: [f32; 4] = [0.79, 0.90, 0.91, 1.];
 const PANEL: [f32; 4] = [0.018, 0.031, 0.039, 1.];
@@ -66,7 +66,7 @@ mod tests {
     use super::*;
     #[test]
     fn all_hud_screens_fit_the_prepared_layer_list() {
-        let mut game = Game::new(Default::default(), survivor::Scenario::Early, 5);
+        let mut game = Game::new(Default::default(), crate::Scenario::Early, 5);
         let mut layers = Vec::with_capacity(256);
         let initial_capacity = layers.capacity();
         for phase in [Phase::Playing, Phase::Choosing, Phase::Defeated] {

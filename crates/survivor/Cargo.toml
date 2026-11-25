@@ -7,6 +7,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [features]
+embed = []
 default = ["vulkan", "presentation"]
 vulkan = ["sashiko/vulkan", "renderer/vulkan"]
 d3d12 = ["sashiko/d3d12", "renderer/d3d12"]

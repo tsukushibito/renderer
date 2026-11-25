@@ -1,9 +1,9 @@
 use super::{Palette, geometry::Geometry, instruments::Equipment};
+use crate::Arena;
 use renderer::{
     mesh::Meshes,
     pipeline::{PipelineResult, RenderObject},
 };
-use survivor::Arena;
 
 pub(super) fn build(
     arena: &Arena,

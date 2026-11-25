@@ -1,4 +1,7 @@
 //! Map device buttons to gameplay actions, retaining edges until a simulation tick.
+mod devices;
+pub use devices::{Axis, Button, DeviceInput, PadState, key, pad};
+
 #[derive(Clone, Copy)]
 struct Binding<K, A> {
     key: K,

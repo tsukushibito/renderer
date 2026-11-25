@@ -23,3 +23,9 @@
 
 # Exported equipment distributions
 /crates/training-yard/assets/equipment/dist/
+
+/hosts/winforms/bin/
+/hosts/winforms/obj/
+/examples/survivor-winforms/bin/
+/examples/survivor-winforms/obj/
+/build/survivor-web/

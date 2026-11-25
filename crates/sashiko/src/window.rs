@@ -15,7 +15,17 @@ use winit::{
     window::{Window, WindowId},
 };
 
-pub trait Keyboard {
+mod child;
+pub use child::HostChild;
+mod controls;
+pub use controls::WindowInput;
+mod gamepad;
+pub use gamepad::poll_gamepad;
+
+pub trait WindowControls {
+    fn focus_gained(&mut self) {}
+    fn mouse_button(&mut self, _button: u16, _pressed: bool) {}
+    fn poll_devices(&mut self) {}
     fn key(&mut self, key: KeyCode, pressed: bool);
     fn focus_lost(&mut self) {}
     fn quit_requested(&self) -> bool {
@@ -31,14 +41,14 @@ pub struct WindowHost<A> {
 struct State<A> {
     title: String,
     initial: [u32; 2],
-    keyboard: A,
+    controls: A,
     window: Option<Arc<Window>>,
     resized: Option<[u32; 2]>,
     closed: bool,
     error: Option<winit::error::OsError>,
 }
 
-impl<A: Keyboard> ApplicationHandler for State<A> {
+impl<A: WindowControls> ApplicationHandler for State<A> {
     fn resumed(&mut self, events: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -56,10 +66,24 @@ impl<A: Keyboard> ApplicationHandler for State<A> {
         match event {
             WindowEvent::CloseRequested => self.closed = true,
             WindowEvent::Resized(size) => self.resized = Some([size.width, size.height]),
-            WindowEvent::Focused(false) => self.keyboard.focus_lost(),
+            WindowEvent::Focused(true) => self.controls.focus_gained(),
+            WindowEvent::MouseInput { state, button, .. } => {
+                use winit::event::MouseButton::*;
+                let button = match button {
+                    Left => 0,
+                    Middle => 1,
+                    Right => 2,
+                    Back => 3,
+                    Forward => 4,
+                    Other(n) => n.saturating_add(5),
+                };
+                self.controls
+                    .mouse_button(button, state == ElementState::Pressed);
+            }
+            WindowEvent::Focused(false) => self.controls.focus_lost(),
             WindowEvent::KeyboardInput { event, .. } if !event.repeat => {
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    self.keyboard
+                    self.controls
                         .key(code, event.state == ElementState::Pressed);
                 }
             }
@@ -68,11 +92,11 @@ impl<A: Keyboard> ApplicationHandler for State<A> {
     }
 }
 
-impl<A: Keyboard> WindowHost<A> {
+impl<A: WindowControls> WindowHost<A> {
     pub fn open(
         title: &str,
         extent: [u32; 2],
-        keyboard: A,
+        controls: A,
         timeout: Duration,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut host = Self {
@@ -80,7 +104,7 @@ impl<A: Keyboard> WindowHost<A> {
             state: State {
                 title: title.to_owned(),
                 initial: extent,
-                keyboard,
+                controls,
                 window: None,
                 resized: None,
                 closed: false,
@@ -104,9 +128,10 @@ impl<A: Keyboard> WindowHost<A> {
 
     pub fn pump(&mut self, timeout: Duration) {
         self.events.pump_app_events(Some(timeout), &mut self.state);
+        self.state.controls.poll_devices();
     }
     pub fn input(&mut self) -> &mut A {
-        &mut self.state.keyboard
+        &mut self.state.controls
     }
     pub fn closed(&self) -> bool {
         self.state.closed
@@ -141,7 +166,7 @@ pub trait WindowGame<A> {
     fn presented(&mut self, interval: Duration);
 }
 
-impl<A: Keyboard> WindowHost<A> {
+impl<A: WindowControls> WindowHost<A> {
     /// One update batch per accepted frame. A pending frame can be resized or
     /// redrawn without consuming further inputs. Minimized time is suspended.
     pub fn run<G: WindowGame<A>>(
@@ -158,7 +183,7 @@ impl<A: Keyboard> WindowHost<A> {
         let mut clock = previous_present;
         while limit.is_none_or(|n| presented < n) {
             self.pump(Duration::ZERO);
-            if self.closed() || self.state.keyboard.quit_requested() {
+            if self.closed() || self.state.controls.quit_requested() {
                 break;
             }
             if let Some(size) = self.take_resize() {
@@ -203,34 +228,5 @@ impl<A: Keyboard> WindowHost<A> {
             .into());
         }
         Ok(())
-    }
-}
-
-/// Keyboard bindings plus the host's quit key. Game code samples the action
-/// map once per simulation tick. Escape presses survive a subsequent focus loss.
-pub struct WindowInput<A> {
-    pub actions: crate::input::ActionMap<KeyCode, A>,
-    quit_key: KeyCode,
-    quit: bool,
-}
-impl<A: Eq + Copy> WindowInput<A> {
-    pub fn new(bindings: &[(KeyCode, A)], quit_key: KeyCode) -> Self {
-        Self {
-            actions: crate::input::ActionMap::new(bindings),
-            quit_key,
-            quit: false,
-        }
-    }
-}
-impl<A: Eq + Copy> Keyboard for WindowInput<A> {
-    fn key(&mut self, key: KeyCode, pressed: bool) {
-        self.quit |= pressed && key == self.quit_key;
-        self.actions.button(key, pressed);
-    }
-    fn quit_requested(&self) -> bool {
-        self.quit
-    }
-    fn focus_lost(&mut self) {
-        self.actions.clear();
     }
 }

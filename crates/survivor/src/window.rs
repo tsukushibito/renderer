@@ -10,12 +10,11 @@ mod validation {
 }
 use validation::check_validation;
 
-use crate::visual::Visual;
 use crate::{RunStart, rate};
 use input::{Controls, PLAY_TITLE};
 use metrics::{Measurements, Sample};
 use renderer::{
-    Frame, Renderer, WindowRenderer,
+    Renderer, WindowRenderer,
     core::{PresentOutcome, runtime::RuntimeConfig},
     pipeline::PipelineResult,
 };
@@ -26,6 +25,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+use survivor::visual::Visual;
 use survivor::{Game, Input, Phase, benchmark_input};
 pub struct Options {
     pub config: RuntimeConfig,
@@ -45,13 +45,6 @@ pub struct Options {
 
 const TIMEOUT: Duration = Duration::from_secs(60);
 
-fn draw(frame: &mut Frame<'_>, visual: &mut Visual, game: &Game) -> PipelineResult<()> {
-    let extent = frame.scene_view().extent;
-    frame.draw_scene(visual.scene(), 1.0)?;
-    frame.draw_overlay(visual.overlay(game, extent))?;
-    Ok(())
-}
-
 fn capture(
     game: &Game,
     o: &Options,
@@ -68,7 +61,7 @@ fn capture(
     visual.prepare_headless(&mut renderer)?;
     visual.sync(game, &camera)?;
     let image = sashiko::capture::CaptureImage::render(&mut renderer, TIMEOUT, |frame| {
-        draw(frame, &mut visual, game)
+        visual.draw(frame, game)
     })?;
     image.write_ppm(BufWriter::new(File::create(path)?))?;
     let mut runtime = renderer.into_runtime()?;
@@ -176,7 +169,7 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
         let start = Instant::now();
         let outcome = self
             .renderer
-            .draw(|frame| draw(frame, self.visual, &self.app.game))?;
+            .draw(|frame| self.visual.draw(frame, &self.app.game))?;
         let now = Instant::now();
         self.draw_time += now.duration_since(start);
         if let Some(samples) = self.measured {
@@ -227,7 +220,11 @@ pub fn run(
     }
     let mut memory = memory::Snapshots::new(o.memory.as_deref());
     memory.before_preparation("before_window", &game)?;
-    let mut host = WindowHost::open(PLAY_TITLE, o.extent, input::controls(), TIMEOUT)?;
+    let mut controls = input::controls();
+    if limit.is_some() {
+        controls.gamepad_slot = None;
+    }
+    let mut host = WindowHost::open(PLAY_TITLE, o.extent, controls, TIMEOUT)?;
     let window = host.window();
     let physical = window.inner_size();
     let extent = [physical.width, physical.height];

@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(super) fn catalog_path() -> PipelineResult<PathBuf> {
+pub fn catalog_path() -> PipelineResult<PathBuf> {
     let exe = std::env::current_exe()?;
     let relative = Path::new("assets/survivor/characters/catalog.json");
     let packaged = exe
@@ -122,7 +122,7 @@ impl Cast {
                     *pose,
                     clip.sample(
                         time,
-                        survivor::TICK_HZ.try_into().expect("positive update rate"),
+                        crate::TICK_HZ.try_into().expect("positive update rate"),
                     ),
                 )?;
             }
@@ -142,7 +142,7 @@ mod tests {
         for variant in catalog.names() {
             let subject = catalog.load(catalog.id(variant).unwrap())?;
             let clip = subject.clip("walk").unwrap();
-            let palette_at = |tick| clip.sample(tick, survivor::TICK_HZ.try_into().unwrap());
+            let palette_at = |tick| clip.sample(tick, crate::TICK_HZ.try_into().unwrap());
             let mut meshes = Meshes::new(MeshCapacity {
                 meshes: 1,
                 retired_mesh_versions: 0,
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn both_cooked_rigs_crossfade_walk_to_jog() -> PipelineResult<()> {
         let catalog = CharacterCatalog::open(&catalog_path()?)?;
-        let rate = survivor::TICK_HZ.try_into().unwrap();
+        let rate = crate::TICK_HZ.try_into().unwrap();
         let duration = std::num::NonZeroU64::new(12).unwrap();
         for name in catalog.names() {
             let model = catalog.load(catalog.id(name).unwrap())?;

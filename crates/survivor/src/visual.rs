@@ -7,7 +7,9 @@ mod instruments;
 mod lab;
 mod surfaces;
 
+pub use crate::character::catalog_path;
 use crate::character::{Cast, WALK_PHASES};
+use crate::{Game, MAX_DROPS, MAX_ENEMIES, MAX_SHOTS};
 use renderer::{
     Renderer, WindowRenderer,
     canvas::Layer,
@@ -18,7 +20,6 @@ use renderer::{
     pipeline::{CameraView, PipelineResult, RenderObject, SceneAssets, SceneInput},
 };
 use surfaces::Surfaces;
-use survivor::{Game, MAX_DROPS, MAX_ENEMIES, MAX_SHOTS};
 
 /// Lift the game's XZ bearing into a 3D placement; coincident targets face +Z.
 fn placement(pos: Vec3, scale: Vec3, facing: Vec2) -> PipelineResult<Transform> {
@@ -379,6 +380,13 @@ impl Visual {
                 aligned,
             )?;
         }
+        Ok(())
+    }
+
+    pub fn draw(&mut self, frame: &mut renderer::Frame<'_>, game: &Game) -> PipelineResult<()> {
+        let extent = frame.scene_view().extent;
+        frame.draw_scene(self.scene(), 1.0)?;
+        frame.draw_overlay(self.overlay(game, extent))?;
         Ok(())
     }
 

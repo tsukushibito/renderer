@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Survivor scene preview</title>
+<style>
+:root { color-scheme: dark; font: 16px "Segoe UI", sans-serif; background: #121c1d; color: #edf5f2 }
+body { max-width: 72rem; margin: auto; padding: 1rem }
+header, form { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem }
+h1 { font-size: 1.4rem; margin-right: auto }
+button, input { font: inherit; padding: .35rem .55rem } input { width: 5rem }
+canvas { display: block; width: 100%; height: 65vh; margin: 1rem 0; outline: 1px solid #647b79 }
+canvas:focus { outline: 2px solid #6be5c3 }
+</style>
+<header><h1>Survivor scene preview</h1><button id="play" disabled>Play</button><button id="step" disabled>Step</button></header>
+<canvas aria-label="Survivor game view"></canvas>
+<form><label>Player X <input id="x" type="number" step="any" required></label>
+<label>Z <input id="z" type="number" step="any" required></label>
+<button id="place" disabled>Place player</button><output id="status" aria-live="polite"></output></form>
+<p>Focus the view to move with WASD or the left stick. Choose upgrades with 1–3 or the D-pad and the bottom face button.</p>
+<script type="module">
+import { attachSurvivor } from "./game.js";
+const find = id => document.querySelector(id);
+const canvas = find("canvas"), play = find("#play"), step = find("#step"), place = find("#place");
+const x = find("#x"), z = find("#z"), status = find("#status");
+try {
+    const { view, position, place: move } = await attachSurvivor(canvas, "./survivor.wasm");
+    view.paused = true;
+    [x.value, z.value] = position();
+    play.disabled = step.disabled = place.disabled = false;
+    play.onclick = () => {
+        view.paused = !view.paused;
+        play.textContent = view.paused ? "Play" : "Pause";
+        step.disabled = place.disabled = !view.paused;
+        if (!view.paused) canvas.focus();
+    };
+    step.onclick = () => view.step();
+    find("form").onsubmit = event => {
+        event.preventDefault();
+        status.textContent = move(x.valueAsNumber, z.valueAsNumber) ? "" : "Position is blocked";
+    };
+    view.start();
+    window.addEventListener("pagehide", e => { if (!e.persisted) view.dispose(); });
+} catch (e) { status.textContent = e.message; }
+</script>
+</html>

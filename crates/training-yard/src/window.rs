@@ -14,7 +14,7 @@ use renderer::{
     },
     pipeline::PipelineResult,
 };
-use sashiko::window::{KeyCode, Keyboard, WindowHost};
+use sashiko::window::{KeyCode, WindowControls, WindowHost};
 use std::{
     ops::ControlFlow,
     sync::Arc,
@@ -31,7 +31,7 @@ struct Events {
     closed: bool,
 }
 
-impl Keyboard for Events {
+impl WindowControls for Events {
     fn key(&mut self, code: KeyCode, pressed: bool) {
         if !pressed {
             return;

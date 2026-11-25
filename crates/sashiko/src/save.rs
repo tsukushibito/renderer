@@ -81,10 +81,11 @@ impl SaveSlot {
             data: &value,
         })?;
         let temporary = self.dir.join("pending.json");
-        let mut file = File::create(&temporary)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        drop(file);
+        {
+            let mut file = File::create(&temporary)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+        }
         fs::rename(temporary, self.dir.join("data.json"))?;
         #[cfg(unix)]
         File::open(&self.dir)?.sync_all()?;

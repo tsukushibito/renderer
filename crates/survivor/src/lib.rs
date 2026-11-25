@@ -1,7 +1,40 @@
 //! Fixed-step research facility simulation shared by the window and replay hosts.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RecordedVisual {
+    pub character: String,
+    catalog: sashiko::asset::Digest,
+    models: Vec<[sashiko::asset::Digest; 2]>,
+    environment: [sashiko::asset::Digest; 6],
+}
+
 mod arena;
 pub mod authoring;
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+mod character;
 mod combat;
+pub mod controls;
+#[cfg(all(
+    feature = "embed",
+    any(
+        target_arch = "wasm32",
+        all(
+            windows,
+            feature = "presentation",
+            any(feature = "d3d12", feature = "vulkan")
+        )
+    )
+))]
+mod embed;
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+pub mod visual;
 pub use arena::{Arena, Obstacle};
 use sashiko::{math::Vec2, space::CrowdNavigation};
 use serde::{Deserialize, Serialize};
@@ -40,6 +73,8 @@ pub enum Upgrade {
 #[serde(default)]
 pub struct Input {
     pub movement: Vec2,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub analog_movement: bool,
     pub upgrade: Option<Upgrade>,
     pub restart: bool,
     #[serde(default, skip_serializing_if = "sashiko::ui::MenuInput::is_idle")]
@@ -229,7 +264,11 @@ impl Game {
         }
         self.elapsed += 1;
         self.invulnerability = self.invulnerability.saturating_sub(1);
-        let movement = input.movement.normalize_or_zero();
+        let movement = if input.analog_movement && input.movement.length() <= 1. {
+            input.movement
+        } else {
+            input.movement.normalize_or_zero()
+        };
         let (pos, contact) =
             self.arena
                 .floor()
@@ -413,6 +452,7 @@ pub fn benchmark_input(game: &Game) -> Input {
     };
     Input {
         movement,
+        analog_movement: false,
         upgrade: Some(Upgrade::Pulse),
         restart: true,
         menu: Default::default(),

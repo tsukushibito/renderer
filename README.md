@@ -6,6 +6,8 @@ Sashiko（刺し子）は、AI エージェントと人がゲームを共同開�
 
 ## ゲームを作る
 
+ゲーム画面を既存のアプリに組み込めます。WinForms のサンプルは子ウィンドウに Survivor の3Dシーンを表示し、Web のサンプルは同じ固定更新を WebAssembly で実行して Canvas に俯瞰図を描きます。どちらも一時停止したまま座標を編集し、1 tick ずつ進められます。[起動手順](docs/guides/examples.md#embedded-game)
+
 [sashiko クレート](crates/sashiko/src/lib.rs)は固定更新、入力とリプレイ、シーンと原型、アニメーション、空間検索、HUD、音声、セーブを提供します。GPU なしで固定更新を使う最小例は `cargo run --locked -p sashiko --example fixed_game` で実行できます。
 
 研究施設ではシーンの JSON を編集すると、実験台を動かしたり、既存のモデルと動作を組み合わせて敵を追加したりできます。新しい動作はゲームの Rust 型として登録します。[敵を追加する例](docs/design/game-engine.md#研究施設で敵を追加して再生する)・[GUI と CLI の編集手順](docs/guides/examples.md#配置プロパティクリップを編集する)

@@ -239,6 +239,13 @@ pub(crate) fn texture_view(
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        clippy::large_enum_variant,
+        reason = "keep prepared material registry slots inline on 32-bit Wasm"
+    )
+)]
 pub enum MaterialInstance {
     Pbr(PbrMaterial),
     Unlit(UnlitParams),

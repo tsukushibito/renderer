@@ -10,13 +10,7 @@ fn rate() -> NonZeroU32 {
     NonZeroU32::new(TICK_HZ).unwrap()
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-struct RecordedVisual {
-    character: String,
-    catalog: sashiko::asset::Digest,
-    models: Vec<[sashiko::asset::Digest; 2]>,
-    environment: [sashiko::asset::Digest; 6],
-}
+use survivor::RecordedVisual;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct RunStart {
@@ -38,18 +32,6 @@ impl RunStart {
     }
 }
 
-#[cfg(all(
-    windows,
-    feature = "presentation",
-    any(feature = "vulkan", feature = "d3d12")
-))]
-mod character;
-#[cfg(all(
-    windows,
-    feature = "presentation",
-    any(feature = "vulkan", feature = "d3d12")
-))]
-mod visual;
 #[cfg(all(
     windows,
     feature = "presentation",
@@ -273,7 +255,7 @@ fn play(
                 .get_one::<PathBuf>("character-catalog")
                 .cloned()
                 .map(Ok)
-                .unwrap_or_else(character::catalog_path)?,
+                .unwrap_or_else(survivor::visual::catalog_path)?,
         },
         profile,
     )

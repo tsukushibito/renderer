@@ -12,6 +12,8 @@
 
 ## 研究施設のサバイバーを遊ぶ
 
+ゲームパッドの左スティックで移動し、十字キーの左右で強化を選び、下側のフェイスボタンで決定・再挑戦します。マウスの左ボタンでも選択中の強化を決定できます。
+
 Windows の既定構成では Vulkan のウィンドウが開きます。WASD で実験台を回り込み、敵を自動攻撃して経験値を拾います。レベルアップ時は 1・2・3 で強化を選ぶか、左右の矢印キーでフォーカスを移動して Enter で決定します。
 
 ```powershell
@@ -40,6 +42,28 @@ python tools/survivor/verify_package.py build/survivor-package --backend vulkan
 記録には入力列、開始時の配置、seed、シナリオ、ゲームルールの版、更新周波数を保存します。再生時は記録した設定を使い、明示した設定と矛盾した場合はエラーを返します。入力だけの JSON 配列は CLI の開始条件で再生できます。
 
 終盤直行では実験体 500 体を活動させます。初回の計測条件と受入の範囲は[ゲームの制作計画](../design/survivor-game.md)にまとめています。
+
+<a id="embedded-game"></a>
+
+### ゲーム画面をアプリに組み込む
+
+Windows x64、.NET 10 SDK と上記の Rust 環境で、次のプロジェクトを Visual Studio から開くかコマンドで起動します。ビルド時にゲーム DLL とキャラクター素材を出力先へ配置します。
+
+```powershell
+dotnet run --project examples/survivor-winforms -c Release
+```
+
+起動直後は一時停止しています。X・Z を変更して **Place player** を押すと、通行できる位置にプレイヤーが移動します。**Step** は1回の固定更新、**Play** は連続再生です。ゲーム画面にフォーカスがある間だけ操作を受け付けます。フォームにビューを配置する例と、ゲームが実装する接続・入力・描画の契約を参照してください。[フォーム](../../examples/survivor-winforms/Program.cs)・[SashikoView](../../hosts/winforms/SashikoView.cs)
+
+Web 版は同じ研究施設を俯瞰図で表示します。次のコマンドで静的サイトを作成し、ブラウザで `http://localhost:8000/` を開きます。ブラウザがゲームパッドを公開するには、ページを開いた後に実機のボタン操作が必要になることがあります。
+
+```sh
+rustup target add wasm32-unknown-unknown
+python examples/survivor-web/build.py
+python -m http.server 8000 --bind 127.0.0.1 --directory build/survivor-web
+```
+
+既存ページに組み込むときは、生成した `game.js` の `attachSurvivor(canvas, wasmUrl)` に表示先を渡します。返された `view.frame(timeInMilliseconds)` をホストの描画周期で呼ぶか、`view.start()` で標準ループを使います。ビューを外すときは `view.dispose()` を呼びます。[Canvas ホスト](../../hosts/web/view.js)
 
 ### 配置・プロパティ・クリップを編集する
 
