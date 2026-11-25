@@ -7,6 +7,7 @@ use wgpu::{CurrentSurfaceTexture, TextureFormat};
 mod bindings;
 mod compute;
 pub(crate) mod engine;
+mod errors;
 mod present;
 mod raster;
 
@@ -18,6 +19,7 @@ pub struct CanvasTarget {
     config: wgpu::SurfaceConfiguration,
     canvas: HtmlCanvasElement,
     failure: Arc<Mutex<Option<String>>>,
+    _errors: errors::Subscription,
     configured: bool,
     display: present::DisplayPass,
 }
@@ -58,12 +60,15 @@ impl CanvasTarget {
             .map_err(|e| e.to_string())?;
         let failure = Arc::new(Mutex::new(None));
         let notice = Arc::clone(&failure);
-        device.set_device_lost_callback(move |reason, message| {
-            notice
-                .lock()
-                .expect("device failure")
-                .get_or_insert_with(|| format!("WebGPU device lost: {reason:?}: {message}"));
-        });
+        let errors = errors::observe(
+            &device,
+            Arc::new(move |_, message| {
+                notice
+                    .lock()
+                    .expect("device failure")
+                    .get_or_insert(message);
+            }),
+        )?;
         let mut config = surface
             .get_default_config(&adapter, 1, 1)
             .ok_or("WebGPU canvas has no presentation configuration")?;
@@ -75,14 +80,17 @@ impl CanvasTarget {
             .into_iter()
             .find(|f| matches!(f, TextureFormat::Bgra8Unorm | TextureFormat::Rgba8Unorm))
             .ok_or("WebGPU canvas has no eight-bit SDR format")?;
-        // The Runtime owns the device's uncaptured-error handler. Catch failures
-        // while preparing the display pipeline before exposing this target.
+        // Finish error scopes for display pipeline creation before exposing the target.
         let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let display = present::DisplayPass::new(&device, config.format);
-        let errors = [validation.pop().await, internal.pop().await, memory.pop().await];
-        if let Some(error) = errors.into_iter().flatten().next() {
+        let scoped = [
+            validation.pop().await,
+            internal.pop().await,
+            memory.pop().await,
+        ];
+        if let Some(error) = scoped.into_iter().flatten().next() {
             device.destroy();
             return Err(error.to_string());
         }
@@ -93,6 +101,7 @@ impl CanvasTarget {
             canvas,
             config,
             failure,
+            _errors: errors,
             configured: false,
             display,
         })
@@ -134,7 +143,9 @@ impl CanvasTarget {
         let texture = runtime.webgpu_texture(image).map_err(|e| e.to_string())?;
         let submitted = self.present_image(texture)?;
         if submitted {
-            runtime.mark_webgpu_presented(image).map_err(|e| e.to_string())?;
+            runtime
+                .mark_webgpu_presented(image)
+                .map_err(|e| e.to_string())?;
         }
         Ok(submitted)
     }

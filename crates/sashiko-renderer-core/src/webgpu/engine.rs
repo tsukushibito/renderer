@@ -46,10 +46,17 @@ impl Health {
             *failure = Some((kind, message));
         }
         drop(failure);
-        for slot in self.wakers.lock().expect("WebGPU wakers").iter() {
-            if let Some(waker) = slot.lock().expect("WebGPU waker").take() {
-                waker.wake();
-            }
+        // Waking can synchronously run caller code. Never hold a slot or the
+        // observer list's mutex across that boundary.
+        let pending: Vec<_> = self
+            .wakers
+            .lock()
+            .expect("WebGPU wakers")
+            .iter()
+            .filter_map(|slot| slot.lock().expect("WebGPU waker").take())
+            .collect();
+        for waker in pending {
+            waker.wake();
         }
     }
     fn check(&self) -> Result<(), Error> {
@@ -105,7 +112,8 @@ impl Engine {
             Arc::new(move |lost, message| {
                 observer.fail(if lost { Kind::DeviceLost } else { Kind::Native }, message)
             }),
-        );
+        )
+        .map_err(|error| Error::webgpu(Kind::Native, error))?;
         let mut registry = Registry::new(owner, limits)?;
         registry.prepare(&device, limits, set.resources)?;
         registry.prepare_samplers(&device, set.samplers);
@@ -272,6 +280,14 @@ impl Engine {
         self.registry
             .bind(graph, self.completed.load(Ordering::Acquire))?;
         self.registry.snapshots(graph, &mut self.updates)?;
+        let id = FrameId::new(self.owner, serial);
+        let receipt = Submission::new(id, graph.id, exports.clone());
+        if let Some(exports) = &exports {
+            let mut values = exports.borrow_mut();
+            for (i, snapshot) in self.updates.iter().filter(|(i, _)| graph.has_export(*i)) {
+                values.push((*i, self.registry.export(snapshot)?));
+            }
+        }
         self.registry.prove(graph, &mut self.indices)?;
         self.upload.clear();
         self.raster.begin();
@@ -316,19 +332,8 @@ impl Engine {
         self.queue.submit([commands]);
         self.registry.commit(serial, &self.updates);
         self.indices.commit(graph, &mut self.registry.proofs);
-        if let Some(e) = &exports {
-            let mut values = e.borrow_mut();
-            values.clear();
-            values.extend(
-                self.updates
-                    .iter()
-                    .filter(|(i, _)| graph.has_export(*i))
-                    .cloned(),
-            );
-        }
         self.updates.clear();
         self.serial = serial;
-        let id = FrameId::new(self.owner, serial);
         result.mapped.store(0, Ordering::Release);
         result
             .data
@@ -338,7 +343,8 @@ impl Engine {
         let wake = Arc::clone(&result.waker);
         self.queue.on_submitted_work_done(move || {
             completed.fetch_max(serial, Ordering::AcqRel);
-            if let Some(waker) = wake.lock().expect("WebGPU waker").take() {
+            let pending = wake.lock().expect("WebGPU waker").take();
+            if let Some(waker) = pending {
                 waker.wake();
             }
         });
@@ -348,11 +354,14 @@ impl Engine {
             serial,
             slot: result,
         });
-        Ok(Submission::new(id, graph.id, exports))
+        Ok(receipt)
     }
 
     pub(crate) fn poll_frame(&mut self, id: Option<FrameId>) -> Result<Option<Completion>, Error> {
         self.health.check()?;
+        if id.is_some_and(|id| id.owner != self.owner) {
+            return Err(Error::webgpu(Kind::WrongOwner, "foreign WebGPU frame"));
+        }
         let index = match id {
             Some(id) => self
                 .frames

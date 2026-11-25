@@ -140,7 +140,7 @@ impl std::fmt::Display for RuntimeCapacityError {
 }
 impl std::error::Error for RuntimeCapacityError {}
 
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(sashiko_gpu_backend)]
 pub(crate) fn import_ranges_capacity(error: &crate::graph::GraphError) -> RuntimeCapacityError {
     use crate::graph::GraphCapacityKind;
     let capacity = error.capacity();
