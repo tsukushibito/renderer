@@ -250,13 +250,13 @@ impl PreparedView {
 
     /// Whether this world-space box may intersect the camera frustum.
     pub fn visible(&self, bounds: Bounds) -> bool {
-        self.culling.is_none_or(|c| c.visible(bounds))
+        self.culling.as_ref().is_none_or(|c| c.visible(bounds))
     }
 
     /// Whether this world-space box may contribute to a cascade.
     /// Returns `None` for indices outside the prepared maps.
     pub fn cascade_overlaps(&self, cascade: usize, bounds: Bounds) -> Option<bool> {
-        self.culling?.cascade_overlaps(cascade, bounds)
+        self.culling.as_ref()?.cascade_overlaps(cascade, bounds)
     }
 
     /// Key each enabled cascade by its projection and the caller's revision

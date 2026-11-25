@@ -90,7 +90,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
     })?;
     let green = materials.create_custom(&opaque, &[("color", Value::Color([0., 0.6, 0., 1.]))])?;
     let blue = materials.create_custom(&blend, &[("color", Value::Color([0., 0., 1., 0.5]))])?;
-    let standard = StandardPipeline::new(
+    let mut standard = StandardPipeline::new(
         technique,
         StandardConfig {
             extent: [32, 16],
@@ -113,6 +113,13 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         },
         &[opaque, blend, textured.clone()],
     )?;
+    // Deferred also exercises the shadow histories with parallel object classification.
+    if technique == pbr::Technique::Deferred {
+        standard.set_scene_jobs(
+            sashiko_jobs::JobSystem::new(4.try_into().unwrap())?.into(),
+            NonZeroUsize::MIN,
+        );
+    }
     let mut meshes = Meshes::new(MeshCapacity {
         meshes: 4,
         retired_mesh_versions: 4,
@@ -181,6 +188,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             ("albedo", Value::Texture(cyan.clone())),
         ],
     )?;
+    materials.prepare_samplers(&mut runtime, [floor, glass, unlit, green, blue, swatch])?;
     let mut bytes = [0u8; 32 * 16 * 8];
     let input = pbr::ViewInput::new(
         IDENTITY,
@@ -501,6 +509,9 @@ fn draw_after_resize(
         &mut prep,
     )?;
     runtime.prepare_working_set(prep.working_set())?;
+    input
+        .materials
+        .prepare_samplers(runtime, input.objects.iter().map(|object| object.material))?;
     scene.reconfigure_view(next, &view, runtime)?;
     scene.remove_pipeline(old_group, runtime)?;
     if let Some(id) = scene.initialize_pipeline(next, runtime)? {
