@@ -243,8 +243,8 @@ impl Budget {
                 ResourceClass::Buffer { .. } => None,
             })
             .collect::<Vec<_>>();
-        if options.windowed {
-            // Images accepted by the Presenter can outlive the submitted Graph.
+        if options.windowed || options.api == "webgpu" {
+            // Native and canvas presentation can outlive the submitted Graph.
             add_instances(
                 &mut classes,
                 ImageDesc::rgba8(options.width, options.height),
@@ -2123,6 +2123,28 @@ mod tests {
         assert_eq!(deferred.physical_resources - four.physical_resources, 16);
         assert_eq!(deferred.graph.resources - four.graph.resources, 4);
         assert_eq!(deferred.graph.upload_bytes - four.graph.upload_bytes, 64);
+    }
+
+    #[test]
+    fn canvas_reserves_a_presentation_source_while_the_next_frame_renders() {
+        let mut options = tiny_output_options();
+        options.width = 101;
+        options.height = 73;
+        let scene = Scene::fixture(false);
+        let environment = ibl::Environment::fixture();
+        let headless = Budget::new(&scene, &environment, &options, [0.; 3]).unwrap();
+        options.api = "webgpu".into();
+        let canvas = Budget::new(&scene, &environment, &options, [0.; 3]).unwrap();
+        let sources = |budget: &Budget| {
+            budget
+                .images
+                .iter()
+                .find(|(desc, _)| *desc == ImageDesc::rgba8(101, 73))
+                .unwrap()
+                .1
+        };
+        assert_eq!(sources(&canvas), sources(&headless) + 1);
+        assert_eq!(canvas.physical_resources, headless.physical_resources + 1);
     }
 
     fn large_geometry_scene() -> Scene {
