@@ -1,5 +1,5 @@
 //! Game asset selection and shared crowd pose slots.
-use sashiko::animation::{AnimatedModel, CharacterCatalog};
+use sashiko::animation::{AnimatedModel, CharacterCatalog, PreparedAnimation};
 use sashiko_renderer::{
     material::{MaterialHandle, Materials},
     mesh::{MeshHandle, Meshes, SkinPoseId},
@@ -32,7 +32,7 @@ pub(super) struct Actor {
     pub poses: [SkinPoseId; WALK_PHASES],
     pub texture: usize,
     pub material: MaterialHandle,
-    clip: String,
+    animation: PreparedAnimation,
 }
 
 pub(super) struct Cast {
@@ -74,9 +74,7 @@ impl Cast {
                     loaded.insert(id, (texture, mesh));
                     (texture, mesh)
                 };
-                if models[texture].clip(clip).is_none() {
-                    return Err(format!("unknown animation {name}/{clip}").into());
-                }
+                let animation = models[texture].prepare_animation(clip)?;
                 let poses = [
                     meshes.create_pose(mesh)?,
                     meshes.create_pose(mesh)?,
@@ -94,7 +92,7 @@ impl Cast {
                     poses,
                     texture,
                     material,
-                    clip: clip.to_owned(),
+                    animation,
                 });
                 actors_by_clip.insert((id, clip), index);
                 index
@@ -111,19 +109,16 @@ impl Cast {
         })
     }
 
-    pub fn animate(&self, tick: u64, meshes: &mut Meshes) -> PipelineResult<()> {
-        for actor in &self.actors {
-            let clip = self.models[actor.texture]
-                .clip(&actor.clip)
-                .expect("validated at load");
+    pub fn animate(&mut self, tick: u64, meshes: &mut Meshes) -> PipelineResult<()> {
+        for actor in &mut self.actors {
             for (phase, pose) in actor.poses.iter().enumerate() {
                 let time = tick.wrapping_add(phase as u64 * 13);
                 meshes.set_joint_transforms(
                     *pose,
-                    clip.sample(
+                    actor.animation.sample(
                         time,
                         crate::TICK_HZ.try_into().expect("positive update rate"),
-                    ),
+                    )?,
                 )?;
             }
         }
@@ -187,7 +182,7 @@ mod tests {
         })?;
         let mut materials = Materials::default();
         let material = materials.create_pbr(sashiko_renderer::material::PbrParams::default())?;
-        let cast = Cast::load(
+        let mut cast = Cast::load(
             &catalog_path()?,
             "primary",
             [
@@ -204,26 +199,72 @@ mod tests {
         cast.animate(20, &mut meshes)
     }
     #[test]
-    fn both_cooked_rigs_crossfade_walk_to_jog() -> PipelineResult<()> {
+    fn transitions_use_the_shared_rig_and_advance_both_clips() -> PipelineResult<()> {
         let catalog = CharacterCatalog::open(&catalog_path()?)?;
         let rate = crate::TICK_HZ.try_into().unwrap();
-        let duration = std::num::NonZeroU64::new(12).unwrap();
         for name in catalog.names() {
             let model = catalog.load(catalog.id(name).unwrap())?;
-            let mut fade = model.prepare_crossfade("walk", "jog")?;
-            assert_eq!(
-                fade.sample(36, 0, duration, rate)?,
-                model.clip("walk").unwrap().sample(36, rate)
-            );
-            for tick in 1..12 {
-                let pose = fade.sample(36, tick, duration, rate)?;
-                assert_eq!(pose.len(), 62);
-                assert_ne!(pose, model.clip("jog").unwrap().sample(tick, rate));
+            let mut walk = model.prepare_animation("walk")?;
+            let mut jog = model.prepare_animation("jog")?;
+            let (source, out) = walk.rigged().unwrap();
+            let (target, _) = jog.rigged().unwrap();
+            let mut player = sashiko::animation::Playback::new(source, rate);
+            player.advance_to(36, &mut [])?;
+            let before = out.evaluate(&player)?.to_vec();
+            player.crossfade(target, 12.try_into().unwrap())?;
+            assert_eq!(out.evaluate(&player)?, before);
+            player.advance_to(42, &mut [])?;
+            assert_ne!(out.evaluate(&player)?, before);
+            player.advance_to(48, &mut [])?;
+            assert_eq!(out.evaluate(&player)?, jog.sample(12, rate)?);
+        }
+        Ok(())
+    }
+    #[test]
+    fn evaluated_palettes_match_both_cooked_rigs() -> PipelineResult<()> {
+        let catalog = CharacterCatalog::open(&catalog_path()?)?;
+        let rate = crate::TICK_HZ.try_into().unwrap();
+        for name in catalog.names() {
+            let model = catalog.load(catalog.id(name).unwrap())?;
+            for clip_name in model.clip_names() {
+                let mut animation = model.prepare_animation(clip_name)?;
+                let reference = model.clip(clip_name).unwrap();
+                for tick in 0..=reference.frames() as u64 {
+                    let actual = animation.sample(tick, rate)?;
+                    let expected = reference.sample(tick, rate);
+                    for (a, b) in actual.iter().zip(expected) {
+                        for (x, y) in a
+                            .columns()
+                            .into_iter()
+                            .flatten()
+                            .zip(b.columns().into_iter().flatten())
+                        {
+                            assert!(
+                                (x - y).abs() < 2e-4,
+                                "{name}/{clip_name} tick {tick}: {x} vs {y}"
+                            );
+                        }
+                    }
+                    for (v, w) in model.model.vertices().step_by(71) {
+                        let position = |palette: &[sashiko_renderer::pbr::Transform]| {
+                            let mut p = [0.; 3];
+                            for (&j, weight) in w.joints.iter().zip(w.weights) {
+                                let q = palette[j as usize].transform_point(v.position());
+                                for i in 0..3 {
+                                    p[i] += weight * q[i];
+                                }
+                            }
+                            p
+                        };
+                        assert!(
+                            position(actual)
+                                .into_iter()
+                                .zip(position(expected))
+                                .all(|(a, b)| (a - b).abs() < 2e-4)
+                        );
+                    }
+                }
             }
-            assert_eq!(
-                fade.sample(36, 12, duration, rate)?,
-                model.clip("jog").unwrap().sample(12, rate)
-            );
         }
         Ok(())
     }

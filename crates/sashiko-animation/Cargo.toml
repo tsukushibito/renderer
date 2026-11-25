@@ -1,0 +1,13 @@
+[package]
+name = "sashiko-animation"
+version = "0.1.0"
+description = "Headless fixed-tick character animation evaluation"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+glam = "0.30"
+
+[lints]
+workspace = true

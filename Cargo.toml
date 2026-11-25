@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/sashiko",
+    "crates/sashiko-animation",
     "crates/sashiko-asset",
     "crates/sashiko-renderer-core",
     "crates/sashiko-lighting-bake",
