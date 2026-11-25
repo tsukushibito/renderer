@@ -397,6 +397,38 @@ impl Runtime {
         }
     }
 
+    /// Prepare native lanes at a change boundary. Use them only for the measured
+    /// large, balanced direct-draw workload. A backend without native lanes
+    /// continues to use its normal encoder.
+    pub fn prepare_automatic_raster_recording(
+        &mut self,
+        jobs: crate::jobs::RendererJobs,
+    ) -> Result<(), ExecutionError> {
+        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+        let (team, budget) = {
+            use crate::jobs::RecordingTeam;
+            (
+                RecordingTeam {
+                    jobs,
+                    automatic: true,
+                },
+                std::num::NonZeroUsize::new(RecordingTeam::POOL_CAPACITY).unwrap(),
+            )
+        };
+        #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
+        let _ = jobs;
+        match &mut self.inner {
+            #[cfg(feature = "vulkan")]
+            RuntimeInner::Vulkan(runtime) => Ok(runtime.prepare_recording_team(team, budget)?),
+            #[cfg(all(feature = "d3d12", windows))]
+            RuntimeInner::D3D12(runtime) => Ok(runtime.prepare_recording_team(team, budget)?),
+            #[cfg(sashiko_webgpu)]
+            RuntimeInner::WebGpu(_) => Ok(()),
+            #[cfg(not(sashiko_gpu_backend))]
+            _ => unreachable!(),
+        }
+    }
+
     /// Change profiling for subsequent Graph submissions. Enabling profiling
     /// may prepare native queries at this explicit configuration boundary.
     pub fn set_profiling(&mut self, enabled: bool) -> Result<(), ExecutionError> {

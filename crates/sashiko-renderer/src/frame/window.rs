@@ -36,6 +36,13 @@ impl crate::pipeline::AssetTarget for WindowRenderer {
 }
 
 impl WindowRenderer {
+    /// Configure the same worker policy used by the headless scene renderer.
+    pub fn prepare_jobs(
+        &mut self,
+        jobs: impl Into<sashiko_renderer_core::jobs::RendererJobs>,
+    ) -> PipelineResult<()> {
+        self.renderer.prepare_jobs(jobs)
+    }
     pub fn new(
         window: impl HasWindowHandle + 'static,
         backend: RuntimeConfig,

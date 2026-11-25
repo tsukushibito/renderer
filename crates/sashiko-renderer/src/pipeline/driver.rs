@@ -69,6 +69,18 @@ pub struct ViewRenderer {
 }
 
 impl ViewRenderer {
+    pub(super) fn set_standard_scene_jobs(
+        &mut self,
+        jobs: &sashiko_renderer_core::jobs::RendererJobs,
+        min_objects: NonZeroUsize,
+    ) {
+        for pipeline in self.pipelines.values_mut() {
+            let group = pipeline.group.as_mut() as &mut dyn Any;
+            if let Some(standard) = group.downcast_mut::<PreparedGroup<StandardPipeline>>() {
+                standard.set_scene_jobs(jobs.clone(), min_objects);
+            }
+        }
+    }
     pub fn new() -> Self {
         Self::default()
     }

@@ -46,6 +46,13 @@ struct ViewSlot<P: ViewPipeline> {
 }
 
 impl PreparedGroup<StandardPipeline> {
+    pub(super) fn set_scene_jobs(
+        &mut self,
+        jobs: sashiko_renderer_core::jobs::RendererJobs,
+        min_objects: NonZeroUsize,
+    ) {
+        self.pipeline.set_scene_jobs(jobs, min_objects);
+    }
     pub(super) fn check_lights(&self, lights: &[crate::pbr::LocalLight]) -> Result<(), GraphError> {
         self.pipeline.limits.check_lights(lights)
     }
