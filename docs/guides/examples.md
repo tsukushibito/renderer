@@ -329,6 +329,43 @@ cargo run --locked -p sashiko-renderer-core --no-default-features --features vul
 cargo run --locked -p sashiko-renderer-core --no-default-features --features d3d12,presentation --example windowed -- --api d3d12
 ```
 
+### Bistro と Sponza を Web ブラウザで開く
+
+Python 3.11 以降を使い、WASM と静的ページをビルドします。ビルド時の `wasm-bindgen` CLI は `Cargo.lock` と同じバージョンを使います。CLI のインストールコマンドはビルドスクリプトにも表示されます。
+
+```powershell
+rustup target add wasm32-unknown-unknown
+cargo install --locked wasm-bindgen-cli --version 0.2.130
+python tools/renderer-scenes/build_web.py --out build/renderer-scenes-web
+```
+
+各シーンの UV 付き cook、IBL、対応する昼の GI と反射プローブを用意します。以下は各入力ディレクトリを `BISTRO` と `SPONZA` とした例です。シーン切り替えに必要な両方のパッケージを同じサイトに置きます。
+
+```powershell
+python tools/renderer-scenes/package_web_scene.py --scene bistro --manifest BISTRO/cooked/manifest.json --ibl-manifest BISTRO/ibl/manifest.json --baked-lighting BISTRO/day.gi --reflection-probes BISTRO/day.reflections --site build/renderer-scenes-web
+python tools/renderer-scenes/package_web_scene.py --scene sponza --manifest SPONZA/cooked/manifest.json --ibl-manifest SPONZA/ibl/manifest.json --baked-lighting SPONZA/day.gi --reflection-probes SPONZA/day.reflections --site build/renderer-scenes-web
+python -m http.server 8000 --bind 127.0.0.1 --directory build/renderer-scenes-web
+```
+
+Windows の Chrome または Edge で `http://localhost:8000/` を開きます。シーンと代表視点を上部で選べます。Canvas をドラッグして向きを変え、WASD で移動、Q / E で下降・上昇します。「Reset camera」で選択中の視点に戻ります。表示中の視点を共有する例は `?scene=sponza&view=gallery` です。小規模な組み込みシーンは素材の用意前でも `?scene=fixture` で開けます。別の端末に配信する場合は HTTPS を使います。
+
+既存ページには、生成した `viewer.js` と `pkg/` とシーンを配置し、表示サイズを CSS で指定した Canvas を渡します。ホストが描画周期を管理する場合は、前の呼び出しが完了した後で `await view.frame(timeInMilliseconds)` を呼びます。
+
+```js
+import { attachScene } from "./viewer.js";
+
+const canvas = document.querySelector("canvas");
+const statusElement = document.querySelector('[role="status"]');
+const view = await attachScene(canvas, "./scenes/sponza/scene.json", {
+    onProgress: message => { statusElement.textContent = message; },
+    onError: error => { statusElement.textContent = String(error); },
+});
+view.start();
+document.querySelector("#close").addEventListener("click", () => view.dispose(), { once: true });
+```
+
+`stop()` で自動描画を止め、`start()` で再開します。ホストが Canvas の描画解像度を直接決める場合は初期化時に `autoResize: false` を指定します。GPU を失った場合はエラー通知後に `dispose()` して同じ Canvas に接続し直します。[ブラウザホスト](../../examples/renderer-scenes/web/viewer.js)
+
 **Bistroの小さなシーンを描画する**
 
 `renderer-scenes`の`renderer-scenes-graph`は公開Graph APIを使い、Rustでパスを定義して描画パイプラインを組み立てます。
