@@ -2,10 +2,14 @@
 //! Run with wasm-bindgen-test-runner and a WebGPU-capable browser (see development guide).
 #![cfg(all(feature = "webgpu", target_arch = "wasm32", target_os = "unknown"))]
 
-use std::time::Duration;
+use std::{
+    pin::pin,
+    task::{Context, Waker},
+    time::Duration,
+};
 
 use sashiko_renderer_core::{
-    capacity::{ResourceClass, WorkingSet},
+    capacity::{ResourceClass, RuntimeCapacityKind, WorkingSet},
     geometry::GeometryData,
     graph::{
         Attachment, Binding, BindingResource, BufferDesc, Graph, GraphCapacity, GraphPool,
@@ -158,6 +162,29 @@ async fn scheduled_exports_survive_early_drops_and_stale_revisions_are_rejected(
     assert_eq!(rt.refresh_buffer(old.key()).unwrap(), new);
     assert_ne!(old, new);
 
+    let mut reader = pool.begin().unwrap();
+    let latest = reader.import_buffer("current revision", &new).unwrap();
+    reader
+        .readback_buffer("current prefix", latest, 0, 4)
+        .unwrap();
+    let read_plan = reader.compile().unwrap();
+    assert_eq!(
+        rt.submit(&read_plan)
+            .err()
+            .unwrap()
+            .capacity()
+            .unwrap()
+            .resource,
+        RuntimeCapacityKind::ExecutionSlots
+    );
+    // Cancelling a pending wait must leave the frame available to a later waiter.
+    {
+        let wait = pin!(rt.wait_for_webgpu_frame(second));
+        assert!(
+            wait.poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+    }
     // The first queue operation's completion remains independently retrievable.
     let mut result = rt.wait_for_webgpu_frame(second).await.unwrap();
     assert_eq!(result.id(), second);
@@ -171,8 +198,22 @@ async fn scheduled_exports_survive_early_drops_and_stale_revisions_are_rejected(
         counter,
         [42, 42, 42, 42, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
     );
-    drop(result);
     assert_eq!(rt.wait_for_webgpu_frame(first).await.unwrap().id(), first);
+    let third = rt.submit(&read_plan).unwrap().id();
+    assert_eq!(
+        rt.submit(&read_plan)
+            .err()
+            .unwrap()
+            .capacity()
+            .unwrap()
+            .resource,
+        RuntimeCapacityKind::ResultSlots
+    );
+    drop(result);
+    let fourth = rt.submit(&read_plan).unwrap().id();
+    drop(rt.wait_for_webgpu_frame(third).await.unwrap());
+    drop(rt.wait_for_webgpu_frame(fourth).await.unwrap());
+    drop(read_plan);
     assert!(rt.poll_frame().unwrap().is_none());
 
     let mut reader = pool.begin().unwrap();
