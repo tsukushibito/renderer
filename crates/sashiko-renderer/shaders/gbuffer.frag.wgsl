@@ -28,14 +28,9 @@ struct _MatrixStorage_float4x4std140_0
     @align(16) data_0 : array<vec4<f32>, i32(4)>,
 };
 
-struct _MatrixStorage_float4x4_ColMajorstd140_0
-{
-    @align(16) data_1 : array<vec4<f32>, i32(4)>,
-};
-
 struct _Array_std140_matrixx3Cfloatx2C4x2C4x3E4_0
 {
-    @align(16) data_2 : array<_MatrixStorage_float4x4_ColMajorstd140_0, i32(4)>,
+    @align(16) data_1 : array<_MatrixStorage_float4x4std140_0, i32(4)>,
 };
 
 struct CameraData_std140_0

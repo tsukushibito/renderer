@@ -83,6 +83,7 @@ CI の `python tools/shaders/webgpu.py --validate-packaged` は Naga だけで�
 頂点シェーダーは固定 SPIR-V から Naga で変換し、
 Vulkan 用射影行列の Y を WebGPU のクリップ空間に合わせる。PBR の fragment などは
 標準 manifest の HLSL と define を使い、Slang で WGSL に変換する。
+`-matrix-layout-row-major` を明示し、カスケード配列でも CPU が連続して格納した各列を HLSL の行として読む。
 ラスターパラメータは group 0・binding 255 の uniform に格納する。
 深度テクスチャの手動比較には、unfilterable-float と nearest sampler を組み合わせる。
 
