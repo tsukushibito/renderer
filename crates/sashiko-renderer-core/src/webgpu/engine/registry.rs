@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use super::proof::{IndexBounds, Proof};
 use super::{Error, Kind, capacity, format, unsupported};
@@ -270,8 +270,22 @@ pub(super) struct Registry {
     samplers: HashMap<SamplerDescriptor, wgpu::Sampler>,
     uses: Vec<Usage>,
     // Additional leases keep the metadata separate from registration ownership.
-    ranges: ImportRangesPool,
+    ranges: RefCell<ImportRangesPool>,
+    canonical_ranges: ImportRangesPool,
     limits: RuntimeLimits,
+}
+
+fn canonical_slots(limits: RuntimeLimits) -> Result<usize, Error> {
+    limits
+        .resource_capacity
+        .checked_add(limits.graph.resources)
+        .ok_or_else(|| Error::invalid("WebGPU resource state capacity overflow"))
+}
+fn range_error(error: crate::graph::GraphError) -> Error {
+    Error::with_capacity(
+        "WebGPU initialized-range capacity exhausted",
+        crate::capacity::import_ranges_capacity(&error),
+    )
 }
 
 impl Registry {
@@ -289,7 +303,12 @@ impl Registry {
             entries: Vec::new(),
             samplers: HashMap::new(),
             uses: Vec::with_capacity(limits.graph.resources),
-            ranges,
+            ranges: RefCell::new(ranges),
+            canonical_ranges: ImportRangesPool::new(
+                limits.initialized_ranges_per_resource,
+                canonical_slots(limits)?,
+            )
+            .map_err(|_| Error::invalid("cannot reserve WebGPU canonical resource states"))?,
             limits,
         })
     }
@@ -319,11 +338,15 @@ impl Registry {
             }
             wanted.extend(std::iter::repeat_n(desc, count));
         }
-        // An unchanged physical slot, including a registered one, can cover its class.
+        // The requested classes are free capacity in addition to retained registrations.
         let mut covered = vec![false; self.entries.len()];
         for desc in wanted {
             if let Some(index) = self.entries.iter().enumerate().position(|(i, e)| {
-                !covered[i] && !matches!(e.physical, Physical::Vacant) && e.class == desc
+                !covered[i]
+                    && e.registered.is_none()
+                    && Arc::strong_count(&e.presentation) == 1
+                    && !matches!(e.physical, Physical::Vacant)
+                    && e.class == desc
             }) {
                 covered[index] = true;
             } else {
@@ -364,8 +387,13 @@ impl Registry {
         }
         let ranges = self
             .ranges
+            .get_mut()
             .expanded_slots(limits.range_snapshots)
             .map_err(|_| Error::invalid("cannot expand WebGPU import snapshots"))?;
+        let canonical = self
+            .canonical_ranges
+            .expanded_slots(canonical_slots(limits)?)
+            .map_err(|_| Error::invalid("cannot expand WebGPU canonical resource states"))?;
         self.uses
             .try_reserve(limits.graph.resources.saturating_sub(self.uses.len()))
             .map_err(|_| Error::invalid("cannot expand WebGPU resource mapping"))?;
@@ -392,7 +420,10 @@ impl Registry {
             }
         }
         if let Some(ranges) = ranges {
-            self.ranges = ranges;
+            *self.ranges.get_mut() = ranges;
+        }
+        if let Some(canonical) = canonical {
+            self.canonical_ranges = canonical;
         }
         self.limits = limits;
         Ok(())
@@ -483,23 +514,33 @@ impl Registry {
             index: i as u32,
             generation: e.generation + 1,
         };
-        let ranges = self.ranges.capture(&[]).map_err(|_| {
-            capacity(
-                Capacity::ImportRanges,
-                Recovery::ReleaseOwners,
-                self.limits.range_snapshots,
-                self.limits.range_snapshots + 1,
-            )
-        })?;
+        let ranges = self.canonical_ranges.capture(&[]).map_err(range_error)?;
         let snapshot = ImportBuffer::new(key, 0, desc, ranges)
             .map_err(|_| Error::invalid("invalid WebGPU buffer snapshot"))?;
         e.registered = Some(Snapshot::Buffer(snapshot));
         e.generation = key.generation;
         Ok(key)
     }
+    // Registrations and trial revisions must never consume the token capacity the
+    // host reserved for Graphs/receipts. Only public tokens borrow this pool.
+    fn public_buffer(&self, v: &ImportBuffer) -> Result<ImportBuffer, Error> {
+        let ranges = self
+            .ranges
+            .borrow_mut()
+            .capture(v.initialized())
+            .map_err(range_error)?;
+        ImportBuffer::new(v.key(), v.revision(), v.desc(), ranges)
+            .map_err(|_| Error::invalid("invalid WebGPU buffer snapshot"))
+    }
+    pub(super) fn export(&self, value: &Snapshot) -> Result<Snapshot, Error> {
+        match value {
+            Snapshot::Buffer(v) => self.public_buffer(v).map(Snapshot::Buffer),
+            Snapshot::Image(v) => Ok(Snapshot::Image(v.clone())),
+        }
+    }
     pub(super) fn refresh_buffer(&self, key: ResourceKey) -> Result<ImportBuffer, Error> {
         match self.lookup(key)?.1 {
-            Snapshot::Buffer(v) => Ok(v.clone()),
+            Snapshot::Buffer(v) => self.public_buffer(v),
             _ => Err(Error::invalid("resource is an image")),
         }
     }
@@ -634,14 +675,10 @@ impl Registry {
             let initialized = graph.final_contents(i);
             let snapshot = match r.desc {
                 ResourceDesc::Buffer(desc) => {
-                    let ranges = self.ranges.capture(initialized).map_err(|_| {
-                        capacity(
-                            Capacity::ImportRanges,
-                            Recovery::ReleaseOwners,
-                            self.limits.range_snapshots,
-                            self.limits.range_snapshots + 1,
-                        )
-                    })?;
+                    let ranges = self
+                        .canonical_ranges
+                        .capture(initialized)
+                        .map_err(range_error)?;
                     Snapshot::Buffer(
                         ImportBuffer::new(key, revision, desc, ranges)
                             .map_err(|_| Error::invalid("WebGPU buffer export ranges"))?,

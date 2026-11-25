@@ -27,7 +27,10 @@ impl Submission {
 
     fn get(&self, graph: u64, index: usize) -> Result<Snapshot, Error> {
         if self.graph != graph {
-            return Err(Error::invalid("export belongs to a different graph"));
+            return Err(Error::webgpu(
+                super::Kind::WrongOwner,
+                "export belongs to a different graph",
+            ));
         }
         self.exports
             .as_ref()
@@ -92,7 +95,10 @@ impl Completion {
     }
     fn index(&self, pass: PassHandle) -> Result<usize, Error> {
         if self.graph != pass.graph {
-            return Err(Error::invalid("readback belongs to a different graph"));
+            return Err(Error::webgpu(
+                super::Kind::WrongOwner,
+                "readback belongs to a different graph",
+            ));
         }
         Ok(pass.index)
     }

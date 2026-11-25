@@ -272,6 +272,14 @@ impl Engine {
         self.registry
             .bind(graph, self.completed.load(Ordering::Acquire))?;
         self.registry.snapshots(graph, &mut self.updates)?;
+        let id = FrameId::new(self.owner, serial);
+        let receipt = Submission::new(id, graph.id, exports.clone());
+        if let Some(exports) = &exports {
+            let mut values = exports.borrow_mut();
+            for (i, snapshot) in self.updates.iter().filter(|(i, _)| graph.has_export(*i)) {
+                values.push((*i, self.registry.export(snapshot)?));
+            }
+        }
         self.registry.prove(graph, &mut self.indices)?;
         self.upload.clear();
         self.raster.begin();
@@ -316,19 +324,8 @@ impl Engine {
         self.queue.submit([commands]);
         self.registry.commit(serial, &self.updates);
         self.indices.commit(graph, &mut self.registry.proofs);
-        if let Some(e) = &exports {
-            let mut values = e.borrow_mut();
-            values.clear();
-            values.extend(
-                self.updates
-                    .iter()
-                    .filter(|(i, _)| graph.has_export(*i))
-                    .cloned(),
-            );
-        }
         self.updates.clear();
         self.serial = serial;
-        let id = FrameId::new(self.owner, serial);
         result.mapped.store(0, Ordering::Release);
         result
             .data
@@ -348,11 +345,14 @@ impl Engine {
             serial,
             slot: result,
         });
-        Ok(Submission::new(id, graph.id, exports))
+        Ok(receipt)
     }
 
     pub(crate) fn poll_frame(&mut self, id: Option<FrameId>) -> Result<Option<Completion>, Error> {
         self.health.check()?;
+        if id.is_some_and(|id| id.owner != self.owner) {
+            return Err(Error::webgpu(Kind::WrongOwner, "foreign WebGPU frame"));
+        }
         let index = match id {
             Some(id) => self
                 .frames
