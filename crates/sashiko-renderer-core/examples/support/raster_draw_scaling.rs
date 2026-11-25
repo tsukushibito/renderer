@@ -1109,6 +1109,7 @@ mod tests {
             batches_per_pass: 5,
             topology: Topology::Chain,
             workers: 4,
+            native_workers: 4,
             report: PathBuf::new(),
             warmup: 0,
             frames: 0,
