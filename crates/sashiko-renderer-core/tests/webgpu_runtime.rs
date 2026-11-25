@@ -25,6 +25,9 @@ use web_sys::HtmlCanvasElement;
 
 wasm_bindgen_test_configure!(run_in_browser);
 
+#[path = "webgpu_runtime/registry.rs"]
+mod registry;
+
 #[wasm_bindgen(inline_js = "
 export function newCanvas() { return document.createElement('canvas'); }
 export function nextTurn() { return new Promise(resolve => setTimeout(resolve, 0)); }
@@ -84,13 +87,14 @@ async fn device_failures_reach_the_canvas_and_each_attached_runtime() {
         if expected == ExecutionErrorKind::DeviceLost {
             target.device().destroy();
         } else {
-            // A mapping buffer may only combine MAP_READ with COPY_DST.
+            // GPUBuffer requires at least one usage.
             drop(target.device().create_buffer(&wgpu::BufferDescriptor {
                 label: Some("intentional uncaptured validation error"),
                 size: 16,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::UNIFORM,
+                usage: wgpu::BufferUsages::empty(),
                 mapped_at_creation: false,
             }));
+            target.queue().submit([]);
         }
         for _ in 0..2500 {
             if target.check_device().is_err() {
@@ -98,7 +102,7 @@ async fn device_failures_reach_the_canvas_and_each_attached_runtime() {
             }
             next_turn().await;
         }
-        assert!(target.check_device().is_err());
+        assert!(target.check_device().is_err(), "canvas missed {expected:?}");
         assert_eq!(first.poll_frame().err().unwrap().kind(), expected);
         assert_eq!(second.poll_frame().err().unwrap().kind(), expected);
     }
