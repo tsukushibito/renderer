@@ -14,7 +14,8 @@ VIEWER = ROOT / "examples/renderer-scenes/web"
 def build_wasm(development_validation):
     features = "webgpu,development-validation" if development_validation else "webgpu"
     command = [
-        "cargo", "build", "--locked", "--release", "--package", "renderer-scenes", "--lib",
+        "cargo", "rustc", "--crate-type", "cdylib", "--locked", "--release",
+        "--package", "renderer-scenes", "--lib",
         "--target", "wasm32-unknown-unknown", "--no-default-features", "--features", features,
         "--message-format", "json-render-diagnostics",
     ]
