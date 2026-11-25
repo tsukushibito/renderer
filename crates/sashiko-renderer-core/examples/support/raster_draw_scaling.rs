@@ -1,9 +1,14 @@
+#[path = "raster_draw_jobs.rs"]
+mod jobs;
+
+use jobs::DrawPreparation;
 use std::{
     collections::VecDeque,
     error::Error,
     ffi::OsString,
     fs::File,
     io::Write,
+    ops::Range,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -94,10 +99,29 @@ enum Api {
     D3d12,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Topology {
+    Independent,
+    Chain,
+}
+
+impl Topology {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Independent => "independent",
+            Self::Chain => "chain",
+        }
+    }
+}
+
 struct Options {
     api: Api,
     draws: usize,
     words: usize,
+    passes: usize,
+    batches_per_pass: usize,
+    topology: Topology,
+    workers: usize,
     report: PathBuf,
     warmup: usize,
     frames: usize,
@@ -110,6 +134,8 @@ impl Options {
         let mut args = std::env::args().skip(1);
         let (mut api, mut draws, mut words, mut report) = (None, None, None, None);
         let (mut warmup, mut frames, mut profile, mut capture) = (120, 600, false, None);
+        let (mut passes, mut batches_per_pass, mut workers) = (1usize, 1usize, 0usize);
+        let mut topology = Topology::Independent;
         while let Some(flag) = args.next() {
             let mut value = || {
                 args.next()
@@ -125,6 +151,16 @@ impl Options {
                 }
                 "--draws" => draws = Some(value()?.parse::<usize>()?),
                 "--words" => words = Some(value()?.parse::<usize>()?),
+                "--passes" => passes = value()?.parse()?,
+                "--batches-per-pass" => batches_per_pass = value()?.parse()?,
+                "--workers" => workers = value()?.parse()?,
+                "--topology" => {
+                    topology = match value()?.as_str() {
+                        "independent" => Topology::Independent,
+                        "chain" => Topology::Chain,
+                        _ => return Err("topology must be independent or chain".into()),
+                    }
+                }
                 "--report" => report = Some(PathBuf::from(value()?)),
                 "--warmup" => warmup = value()?.parse()?,
                 "--frames" => frames = value()?.parse()?,
@@ -143,16 +179,46 @@ impl Options {
         if frames == 0 && (capture.is_none() || warmup != 0) {
             return Err("zero measured frames require --capture and --warmup 0".into());
         }
+        if passes == 0 || batches_per_pass == 0 || passes > draws / batches_per_pass {
+            return Err("each requested pass and batch must contain at least one draw".into());
+        }
         Ok(Self {
             api: api.ok_or("missing --api")?,
             draws,
             words,
+            passes,
+            batches_per_pass,
+            topology,
+            workers,
             report: report.ok_or("missing --report")?,
             warmup,
             frames,
             profile,
             capture,
         })
+    }
+
+    fn color_count(&self) -> usize {
+        if self.words == 0 { 2 } else { 1 }
+    }
+
+    fn capacity(&self) -> GraphCapacity {
+        let base = GraphCapacity::default();
+        let outputs = self.passes * self.color_count();
+        let passes = self.passes + outputs;
+        GraphCapacity {
+            draws: self.draws,
+            resources: base.resources.max(outputs + 3),
+            passes: base.passes.max(passes),
+            attachments: base.attachments.max(outputs),
+            dependencies: base.dependencies.max(self.passes - 1),
+            accesses: base.accesses.max(self.passes * 8),
+            segments: base.segments.max(outputs + 3),
+            readers: base.readers.max(self.passes * 5),
+            edges: base.edges.max(self.passes * 4),
+            name_bytes: base.name_bytes.max(passes * 64 + 64),
+            ..base
+        }
     }
 }
 
@@ -186,8 +252,13 @@ impl Runtime {
         program: ManagedRasterProgram,
         buffers: &[BufferDesc],
     ) -> Result<Self, Failure> {
-        let colors = if options.words == 0 { 2 } else { 1 };
+        let colors = options.passes * options.color_count();
         let resources = buffers.len() + colors * IN_FLIGHT;
+        let readback_bytes = if options.capture.is_some() {
+            STAGING_BYTES.max(colors as u64 * u64::from(EXTENT).pow(2) * 4)
+        } else {
+            STAGING_BYTES
+        };
         let images = D3D12ImageClass {
             desc: color_desc(),
             count: colors * IN_FLIGHT,
@@ -198,9 +269,9 @@ impl Runtime {
                     RuntimeConfig {
                         execution_slots: IN_FLIGHT,
                         resource_capacity: resources,
-                        staging_bytes: STAGING_BYTES,
+                        staging_bytes: readback_bytes,
+                        staging_ranges: RuntimeConfig::default().staging_ranges.max(colors),
                         max_shader_bindings: 1,
-                        ..Default::default()
                     },
                     if STRICT {
                         ValidationMode::Required
@@ -260,7 +331,7 @@ impl Runtime {
                             buffers: buffers.len(),
                             buffer_bytes: buffers.iter().map(|desc| desc.size).max().unwrap(),
                             upload_bytes: STAGING_BYTES,
-                            readback_bytes: STAGING_BYTES,
+                            readback_bytes,
                             index_prefixes_per_resource: 0,
                             ..Default::default()
                         },
@@ -396,11 +467,49 @@ fn color_desc() -> ImageDesc {
     ImageDesc::rgba8(EXTENT, EXTENT)
 }
 
+struct Layout {
+    pass_names: Vec<String>,
+    batches: Vec<Range<usize>>,
+    batches_per_pass: usize,
+    topology: Topology,
+}
+
+impl Layout {
+    fn new(options: &Options) -> Self {
+        let mut batches = Vec::with_capacity(options.passes * options.batches_per_pass);
+        for pass in 0..options.passes {
+            let start = pass * options.draws / options.passes;
+            let end = (pass + 1) * options.draws / options.passes;
+            let boundary = |batch| start + batch * (end - start) / options.batches_per_pass;
+            for batch in 0..options.batches_per_pass {
+                batches.push(boundary(batch)..boundary(batch + 1));
+            }
+        }
+        Self {
+            pass_names: (0..options.passes)
+                .map(|i| format!("objects {i}"))
+                .collect(),
+            batches,
+            batches_per_pass: options.batches_per_pass,
+            topology: options.topology,
+        }
+    }
+
+    fn pass_draws(&self, pass: usize) -> Range<usize> {
+        let first = pass * self.batches_per_pass;
+        self.batches[first].start..self.batches[first + self.batches_per_pass - 1].end
+    }
+}
+
 struct Scene {
     geometry: GeometryData,
     program: ManagedRasterProgram,
     parameters: Option<[Vec<RasterConstants>; 2]>,
-    draws: usize,
+    layout: Layout,
+    preparation: Option<DrawPreparation>,
+    // Reused after submission has acquired its own native leases and exports.
+    outputs: Vec<ImageHandle>,
+    readbacks: Vec<PassHandle>,
 }
 
 impl Scene {
@@ -454,7 +563,12 @@ impl Scene {
             geometry,
             program,
             parameters,
-            draws: options.draws,
+            layout: Layout::new(options),
+            preparation: (options.workers != 0)
+                .then(|| DrawPreparation::new(options.workers, options.draws))
+                .transpose()?,
+            outputs: Vec::with_capacity(options.passes),
+            readbacks: Vec::with_capacity(options.passes * options.color_count()),
         })
     }
 
@@ -523,26 +637,21 @@ impl Scene {
     }
 
     fn build(
-        &self,
+        &mut self,
         pool: &mut GraphPool,
         resident: &ResidentScene,
         variant: usize,
         capture: bool,
-    ) -> Result<(Graph, ImageHandle, [Option<PassHandle>; 2]), Failure> {
+        verify: bool,
+    ) -> Result<(Graph, Option<Duration>), Failure> {
+        self.outputs.clear();
+        self.readbacks.clear();
         let mut graph = pool.begin()?;
         let vertices = graph.import_buffer("vertices", &resident.vertices)?;
         let indices = graph.import_buffer("indices", &resident.indices)?;
-        let color = graph.image("scene color", color_desc())?;
-        let mut colors = [Attachment {
-            view: graph.image_view(color, 0, 0)?,
-            load: LoadOp::Clear(CLEAR),
-            store: StoreOp::Store,
-        }; 2];
-        let second = if let Some(uniform) = &resident.uniform {
-            let secondary = graph.image("secondary color", color_desc())?;
-            colors[1].view = graph.image_view(secondary, 0, 0)?;
+        let bindings = if let Some(uniform) = &resident.uniform {
             let uniform = graph.import_buffer("shared color uniform", uniform)?;
-            let bindings = graph.raster_bindings(
+            Some(graph.raster_bindings(
                 &self.program,
                 &[Binding {
                     group: 0,
@@ -553,68 +662,125 @@ impl Scene {
                         size: UNIFORM.size,
                     },
                 }],
-            )?;
-            graph.raster(
-                "objects",
-                RasterAttachments {
-                    colors: &colors,
-                    depth: None,
-                    color_resolves: &[],
-                },
-                |pass| {
-                    pass.draw(
-                        &self.program,
-                        (0..self.draws as u32).map(|draw| RasterDraw {
-                            secondary_vertices: None,
-                            vertices,
-                            indices,
-                            first_index: draw * 3,
-                            index_count: 3,
-                            instance_count: 1,
-                            bindings: Some(bindings),
-                            parameters: RasterConstants::default(),
-                        }),
-                    )
-                },
-            )?;
-            Some(secondary)
+            )?)
         } else {
-            let parameters = &self.parameters.as_ref().unwrap()[variant];
-            graph.raster(
-                "objects",
-                RasterAttachments {
-                    colors: &colors[..1],
-                    depth: None,
-                    color_resolves: &[],
-                },
-                |pass| {
-                    pass.draw(
-                        &self.program,
-                        parameters.iter().map(|&parameters| RasterDraw {
-                            secondary_vertices: None,
-                            vertices,
-                            indices,
-                            first_index: 0,
-                            index_count: 3,
-                            instance_count: 1,
-                            bindings: None,
-                            parameters,
-                        }),
-                    )
-                },
-            )?;
             None
         };
-        let mut passes = [None, None];
-        if capture {
-            passes[0] = Some(graph.readback_image("read scene color", color)?);
-            if let Some(second) = second {
-                passes[1] = Some(graph.readback_image("read secondary color", second)?);
+        let template = RasterDraw {
+            vertices,
+            indices,
+            secondary_vertices: None,
+            bindings,
+            first_index: 0,
+            index_count: 3,
+            instance_count: 1,
+            parameters: RasterConstants::default(),
+        };
+        let parameters = self
+            .parameters
+            .as_ref()
+            .map(|sets| sets[variant].as_slice());
+        let packet_time = self.preparation.as_mut().map(|prep| {
+            let started = Instant::now();
+            prep.prepare(template, parameters, &self.layout.batches);
+            started.elapsed()
+        });
+        let direct = |ordinal: usize| match parameters {
+            None => RasterDraw {
+                first_index: ordinal as u32 * 3,
+                ..template
+            },
+            Some(values) => RasterDraw {
+                parameters: values[ordinal],
+                ..template
+            },
+        };
+        if verify && let Some(prep) = &self.preparation {
+            for range in &self.layout.batches {
+                if !prep
+                    .draws(range.clone())
+                    .iter()
+                    .copied()
+                    .eq(range.clone().map(direct))
+                {
+                    return Err(format!(
+                        "prepared draws differ from the ordered input at {range:?}"
+                    )
+                    .into());
+                }
             }
-        } else {
-            graph.export_image(color)?;
         }
-        Ok((graph, color, passes))
+        let mut previous = None;
+        for (pass_index, batches) in self
+            .layout
+            .batches
+            .chunks_exact(self.layout.batches_per_pass)
+            .enumerate()
+        {
+            let color = graph.image("scene color", color_desc())?;
+            let mut colors = [Attachment {
+                view: graph.image_view(color, 0, 0)?,
+                load: LoadOp::Clear(CLEAR),
+                store: StoreOp::Store,
+            }; 2];
+            let secondary = if bindings.is_some() {
+                let image = graph.image("secondary color", color_desc())?;
+                colors[1].view = graph.image_view(image, 0, 0)?;
+                Some(image)
+            } else {
+                None
+            };
+            let pass = graph.raster(
+                &self.layout.pass_names[pass_index],
+                RasterAttachments {
+                    colors: &colors[..1 + usize::from(secondary.is_some())],
+                    depth: None,
+                    color_resolves: &[],
+                },
+                |pass| {
+                    for range in batches {
+                        if let Some(prep) = &self.preparation {
+                            pass.draw(&self.program, prep.draws(range.clone()))?;
+                        } else {
+                            pass.draw(&self.program, range.clone().map(direct))?;
+                        }
+                    }
+                    Ok(())
+                },
+            )?;
+            if self.layout.topology == Topology::Chain
+                && let Some(prior) = previous
+            {
+                graph.depends_on(pass, prior)?;
+            }
+            previous = Some(pass);
+            if capture {
+                self.readbacks
+                    .push(graph.readback_image("read scene color", color)?);
+                if let Some(image) = secondary {
+                    self.readbacks
+                        .push(graph.readback_image("read secondary color", image)?);
+                }
+            } else {
+                // Each Raster pass has its own externally visible output, including
+                // every independent pass. The shared imported buffers are read-only.
+                graph.export_image(color)?;
+                self.outputs.push(color);
+            }
+        }
+        Ok((graph, packet_time))
+    }
+
+    fn verify_plan(&self, plan: &CompiledGraph) -> Result<(), Failure> {
+        if plan.pass_count() != self.layout.pass_names.len() + self.readbacks.len()
+            || !plan
+                .ordered_pass_names()
+                .filter(|name| name.starts_with("objects "))
+                .eq(self.layout.pass_names.iter().map(String::as_str))
+        {
+            return Err("compiled graph did not retain every raster pass in expected order".into());
+        }
+        Ok(())
     }
 }
 
@@ -627,6 +793,7 @@ struct ResidentScene {
 struct Sample {
     active_ns: u64,
     build_ns: u64,
+    packet_prepare_ns: Option<u64>,
     compile_ns: u64,
     interval_ns: u64,
     metrics: Option<SubmissionMetrics>,
@@ -640,6 +807,7 @@ impl Sample {
     fn json(&self) -> Value {
         let mut result = json!({
             "active_ns": self.active_ns, "build_ns": self.build_ns,
+            "packet_prepare_ns": self.packet_prepare_ns,
             "compile_ns": self.compile_ns, "interval_ns": self.interval_ns,
         });
         if let Some(metrics) = self.metrics {
@@ -659,7 +827,7 @@ impl Sample {
 fn measure(
     runtime: &mut Runtime,
     pool: &mut GraphPool,
-    scene: &Scene,
+    scene: &mut Scene,
     resident: &ResidentScene,
     frames: usize,
     collect: bool,
@@ -680,7 +848,7 @@ fn measure(
         if frame == 0 {
             first_start = started;
         }
-        let (graph, color, _) = scene.build(pool, resident, frame % 2, false)?;
+        let (graph, packet_time) = scene.build(pool, resident, frame % 2, false, false)?;
         let built = Instant::now();
         let plan = graph.compile()?;
         let compiled = Instant::now();
@@ -690,13 +858,16 @@ fn measure(
             samples.push(Sample {
                 active_ns: ns(submitted.duration_since(started)),
                 build_ns: ns(built.duration_since(started)),
+                packet_prepare_ns: packet_time.map(ns),
                 compile_ns: ns(compiled.duration_since(built)),
                 interval_ns: ns(started.duration_since(last_start)),
                 metrics: None,
             });
         }
         last_start = started;
-        runtime.delete(pending.output_key(color)?)?;
+        for &output in &scene.outputs {
+            runtime.delete(pending.output_key(output)?)?;
+        }
         queue.push_back((frame, pending));
     }
     while let Some((frame, mut pending)) = queue.pop_front() {
@@ -713,39 +884,87 @@ fn measure(
     Ok((samples, ns(first_start.elapsed())))
 }
 
+/// The grid places the single covered pixel for each ordinal at the even x/y
+/// coordinate of its 2x2 cell. Check every cell and every clear pixel, on both
+/// MRT planes, independently of CPU packet preparation.
+fn verify_pixels(
+    rgba: &[u8],
+    draws: Range<usize>,
+    words: usize,
+    target: usize,
+    variant: usize,
+) -> Result<(), Failure> {
+    let width = EXTENT as usize;
+    let unorm = |v: f32| (255.0 * v).round() as u8;
+    for (offset, pixel) in rgba.as_chunks::<4>().0.iter().enumerate() {
+        let (x, y) = (offset % width, offset / width);
+        let ordinal = y / 2 * (width / 2) + x / 2;
+        if x % 2 != 0 || y % 2 != 0 || !draws.contains(&ordinal) {
+            if pixel != &[0, 0, 0, 255] {
+                return Err(format!("unexpected covered pixel at ({x}, {y})").into());
+            }
+            continue;
+        }
+        let expected = if words == 0 {
+            if target == 0 {
+                [64, 191, 128, 255]
+            } else {
+                [128, 64, 191, 255]
+            }
+        } else {
+            [
+                unorm(0.25 + (ordinal % 31) as f32 / 64.0),
+                unorm(0.25 + (ordinal % 29) as f32 / 64.0),
+                unorm(if variant == 0 { 0.375 } else { 0.75 }),
+                255,
+            ]
+        };
+        if !pixel
+            .iter()
+            .zip(expected)
+            .all(|(&value, want)| value.abs_diff(want) <= 1)
+        {
+            return Err(format!(
+                "draw {ordinal} pixel ({x}, {y}) is {pixel:?}, expected {expected:?}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 fn capture(
     runtime: &mut Runtime,
     pool: &mut GraphPool,
-    scene: &Scene,
+    scene: &mut Scene,
     resident: &ResidentScene,
+    options: &Options,
     stem: &Path,
 ) -> Result<Vec<Value>, Failure> {
     let mut output = vec![0; (EXTENT * EXTENT * 4) as usize];
     let mut captures = Vec::new();
     for variant in 0..2 {
-        let (graph, _, passes) = scene.build(pool, resident, variant, true)?;
-        let mut completed = runtime.submit(&graph.compile()?)?.wait()?;
-        for (target, pass) in passes.into_iter().flatten().enumerate() {
-            completed.readback(pass, &mut output)?;
-            let colored = output
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .filter(|&&pixel| pixel != [0, 0, 0, 255])
-                .count();
-            if colored < scene.draws {
-                return Err(format!(
-                    "rendered only {colored} colored pixels for {} objects",
-                    scene.draws
-                )
-                .into());
-            }
+        let (graph, _) = scene.build(pool, resident, variant, true, true)?;
+        let plan = graph.compile()?;
+        scene.verify_plan(&plan)?;
+        let mut completed = runtime.submit(&plan)?.wait()?;
+        for (index, &readback) in scene.readbacks.iter().enumerate() {
+            let pass = index / options.color_count();
+            let target = index % options.color_count();
+            let draws = scene.layout.pass_draws(pass);
+            completed.readback(readback, &mut output)?;
+            verify_pixels(&output, draws.clone(), options.words, target, variant)?;
             let mut path: OsString = stem.as_os_str().into();
-            path.push(format!(".{variant}-{target}.rgba"));
+            if options.passes == 1 {
+                path.push(format!(".{variant}-{target}.rgba"));
+            } else {
+                path.push(format!(".{variant}-pass{pass}-{target}.rgba"));
+            }
             std::fs::write(&path, &output)?;
             captures.push(json!({
-                "variant": variant, "target": target, "colored_pixels": colored,
-                "path": PathBuf::from(path), "sha256": format!("{:x}", Sha256::digest(&output)),
+                "variant": variant, "pass": pass, "target": target, "colored_pixels": draws.len(),
+                "first_draw": draws.start, "path": PathBuf::from(path),
+                "sha256": format!("{:x}", Sha256::digest(&output)),
             }));
         }
     }
@@ -754,20 +973,21 @@ fn capture(
 
 pub fn run() -> Result<(), Failure> {
     let options = Options::parse()?;
-    let capacity = GraphCapacity {
-        draws: options.draws,
-        ..GraphCapacity::default()
-    };
-    let scene = Scene::new(&options)?;
+    let capacity = options.capacity();
+    let mut scene = Scene::new(&options)?;
     let buffers = scene.buffers();
     let mut runtime = Runtime::new(&options, capacity, scene.program.clone(), &buffers)?;
     let identity = runtime.identity();
     let resident = scene.upload(&mut runtime, &buffers)?;
     let mut pool = GraphPool::new(capacity, IN_FLIGHT)?;
+    // Audit the exported, timed topology and inputs outside every measurement
+    // window. Capture has extra readback consumers and is verified separately.
+    let (graph, _) = scene.build(&mut pool, &resident, 0, false, true)?;
+    scene.verify_plan(&graph.compile()?)?;
     measure(
         &mut runtime,
         &mut pool,
-        &scene,
+        &mut scene,
         &resident,
         options.warmup,
         false,
@@ -775,7 +995,7 @@ pub fn run() -> Result<(), Failure> {
     let (samples, wall_ns) = measure(
         &mut runtime,
         &mut pool,
-        &scene,
+        &mut scene,
         &resident,
         options.frames,
         true,
@@ -783,7 +1003,16 @@ pub fn run() -> Result<(), Failure> {
     let captures = options
         .capture
         .as_ref()
-        .map(|stem| capture(&mut runtime, &mut pool, &scene, &resident, stem))
+        .map(|stem| {
+            capture(
+                &mut runtime,
+                &mut pool,
+                &mut scene,
+                &resident,
+                &options,
+                stem,
+            )
+        })
         .transpose()?
         .unwrap_or_default();
     assert!(pool.is_idle());
@@ -793,6 +1022,10 @@ pub fn run() -> Result<(), Failure> {
         &mut report,
         &json!({
             "device": identity, "draws": options.draws, "words": options.words,
+            "passes": options.passes, "batches_per_pass": options.batches_per_pass,
+            "topology": options.topology.name(), "workers": options.workers,
+            "packet_capacity_bytes": scene.preparation.as_ref().map_or(0, DrawPreparation::packet_capacity_bytes),
+            "draws_per_pass": (0..options.passes).map(|p| scene.layout.pass_draws(p).len()).collect::<Vec<_>>(),
             "extent": EXTENT, "in_flight": IN_FLIGHT, "warmup": options.warmup,
             "frames": options.frames, "profile": options.profile, "wall_ns": wall_ns,
             "samples": samples.iter().map(Sample::json).collect::<Vec<_>>(),
@@ -801,4 +1034,43 @@ pub fn run() -> Result<(), Failure> {
     )?;
     report.write_all(b"\n")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uneven_passes_and_batches_cover_every_ordinal_in_declaration_order() {
+        let options = Options {
+            api: Api::Vulkan,
+            draws: 1_024,
+            words: 20,
+            passes: 3,
+            batches_per_pass: 5,
+            topology: Topology::Chain,
+            workers: 4,
+            report: PathBuf::new(),
+            warmup: 0,
+            frames: 0,
+            profile: false,
+            capture: None,
+        };
+        let layout = Layout::new(&options);
+        assert_eq!(layout.batches.len(), 15);
+        assert!(layout.batches.iter().all(|range| !range.is_empty()));
+        assert!(layout.batches.iter().cloned().flatten().eq(0..1_024));
+        assert_eq!(layout.pass_draws(0), 0..341);
+        assert_eq!(layout.pass_draws(2), 682..1_024);
+    }
+
+    #[test]
+    fn capture_rejects_a_missing_or_misplaced_draw_and_a_swapped_mrt_plane() {
+        let mut image = [0, 0, 0, 255].repeat((EXTENT * EXTENT) as usize);
+        image[8..12].copy_from_slice(&[128, 64, 191, 255]);
+        assert!(verify_pixels(&image, 1..2, 0, 1, 0).is_ok());
+        assert!(verify_pixels(&image, 1..2, 0, 0, 0).is_err());
+        assert!(verify_pixels(&image, 0..2, 0, 1, 0).is_err());
+        assert!(verify_pixels(&image, 2..3, 0, 1, 0).is_err());
+    }
 }
