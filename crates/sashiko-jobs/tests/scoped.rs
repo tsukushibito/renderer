@@ -1,76 +1,99 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use sashiko_jobs::{ExecutionMode, JobPool};
+use sashiko_jobs::JobSystem;
 use std::num::NonZeroUsize;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 #[test]
-fn borrowed_nested_subsystems_cover_each_chunk_once() {
-    for count in [0, 1, 4] {
-        let pool = NonZeroUsize::new(count)
-            .map(|workers| JobPool::new(workers).unwrap())
-            .unwrap_or_else(JobPool::inline);
-        assert_eq!(
-            pool.mode(),
-            if count == 0 {
-                ExecutionMode::Inline
-            } else {
-                ExecutionMode::Parallel
-            }
-        );
+fn nested_clients_borrow_results_and_visit_stable_chunks() {
+    for n in [1, 2, 4] {
+        let mut system = JobSystem::new(n.try_into().unwrap()).unwrap();
+        assert_eq!(system.parallelism().get(), n);
         for len in [0, 1, 7, 8, 9, 513] {
             let mut output = vec![0; len];
-            let (tag, (a, b)) = pool.join(
-                || {
-                    pool.for_each_chunk_mut(
-                        &mut output,
-                        NonZeroUsize::new(8).unwrap(),
-                        |start, chunk| {
-                            assert_eq!(start % 8, 0);
-                            assert_eq!(chunk.len(), (len - start).min(8));
-                            for (offset, value) in chunk.iter_mut().enumerate() {
-                                *value += start + offset + 1;
-                            }
-                        },
-                    );
-                    "done"
-                },
-                || pool.join(|| 17, || 23),
-            );
-            assert_eq!((tag, a, b), ("done", 17, 23));
-            assert!(output.iter().copied().eq(1..=len));
+            let local = std::rc::Rc::new(7);
+            let (tag, values) = system.run(|jobs| {
+                jobs.join(
+                    |jobs| jobs.join(|_| local.clone(), |_| {}).0,
+                    |jobs| {
+                        jobs.for_each_chunk_mut(
+                            &mut output,
+                            8.try_into().unwrap(),
+                            |start, chunk| {
+                                assert_eq!(start % 8, 0);
+                                assert_eq!(chunk.len(), 8.min(len - start));
+                                for (i, element) in chunk.iter_mut().enumerate() {
+                                    *element += start + i + 1;
+                                }
+                            },
+                        );
+                        output.as_slice()
+                    },
+                )
+            });
+            assert_eq!(*tag, 7);
+            assert!(values.iter().copied().eq(1..=len));
         }
     }
 }
 
 #[test]
-fn failed_branch_settles_borrowed_work_before_unwind() {
-    let pool = JobPool::new(2.try_into().unwrap()).unwrap();
-    let mut output = 0;
-    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        pool.join(|| panic!("failed"), || output = 42)
-    }));
-    assert!(panic.is_err());
-    assert_eq!(output, 42);
-    assert_eq!(pool.join(|| output, || 1), (42, 1));
+fn both_branches_settle_before_unwind() {
+    for n in [1, 2, 4] {
+        let mut system = JobSystem::new(n.try_into().unwrap()).unwrap();
+        for fail_left in [false, true] {
+            let mut a = 0;
+            let mut b = 0;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                system.run(|jobs| {
+                    jobs.join(
+                        |_| {
+                            a = 3;
+                            assert!(!fail_left);
+                        },
+                        |_| {
+                            b = 4;
+                            assert!(fail_left);
+                        },
+                    )
+                })
+            }));
+            assert!(outcome.is_err());
+            assert_eq!((a, b), (3, 4));
+            assert_eq!(system.run(|jobs| jobs.join(|_| a, |_| b)), (3, 4));
+        }
+    }
 }
 
 #[test]
-fn independent_hosts_and_nested_single_worker_pools_make_progress() {
-    let a = JobPool::new(NonZeroUsize::MIN).unwrap();
-    let b = JobPool::new(NonZeroUsize::MIN).unwrap();
-    let start = std::sync::Barrier::new(4);
-    std::thread::scope(|scope| {
-        for seed in 0..4 {
-            // Each producer enters the shared pool independently.
-            let (a, b, start) = (&a, &b, &start);
-            scope.spawn(move || {
-                start.wait();
-                for i in 0..100 {
-                    let (value, ()) =
-                        a.join(|| b.join(|| a.join(|| i + seed, || ()).0, || ()).0, || ());
-                    assert_eq!(value, i + seed);
-                }
+fn sleeping_worker_claims_an_independent_branch_without_further_submissions() {
+    let host = thread::current().id();
+    for _ in 0..3 {
+        let mut system = JobSystem::new(2.try_into().unwrap()).unwrap();
+        for _ in 0..8 {
+            thread::sleep(Duration::from_millis(1));
+            let (tx, rx) = mpsc::channel();
+            system.run(|jobs| {
+                jobs.join(
+                    |_| {
+                        assert_eq!(thread::current().id(), host);
+                        rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                    },
+                    move |_| {
+                        assert_ne!(thread::current().id(), host);
+                        tx.send(()).unwrap();
+                    },
+                )
             });
         }
+    }
+    let mut one = JobSystem::new(NonZeroUsize::MIN).unwrap();
+    one.run(|jobs| {
+        jobs.join(
+            |_| assert_eq!(thread::current().id(), host),
+            |_| assert_eq!(thread::current().id(), host),
+        )
     });
 }

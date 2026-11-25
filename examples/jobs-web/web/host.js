@@ -10,13 +10,17 @@ self.onmessage = async ({data}) => {
             }
             const pkg = await import(parallel ? "./parallel/jobs.js" : "./inline/jobs.js");
             await pkg.default();
-            example = await pkg.Example.start(parallel ? data.workers : 0);
+            example = await pkg.Example.start(parallel ? data.parallelism : 1);
             postMessage({type: "ready", mode: example.parallel() ? "parallel" : "inline"});
+        } else if (data.type === "release") {
+            example.free();
+            example = undefined;
+            postMessage({type: "released"});
         } else if (data.type === "run") {
             postMessage({type: "running"});
-            const [checksum, participants] = example.calculate(data.rounds);
+            const [checksum, participants, hostParticipated] = example.calculate(data.rounds);
             const heap = Array.from(example.frame_heap());
-            postMessage({type: "done", checksum, participants, heap});
+            postMessage({type: "done", checksum, participants, hostParticipated, heap});
         }
     } catch (error) {
         postMessage({type: "error", message: String(error)});

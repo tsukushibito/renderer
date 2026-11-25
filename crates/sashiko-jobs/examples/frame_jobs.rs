@@ -1,7 +1,7 @@
 //! Isolated process-wide allocation and latency check of two borrowed clients.
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    use sashiko_jobs::JobPool;
+    use sashiko_jobs::{JobContext, JobSystem};
     use sashiko_renderer_core::measurement::{CountingAllocator, Snapshot};
     use std::hint::black_box;
     use std::time::{Duration, Instant};
@@ -9,7 +9,7 @@ fn main() {
     #[global_allocator]
     static HEAP: CountingAllocator<std::alloc::System> = CountingAllocator::new(std::alloc::System);
 
-    fn client(pool: &JobPool, data: &mut [u32]) {
+    fn client(pool: &JobContext, data: &mut [u32]) {
         pool.for_each_chunk_mut(data, 256.try_into().unwrap(), |start, chunk| {
             for value in chunk {
                 for _ in 0..64 {
@@ -19,16 +19,16 @@ fn main() {
         });
     }
 
-    for pool in [
-        JobPool::inline(),
-        JobPool::new(4.try_into().unwrap()).unwrap(),
+    for mut pool in [
+        JobSystem::inline(),
+        JobSystem::new(4.try_into().unwrap()).unwrap(),
     ] {
         for size in [32, 65536] {
             let mut values = vec![33; size];
             let mut times = [Duration::ZERO; 256];
             let mut frame = || {
                 let (a, b) = black_box(&mut values).split_at_mut(size / 2);
-                pool.join(|| client(&pool, a), || client(&pool, b));
+                pool.run(|jobs| jobs.join(|j| client(j, a), |j| client(j, b)));
             };
             for _ in 0..128 {
                 frame();
@@ -43,12 +43,47 @@ fn main() {
             times.sort_unstable();
             println!(
                 "{:?} n={size} p50={:?} p95={:?} alloc/zeroed/realloc/free={:?}",
-                pool.mode(),
+                pool.parallelism(),
                 times[127],
                 times[243],
                 delta.rust.map(|entry| entry.calls)
             );
             assert!(delta.is_allocation_free(), "{delta:?}");
+        }
+        for rest in [false, true] {
+            for split in [false, true] {
+                let mut values = [1u32; 64];
+                let mut times = [Duration::ZERO; 128];
+                for time in &mut times {
+                    if rest {
+                        std::thread::sleep(Duration::from_millis(16));
+                    }
+                    let start = Instant::now();
+                    pool.run(|jobs| {
+                        let visit = |start: usize, chunk: &mut [u32]| {
+                            for value in chunk {
+                                *value = black_box(*value).wrapping_add(start as u32 + 1);
+                            }
+                        };
+                        if split {
+                            jobs.for_each_chunk_mut(&mut values, 16.try_into().unwrap(), visit);
+                        } else {
+                            for (i, chunk) in values.chunks_mut(16).enumerate() {
+                                visit(i * 16, chunk);
+                            }
+                        }
+                    });
+                    *time = start.elapsed();
+                }
+                black_box(values);
+                times.sort_unstable();
+                println!(
+                    "parallelism={} idle={rest} split={split} p50={:?} p95={:?}",
+                    pool.parallelism(),
+                    times[63],
+                    times[121]
+                );
+            }
         }
     }
 }

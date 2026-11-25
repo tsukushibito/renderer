@@ -7,14 +7,10 @@ rust-version.workspace = true
 publish = false
 
 [features]
-web-threads = ["dep:rayon", "dep:wasm-bindgen-rayon", "dep:wasm-bindgen-futures", "dep:web-sys"]
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rayon = "1.12"
+web-threads = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-rayon = { version = "1.12", optional = true }
-wasm-bindgen-rayon = { version = "1.3", optional = true, features = ["no-bundler"] }
+wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", optional = true, features = ["DedicatedWorkerGlobalScope"] }
 

@@ -1,9 +1,11 @@
 const element = id => document.getElementById(id);
 let host;
 let timer;
+let failures;
 
 function stop(message) {
     clearTimeout(timer);
+    failures?.close();
     host?.terminate();
     host = undefined;
     element("start").disabled = false;
@@ -16,7 +18,10 @@ element("start").onclick = () => {
     element("stop").disabled = false;
     element("status").value = "Starting";
     element("result").value = "";
-    const worker = new Worker(new URL("./host.js", import.meta.url), {type: "module"});
+    const name = crypto.randomUUID();
+    const worker = new Worker(new URL("./host.js", import.meta.url), {type: "module", name});
+    failures = new BroadcastChannel("sashiko-jobs:" + name);
+    failures.onmessage = ({data}) => { if (host === worker) stop("Error: " + data); };
     host = worker;
     timer = setTimeout(() => stop("Error: worker initialization timed out"), 30000);
     worker.onerror = event => { if (host === worker) stop("Error: " + event.message); };
@@ -32,6 +37,7 @@ element("start").onclick = () => {
             element("status").value = "Running";
             break;
         case "done":
+            clearTimeout(timer);
             element("result").value = JSON.stringify(data);
             element("status").value = "Done";
             element("run").disabled = false;
@@ -41,10 +47,11 @@ element("start").onclick = () => {
             break;
         }
     };
-    worker.postMessage({type: "start", workers: 2, requireParallel: element("required").checked});
+    worker.postMessage({type: "start", parallelism: 2, requireParallel: element("required").checked});
 };
 element("run").onclick = () => {
     element("run").disabled = true;
+    timer = setTimeout(() => stop("Error: job batch timed out"), 60000);
     host.postMessage({type: "run", rounds: 1000000});
 };
 element("stop").onclick = () => stop("Stopped");

@@ -9,12 +9,14 @@
 
 ## CPU ジョブを検証する
 
-ネイティブの公開 API、プロセス全体の Rust ヒープ、逐次と 4 ワーカーの p50・p95 は次の手順で確認する。対象の CPU 処理は外部アセットや GPU を使わない。
+ネイティブの公開 API、全スレッドの Rust ヒープ、最大 1・4 並列の p50・p95 を確認する。軽い加算は直接ループとチャンク分割で比較し、連続実行と 16 ms 休止後を分ける。対象の CPU 処理は GPU や外部アセットを使わない。
 
 ```sh
 cargo test --locked --release -p sashiko-jobs
 cargo run --locked --release -p sashiko-jobs --example frame_jobs
 ```
+
+借用した枝の受け渡し・合流・巻き戻しは `cargo +nightly-2026-11-15 miri test --locked --target x86_64-unknown-linux-gnu -p sashiko-jobs` でも検証できる（同 nightly の miri と rust-src が必要）。
 
 ブラウザのサンプルは同じ Rust 処理を二通りの Wasm にビルドする。共有メモリ版だけに固定 nightly と atomics 用の標準ライブラリを使う。リポジトリのルートで次を実行する。`wasm-bindgen-cli` は Cargo.lock の版に合わせる。
 
