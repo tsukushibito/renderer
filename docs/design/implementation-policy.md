@@ -820,6 +820,8 @@ Graph内の出力handleを返すことと、Graph外へ保持するexportは区�
 計画cacheは計測と依存・失効契約を伴う別の最適化として判断する。
 
 定義・設定、Deviceに対応するpipeline/容量の準備、frame入力、Viewごとの履歴は責務を分ける。
+標準描画では [RendererSetup](../../crates/sashiko-renderer/src/pipeline/setup.rs) が必要量の算出と初期化を担当する。
+初期化後のフレーム記録・投入、ビューの差し替えと退役は [SceneRenderer](../../crates/sashiko-renderer/src/pipeline/scene_renderer.rs) が管理する。
 この区分だけを理由に新しい型を増やさない。frame固有のGraph handleを次frameの定義へ保存しない。
 資源pinは入力接続・構築からcompile、記録・投入・cancel・実GPU完了の必要な所有へ引き継ぎ、
 呼出側へ手動の寿命token管理を通常手順として要求しない。

@@ -5,6 +5,9 @@
 //! nor a retained CPU copy solely to prove those bounds. Scene, material and
 //! vertex-attribute interpretation remain the caller's responsibility.
 
+#[cfg(test)]
+pub(crate) mod test_mesh;
+
 mod registry;
 pub use registry::{
     MeshCapacity, MeshError, MeshErrorKind, MeshHandle, MeshRegistry, MeshSnapshot, SnapshotInputs,

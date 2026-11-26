@@ -733,8 +733,8 @@ impl VulkanEngine {
 
 #[cfg(test)]
 mod tests {
-    use crate::unlit_test_input::FrameSnapshot;
-    use crate::unlit_test_input::{Draw, IDENTITY, Vertex, View, mesh_data};
+    use super::super::test_input::{Draw, FrameSnapshot, View};
+    use crate::geometry::test_mesh::{Vertex, mesh_data};
 
     use super::*;
     use crate::geometry::{MeshCapacity, SnapshotPool};
@@ -803,14 +803,9 @@ mod tests {
             &View {
                 width: 8,
                 height: 8,
-                clip_from_world: IDENTITY,
                 clear_color: [0.0, 0.0, 0.0, 1.0],
             },
-            &[Draw {
-                mesh,
-                tint,
-                world_from_model: IDENTITY,
-            }],
+            &[Draw::new(mesh, tint)],
         )
         .unwrap();
         deferred.retain(Arc::clone(&snapshot.draws[0].data));

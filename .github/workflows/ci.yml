@@ -117,7 +117,7 @@ jobs:
       - name: Check managed shader ABI contracts without an SDK
         shell: pwsh
         run: ./crates/sashiko-renderer-core/shaders/test-managed-abi.ps1
-      - name: Verify Pipeline shader sources and generated artifacts without an SDK
+      - name: Verify rendering and lighting bake shader packages without an SDK
         run: |
           python -B -m unittest discover -s tools/shaders -p 'test_*.py'
           python -B tools/shaders/verify_pipeline_manifest.py

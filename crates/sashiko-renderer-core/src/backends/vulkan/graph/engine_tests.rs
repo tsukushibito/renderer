@@ -1,13 +1,13 @@
 //! Real engine-input contracts, including pending versions and external passes.
 
+use crate::geometry::test_mesh::{Vertex, mesh_data};
 use crate::image_transform::{self, Transform};
-use crate::unlit_test_input::{Draw, FrameSnapshot, IDENTITY, Vertex, View, mesh_data};
 use std::time::{Duration, Instant};
 
 use super::{FrameCapacity, ResourceClass, RuntimeConfig, VulkanRuntime};
 use crate::backends::vulkan::engine::{
     EngineFrameCapacity,
-    test_input::{Assets, build_snapshot, render_snapshot},
+    test_input::{Assets, Draw, FrameSnapshot, View, build_snapshot, graph, render_snapshot},
 };
 use crate::{
     geometry::GeometryData,
@@ -179,17 +179,12 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
     with_engine(|engine, assets| {
         let mesh_handle = assets.create_mesh(mesh([1.0; 4])).unwrap();
         let tint = [1.0, 0.0, 0.0, 1.0];
-        let mut view = View {
+        let view = View {
             width: 32,
             height: 32,
-            clip_from_world: IDENTITY,
             clear_color: [0.0, 0.0, 0.0, 1.0],
         };
-        let mut draw = Draw {
-            mesh: mesh_handle,
-            tint,
-            world_from_model: IDENTITY,
-        };
+        let mut draw = Draw::new(mesh_handle, tint);
         let mut first =
             render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
         engine.release_output(&mut first).unwrap();
@@ -200,7 +195,7 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             [255, 0, 0, 255],
         )];
         draw.tint = [0.0, 1.0, 0.0, 1.0];
-        draw.world_from_model[3][0] = -0.75;
+        draw.transform[3][0] = -0.75;
         let mut shifted =
             render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
         engine.release_output(&mut shifted).unwrap();
@@ -210,14 +205,14 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             16 * 32 + 4,
             [0, 255, 0, 255],
         ));
-        view.clip_from_world[3][0] = 0.75;
+        draw.transform[3][0] = 0.0;
         draw.tint = [0.0, 0.0, 1.0, 1.0];
-        let mut camera =
+        let mut centered =
             render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
-        engine.release_output(&mut camera).unwrap();
+        engine.release_output(&mut centered).unwrap();
         expected.push((
-            camera.submission().id(),
-            camera.readback().unwrap(),
+            centered.submission().id(),
+            centered.readback().unwrap(),
             16 * 32 + 16,
             [0, 0, 255, 255],
         ));
@@ -263,27 +258,14 @@ fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
         let green = [0.0, 1.0, 0.0, 1.0];
         let blue = [0.0, 0.0, 1.0, 1.0];
         let mut draws = [
-            Draw {
-                mesh: near,
-                tint: red,
-                world_from_model: IDENTITY,
-            },
-            Draw {
-                mesh: far,
-                tint: green,
-                world_from_model: IDENTITY,
-            },
-            Draw {
-                mesh: equal,
-                tint: blue,
-                world_from_model: IDENTITY,
-            },
+            Draw::new(near, red),
+            Draw::new(far, green),
+            Draw::new(equal, blue),
         ]
         .repeat(32);
         let view = View {
             width: 32,
             height: 32,
-            clip_from_world: IDENTITY,
             clear_color: [0.0, 0.0, 0.0, 1.0],
         };
         let extension = |graph: &mut Graph, color| {
@@ -340,7 +322,6 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         let view = View {
             width: 8,
             height: 8,
-            clip_from_world: IDENTITY,
             clear_color: [0.0, 0.0, 1.0, 1.0],
         };
         let mut frame = render_frame(engine, assets, &view, &[], true, |graph, color| {
@@ -383,11 +364,7 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         };
         let handle = assets.create_mesh(mesh([1.0; 4])).unwrap();
         let tint = [1.0; 4];
-        let draw = Draw {
-            mesh: handle,
-            tint,
-            world_from_model: IDENTITY,
-        };
+        let draw = Draw::new(handle, tint);
         let captured = assets.snapshot(&black_view, &[draw]).unwrap();
         prepare_meshes(engine, &captured);
         let old_a = build_snapshot(engine, &captured, true, |_, c| Ok(c)).unwrap();
@@ -538,14 +515,9 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
     let view = View {
         width: 32,
         height: 32,
-        clip_from_world: IDENTITY,
         clear_color: [0.0, 0.0, 0.0, 1.0],
     };
-    let draw = Draw {
-        mesh: mesh_handle,
-        tint,
-        world_from_model: IDENTITY,
-    };
+    let draw = Draw::new(mesh_handle, tint);
     let snapshot = assets.snapshot(&view, &[draw]).unwrap();
     prepare_meshes(&mut engine, &snapshot);
     let prepared = build_snapshot(&mut engine, &snapshot, true, |_, color| Ok(color)).unwrap();
