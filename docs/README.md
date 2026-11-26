@@ -53,6 +53,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 
 | 分類 | 文書 | 内容 |
 |---|---|---|
+| 研究提案・未採用 | [ライトマップを用いた差分 GI（PDF）](design/differential-gi.pdf) | 動的物体による間接光の遮蔽と色移りを扱う。単一物体での比較方法と、複数物体の GPU 試作へ進む条件を示す。 |
 | 利用手順 | [Examples](guides/examples.md) | 各ターゲットの前提、入門コマンド、比較・計測の導線 |
 | 利用手順 | [開発手順](guides/development.md) | 環境構築、Bistro素材と再現条件の準備、ビルド、試験、性能測定 |
 | 利用手順 | [開発ツール](guides/tooling.md) | 依存監査、D3D12 bindings生成、SPIR-V／DXIL検証、[外部シェーダー取込](guides/tooling.md#runtime-shader-import)、[Rustのパイプライン構築](guides/tooling.md#rust-pipeline)、[Bistro cook・shader・比較](guides/tooling.md#bistro-tools)、[Tracy zone](guides/tooling.md#tracy-profiling)・[WPR CPUプロファイル](guides/tooling.md#cpu-profiling)、RenderDoc |
