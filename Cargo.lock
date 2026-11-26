@@ -879,7 +879,7 @@ name = "inspector-door"
 version = "0.1.0"
 dependencies = [
  "sashiko",
- "sashiko-renderer-core",
+ "sashiko-heap",
  "serde",
 ]
 
@@ -2062,6 +2062,7 @@ dependencies = [
  "sashiko-animation-character",
  "sashiko-asset",
  "sashiko-inspect",
+ "sashiko-jobs",
  "sashiko-math",
  "sashiko-physics",
  "sashiko-renderer",
@@ -2076,8 +2077,8 @@ name = "sashiko-animation"
 version = "0.1.0"
 dependencies = [
  "glam 0.30.10",
+ "sashiko-heap",
  "sashiko-jobs",
- "sashiko-renderer-core",
 ]
 
 [[package]]
@@ -2121,6 +2122,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sashiko-heap"
+version = "0.1.0"
+
+[[package]]
 name = "sashiko-inspect"
 version = "0.1.0"
 dependencies = [
@@ -2132,7 +2137,7 @@ dependencies = [
 name = "sashiko-jobs"
 version = "0.1.0"
 dependencies = [
- "sashiko-renderer-core",
+ "sashiko-heap",
  "tracy-client",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -2143,8 +2148,8 @@ dependencies = [
 name = "sashiko-jobs-web-example"
 version = "0.1.0"
 dependencies = [
+ "sashiko-heap",
  "sashiko-jobs",
- "sashiko-renderer-core",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
@@ -2197,6 +2202,7 @@ dependencies = [
  "criterion",
  "raw-window-handle",
  "sashiko-example-support",
+ "sashiko-heap",
  "sashiko-jobs",
  "sashiko-renderer",
  "serde_json",

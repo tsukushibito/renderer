@@ -21,7 +21,7 @@ use sashiko_renderer_core::{
         IndexedIndirectArgs, IndexedIndirectTable, IndexedIndirectTemplate, LoadOp, PassHandle,
         RasterAttachments, RasterDraw, RasterParameters, StoreOp,
     },
-    jobs::{JobSystem, RendererJobs},
+    jobs::{JobSystem, SharedJobs},
     program::ManagedRasterProgram,
     runtime::{FrameSubmission, Runtime, RuntimeConfig, RuntimeLimits},
 };
@@ -230,7 +230,7 @@ impl Scene {
     fn classify(
         &mut self,
         camera: [[f32; 4]; 4],
-        jobs: Option<&RendererJobs>,
+        jobs: Option<&SharedJobs>,
     ) -> Result<(), Failure> {
         let frustum = Frustum::new(camera, Bounds::new([-1.25, -1.25, 0.], [4., 1.25, 1.])?);
         let bounds = &self.bounds;
@@ -328,7 +328,7 @@ fn build(
     scene: &mut Scene,
     pool: &mut GraphPool,
     r: &Resources,
-    jobs: Option<&RendererJobs>,
+    jobs: Option<&SharedJobs>,
     frame: usize,
     capture: bool,
 ) -> Result<Frame, Failure> {
@@ -512,7 +512,7 @@ pub fn run() -> Result<(), Failure> {
     let team = NonZeroUsize::new(o.workers)
         .map(JobSystem::new)
         .transpose()?
-        .map(RendererJobs::new);
+        .map(SharedJobs::new);
     let mut prep = Preparation::new(NonZeroUsize::new(FRAMES).unwrap());
     let vertices = BufferDesc {
         size: scene.vertices.len() as u64,
@@ -739,7 +739,7 @@ fn capture_hashes(
     pool: &mut GraphPool,
     rt: &mut Runtime,
     resources: &mut Resources,
-    jobs: Option<&RendererJobs>,
+    jobs: Option<&SharedJobs>,
     boundary: bool,
 ) -> Result<Vec<String>, Failure> {
     let mut hashes = Vec::with_capacity(6);

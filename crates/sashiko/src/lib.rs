@@ -7,6 +7,7 @@ pub mod cli;
 pub mod input;
 #[cfg(feature = "live-inspector")]
 pub use sashiko_inspect as inspect;
+pub use sashiko_jobs as jobs;
 pub use sashiko_math as math;
 #[cfg(feature = "physics")]
 pub use sashiko_physics as physics;

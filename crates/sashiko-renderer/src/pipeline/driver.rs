@@ -71,7 +71,7 @@ pub struct ViewRenderer {
 impl ViewRenderer {
     pub(super) fn set_standard_scene_jobs(
         &mut self,
-        jobs: &sashiko_renderer_core::jobs::RendererJobs,
+        jobs: &sashiko_renderer_core::jobs::SharedJobs,
         policy: StandardJobPolicy,
     ) {
         for pipeline in self.pipelines.values_mut() {

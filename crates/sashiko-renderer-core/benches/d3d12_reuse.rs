@@ -5,13 +5,6 @@
 
 use std::{alloc::System, hint::black_box, sync::Arc, time::Instant};
 
-#[path = "../src/measurement.rs"]
-#[allow(
-    dead_code,
-    unused_imports,
-    reason = "standalone benchmark uses only Rust allocation counters"
-)]
-mod measurement;
 #[path = "../src/backends/d3d12/registry/reuse.rs"]
 #[allow(
     dead_code,
@@ -20,8 +13,8 @@ mod measurement;
 )]
 mod reuse;
 
-use measurement::{CountingAllocator, Snapshot};
 use reuse::{ReuseClass, ReuseIndex};
+use sashiko_heap::{CountingAllocator, HeapSnapshot};
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator<System> = CountingAllocator::new(System);
@@ -170,9 +163,9 @@ fn run<const REFERENCE: bool>(case: Case, samples: usize, iterations: usize) -> 
         warmup_frames += 1;
     }
     let mut elapsed = Vec::with_capacity(samples);
-    let mut allocation = Snapshot::default();
+    let mut allocation = HeapSnapshot::default();
     for _ in 0..samples {
-        let before = Snapshot::now();
+        let before = HeapSnapshot::now();
         let started = Instant::now();
         for _ in 0..iterations {
             black_box(frame::<REFERENCE>(
@@ -183,7 +176,7 @@ fn run<const REFERENCE: bool>(case: Case, samples: usize, iterations: usize) -> 
             ));
         }
         let duration = started.elapsed();
-        allocation.accumulate(Snapshot::now().since(before));
+        allocation.accumulate(HeapSnapshot::now().since(before));
         elapsed.push(duration.as_nanos() as f64 / iterations as f64);
     }
     assert!(
@@ -202,8 +195,8 @@ fn run<const REFERENCE: bool>(case: Case, samples: usize, iterations: usize) -> 
         "median_frame_ns": sorted[sorted.len() / 2],
         "p95_frame_ns": sorted[(sorted.len() * 95).div_ceil(100).saturating_sub(1)],
         "raw_frame_ns": elapsed,
-        "rust_allocation_calls": allocation.rust.map(|event| event.calls),
-        "rust_allocation_bytes": allocation.rust.map(|event| event.bytes),
+        "rust_allocation_calls": allocation.events.map(|event| event.calls),
+        "rust_allocation_bytes": allocation.events.map(|event| event.bytes),
     })
 }
 

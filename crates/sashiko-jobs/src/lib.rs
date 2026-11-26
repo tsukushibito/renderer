@@ -20,6 +20,9 @@ use std::sync::Mutex;
 #[cfg(any(not(target_arch = "wasm32"), feature = "web-threads"))]
 use std::sync::atomic::AtomicUsize;
 
+mod shared;
+pub use shared::SharedJobs;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 #[cfg(any(not(target_arch = "wasm32"), feature = "web-threads"))]

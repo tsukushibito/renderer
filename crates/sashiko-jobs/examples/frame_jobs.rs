@@ -1,8 +1,8 @@
 //! Isolated process-wide allocation and latency check of two borrowed clients.
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    use sashiko_heap::{CountingAllocator, HeapSnapshot};
     use sashiko_jobs::{JobScope, JobSystem};
-    use sashiko_renderer_core::measurement::{CountingAllocator, Snapshot};
     use std::hint::black_box;
     use std::time::{Duration, Instant};
 
@@ -36,20 +36,20 @@ fn main() {
             for _ in 0..128 {
                 frame();
             }
-            let before = Snapshot::now();
+            let before = HeapSnapshot::now();
             for time in &mut times {
                 let start = Instant::now();
                 frame();
                 *time = start.elapsed();
             }
-            let delta = Snapshot::now().since(before);
+            let delta = HeapSnapshot::now().since(before);
             times.sort_unstable();
             println!(
                 "{:?} n={size} p50={:?} p95={:?} alloc/zeroed/realloc/free={:?}",
                 pool.parallelism(),
                 times[127],
                 times[243],
-                delta.rust.map(|entry| entry.calls)
+                delta.events.map(|entry| entry.calls)
             );
             assert!(delta.is_allocation_free(), "{delta:?}");
         }

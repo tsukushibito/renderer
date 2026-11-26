@@ -1,4 +1,5 @@
 //! Research hall, animated subjects and gameplay feedback shared by capture and presentation.
+use sashiko::jobs::{JobSystem, SharedJobs};
 use sashiko::math::{LocalTransform, Rotation3, Vec2, Vec3};
 use sashiko::view::{DrawList, on_screen, render_transform};
 mod geometry;
@@ -13,10 +14,7 @@ use crate::{Game, MAX_DROPS, MAX_ENEMIES, MAX_SHOTS};
 use sashiko_renderer::{
     Renderer, WindowRenderer,
     canvas::Layer,
-    core::{
-        jobs::{JobSystem, RendererJobs},
-        runtime::Runtime,
-    },
+    core::runtime::Runtime,
     material::{AlphaMode, MaterialHandle, Materials, PbrParams},
     mesh::{MeshCapacity, MeshHandle, Meshes},
     pbr::{Bounds, LocalLight, Sun, Transform},
@@ -96,7 +94,7 @@ pub struct CharacterRendering {
 }
 
 pub struct Visual {
-    jobs: RendererJobs,
+    jobs: SharedJobs,
     meshes: Meshes,
     materials: Materials,
     palette: Palette,

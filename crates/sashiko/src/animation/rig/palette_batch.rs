@@ -1,6 +1,6 @@
 use super::*;
+use crate::jobs::SharedJobs;
 use sashiko_animation::PoseSample;
-use sashiko_renderer::core::jobs::RendererJobs;
 
 /// A recorded mesh palette, or an index in the supplied slice of resolved local poses.
 #[derive(Clone, Copy)]
@@ -82,7 +82,7 @@ impl PaletteBatch {
         requests: &'a [PaletteRequest],
         samples: &[PoseSample<'_>],
         rate: NonZeroU32,
-        jobs: &RendererJobs,
+        jobs: &SharedJobs,
     ) -> PipelineResult<impl ExactSizeIterator<Item = &'a [Transform]> + 'a> {
         if requests.len() > self.capacity || samples.len() > self.sample_capacity {
             return Err("palette capacity exceeded".into());
@@ -177,7 +177,7 @@ impl PaletteBatch {
 mod tests {
     use super::*;
     use crate::animation::CharacterCatalog;
-    use sashiko_renderer::core::jobs::JobSystem;
+    use crate::jobs::JobSystem;
     use std::path::Path;
 
     #[test]
@@ -206,7 +206,7 @@ mod tests {
             .map(|i| clip.interpolated_at(i as u64, rate))
             .collect();
         let mut batch = model.prepare_palette_batch(&["walk"], capacity, capacity)?;
-        let serial: RendererJobs = JobSystem::inline().into();
+        let serial: SharedJobs = JobSystem::inline().into();
         let parallel = JobSystem::new(4.try_into()?)?.into();
         let reference: Vec<_> = batch
             .evaluate(&requests, &samples, rate, &serial)?

@@ -1,19 +1,19 @@
 //! Parallel capture into disjoint portions of the final operand and constant arenas.
 use super::*;
-use crate::jobs::RendererJobs;
+use crate::jobs::SharedJobs;
 use std::{
     num::NonZeroUsize,
     sync::{Mutex, TryLockError},
 };
 
 pub(in crate::graph) struct CaptureJobs {
-    team: RendererJobs,
+    team: SharedJobs,
     minimum: NonZeroUsize,
     chunks: Mutex<Vec<Result<Footprint, GraphError>>>,
 }
 
 impl CaptureJobs {
-    pub(in crate::graph) fn new(team: RendererJobs, minimum: NonZeroUsize) -> Self {
+    pub(in crate::graph) fn new(team: SharedJobs, minimum: NonZeroUsize) -> Self {
         let chunks = (0..team.parallelism().get())
             .map(|_| Ok(Footprint::default()))
             .collect();
@@ -148,7 +148,7 @@ impl RasterPass<'_, '_> {
         program: &ManagedRasterProgram,
         count: usize,
         draw_at: &(impl Fn(usize) -> D + Sync),
-        team: Option<&RendererJobs>,
+        team: Option<&SharedJobs>,
         chunks: &mut [Result<Footprint, GraphError>],
     ) -> Result<(), GraphError> {
         let started = self

@@ -166,14 +166,14 @@ fn measure_animation() -> PipelineResult<()> {
 #[test]
 #[ignore = "release animation timing and isolated process-wide counters"]
 fn measure_palette_jobs() -> PipelineResult<()> {
-    use sashiko_renderer::core::jobs::{JobSystem, RendererJobs};
+    use crate::jobs::{JobSystem, SharedJobs};
     let catalog = CharacterCatalog::open(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/survivor/characters/catalog.json"),
     )?;
     let model = catalog.load(catalog.id("primary").unwrap())?;
     let teams = [
-        RendererJobs::new(JobSystem::inline()),
+        SharedJobs::new(JobSystem::inline()),
         JobSystem::new(4.try_into()?)?.into(),
     ];
     let rate = 60.try_into()?;
@@ -228,8 +228,8 @@ fn measure_palette_jobs() -> PipelineResult<()> {
 #[test]
 #[ignore = "release animation timing and isolated process-wide counters"]
 fn measure_composed_and_sparse_poses() -> PipelineResult<()> {
+    use crate::jobs::{JobSystem, SharedJobs};
     use sashiko_animation::{ClipTimeline, LocalBuffer};
-    use sashiko_renderer::core::jobs::{JobSystem, RendererJobs};
     let catalog = CharacterCatalog::open(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/survivor/characters/catalog.json"),
@@ -238,7 +238,7 @@ fn measure_composed_and_sparse_poses() -> PipelineResult<()> {
     let walk = model.prepare_pose_clip("walk")?;
     let jog = model.prepare_pose_clip("jog")?;
     let rate = 60.try_into()?;
-    let jobs = RendererJobs::new(JobSystem::inline());
+    let jobs = SharedJobs::new(JobSystem::inline());
     let mut mix = LocalBuffer::new(walk.skeleton());
     let mut batch = model.prepare_palette_batch(&["walk", "jog"], 9, 1)?;
     measure("eight_cooked_one_blended", |tick| {

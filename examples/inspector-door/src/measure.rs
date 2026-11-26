@@ -1,5 +1,5 @@
 use super::Game;
-use sashiko_renderer_core::measurement::{CountingAllocator, Snapshot};
+use sashiko_heap::{CountingAllocator, HeapSnapshot};
 use std::{
     alloc::System,
     error::Error,
@@ -15,13 +15,13 @@ fn sample(n: usize, journal_bytes: usize, mut update: impl FnMut()) {
         update()
     }
     let mut times = vec![Duration::ZERO; n];
-    let start = Snapshot::now();
+    let start = HeapSnapshot::now();
     for time in &mut times {
         let before = Instant::now();
         update();
         *time = before.elapsed();
     }
-    let counts = Snapshot::now().since(start).rust;
+    let counts = HeapSnapshot::now().since(start).events;
     times.sort_unstable();
     println!(
         "{{\"ticks\":{n},\"p95_ns\":{},\"max_ns\":{},\"alloc\":{},\"realloc\":{},\"free\":{},\"journal_bytes\":{journal_bytes}}}",

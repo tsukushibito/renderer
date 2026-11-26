@@ -1,0 +1,10 @@
+[package]
+name = "sashiko-heap"
+description = "Allocation event counters for Sashiko measurement executables"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true

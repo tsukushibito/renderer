@@ -2,8 +2,8 @@
 use sashiko::animation::{
     AnimatedModel, CharacterCatalog, LocalBuffer, PaletteBatch, PaletteRequest, PoseClip,
 };
+use sashiko::jobs::SharedJobs;
 use sashiko_renderer::{
-    core::jobs::RendererJobs,
     material::{MaterialHandle, Materials},
     mesh::{MeshHandle, Meshes, SkinPoseId},
     pipeline::PipelineResult,
@@ -190,7 +190,7 @@ impl Cast {
     pub fn animate(
         &mut self,
         game: &crate::Game,
-        jobs: &RendererJobs,
+        jobs: &SharedJobs,
         meshes: &mut Meshes,
     ) -> PipelineResult<()> {
         for model in &mut self.poses {
@@ -339,7 +339,7 @@ mod tests {
         let game = crate::Game::new(Default::default(), crate::Scenario::Early, 1);
         cast.animate(
             &game,
-            &RendererJobs::new(sashiko_renderer::core::jobs::JobSystem::inline()),
+            &SharedJobs::new(sashiko::jobs::JobSystem::inline()),
             &mut meshes,
         )
     }

@@ -8,6 +8,7 @@ description = "RenderGraph-centered renderer for game engine integration"
 
 [features]
 default = []
+scheduler-metrics = ["sashiko-jobs/scheduler-metrics"]
 # Optional Renderer diagnostics, independent of optimization and native layers.
 development-validation = ["vulkan-diagnostics", "d3d12-diagnostics"]
 # Native callback monitoring and debug names/labels can be enabled independently.
@@ -16,7 +17,7 @@ d3d12-diagnostics = []
 # Detailed Graph dumps are independent of validation and profiling.
 graph-diagnostics = []
 # Allocation/native event counters; independent of validation and optimization.
-memory-profiling = []
+memory-profiling = ["dep:sashiko-heap"]
 # Optional explicit CPU zones; independent of native layers and GPU timestamps.
 tracy = ["dep:tracy-client", "sashiko-jobs/tracy"]
 vulkan = ["dep:ash", "dep:vk-mem", "dep:tracing"]
@@ -25,6 +26,7 @@ d3d12 = ["dep:windows-core"]
 webgpu = ["dep:wgpu", "dep:web-sys"]
 
 [dependencies]
+sashiko-heap = { workspace = true, optional = true }
 sashiko-jobs = { version = "0.1.0", path = "../sashiko-jobs" }
 ash = { workspace = true, optional = true }
 vk-mem = { workspace = true, optional = true }
@@ -49,6 +51,7 @@ wasm-bindgen-futures = "0.4"
 wasm-bindgen-test = "0.3"
 
 [dev-dependencies]
+sashiko-heap.workspace = true
 criterion.workspace = true
 tracing-subscriber.workspace = true
 sashiko-renderer = { version = "0.1.0", path = "../sashiko-renderer" }

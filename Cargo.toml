@@ -8,6 +8,7 @@ members = [
     "crates/sashiko-animation",
     "crates/sashiko-animation-character",
     "crates/sashiko-jobs",
+    "crates/sashiko-heap",
     "examples/jobs-web",
     "crates/sashiko-asset",
     "crates/sashiko-renderer-core",
@@ -26,6 +27,7 @@ edition = "2024"
 rust-version = "1.99"
 
 [workspace.dependencies]
+sashiko-heap = { path = "crates/sashiko-heap", version = "0.1.0" }
 ash = { version = "0.38", default-features = false, features = ["std", "loaded", "debug"] }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 vk-mem = "0.5"

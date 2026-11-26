@@ -12,19 +12,9 @@
 //! allocation in both the Rust and VMA rows. Native event categories describe
 //! separate requests, not one additive count of physical allocations.
 
-use std::alloc::{GlobalAlloc, Layout};
+use sashiko_heap::HeapSnapshot;
+pub use sashiko_heap::{CountingAllocator, EventCount, RustEvent};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-
-/// Separate allocator entry points; an allocation made before the measurement
-/// still contributes a deallocation when it is freed inside the interval.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(usize)]
-pub enum RustEvent {
-    Allocate,
-    AllocateZeroed,
-    Reallocate,
-    Deallocate,
-}
 
 /// Requests through the host callbacks supplied to VMA, including callbacks
 /// forwarded to Vulkan. Their VMA/driver origin is not distinguished; Rust's
@@ -62,14 +52,6 @@ pub enum NativeEvent {
     Reset,
 }
 
-/// Event requests and their requested bytes, rather than resident/peak memory.
-/// Free callbacks with no known size can report zero bytes while counting frees.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct EventCount {
-    pub calls: u64,
-    pub bytes: u64,
-}
-
 /// Cumulative process counters. Snapshot only at quiescent boundaries for exact
 /// totals: independent atomic fields are not one transactional live snapshot.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -82,7 +64,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn now() -> Self {
-        COUNTERS.snapshot()
+        COUNTERS.snapshot(HeapSnapshot::now())
     }
 
     /// Checked difference over one interval (or a contained event subtotal).
@@ -97,12 +79,9 @@ impl Snapshot {
             })
         }
         let mut overflowed = self.overflowed || earlier.overflowed;
-        let mut difference = |current: EventCount, previous: EventCount| EventCount {
-            calls: subtract(current.calls, previous.calls, &mut overflowed),
-            bytes: subtract(current.bytes, previous.bytes, &mut overflowed),
-        };
-        let rust = std::array::from_fn(|i| difference(self.rust[i], earlier.rust[i]));
-        let vma_host = std::array::from_fn(|i| difference(self.vma_host[i], earlier.vma_host[i]));
+        let rust = std::array::from_fn(|i| self.rust[i].since(earlier.rust[i], &mut overflowed));
+        let vma_host =
+            std::array::from_fn(|i| self.vma_host[i].since(earlier.vma_host[i], &mut overflowed));
         let native =
             std::array::from_fn(|i| subtract(self.native[i], earlier.native[i], &mut overflowed));
         Self {
@@ -129,8 +108,7 @@ impl Snapshot {
             .zip(value.rust)
             .chain(self.vma_host.iter_mut().zip(value.vma_host))
         {
-            add(&mut total.calls, value.calls, &mut self.overflowed);
-            add(&mut total.bytes, value.bytes, &mut self.overflowed);
+            total.accumulate(value, &mut self.overflowed);
         }
         for (total, value) in self.native.iter_mut().zip(value.native) {
             add(total, value, &mut self.overflowed);
@@ -151,8 +129,6 @@ impl Snapshot {
 }
 
 struct Counters {
-    rust_calls: [AtomicU64; 4],
-    rust_bytes: [AtomicU64; 4],
     host_calls: [AtomicU64; 3],
     host_bytes: [AtomicU64; 3],
     native: [AtomicU64; 9],
@@ -162,8 +138,6 @@ struct Counters {
 impl Counters {
     const fn new() -> Self {
         Self {
-            rust_calls: [const { AtomicU64::new(0) }; 4],
-            rust_bytes: [const { AtomicU64::new(0) }; 4],
             host_calls: [const { AtomicU64::new(0) }; 3],
             host_bytes: [const { AtomicU64::new(0) }; 3],
             native: [const { AtomicU64::new(0) }; 9],
@@ -177,28 +151,20 @@ impl Counters {
         }
     }
 
-    fn rust(&self, event: RustEvent, bytes: usize) {
-        self.add(&self.rust_calls[event as usize], 1);
-        self.add(&self.rust_bytes[event as usize], bytes as u64);
-    }
-
     fn host(&self, event: HostEvent, bytes: usize) {
         self.add(&self.host_calls[event as usize], 1);
         self.add(&self.host_bytes[event as usize], bytes as u64);
     }
 
-    fn snapshot(&self) -> Snapshot {
+    fn snapshot(&self, heap: HeapSnapshot) -> Snapshot {
         Snapshot {
-            rust: std::array::from_fn(|i| EventCount {
-                calls: self.rust_calls[i].load(Ordering::Relaxed),
-                bytes: self.rust_bytes[i].load(Ordering::Relaxed),
-            }),
+            rust: heap.events,
             vma_host: std::array::from_fn(|i| EventCount {
                 calls: self.host_calls[i].load(Ordering::Relaxed),
                 bytes: self.host_bytes[i].load(Ordering::Relaxed),
             }),
             native: std::array::from_fn(|i| self.native[i].load(Ordering::Relaxed)),
-            overflowed: self.overflowed.load(Ordering::Relaxed),
+            overflowed: heap.overflowed || self.overflowed.load(Ordering::Relaxed),
         }
     }
 }
@@ -218,59 +184,22 @@ pub fn record_vma_host(event: HostEvent, requested_bytes: usize) {
     COUNTERS.host(event, requested_bytes);
 }
 
-/// A forwarding global allocator wrapper for a measurement executable.
-/// The library never selects an application's global allocator automatically.
-pub struct CountingAllocator<A> {
-    inner: A,
-}
-
-impl<A> CountingAllocator<A> {
-    pub const fn new(inner: A) -> Self {
-        Self { inner }
-    }
-}
-
-// SAFETY: Each method forwards the original pointer/Layout and operation to A;
-// recording uses only fixed atomic storage and cannot allocate or unwind.
-unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAllocator<A> {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        COUNTERS.rust(RustEvent::Allocate, layout.size());
-        // SAFETY: Forward the caller's valid allocation contract unchanged.
-        unsafe { self.inner.alloc(layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        COUNTERS.rust(RustEvent::AllocateZeroed, layout.size());
-        // SAFETY: Forward the caller's valid zeroed allocation contract.
-        unsafe { self.inner.alloc_zeroed(layout) }
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        COUNTERS.rust(RustEvent::Reallocate, new_size);
-        // SAFETY: Forward the original allocator's live pointer and Layout.
-        unsafe { self.inner.realloc(pointer, layout, new_size) }
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        COUNTERS.rust(RustEvent::Deallocate, layout.size());
-        // SAFETY: Forward exactly the original allocation's pointer and Layout.
-        unsafe { self.inner.dealloc(pointer, layout) };
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::alloc::System;
 
     #[test]
     fn event_classes_overflow_and_zero_contract_are_independent() {
         let counters = Counters::new();
-        let initial = counters.snapshot();
-        counters.rust(RustEvent::AllocateZeroed, 32);
+        let initial = counters.snapshot(HeapSnapshot::default());
+        let mut heap = HeapSnapshot::default();
+        heap.events[RustEvent::AllocateZeroed as usize] = EventCount {
+            calls: 1,
+            bytes: 32,
+        };
         counters.host(HostEvent::Deallocate, 0);
         counters.add(&counters.native[NativeEvent::Reset as usize], 1);
-        let delta = counters.snapshot().since(initial);
+        let delta = counters.snapshot(heap).since(initial);
         assert_eq!(
             delta.rust[RustEvent::AllocateZeroed as usize],
             EventCount {
@@ -300,34 +229,6 @@ mod tests {
         assert!(reset_only.is_allocation_free());
         counters.add(&counters.native[0], u64::MAX);
         counters.add(&counters.native[0], 1);
-        assert!(counters.snapshot().overflowed);
-    }
-
-    #[test]
-    fn forwarding_allocator_observes_each_operation_and_a_delayed_free() {
-        let allocator = CountingAllocator::new(System);
-        let small = Layout::from_size_align(16, 16).unwrap();
-        let large = Layout::from_size_align(32, 16).unwrap();
-        // SAFETY: Both allocations have valid nonzero Layouts; each successful
-        // pointer is resized/freed only using this same allocator and Layout.
-        unsafe {
-            let prior = allocator.alloc(small);
-            assert!(!prior.is_null());
-            let start = Snapshot::now();
-            let zeroed = allocator.alloc_zeroed(small);
-            assert!(!zeroed.is_null());
-            assert_eq!(*zeroed, 0);
-            let grown = allocator.realloc(zeroed, small, 32);
-            assert!(!grown.is_null());
-            allocator.dealloc(grown, large);
-            allocator.dealloc(prior, small);
-            let delta = Snapshot::now().since(start);
-            // Other parallel tests may also use counters; these are lower
-            // bounds, while local fixed-counter tests check exact indexing.
-            assert!(delta.rust[RustEvent::AllocateZeroed as usize].calls >= 1);
-            assert!(delta.rust[RustEvent::Reallocate as usize].calls >= 1);
-            assert!(delta.rust[RustEvent::Deallocate as usize].calls >= 2);
-            assert!(!delta.is_allocation_free());
-        }
+        assert!(counters.snapshot(HeapSnapshot::default()).overflowed);
     }
 }
