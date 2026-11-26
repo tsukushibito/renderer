@@ -98,7 +98,7 @@ def run(browser, site, isolated):
             page.close()
 
 
-def verify_team_lifecycle(browser, site):
+def verify_team_lifecycle(browser, site, rayon=False):
     # Keep the host alive across a partially failed startup, recovery, and drop.
     with serve(site, True, fail_second_child=True) as url:
         page = browser.new_page()
@@ -127,14 +127,25 @@ def verify_team_lifecycle(browser, site):
             assert len(workers() - baseline) == n, workers() - baseline
 
         try:
-            start = {"type": "start", "parallelism": 3, "requireParallel": True}
+            start = {"type": "start", "parallelism": 3, "requireParallel": True, "rayon": rayon, "trial": rayon}
             assert send(start)["type"] == "error"
             wait_count(1)
-            for _ in range(2):
-                assert send(start)["mode"] == "parallel"
-                wait_count(3)
-                assert send({"type": "release"})["type"] == "released"
-                wait_count(1)
+            checksum = None
+            for backend in ([False, True] if rayon else [False]):
+                start["rayon"] = backend
+                for n in ([1, 2, 4, 8, 2] if rayon else [3, 3]):
+                    start["parallelism"] = n
+                    assert send(start)["mode"] == ("parallel" if n > 1 else "inline")
+                    wait_count(n)
+                    if rayon:
+                        result = send({"type": "contract"})
+                        assert result["type"] == "checked" and 1 <= result["participants"] <= n, result
+                        if checksum is not None:
+                            assert result["checksum"] == checksum, result
+                        checksum = result["checksum"]
+                        print("Rayon" if backend else "Workers", n, result, flush=True)
+                    assert send({"type": "release"})["type"] == "released"
+                    wait_count(1)
         finally:
             page.evaluate("testHost.terminate()")
             targets.detach()
@@ -145,11 +156,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("site", type=Path)
     parser.add_argument("--channel", default="chromium")
+    parser.add_argument("--experimental-rayon", action="store_true")
     args = parser.parse_args()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(channel=args.channel)
         try:
             verify_team_lifecycle(browser, args.site)
+            if args.experimental_rayon:
+                verify_team_lifecycle(browser, args.site, rayon=True)
             parallel = run(browser, args.site, True)
             inline = run(browser, args.site, False)
             if parallel != inline:

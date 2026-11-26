@@ -2178,6 +2178,7 @@ dependencies = [
 name = "sashiko-jobs"
 version = "0.1.0"
 dependencies = [
+ "rayon",
  "sashiko-heap",
  "tracy-client",
  "wasm-bindgen",
@@ -2189,6 +2190,7 @@ dependencies = [
 name = "sashiko-jobs-web-example"
 version = "0.1.0"
 dependencies = [
+ "sashiko-animation",
  "sashiko-heap",
  "sashiko-jobs",
  "wasm-bindgen",

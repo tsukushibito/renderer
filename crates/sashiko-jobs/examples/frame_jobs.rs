@@ -1,4 +1,7 @@
 //! Isolated process-wide allocation and latency check of two borrowed clients.
+#[cfg(all(not(target_arch = "wasm32"), feature = "experimental-rayon"))]
+#[path = "../fixtures/scope_cost.rs"]
+mod scope_cost;
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     use sashiko_heap::{CountingAllocator, HeapSnapshot};
@@ -19,10 +22,24 @@ fn main() {
         });
     }
 
-    for mut pool in [
-        JobSystem::inline(),
-        JobSystem::new(4.try_into().unwrap()).unwrap(),
-    ] {
+    let rayon = std::env::args().any(|arg| arg == "--rayon");
+    let create = match rayon {
+        false => JobSystem::new,
+        #[cfg(feature = "experimental-rayon")]
+        true => JobSystem::new_rayon,
+        #[cfg(not(feature = "experimental-rayon"))]
+        true => panic!("--rayon requires the experimental-rayon feature"),
+    };
+    for mut pool in [JobSystem::inline(), create(4.try_into().unwrap()).unwrap()] {
+        #[cfg(feature = "experimental-rayon")]
+        {
+            let clock = Instant::now();
+            let costs = scope_cost::measure(&mut pool, || clock.elapsed().as_secs_f64() * 1e6);
+            println!(
+                "participants={} entry/spawn/range={costs:?}",
+                pool.parallelism()
+            );
+        }
         for size in [32, 65536] {
             let mut values = vec![33; size];
             let mut times = [Duration::ZERO; 256];
@@ -51,7 +68,9 @@ fn main() {
                 times[243],
                 delta.events.map(|entry| entry.calls)
             );
-            assert!(delta.is_allocation_free(), "{delta:?}");
+            if !rayon || pool.parallelism().get() == 1 {
+                assert!(delta.is_allocation_free(), "{delta:?}");
+            }
         }
         for rest in [false, true] {
             for split in [false, true] {

@@ -50,60 +50,15 @@ fn mixed_phases_and_fades_preserve_partial_hierarchies_and_order() {
     }
 }
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "../fixtures/scoped_pose.rs"]
+mod scoped_pose;
+
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn scoped_packed_worlds_match_serial_with_fades_and_scalar_tail() {
-    let joints = 19;
-    let rig = Skeleton::new(
-        (0..joints)
-            .map(|i| if i == 0 { None } else { Some((i - 1) / 2) })
-            .collect(),
-    )
-    .unwrap();
-    let rate = 60.try_into().unwrap();
-    let make = |angle: f32| {
-        Clip::new(
-            rig.clone(),
-            (0..joints)
-                .map(|i| {
-                    LocalPose::new(
-                        [i as f32, 0.5, 1.0],
-                        Quat::from_rotation_x(angle + i as f32 * 0.01).to_array(),
-                        [1.2, 0.9, 0.6],
-                    )
-                })
-                .collect(),
-            rate,
-            true,
-            vec![],
-            vec![],
-        )
-        .unwrap()
-    };
-    let a = make(0.2);
-    let b = make(1.7);
-    let mut fade = Playback::new(&a, rate);
-    fade.crossfade(&b, 8.try_into().unwrap()).unwrap();
-    fade.advance_to(3, &mut []).unwrap();
-    let samples: Vec<_> = (0..47)
-        .map(|i| {
-            if i % 3 == 0 {
-                fade.sample()
-            } else {
-                b.sample_at(i, rate)
-            }
-        })
-        .collect();
-    let layout = PoseWorkspace::subset(&rig, &[12, 18]).unwrap();
-    let mut sequential = PoseBatch::new(&layout, samples.len());
-    let mut parallel = PoseBatch::new(&layout, samples.len());
-    let expected = sequential.evaluate(&samples).unwrap();
-    let mut jobs = sashiko_jobs::JobSystem::new(4.try_into().unwrap()).unwrap();
-    let actual = jobs
-        .scope(|s| parallel.evaluate_scoped(&samples, s))
-        .unwrap();
-    for (a, b) in actual.iter().zip(expected) {
-        for j in 0..joints {
-            assert_eq!(a.joint(j), b.joint(j));
-        }
+    for n in [1usize, 2, 4, 8] {
+        scoped_pose::check(&mut sashiko_jobs::JobSystem::new(n.try_into().unwrap()).unwrap());
+        #[cfg(feature = "experimental-rayon")]
+        scoped_pose::check(&mut sashiko_jobs::JobSystem::new_rayon(n.try_into().unwrap()).unwrap());
     }
 }

@@ -50,14 +50,19 @@ mod tests {
     #[test]
     fn nested_stage_finishes_inline_and_returns_team_to_next_stage() {
         let two = NonZeroUsize::new(2).unwrap();
-        let owner = SharedJobs::new(JobSystem::new(two).unwrap());
-        let other = owner.clone();
-        owner.with(|team| {
-            assert_eq!(team.parallelism(), two);
-            team.scope(|scope| {
-                scope.spawn(|| other.with(|nested| assert_eq!(nested.parallelism().get(), 1)));
+        let check = |system| {
+            let owner = SharedJobs::new(system);
+            let other = owner.clone();
+            owner.with(|team| {
+                assert_eq!(team.parallelism(), two);
+                team.scope(|scope| {
+                    scope.spawn(|| other.with(|nested| assert_eq!(nested.parallelism().get(), 1)));
+                });
             });
-        });
-        other.with(|team| assert_eq!(team.parallelism(), two));
+            other.with(|team| assert_eq!(team.parallelism(), two));
+        };
+        check(JobSystem::new(two).unwrap());
+        #[cfg(feature = "experimental-rayon")]
+        check(JobSystem::new_rayon(two).unwrap());
     }
 }

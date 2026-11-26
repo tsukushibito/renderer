@@ -21,6 +21,14 @@ cargo run --locked --release -p sashiko-animation --example pose_jobs -- --idle
 cargo run --locked --release -p sashiko-animation --features scheduler-metrics --example pose_jobs
 ```
 
+実験用 Rayon と既定ワーカーの契約を同じテストで比較する。フレーム計測の `--rayon` はホスト生成時にだけ作用する。成立した仕事の件数や CPU 時間はスケジューラ固有のカウンタから推定せず、同じ入力の結果とホストの経過時間を使う。
+
+```sh
+cargo test --locked --release -p sashiko-jobs -p sashiko-animation --features sashiko-animation/experimental-rayon
+cargo run --locked --release -p sashiko-jobs --features experimental-rayon --example frame_jobs -- --rayon
+cargo run --locked --release -p sashiko-animation --features experimental-rayon --example pose_jobs -- --rayon --idle
+```
+
 型消去した借用クロージャの受け渡しと panic 時の合流は `cargo +nightly-2026-11-15 miri test --locked --target x86_64-unknown-linux-gnu -p sashiko-jobs` で検証できる（同 nightly の miri と rust-src が必要）。
 
 Rapier とゲームの CPU ジョブで Rayon プールを共有する試作は、下の二つのコマンドを一つずつ実行して比較する。ブラウザ側には Google Chrome、Playwright、下記の Wasm ツールチェーンを使う。`--wasm-bindgen` で CLI のパスを指定できる。各行の先頭は実行方式、並列度、負荷名。時間の単位は µs。計測窓と結果の読み方は[共有プールの評価](../verification/current.md#shared-worker-budget)を参照する。
@@ -42,6 +50,8 @@ python -m playwright install chromium --no-shell
 python -B examples/jobs-web/verify.py build/jobs-web
 python -B examples/jobs-web/serve.py build/jobs-web
 ```
+
+ブラウザで Rayon も検証するときは `build.py` と `verify.py` の両方に `--experimental-rayon` を追加する。逐次版・既定の共有メモリ版に加え、検証用 Wasm で両バックエンドを明示的に選択し、姿勢行列、Worker 数、部分起動失敗、終了・再生成を検査する。
 
 ローカル配信時は表示された URL を開き、Start host、Run batch を順に押す。ページの入力欄は計算中も編集できる。Stop host で親 Worker とその子 Worker を終了する。配信先では HTTPS（開発時は localhost）を使い、文書と Worker スクリプトに `Cross-Origin-Opener-Policy: same-origin` と `Cross-Origin-Embedder-Policy: require-corp` を付け、サンプル資産を同一オリジンで配信する。分離ヘッダーを付けない配信では逐次版を選ぶ。「Require parallel execution」を指定すると要件不足を初期化エラーとして表示する。
 

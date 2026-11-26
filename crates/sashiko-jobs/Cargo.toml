@@ -7,11 +7,13 @@ rust-version.workspace = true
 publish = false
 
 [features]
+experimental-rayon = ["dep:rayon"]
 scheduler-metrics = []
 tracy = ["dep:tracy-client"]
 web-threads = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [dependencies]
+rayon = { version = "1.12", optional = true }
 tracy-client = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

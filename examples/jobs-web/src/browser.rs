@@ -28,6 +28,31 @@ impl Example {
         Ok(Self { pool })
     }
 
+    #[cfg(feature = "experimental-rayon")]
+    pub async fn start_rayon(parallelism: usize) -> Result<Example, JsValue> {
+        let n = NonZeroUsize::new(parallelism).ok_or("parallelism must be positive")?;
+        Ok(Self {
+            pool: JobSystem::start_web_rayon(n).await?,
+        })
+    }
+
+    #[cfg(feature = "experimental-rayon")]
+    pub fn check_contract(&mut self) -> Vec<f64> {
+        let host = std::rc::Rc::new(thread::current().id());
+        let n = self.pool.parallelism();
+        self.pool.scope(|s| {
+            assert_eq!(*host, thread::current().id());
+            s.spawn(|| s.scope(|child| assert_eq!(child.parallelism(), n)));
+        });
+        scoped_pose::check(&mut self.pool);
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = performance, js_name = now)]
+            fn now_ms() -> f64;
+        }
+        scope_cost::measure(&mut self.pool, || now_ms() * 1000.)
+    }
+
     pub fn parallel(&self) -> bool {
         self.pool.parallelism().get() > 1
     }
@@ -100,3 +125,11 @@ impl Example {
         ]
     }
 }
+
+#[cfg(feature = "experimental-rayon")]
+#[path = "../../../crates/sashiko-animation/fixtures/scoped_pose.rs"]
+mod scoped_pose;
+
+#[cfg(feature = "experimental-rayon")]
+#[path = "../../../crates/sashiko-jobs/fixtures/scope_cost.rs"]
+mod scope_cost;

@@ -9,6 +9,14 @@ fn main() {
     use std::time::{Duration, Instant};
     #[global_allocator]
     static HEAP: CountingAllocator<std::alloc::System> = CountingAllocator::new(std::alloc::System);
+    let rayon = std::env::args().any(|arg| arg == "--rayon");
+    let create = match rayon {
+        false => JobSystem::new,
+        #[cfg(feature = "experimental-rayon")]
+        true => JobSystem::new_rayon,
+        #[cfg(not(feature = "experimental-rayon"))]
+        true => panic!("--rayon requires the experimental-rayon feature"),
+    };
     let idle = std::env::args().any(|a| a == "--idle");
     for (joints, count) in [(16usize, 8usize), (64, 256)] {
         let rig = Skeleton::new((0..joints).map(|i| i.checked_sub(1)).collect()).unwrap();
@@ -43,7 +51,7 @@ fn main() {
                 })
                 .collect::<Vec<_>>();
             for n in [1, 2, 4, 8] {
-                let mut jobs = JobSystem::new(n.try_into().unwrap()).unwrap();
+                let mut jobs = create(n.try_into().unwrap()).unwrap();
                 let mut batch = PoseBatch::new(&PoseWorkspace::all(&rig), count);
                 let mut frame = || {
                     let poses = if n == 1 {
@@ -67,7 +75,9 @@ fn main() {
                     *t = start.elapsed();
                 }
                 let delta = HeapSnapshot::now().since(before);
-                assert!(delta.is_allocation_free(), "{delta:?}");
+                if !rayon {
+                    assert!(delta.is_allocation_free(), "{delta:?}");
+                }
                 times.sort_unstable();
                 println!(
                     "{joints}j {count}p skew={skew} n={n}: {:?} / {:?}",

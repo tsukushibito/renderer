@@ -16,21 +16,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wasm-bindgen", default="wasm-bindgen")
     parser.add_argument("--out", type=Path, default=ROOT / "build/jobs-web")
+    parser.add_argument("--experimental-rayon", action="store_true")
     args = parser.parse_args()
     with (ROOT / "Cargo.lock").open("rb") as lock:
         version = next(p["version"] for p in tomllib.load(lock)["package"] if p["name"] == "wasm-bindgen")
     if subprocess.check_output([args.wasm_bindgen, "--version"], text=True).strip() != f"wasm-bindgen {version}":
         parser.error(f"expected wasm-bindgen CLI {version}")
-    for mode in ("inline", "parallel"):
-        target_dir = ROOT / "target/jobs-web" / mode
+    for mode in (["inline", "parallel", "rayon"] if args.experimental_rayon else ["inline", "parallel"]):
+        target_dir = ROOT / "target/jobs-web" / ("inline" if mode == "inline" else "parallel")
         env = os.environ.copy()
         cargo = ["cargo"]
-        if mode == "parallel":
+        if mode != "inline":
             cargo.append("+" + NIGHTLY)
         cmd = cargo + ["build", "--release", "--locked", "--target-dir", str(target_dir),
                        "--target", TARGET, "-p", "sashiko-jobs-web-example"]
-        if mode == "parallel":
-            cmd += ["--features", "web-threads", "-Zbuild-std=std,panic_abort"]
+        if mode != "inline":
+            cmd += ["--features", "experimental-rayon" if mode == "rayon" else "web-threads", "-Zbuild-std=std,panic_abort"]
             flags = ["-Ctarget-feature=+atomics,+bulk-memory", "-Clink-arg=--shared-memory",
                      "-Clink-arg=--import-memory", "-Clink-arg=--max-memory=1073741824"]
             for symbol in ("__wasm_init_tls", "__tls_size", "__tls_align", "__tls_base"):

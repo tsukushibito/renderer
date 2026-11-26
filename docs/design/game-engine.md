@@ -49,6 +49,10 @@ rstar = { path = "../sashiko/crates/sashiko-physics/compat/rstar" }
 
 ホストが所有する `JobSystem` に、参加スレッドの総数を指定する。1 ならホストだけで実行する。`scope` から戻ると、投入したすべての仕事とその子孫が完了し、結果の領域を再び借用できる。
 
+`scope` 本体は呼び出し元で実行し、`Rc` などの `!Send` な値を使える。補助ワーカーに渡すジョブには `Send` を要求する。入れ子のスコープでも同じ参加者を使う。unwind 構成の panic は合流後に伝播し、本体と子の両方が panic した場合は本体の panic を返す。
+
+`inline`、ネイティブの `new`、Web の `start_web` が製品の入口である。比較用には `sashiko-jobs/experimental-rayon` を有効にし、`new_rayon` または共有メモリ Web の `start_web_rayon` を明示的に選べる。利用側の `JobScope`、チャンクの位置・長さ、合流の契約は共通。Rayon では `in_place_scope` がホストに本体を残し、N−1 人のプールが子ジョブを受け取る。`scheduler_counts` は独自スケジューラのイベントを数えるため、Rayon では全項目が 0 になる。物理ワールドへのプール指定は別の統合点である。[バックエンド別の実測](../verification/current.md#job-backends)
+
 アニメーションのパレット評価と描画で同じワーカーを使う場合は、ホストが `sashiko_jobs::SharedJobs::new(system)` でチームを一度だけ包み、各処理にハンドルを渡す。ハンドルをクローンしてもワーカーは増えない。`with` の呼び出しが別の処理や入れ子の呼び出しと重なると、後から入った処理は呼び出し元のスレッドで完了する。ゲームからは `sashiko::jobs`、描画ホストからは `sashiko_renderer::core::jobs` を通じて同じ型を利用できる。
 
 ```rust,ignore

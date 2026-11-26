@@ -9,6 +9,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [features]
+experimental-rayon = ["web-threads", "sashiko-jobs/experimental-rayon", "dep:sashiko-animation"]
 web-threads = ["sashiko-jobs/web-threads"]
 
 [dependencies]
@@ -16,6 +17,7 @@ sashiko-jobs = { path = "../../crates/sashiko-jobs", version = "0.1.0" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 sashiko-heap.workspace = true
+sashiko-animation = { path = "../../crates/sashiko-animation", version = "0.1.0", optional = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 

@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::mem::{MaybeUninit, align_of, size_of};
 
-use super::Group;
+use super::scope::Group;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Condvar, Mutex};
 
