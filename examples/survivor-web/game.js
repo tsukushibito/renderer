@@ -1,6 +1,6 @@
 import { attach } from "./sashiko-view.js";
 
-const colors = ["#263638", "#50676a", "#e2c074", "#ea7b62", "#ffcf55", "#58da9c", "#ffdf7b", "#e3faf6"];
+const colors = ["#263638", "#50676a", "#e2c074", "#ea7b62", "#ffcf55", "#58da9c", "#ffdf7b", "#e3faf6", "#d19b56"];
 
 export async function attachSurvivor(canvas, wasmUrl) {
     const response = await fetch(wasmUrl);

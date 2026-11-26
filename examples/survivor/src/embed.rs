@@ -145,10 +145,7 @@ extern "C" fn survivor_step(id: u32) -> i32 {
 extern "C" fn survivor_place(id: u32, x: f32, z: f32) -> i32 {
     access(id, |s| {
         let p = Vec2::new(x, z);
-        if !x.is_finite()
-            || !z.is_finite()
-            || !s.app.game.arena.floor().open(p, crate::PLAYER_RADIUS)
-        {
+        if !x.is_finite() || !z.is_finite() || !s.app.game.hall.open(p, crate::PLAYER_RADIUS) {
             return Ok(1);
         }
         s.app.game.player = p;

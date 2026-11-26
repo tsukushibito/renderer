@@ -131,7 +131,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             },
             scenario,
             seed,
-            rules_version: 2,
+            rules_version: 3,
             visual: None,
             locomotion: None,
         })
@@ -139,7 +139,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (mut initial, mut replay) = if let Some(path) = args.get_one::<PathBuf>("replay") {
         let replay = Replay::<RunStart, Input>::read(fs::File::open(path)?, requested, rate())?;
         let init = replay.initial;
-        if init.rules_version != 2 {
+        if init.rules_version != 3 {
             return Err("replay uses an incompatible game rules version".into());
         }
         if explicit_arena
@@ -338,7 +338,7 @@ mod tests {
             arena,
             seed: 506,
             scenario: Scenario::Early,
-            rules_version: 2,
+            rules_version: 3,
             visual: None,
             locomotion: None,
         };

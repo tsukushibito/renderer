@@ -117,7 +117,7 @@ impl Marker {
 pub fn registry() -> Registry<RuleContext> {
     let mut types = Registry::default();
     sashiko::view::register_components(&mut types).expect("standard view types");
-    for name in ["Room", "Bench"] {
+    for name in ["Room", "Bench", "Cargo"] {
         types
             .register(name, &["half_extent"], Extent::validate)
             .expect("unique registered type");
@@ -195,6 +195,7 @@ pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
     let mut spawn = None;
     let mut marker = None;
     let mut obstacles = Vec::new();
+    let mut cargo = None;
     let mut subjects = Vec::new();
     for e in world.entities() {
         let [x, y, z] = e.world_translation.to_array();
@@ -237,6 +238,14 @@ pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
                 }
                 single(&mut extent, half_extent()?, "Room")?;
             }
+            "Cargo" => single(
+                &mut cargo,
+                Obstacle {
+                    center: pos,
+                    half_extent: half_extent()?,
+                },
+                "Cargo",
+            )?,
             "Bench" => obstacles.push(Obstacle {
                 center: pos,
                 half_extent: half_extent()?,
@@ -257,6 +266,7 @@ pub(crate) fn decode_arena(data: Value) -> Result<Arena, String> {
         player_spawn: spawn.ok_or("missing PlayerSpawn")?,
         marker: marker.ok_or("missing Marker")?,
         obstacles,
+        cargo,
         subjects,
         view,
         authored_scene: Some(std::sync::Arc::new(scene)),

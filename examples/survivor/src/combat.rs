@@ -39,9 +39,11 @@ impl Game {
             }
         }
         for shot in &mut self.shots {
-            shot.pos += shot.dir * 13. / TICK_HZ as f32;
+            let delta = shot.dir * 13. / TICK_HZ as f32;
+            let blocked = self.hall.blocked_shot(shot.pos, delta);
+            shot.pos += delta;
             shot.remaining_ticks -= 1;
-            if !self.arena.floor().open(shot.pos, 0.) {
+            if blocked {
                 shot.remaining_ticks = 0;
                 continue;
             }

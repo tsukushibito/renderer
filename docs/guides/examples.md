@@ -67,6 +67,8 @@ python -m http.server 8000 --bind 127.0.0.1 --directory build/survivor-web
 
 既存ページに組み込むときは、生成した `game.js` の `attachSurvivor(canvas, wasmUrl)` に表示先を渡します。返された `view.frame(timeInMilliseconds)` をホストの描画周期で呼ぶか、`view.start()` で標準ループを使います。ビューを外すときは `view.dispose()` を呼びます。[Canvas ホスト](../../hosts/web/view.js)
 
+標準アリーナでは、開始地点の右側にある運搬箱に向かって歩くと押せます。床の上を滑り、実験台や壁で止まります。弾と敵は箱に遮られます。シーンの `cargo-east` を移動すると開始位置が変わります。
+
 ### 配置・プロパティ・クリップを編集する
 
 Windows で次をリポジトリのルートから実行します。画面を使う場合は Tk を含む Python 3 が必要です。

@@ -4,7 +4,9 @@ pub mod capture;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod input;
-pub mod math;
+pub use sashiko_math as math;
+#[cfg(feature = "physics")]
+pub use sashiko_physics as physics;
 #[cfg(all(
     windows,
     feature = "presentation",

@@ -7,7 +7,7 @@ pub(super) struct CanvasScene(Vec<[f32; 5]>);
 impl CanvasScene {
     pub(super) fn new(obstacles: usize) -> Self {
         Self(Vec::with_capacity(
-            MAX_ENEMIES + MAX_DROPS + MAX_SHOTS + obstacles + 3,
+            MAX_ENEMIES + MAX_DROPS + MAX_SHOTS + obstacles + 4,
         ))
     }
     fn update(&mut self, game: &Game) {
@@ -19,6 +19,9 @@ impl CanvasScene {
         rect(Vec2::ZERO, game.arena.half_extent, 0);
         for b in &game.arena.obstacles {
             rect(b.center, b.half_extent, 1);
+        }
+        if let (Some(p), Some(b)) = (game.cargo_position(), game.arena.cargo) {
+            rect(Vec2::new(p.x(), p.z()), b.half_extent, 8);
         }
         rect(game.arena.marker, Vec2::ONE * 0.4, 2);
         for e in &game.enemies {

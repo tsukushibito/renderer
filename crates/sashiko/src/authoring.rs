@@ -110,14 +110,16 @@ pub fn inspect<C: 'static>(
                     let world = scene.instantiate(registry)?;
                     let e = world.find(parent).ok_or("missing parent")?;
                     let basis = glam::Mat3::from_cols(
-                        e.transform_vector(Vec3::X).0,
-                        e.transform_vector(Vec3::Y).0,
-                        e.transform_vector(Vec3::Z).0,
+                        e.transform_vector(Vec3::X).to_array().into(),
+                        e.transform_vector(Vec3::Y).to_array().into(),
+                        e.transform_vector(Vec3::Z).to_array().into(),
                     );
                     if basis.determinant() == 0. {
                         return Err(format!("{id}: parent transform is singular"));
                     }
-                    Vec3(basis.inverse() * delta.0)
+                    Vec3::from_array(
+                        (basis.inverse() * glam::Vec3::from_array(delta.to_array())).to_array(),
+                    )
                 }
             };
             let p = &mut scene.placements[index];

@@ -2,6 +2,7 @@
   "schema_version": 1,
   "prefabs": {
     "hall": {"kind": "Room", "fields": {"half_extent": [18, 14]}},
+    "cargo": {"kind": "Cargo", "fields": {"half_extent": [0.5, 0.5]}},
     "table": {"kind": "Bench", "fields": {"half_extent": [2.3, 1.1]}},
     "spawn": {"kind": "PlayerSpawn", "fields": {}},
     "goal": {"kind": "Marker", "fields": {"radius": 0.65}},
@@ -15,6 +16,7 @@
     {"id": "room", "prefab": "hall"},
     {"id": "player", "prefab": "spawn", "translation": [0, 0, 6]},
     {"id": "marker", "prefab": "goal", "translation": [0, 0, 3]},
+    {"id": "cargo-east", "prefab": "cargo", "translation": [3, 0, 6], "parent": "room"},
     {"id": "bench-west", "prefab": "table", "translation": [-3.2, 0, 0.0], "parent": "room"},
     {"id": "bench-east", "prefab": "table", "translation": [3.2, 0, 0.0], "parent": "room"},
     {"id": "bench-north", "prefab": "table", "translation": [-10.0, 0, -6.0], "overrides": {"half_extent": [1.4, 2.0]}, "parent": "room"},

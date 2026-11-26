@@ -215,11 +215,4 @@ impl LocalTransform {
     pub fn transform_vector(self, v: Vec3) -> Vec3 {
         self.rotation.rotate_vector(Vec3(self.scale.0 * v.0))
     }
-    pub(crate) fn affine(self) -> glam::Affine3A {
-        glam::Affine3A::from_scale_rotation_translation(
-            self.scale.0,
-            self.rotation.0,
-            self.translation.0,
-        )
-    }
 }

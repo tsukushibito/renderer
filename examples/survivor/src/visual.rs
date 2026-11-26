@@ -173,7 +173,7 @@ impl Visual {
             palette.subject,
         )?;
         let body = cast.actors[0].mesh;
-        let maximum = hall.len() + 6 + 3 * MAX_ENEMIES + MAX_DROPS + MAX_SHOTS;
+        let maximum = hall.len() + 7 + 3 * MAX_ENEMIES + MAX_DROPS + MAX_SHOTS;
         let mut prepared = Vec::with_capacity(maximum);
         prepared.extend_from_slice(&hall);
         for actor in &cast.actors {
@@ -190,6 +190,7 @@ impl Visual {
             (ring, palette.pulse),
             (ring, palette.drop),
             (disk, palette.shadow),
+            (block, palette.safety),
             (block, palette.warning),
             (block, palette.shot),
             (block, palette.drop),
@@ -323,6 +324,15 @@ impl Visual {
             self.last_step = Some(game.tick);
         }
         let aligned = Vec2::new(0., 1.);
+        if let (Some(p), Some(b)) = (game.cargo_position(), game.arena.cargo) {
+            self.instance(
+                self.block,
+                self.palette.safety,
+                p,
+                Vec3::new(2. * b.half_extent.x(), 1., 2. * b.half_extent.y()),
+                aligned,
+            )?;
+        }
         let [px, pz] = game.player.to_array();
         let [mx, mz] = game.arena.marker.to_array();
         self.instance(

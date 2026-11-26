@@ -186,7 +186,7 @@ pub fn on_screen(camera: &CameraView, pos: Vec2, height: f32, radius: f32) -> bo
 /// Prepare a standalone model placement for rendering. The renderer requires an
 /// invertible linear part so it can transform normals.
 pub fn render_transform(placement: LocalTransform) -> PipelineResult<Transform> {
-    let columns = placement.affine().to_cols_array_2d();
+    let columns = crate::scene::affine(placement).to_cols_array_2d();
     Ok(Transform::new(std::array::from_fn(|row| {
         columns.map(|column| column[row])
     }))?)

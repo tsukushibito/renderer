@@ -17,7 +17,7 @@ development-validation = ["sashiko-renderer?/development-validation"]
 memory-profiling = ["sashiko-renderer?/memory-profiling"]
 
 [dependencies]
-sashiko = { version = "0.1.0", path = "../../crates/sashiko", features = ["cli"] }
+sashiko = { version = "0.1.0", path = "../../crates/sashiko", features = ["cli", "physics"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"] }

@@ -11,6 +11,8 @@ pub struct Arena {
     pub player_spawn: Vec2,
     pub marker: Vec2,
     pub obstacles: Vec<Obstacle>,
+    #[serde(default)]
+    pub cargo: Option<Obstacle>,
     #[serde(default = "crate::authoring::default_subjects")]
     pub subjects: Vec<crate::authoring::SubjectType>,
     #[serde(skip)]
@@ -42,6 +44,22 @@ impl Arena {
             return Err("arena half extents must be between 2 and 128 metres".to_owned());
         }
         a.floor().validate()?;
+        if let Some(b) = a.cargo {
+            Floor {
+                half_extent: a.half_extent,
+                obstacles: std::slice::from_ref(&b),
+            }
+            .validate()?;
+            if a.obstacles.iter().any(|o| {
+                (0..2).all(|i| {
+                    (b.center[i] - o.center[i]).abs() < b.half_extent[i] + o.half_extent[i]
+                })
+            }) || [a.player_spawn, a.marker].into_iter().any(|p| {
+                (0..2).all(|i| (p[i] - b.center[i]).abs() < b.half_extent[i] + PLAYER_RADIUS)
+            }) {
+                return Err("cargo must start clear of benches, spawn and marker".into());
+            }
+        }
         if !a.floor().open(a.player_spawn, PLAYER_RADIUS)
             || !a.floor().open(a.marker, PLAYER_RADIUS)
         {

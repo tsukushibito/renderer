@@ -171,10 +171,16 @@ impl Entity {
         self.component.downcast_ref()
     }
     pub fn transform_vector(&self, local: Vec3) -> Vec3 {
-        Vec3(self.world.transform_vector3(local.0))
+        self.world
+            .transform_vector3(local.to_array().into())
+            .to_array()
+            .into()
     }
     pub fn transform_point(&self, local: Vec3) -> Vec3 {
-        Vec3(self.world.transform_point3(local.0))
+        self.world
+            .transform_point3(local.to_array().into())
+            .to_array()
+            .into()
     }
 }
 
@@ -249,7 +255,7 @@ impl<C: 'static> World<C> {
                     .ok_or_else(|| format!("{}: missing parent {name}", placement.id))
             })
             .transpose()?;
-        let local = placement.local_transform().affine();
+        let local = affine(placement.local_transform());
         let world = compose(parent.map_or(Affine3A::IDENTITY, |p| p.world), local)
             .map_err(|e| format!("{}: {e}", placement.id))?;
         let parent = parent.map(|p| p.id);
@@ -281,7 +287,7 @@ impl<C: 'static> World<C> {
                 local,
                 world,
                 component,
-                world_translation: Vec3(world.translation.into()),
+                world_translation: world.translation.to_array().into(),
                 fields,
             },
         );
@@ -297,7 +303,7 @@ impl<C: 'static> World<C> {
         root: EntityId,
         transform: LocalTransform,
     ) -> Result<(), String> {
-        let local = transform.affine();
+        let local = affine(transform);
         let node = self.entity(root).ok_or("unknown entity")?;
         let parent = node
             .parent
@@ -321,7 +327,7 @@ impl<C: 'static> World<C> {
         for &(id, world) in &self.pose_changes {
             let child = self.entities.get_mut(&id).expect("live descendant");
             child.world = world;
-            child.world_translation = Vec3(world.translation.into());
+            child.world_translation = world.translation.to_array().into();
         }
         Ok(())
     }
@@ -388,6 +394,14 @@ impl Scene {
         }
         Ok(world)
     }
+}
+
+pub(crate) fn affine(t: crate::math::LocalTransform) -> Affine3A {
+    Affine3A::from_scale_rotation_translation(
+        t.scale.to_array().into(),
+        glam::Quat::from_array(t.rotation.into()),
+        t.translation.to_array().into(),
+    )
 }
 
 #[cfg(test)]

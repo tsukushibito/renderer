@@ -19,6 +19,7 @@ pub mod authoring;
 mod character;
 mod combat;
 mod locomotion;
+mod physics;
 pub use locomotion::{Locomotion, LocomotionClips, catalog_path};
 pub mod controls;
 #[cfg(all(
@@ -161,6 +162,7 @@ pub struct Game {
     reload: u8,
     invulnerability: u8,
     nav: CrowdNavigation,
+    hall: physics::Hall,
     scene: sashiko::scene::World<authoring::RuleContext>,
 }
 
@@ -174,6 +176,7 @@ impl Game {
         let mut game = Self {
             locomotion: Locomotion::default(),
             player: arena.player_spawn,
+            hall: physics::Hall::new(&arena),
             arena,
             tick: 0,
             phase: Phase::Playing,
@@ -208,7 +211,7 @@ impl Game {
         if scenario == Scenario::Endgame {
             for i in 0..128 {
                 let mut pos = game.random_pos();
-                if !game.arena.floor().open(pos, 0.) {
+                if !game.hall.open(pos, 0.) {
                     let Some(subject) = game.enemies.get(i) else {
                         continue;
                     };
@@ -224,6 +227,9 @@ impl Game {
         game
     }
 
+    pub fn cargo_position(&self) -> Option<sashiko::math::Vec3> {
+        self.hall.cargo()
+    }
     pub fn xp_required(&self) -> u32 {
         self.level.saturating_mul(2).saturating_add(1)
     }
@@ -233,6 +239,7 @@ impl Game {
             tick: self.tick,
             phase: self.phase,
             player: self.player,
+            cargo: self.cargo_position(),
             hp: self.hp,
             xp: self.xp,
             level: self.level,
@@ -280,14 +287,18 @@ impl Game {
         } else {
             input.movement.normalize_or_zero()
         };
-        let (pos, contact) =
-            self.arena
-                .floor()
-                .slide(self.player, movement, 4.5 / TICK_HZ as f32, PLAYER_RADIUS);
+        let (pos, contact) = self.hall.slide(
+            self.player,
+            movement,
+            4.5 / TICK_HZ as f32,
+            PLAYER_RADIUS,
+            true,
+        );
         events.footsteps = self
             .locomotion
             .advance((pos - self.player).length() * TICK_HZ as f32);
         self.player = pos;
+        self.hall.advance();
         events.contact = contact;
 
         let mut rules = authoring::RuleContext {
@@ -326,7 +337,7 @@ impl Game {
         while self.enemies.len() < count {
             let spawn = (0..64).find_map(|_| {
                 let p = self.random_pos();
-                (p.distance_squared(self.player) >= 16. && self.arena.floor().open(p, ENEMY_RADIUS))
+                (p.distance_squared(self.player) >= 16. && self.hall.open(p, ENEMY_RADIUS))
                     .then_some(p)
             });
             let Some(spawn) = spawn else {
@@ -403,13 +414,13 @@ impl Game {
                 subject.walk_speed
             };
             enemy.pos = self
-                .arena
-                .floor()
+                .hall
                 .slide(
                     enemy.pos,
                     enemy.facing,
                     speed / TICK_HZ as f32,
                     ENEMY_RADIUS,
+                    false,
                 )
                 .0;
             if enemy.pos.distance_squared(self.player) < (PLAYER_RADIUS + ENEMY_RADIUS).powi(2) {
@@ -427,6 +438,7 @@ impl Game {
 
 #[derive(Debug, PartialEq, Serialize)]
 pub struct Snapshot {
+    pub cargo: Option<sashiko::math::Vec3>,
     pub tick: u64,
     pub phase: Phase,
     pub player: Vec2,
@@ -514,6 +526,50 @@ mod tests {
         assert!(blocked.contacts > 0 && blocked.player[1] > 5.);
     }
 
+    #[test]
+    fn cargo_blocks_shots_and_stops_at_bench_after_push() {
+        let mut arena = Arena::default();
+        arena.obstacles.push(Obstacle {
+            center: Vec2::new(5., 6.),
+            half_extent: Vec2::new(0.5, 1.),
+        });
+        let mut game = Game::new(arena, Scenario::Early, 506);
+        let start = game.cargo_position().unwrap();
+        assert!(game.hall.blocked_shot(game.player, Vec2::new(4., 0.)));
+        let toward = Vec2::new(1., 0.);
+        let left_face = start.x() - 0.5;
+        game.shots.push(Shot {
+            pos: Vec2::new(left_face - 0.05, 6.),
+            dir: toward,
+            remaining_ticks: 10,
+            pierce_left: 0,
+            last_hit: None,
+        });
+        game.reload = 2;
+        game.combat(&mut Events::default());
+        assert!(game.shots.is_empty());
+        let enemy_start = Vec2::new(left_face - ENEMY_RADIUS - 0.02, 6.);
+        let (enemy_end, blocked) = game
+            .hall
+            .slide(enemy_start, toward, 1., ENEMY_RADIUS, false);
+        assert!(blocked && enemy_end.x() <= left_face - ENEMY_RADIUS);
+        assert_eq!(game.cargo_position(), Some(start));
+        for _ in 0..110 {
+            game.step(Input {
+                movement: Vec2::new(1., 0.),
+                ..Input::default()
+            });
+        }
+        let end = game.cargo_position().unwrap();
+        assert!(end.x() > start.x() + 0.4 && end.x() < 4.03, "{end:?}");
+        assert!(game.player.x() < end.x() - 0.75);
+        game.phase = Phase::Defeated;
+        game.step(Input {
+            restart: true,
+            ..Input::default()
+        });
+        assert_eq!(game.cargo_position(), Some(start));
+    }
     #[test]
     fn invalid_placement_is_rejected_at_load() {
         let mut arena = Arena::default();
