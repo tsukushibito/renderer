@@ -37,9 +37,9 @@ async function load(preset) {
     try {
         await current?.dispose();
         current = undefined;
-        const source = scene === "fixture" ? "fixture" : new URL(`./scenes/${scene}/scene.json`, document.baseURI);
+        const source = ["fixture", "indirect-shadow", "indirect-shadow-off"].includes(scene) ? scene : new URL(`./scenes/${scene}/scene.json`, document.baseURI);
         let manifest = { defaultView: "", views: [], credits: "" };
-        if (source !== "fixture") {
+        if (source instanceof URL) {
             const response = await fetch(source);
             if (!response.ok) throw new Error(`Could not load ${source.pathname} (HTTP ${response.status}). Package this scene in the site directory.`);
             manifest = await response.json();

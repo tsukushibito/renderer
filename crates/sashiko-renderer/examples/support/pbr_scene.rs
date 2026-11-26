@@ -382,6 +382,7 @@ pub fn prepare(frames_in_flight: NonZeroUsize, settings: Settings) -> Result<Pre
         2
     };
     let limits = SceneLimits {
+        max_indirect_shadow_capsules: 0,
         max_lightmapped_draws: 0,
         frames_in_flight,
         max_draws: count,

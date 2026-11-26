@@ -118,6 +118,7 @@ fn rejects_incompatible_abis_and_scene_modes_at_preparation() {
         samples: SampleCount::X4,
     };
     let limits = pbr::SceneLimits {
+        max_indirect_shadow_capsules: 0,
         max_lightmapped_draws: 0,
         frames_in_flight: std::num::NonZeroUsize::MIN,
         max_draws: 1,

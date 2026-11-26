@@ -27,6 +27,7 @@ use sashiko_example_support::{window_camera, window_input};
 mod backend;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
 mod browser;
+mod indirect_shadow_demo;
 mod lifecycle;
 mod lighting_pass;
 use lighting_pass::LightingPass;
@@ -118,6 +119,7 @@ struct Options {
     ibl_manifest: Option<PathBuf>,
     reflection_probes: Option<PathBuf>,
     reflection_debug: sashiko_renderer::pbr::ReflectionProbeView,
+    shadow_demo: Option<bool>,
     reflection_spheres: Option<[f32; 3]>,
     reflection_spheres_to: Option<[f32; 3]>,
     baked_lighting: Option<PathBuf>,
@@ -191,7 +193,7 @@ impl Options {
         }
     }
     fn diffuse_lighting(&self, blend: f32) -> sashiko_renderer::pbr::DiffuseLighting {
-        if self.baked_lighting.is_some() {
+        if self.baked_lighting.is_some() || self.shadow_demo.is_some() {
             sashiko_renderer::pbr::DiffuseLighting::BakedLighting {
                 blend,
                 view: self.gi_debug,
@@ -239,6 +241,9 @@ impl Options {
         env: &mut ibl::Environment,
         look: &mut serde_json::Value,
     ) -> Result<(), Error> {
+        if self.shadow_demo.is_some() {
+            indirect_shadow_demo::populate(scene, env)?;
+        }
         self.apply_baked_lighting(scene, conditions, env, look)?;
         // Bind static placements before adding dynamic probe receivers.
         if let Some(pos) = self.ball {
@@ -249,8 +254,11 @@ impl Options {
                 scene.add_inspection_sphere([pos[0], pos[1], pos[2] + dz], roughness, 1.);
             }
         }
-        self.lighting_pass
-            .apply(scene, env, self.baked_lighting.is_some())?;
+        self.lighting_pass.apply(
+            scene,
+            env,
+            self.baked_lighting.is_some() || self.shadow_demo.is_some(),
+        )?;
         look["lighting_pass"] = serde_json::json!(format!("{:?}", self.lighting_pass));
         if self.lighting_pass != LightingPass::Beauty {
             look["ibl_strength"] = serde_json::json!(env.nits_per_unit);
@@ -376,6 +384,9 @@ impl Options {
         look["time_sweep"] = serde_json::json!(self.sweep);
         look["baked_lighting_sha256"] = env.identity["baked_lighting_sha256"].clone();
         look["gi_view"] = serde_json::json!(format!("{:?}", self.gi_debug));
+        if let Some(enabled) = self.shadow_demo {
+            look["indirect_shadow_demo"] = enabled.into();
+        }
         look["reflection_spheres"] = serde_json::json!(self.reflection_spheres);
         look["reflection_spheres_to"] = serde_json::json!(self.reflection_spheres_to);
         look["white_sphere"] = serde_json::json!(self.ball);
@@ -455,6 +466,7 @@ impl Options {
             ibl_manifest: None,
             reflection_probes: None,
             reflection_debug: Default::default(),
+            shadow_demo: None,
             reflection_spheres: None,
             reflection_spheres_to: None,
             baked_lighting: None,
@@ -519,6 +531,15 @@ impl Options {
                         Some("shadowed") => RectLights::Shadowed,
                         _ => return Err("expected off, unshadowed or shadowed".into()),
                     }
+                }
+                "--indirect-shadow-demo" => {
+                    result.shadow_demo = Some(match args.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => return Err("expected --indirect-shadow-demo on or off".into()),
+                    });
+                    result.fixture = true;
+                    result.shadows = false;
                 }
                 "--fixture" => result.fixture = true,
                 "--gpu-timing" => result.gpu_timing = true,
@@ -749,6 +770,18 @@ impl Options {
         if result.fixture && result.look != camera::Look::Reference {
             return Err("the selected lighting preset requires a scene manifest".into());
         }
+        if result.shadow_demo.is_some()
+            && (result.shader_assets.is_some()
+                || result.pipeline == PipelineMode::ForwardReference
+                || result.submission != SubmissionMode::Direct
+                || result.instances.enabled()
+                || result.ball.is_some()
+                || result.reflection_spheres.is_some()
+                || result.baked_lighting.is_some()
+                || result.shadows)
+        {
+            return Err("indirect shadow demo needs the standard direct-draw fixture".into());
+        }
         if result.fixture && !specified_size {
             result.width = 128;
             result.height = 96;
@@ -876,6 +909,7 @@ Scenes and output
   --output DIR                   Default: .tools/bistro-runtime
   --baked-lighting FILE --scenario-blend 0..1     Baked day-to-dusk indirect and direct light
   --reflection-probes FILE [--reflection-debug weights|radiance] [--reflection-spheres X Y Z] [--reflection-spheres-to X Y Z]
+  --indirect-shadow-demo on|off
   --lighting-pass beauty|base-color|direct|diffuse|diffuse-no-ao|specular|local-specular|emissive
   --time-sweep | --gi-debug irradiance|sources|weights | --white-sphere X Y Z
   --look reference|lumberyard-day|o3de-atrium

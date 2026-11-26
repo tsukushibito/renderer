@@ -26,7 +26,7 @@ export async function attachScene(canvas, sceneUrl, {
 } = {}) {
     if (!navigator.gpu) throw new Error("WebGPU is unavailable. Open this page using HTTPS or localhost in a WebGPU browser.");
     if (mounted.has(canvas)) throw new Error("Dispose the current scene before attaching another to this canvas.");
-    const url = sceneUrl === "fixture" ? sceneUrl : new URL(sceneUrl, document.baseURI).href;
+    const url = ["fixture", "indirect-shadow", "indirect-shadow-off"].includes(sceneUrl) ? sceneUrl : new URL(sceneUrl, document.baseURI).href;
     mounted.add(canvas);
     let session;
     try {

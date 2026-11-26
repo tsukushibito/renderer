@@ -127,6 +127,7 @@ impl PreparedSet {
 }
 
 pub(super) struct Budget {
+    shadow_demo: bool,
     pub graph: GraphCapacity,
     pub samplers: Vec<SamplerDescriptor>,
     pub prepared: Option<PreparedSet>,
@@ -500,6 +501,7 @@ impl Budget {
             frame_readback_bytes
         };
         Ok(Self {
+            shadow_demo: options.shadow_demo == Some(true),
             graph,
             samplers: scene.render_samplers(!options.windowed || options.sdr_output().fxaa),
             prepared: Some(prepared),
@@ -546,6 +548,7 @@ impl Budget {
 }
 
 pub(super) struct Resident {
+    shadow_volume: Option<pbr::BakedLighting>,
     pub vertices: Vec<ImportBuffer>,
     pub indices: Vec<ImportBuffer>,
     pub materials: Vec<ResidentMaterialUniform>,
@@ -985,10 +988,10 @@ impl Resident {
         let mut lightmap_pages = Vec::with_capacity(environment.lightmaps.len());
         for image in &environment.lightmaps {
             #[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu"))]
-            let bytes = lightmaps
-                .ok_or("missing lightmap source")?
-                .page(lightmap_pages.len())
-                .await?;
+            let bytes = match lightmaps {
+                Some(source) => source.page(lightmap_pages.len()).await?,
+                None => image.bytes.clone(),
+            };
             #[cfg(not(all(target_arch = "wasm32", target_os = "unknown", feature = "webgpu")))]
             let bytes = &image.bytes;
             lightmap_pages.push(upload_environment(image, bytes.as_slice()).await?);
@@ -1013,6 +1016,13 @@ impl Resident {
             .collect::<Result<Vec<_>, _>>()?;
         let surfaces = standard_forward::SurfaceTable::new(scene, &materials, &images)?;
         Ok(Self {
+            shadow_volume: if budget.shadow_demo {
+                Some(pbr::BakedLighting::from_texels(
+                    environment.diffuse.bytes.clone(),
+                )?)
+            } else {
+                None
+            },
             vertices,
             indices,
             materials,

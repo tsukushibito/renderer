@@ -125,7 +125,7 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
     let mut renderer = Renderer::headless(
         backend,
         view,
-        SceneAssets::new(&mut meshes, &mut materials, &objects),
+        SceneAssets::new(&mut meshes, &mut materials, &objects).with_indirect_shadow_capacity(2),
     )?;
     for (include_diffuse, include_reflections) in [(false, true), (true, false), (true, true)] {
         let lighting = renderer.load_probe_lighting(ProbeLighting {
@@ -262,6 +262,41 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
         }
     }
     drop(resident);
+    // A black caster covers the sampled point on both static placements, including
+    // the model-space variant. Duplicate capsules must not attenuate twice.
+    let mut uniform = Vec::new();
+    BakedLighting::uniform([[1.; 3]; 3])?.write(&mut uniform)?;
+    let ambient = sashiko_renderer::pbr::SurfaceLightmapIndex::new(
+        3,
+        index.pages().to_vec(),
+        Sha256::digest(&uniform).into(),
+    )?
+    .load([0, 1], Some(&uniform), |hash| Ok(pages[hash].clone()))?;
+    let ambient = renderer.load_surface_lighting(&ambient, None)?;
+    let caster =
+        sashiko_renderer::pbr::ShadowCapsule::new([0.04, 0.04, 0.32], [0.04, 0.04, 0.32], 0.18)?;
+    let far = sashiko_renderer::pbr::ShadowCapsule::new([4.; 3], [4.; 3], 0.18)?;
+    for object in &objects[2..] {
+        let scene = SceneInput::new(&meshes, &materials, std::slice::from_ref(object))
+            .with_baked_lighting(&ambient, 0.);
+        let mut pixel = |capsules: &[sashiko_renderer::pbr::ShadowCapsule]| {
+            let mut input = scene;
+            input.indirect_shadow_capsules = capsules;
+            center_pixel(&mut renderer, input)
+        };
+        let base = pixel(&[])?;
+        let covered = pixel(&[caster])?;
+        assert!(
+            covered.iter().zip(base).any(|(a, b)| *a < b)
+                && covered.iter().zip(base).all(|(a, b)| *a <= b),
+            "{covered:?} vs {base:?}"
+        );
+        assert_eq!(covered, pixel(&[caster, caster])?);
+        assert_eq!(base, pixel(&[far])?);
+        assert!(pixel(&[caster; 3]).is_err());
+        assert_eq!(base, pixel(&[])?);
+    }
+    drop(ambient);
     let mut read_bytes = 0;
     let subset = index.load([1], None, |hash| {
         read_bytes += pages[hash].len();

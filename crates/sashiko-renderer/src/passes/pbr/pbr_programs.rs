@@ -291,6 +291,7 @@ pub const fn instancing_program() -> ManagedRasterProgram {
 pub(crate) fn lightmapped_program(
     base: &ManagedRasterProgram,
     packed: bool,
+    shadowed: bool,
 ) -> Option<ManagedRasterProgram> {
     const fn attributes(packed: bool) -> [VertexAttribute; 5] {
         [
@@ -311,7 +312,7 @@ pub(crate) fn lightmapped_program(
         ]
     }
     macro_rules! variants {
-        ($base:path, $vs:literal, $fs:literal, $size:literal) => {{
+        ($base:path, $vs:literal, $fs:literal, $shadow_vs:literal, $shadow_fs:literal, $size:literal) => {{
             static UV: RasterProgramDescriptor = RasterProgramDescriptor {
                 secondary_vertex_stride: 8,
                 vertex_attributes: &attributes(false),
@@ -328,89 +329,151 @@ pub(crate) fn lightmapped_program(
                 vertex_attributes: &attributes(true),
                 ..UV
             };
-            (&$base, &UV, &PACKED)
+            const N: usize = $base.bindings.len();
+            const SHADOW_BYTES: u64 = crate::pbr::indirect_shadow::BYTES as u64;
+            static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
+                bindings: &{
+                    let mut slots = [CAMERA; N];
+                    let mut i = 0;
+                    while i < N {
+                        slots[i] = $base.bindings[i];
+                        i += 1;
+                    }
+                    slots[0].min_size = SHADOW_BYTES;
+                    slots
+                },
+                binding_bytes: &{
+                    let mut sizes = [0; N];
+                    let mut i = 0;
+                    while i < N {
+                        sizes[i] = $base.binding_bytes[i];
+                        i += 1;
+                    }
+                    sizes[0] = SHADOW_BYTES;
+                    sizes
+                },
+                shaders: packaged_shaders!(
+                    raster: ($shadow_vs, $shadow_fs),
+                    inline_constants: Some(sashiko_renderer_core::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
+                    nonfiltering: $base.shaders.webgpu_nonfiltering_samplers(),
+                ),
+                ..UV
+            };
+            static SHADOW_PACKED: RasterProgramDescriptor = RasterProgramDescriptor {
+                vertex_attributes: PACKED.vertex_attributes,
+                secondary_vertex_stride: PACKED.secondary_vertex_stride,
+                ..SHADOW
+            };
+            (&$base, [[&UV, &PACKED], [&SHADOW, &SHADOW_PACKED]])
         }};
     }
-    static VARIANTS: &[(
-        &RasterProgramDescriptor,
-        &RasterProgramDescriptor,
-        &RasterProgramDescriptor,
-    )] = &[
-        variants!(OPAQUE, "pbr_lightmap.vert", "pbr.frag", 4),
+    static VARIANTS: &[(&RasterProgramDescriptor, [[&RasterProgramDescriptor; 2]; 2])] = &[
+        variants!(
+            OPAQUE,
+            "pbr_lightmap.vert",
+            "pbr.frag",
+            "pbr_lightmap.vert",
+            "pbr_indirect_shadow.frag",
+            4
+        ),
         variants!(
             deferred::GBUFFER,
             "gbuffer_lightmap.vert",
             "gbuffer.frag",
+            "pbr_lightmap.vert",
+            "gbuffer_indirect_shadow.frag",
             4
         ),
         variants!(
             forward_plus::REFERENCE_OPAQUE,
             "pbr_lightmap.vert",
             "pbr_all_lights.frag",
+            "pbr_lightmap.vert",
+            "pbr_all_lights_indirect_shadow.frag",
             4
         ),
         variants!(
             forward_plus::TILED_OPAQUE,
             "pbr_lightmap.vert",
             "pbr_forward_plus.frag",
+            "pbr_lightmap.vert",
+            "pbr_forward_plus_indirect_shadow.frag",
             4
         ),
         variants!(
             super::transform_programs::small::FORWARD,
             "pbr_lightmap_transformed_small.vert",
             "pbr_transformed.frag",
+            "pbr_lightmap_transformed_small.vert",
+            "pbr_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
             super::transform_programs::small::ALL_LIGHTS,
             "pbr_lightmap_transformed_small.vert",
             "pbr_all_lights_transformed.frag",
+            "pbr_lightmap_transformed_small.vert",
+            "pbr_all_lights_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
             super::transform_programs::small::FORWARD_PLUS,
             "pbr_lightmap_transformed_small.vert",
             "pbr_forward_plus_transformed.frag",
+            "pbr_lightmap_transformed_small.vert",
+            "pbr_forward_plus_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
             super::transform_programs::small::DEFERRED,
             "gbuffer_lightmap_transformed_small.vert",
             "gbuffer_transformed.frag",
+            "pbr_lightmap_transformed_small.vert",
+            "gbuffer_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
             super::transform_programs::full::FORWARD,
             "pbr_lightmap_transformed.vert",
             "pbr_transformed.frag",
+            "pbr_lightmap_transformed.vert",
+            "pbr_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
             super::transform_programs::full::ALL_LIGHTS,
             "pbr_lightmap_transformed.vert",
             "pbr_all_lights_transformed.frag",
+            "pbr_lightmap_transformed.vert",
+            "pbr_all_lights_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
             super::transform_programs::full::FORWARD_PLUS,
             "pbr_lightmap_transformed.vert",
             "pbr_forward_plus_transformed.frag",
+            "pbr_lightmap_transformed.vert",
+            "pbr_forward_plus_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
             super::transform_programs::full::DEFERRED,
             "gbuffer_lightmap_transformed.vert",
             "gbuffer_transformed.frag",
+            "pbr_lightmap_transformed.vert",
+            "gbuffer_transformed_indirect_shadow.frag",
             8
         ),
     ];
-    VARIANTS.iter().find_map(|&(plain, uv, indexed)| {
-        // SAFETY: All three are immutable packaged standard programs. The UV
-        // variants declare the secondary input, inline words and matching shaders.
+    VARIANTS.iter().find_map(|&(plain, variants)| {
+        // SAFETY: These immutable packaged descriptors declare the matching UV stream,
+        // inline words, camera range and shader pair for each static variant.
         unsafe {
             base.same(&ManagedRasterProgram::from_trusted_descriptor(plain))
                 .then(|| {
-                    ManagedRasterProgram::from_trusted_descriptor(if packed { indexed } else { uv })
+                    ManagedRasterProgram::from_trusted_descriptor(
+                        variants[usize::from(shadowed)][usize::from(packed)],
+                    )
                 })
         }
     })

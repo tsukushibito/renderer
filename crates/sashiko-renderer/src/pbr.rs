@@ -1,6 +1,8 @@
 //! Material, draw and view inputs shared by the standard PBR recipes.
 
 mod culling;
+pub(crate) mod indirect_shadow;
+pub use indirect_shadow::{MAX_INDIRECT_SHADOW_CAPSULES, ShadowCapsule};
 mod lights;
 pub use lights::{LocalLight, PointLight, RectLight, photometric_rgb};
 mod defaults;
@@ -106,6 +108,8 @@ pub struct SceneLimits {
     pub frames_in_flight: NonZeroUsize,
     pub max_draws: usize,
     pub max_materials: usize,
+    /// Maximum simultaneous indirect shadow capsules, up to MAX_INDIRECT_SHADOW_CAPSULES.
+    pub max_indirect_shadow_capsules: usize,
     /// Maximum static lightmapped commands in this view.
     pub max_lightmapped_draws: usize,
     /// Maximum local lights per view. Zero reserves no light data or programs.
@@ -164,6 +168,8 @@ pub struct Environment {
 
 /// A view calculated before selecting scene draws, cascade draws or history.
 pub struct PreparedView {
+    shadow_limit: usize,
+    shadow_view: Option<BufferHandle>,
     data: view::ViewData,
     pub(crate) sort_direction: [f64; 3],
     culling: Option<ViewCulling>,
@@ -213,6 +219,8 @@ impl PreparedView {
             sort_direction: view.forward(),
             uniform,
             clear_override: None,
+            shadow_limit: 0,
+            shadow_view: None,
             culling: bounds
                 .map(|bounds| ViewCulling::new(*data.matrix(), data.shadow_matrices(), bounds)),
             data,
@@ -220,6 +228,35 @@ impl PreparedView {
             extent,
             shadows,
         })
+    }
+
+    /// Record directional indirect shadows on this Graph's lightmapped opaque and mask draws.
+    /// Supply the matching diffuse volume and lighting scenario of the surface pages.
+    pub fn set_indirect_shadows(
+        &mut self,
+        graph: &mut sashiko_renderer_core::graph::Graph,
+        volume: &BakedLighting,
+        blend: f32,
+        capsules: &[ShadowCapsule],
+    ) -> Result<(), GraphError> {
+        if !(0.0..=1.0).contains(&blend) {
+            return Err(GraphError::invalid_input("invalid indirect shadow blend"));
+        }
+        if capsules.len() > self.shadow_limit {
+            return Err(GraphError::capacity_error(
+                sashiko_renderer_core::graph::GraphCapacityKind::InputRecords(
+                    "indirect shadow capsules",
+                ),
+                self.shadow_limit,
+                Some(capsules.len()),
+            ));
+        }
+        self.shadow_view = if capsules.is_empty() {
+            None
+        } else {
+            indirect_shadow::upload(graph, self, volume, blend, capsules)?
+        };
+        Ok(())
     }
 
     /// Override this view's HDR clear at frame construction (for example a

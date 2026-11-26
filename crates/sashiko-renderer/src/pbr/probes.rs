@@ -89,6 +89,7 @@ impl DiffuseLighting {
 }
 
 /// Resident-ready linear RGBA32F texture. All structural checks run at import.
+#[derive(Clone)]
 pub struct BakedLighting {
     bytes: Vec<u8>,
     extent: [u32; 2],

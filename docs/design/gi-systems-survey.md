@@ -576,7 +576,7 @@ E_{final}(x)=E_{baked}(x)+\Delta E(x)
 | P4 | Differential GI | 正負の補正、静的基準の再利用、二重計上の抑制 |
 | P5（別系統） | Full Realtime GI | 昼夜変化、広域破壊、動的環境に必要な場合に検討 |
 
-P2でVoxelを採用することは未確定。少数の動的物体の遮蔽だけなら、Capsule/Box等の解析的形状でP1を実装できる可能性がある。Voxelを使う場合も、まずVisibility用の最小構成から始める。
+P1 は標準 PBR の任意機能として、動的カプセルが静的ライトマップの拡散間接光を遮る範囲を実装した。P2 で用いる空間表現は未確定。P1 の近似が薄壁や複数方向の入射光でどう振る舞うかは[現在の設計](vulkan.md#directional-indirect-shadows)を参照。
 
 Local Color Bleedingを標準機能にする判断は、Visibilityと計算予算が成立した後に行う。VisibilityなしのVPL/RSMを汎用GIとして採用することは推奨しない。
 

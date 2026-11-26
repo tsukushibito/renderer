@@ -11,8 +11,10 @@ ROOT = Path(__file__).resolve().parents[2]
 VIEWER = ROOT / "examples/renderer-scenes/web"
 
 
-def build_wasm(development_validation):
+def build_wasm(development_validation, memory_profiling):
     features = "webgpu,development-validation" if development_validation else "webgpu"
+    if memory_profiling:
+        features += ",memory-profiling"
     command = [
         "cargo", "rustc", "--crate-type", "cdylib", "--locked", "--release",
         "--package", "renderer-scenes", "--lib",
@@ -35,6 +37,7 @@ def main():
     parser.add_argument("--out", type=Path, default=ROOT / "build/renderer-scenes-web")
     parser.add_argument("--wasm-bindgen", default="wasm-bindgen", help="wasm-bindgen CLI executable")
     parser.add_argument("--development-validation", action="store_true")
+    parser.add_argument("--memory-profiling", action="store_true")
     args = parser.parse_args()
 
     with (ROOT / "Cargo.lock").open("rb") as lock:
@@ -47,7 +50,7 @@ def main():
     if tool_version != f"wasm-bindgen {version}":
         parser.exit(1, f"Found {tool_version}; this workspace needs wasm-bindgen {version}. Run: {install}\n")
 
-    wasm = build_wasm(args.development_validation)
+    wasm = build_wasm(args.development_validation, args.memory_profiling)
     output = args.out.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output.parent) as temp:

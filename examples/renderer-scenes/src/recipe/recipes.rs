@@ -67,7 +67,14 @@ impl Prepared {
                 .checked_add(instance_draws)
                 .ok_or("Bistro scene draw capacity overflow")?;
             let limits = pbr::SceneLimits {
-                max_lightmapped_draws: if options.baked_lighting.is_some() {
+                max_indirect_shadow_capsules: if options.shadow_demo == Some(true) {
+                    16
+                } else {
+                    0
+                },
+                max_lightmapped_draws: if options.baked_lighting.is_some()
+                    || options.shadow_demo.is_some()
+                {
                     max_draws
                 } else {
                     0
@@ -90,7 +97,9 @@ impl Prepared {
                     0
                 },
                 max_shadow_casters: max_draws,
-                max_transforms: if options.instances.enabled() {
+                max_transforms: if options.shadow_demo.is_some() {
+                    16
+                } else if options.instances.enabled() {
                     crate::shared::instancing::COUNT
                 } else {
                     usize::from(options.reflection_spheres_to.is_some())

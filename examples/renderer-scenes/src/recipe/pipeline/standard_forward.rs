@@ -173,7 +173,10 @@ pub(super) fn build(
         }
     }
     let bounds = |i: usize| {
-        if motion.is_some() && i >= sphere_start {
+        if options.shadow_demo.is_some() && i == 2 {
+            // The floor and wall bounds enclose every animated instance of the sphere mesh.
+            scene_bounds
+        } else if motion.is_some() && i >= sphere_start {
             moving_bounds[i - sphere_start]
         } else {
             resident.standard_primitive_bounds[i]
@@ -216,11 +219,22 @@ pub(super) fn build(
             max_prefilter_lod: max_prefilter_lod as u32,
         },
     )?;
-    let view = if let Some(clear) = options.sweep_clear(camera_input.scenario_blend) {
+    let mut view = if let Some(clear) = options.sweep_clear(camera_input.scenario_blend) {
         view.with_clear_color(clear)?
     } else {
         view
     };
+    let demo_pose = options
+        .shadow_demo
+        .map(|_| crate::recipe::indirect_shadow_demo::Pose::at(frame_index))
+        .transpose()?;
+    if let (Some(true), Some(pose)) = (options.shadow_demo, &demo_pose) {
+        let volume = resident
+            .shadow_volume
+            .as_ref()
+            .ok_or("missing demo shadow probes")?;
+        view.set_indirect_shadows(&mut graph, volume, 0., &pose.capsules)?;
+    }
     // GPU culling reads the current camera before the recipe adds its passes.
     if options.submission == SubmissionMode::Indirect {
         graph.upload_buffer(
@@ -269,7 +283,13 @@ pub(super) fn build(
         material: scene.primitives[index].material,
     };
     let draw = |index| {
-        if motion.is_some() && index >= sphere_start {
+        if demo_pose.is_some() && index == 2 {
+            Draw::Instanced {
+                geometry: geometry(index),
+                first_transform: 0,
+                instance_count: 16,
+            }
+        } else if motion.is_some() && index >= sphere_start {
             Draw::Instanced {
                 geometry: geometry(index),
                 first_transform: 0,
@@ -432,6 +452,9 @@ pub(super) fn build(
         .placements
         .as_ref()
         .map_or(motion.as_slice(), |p| &p.transforms[..]);
+    if let Some(pose) = &demo_pose {
+        frame.transforms = &pose.transforms;
+    }
     if let Some(history) = &rect_frame {
         frame.use_rect_shadow_history(history);
     }

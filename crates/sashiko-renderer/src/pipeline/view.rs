@@ -228,6 +228,13 @@ impl StandardPipeline {
                 Some(input.objects.len()),
             ));
         }
+        if input.indirect_shadow_capsules.len() > self.limits.max_indirect_shadow_capsules {
+            return Err(GraphError::capacity_error(
+                GraphCapacityKind::InputRecords("indirect shadow capsules"),
+                self.limits.max_indirect_shadow_capsules,
+                Some(input.indirect_shadow_capsules.len()),
+            ));
+        }
         let defaults = self
             .resources
             .as_ref()
@@ -267,7 +274,14 @@ impl StandardPipeline {
         {
             environment.diffuse_lighting = pbr::DiffuseLighting::SurfacePages { blend };
         }
-        let prepared = self.prepare_view(camera.camera, input.sun, input.bounds, environment)?;
+        let mut prepared =
+            self.prepare_view(camera.camera, input.sun, input.bounds, environment)?;
+        if !input.indirect_shadow_capsules.is_empty()
+            && let Some((lighting, blend)) = input.surfaces
+            && let Some(volume) = &lighting.shadow_probes
+        {
+            prepared.set_indirect_shadows(graph, volume, blend, input.indirect_shadow_capsules)?;
+        }
         // Adjacent phases share a boundary. Disabled profiling reads no clocks.
         let mut clock = self.timings.map(|_| Instant::now());
         let mut next_phase = || {

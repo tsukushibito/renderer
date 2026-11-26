@@ -6,6 +6,9 @@ Texture2D<float4> irradiance_image : register(t0, space2);
 #include "probe_volume.hlsli"
 #include "lightmap.hlsli"
 struct PixelInput {
+#ifdef INDIRECT_SHADOW
+    BISTRO_LOCATION(0) float3 world_position : TEXCOORD0;
+#endif
     BISTRO_LOCATION(1) float3 world_normal : TEXCOORD1;
     BISTRO_LOCATION(2) float4 world_tangent : TEXCOORD2;
     BISTRO_LOCATION(3) float2 texcoord : TEXCOORD3;
@@ -14,6 +17,9 @@ struct PixelInput {
 #endif
     BISTRO_LOCATION(5) float2 lightmap_uv : TEXCOORD5;
     BISTRO_LOCATION(6) nointerpolation uint lightmap_slot : TEXCOORD6;
+#ifdef INDIRECT_SHADOW
+    float4 pixel : SV_Position;
+#endif
     bool front_facing : SV_IsFrontFace;
 };
 
@@ -29,7 +35,11 @@ GBuffer main(PixelInput input) {
 #endif
     Surface surface = sample_material(
         input.world_normal, input.world_tangent, input.texcoord, input.front_facing).surface;
-    apply_lightmap(surface,input.lightmap_slot,input.front_facing,input.lightmap_uv);
+    apply_lightmap(surface,input.lightmap_slot,input.front_facing,input.lightmap_uv
+#ifdef INDIRECT_SHADOW
+        , input.world_position, input.pixel.xy
+#endif
+    );
     GBuffer result;
     result.base_metallic = float4(surface.base_color, surface.metallic);
     result.normal_roughness = float4(

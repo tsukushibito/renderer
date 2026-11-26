@@ -39,6 +39,7 @@ fn config() -> Config {
 
 fn limits() -> SceneLimits {
     SceneLimits {
+        max_indirect_shadow_capsules: 0,
         max_lightmapped_draws: 0,
         frames_in_flight: NonZeroUsize::MIN,
         max_draws: 2,

@@ -37,7 +37,9 @@ struct Pending {
 }
 
 fn camera(conditions: &Conditions, options: &Options, frame: usize) -> Result<Camera, Error> {
-    if options.fixture {
+    if options.shadow_demo.is_some() {
+        Ok(super::indirect_shadow_demo::camera())
+    } else if options.fixture {
         Ok(Camera::fixture())
     } else {
         conditions.camera(&options.view, frame)
@@ -766,7 +768,9 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         &mut workspace,
         0,
     )?;
-    if (options.sweep || options.reflection_spheres_to.is_some()) && options.frames > 1 {
+    if (options.sweep || options.reflection_spheres_to.is_some() || options.shadow_demo.is_some())
+        && options.frames > 1
+    {
         for (label, frame) in [
             ("midpoint", (options.frames - 1) / 2),
             (

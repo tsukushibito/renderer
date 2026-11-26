@@ -177,6 +177,7 @@ pub struct ProbeLighting<'a> {
 
 /// Owns the GPU registrations until dropped. Share across cameras on the same renderer.
 pub struct ResidentBakedLighting {
+    pub(super) shadow_probes: Option<crate::pbr::BakedLighting>,
     pub(super) complete: bool,
     pub(super) pages: Vec<sashiko_renderer_core::runtime::ManagedImage>,
     pub(super) placements: std::collections::BTreeMap<u32, crate::pbr::LightmapAddress>,
@@ -235,6 +236,8 @@ pub struct SceneInput<'a> {
     pub meshes: &'a Meshes,
     pub materials: &'a Materials,
     pub objects: &'a [RenderObject],
+    /// World-space proxies for the current pose, shared by the lightmapped receivers in this view.
+    pub indirect_shadow_capsules: &'a [crate::pbr::ShadowCapsule],
     pub lights: &'a [LocalLight],
     /// Directional light for standard shading. Defaults to zero radiance.
     pub sun: Sun,
@@ -255,6 +258,7 @@ impl<'a> SceneInput<'a> {
             meshes,
             materials,
             objects,
+            indirect_shadow_capsules: &[],
             lights: &[],
             sun: Sun::OFF,
             bounds: None,

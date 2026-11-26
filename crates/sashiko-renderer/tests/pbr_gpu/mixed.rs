@@ -102,6 +102,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
             samples: SampleCount::X1,
         },
         pbr::SceneLimits {
+            max_indirect_shadow_capsules: 0,
             max_lightmapped_draws: 0,
             frames_in_flight: NonZeroUsize::MIN,
             max_draws: 8,
@@ -491,6 +492,7 @@ fn draw_after_resize(
     };
     let n = NonZeroUsize::MIN;
     let limits = pbr::SceneLimits {
+        max_indirect_shadow_capsules: 0,
         max_lightmapped_draws: 0,
         frames_in_flight: n,
         max_draws: 1,

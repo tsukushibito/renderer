@@ -49,6 +49,7 @@ impl ScenePrograms {
         samples: SampleCount,
         include_shadows: bool,
         lightmaps: bool,
+        indirect_shadows: bool,
     ) -> Vec<RasterPipelineRequest> {
         let mut raster = Vec::with_capacity(
             (2 + usize::from(include_shadows)) * (1 + usize::from(self.model.is_some())),
@@ -63,10 +64,15 @@ impl ScenePrograms {
         if lightmaps {
             for packed in [false, true] {
                 for p in std::iter::once(&self.world).chain(self.model.iter().filter(|_| !packed)) {
-                    if let Some(program) =
-                        crate::passes::pbr::lightmapped_program(&p.opaque, packed)
+                    for shadow in [false, true]
+                        .into_iter()
+                        .take(1 + usize::from(indirect_shadows))
                     {
-                        raster.push(pipeline(program, samples));
+                        if let Some(program) =
+                            crate::passes::pbr::lightmapped_program(&p.opaque, packed, shadow)
+                        {
+                            raster.push(pipeline(program, samples));
+                        }
                     }
                 }
             }
@@ -126,8 +132,12 @@ impl LocalLights {
         } else {
             None
         };
-        let raster =
-            programs.raster_requests(config.samples, false, limits.max_lightmapped_draws > 0);
+        let raster = programs.raster_requests(
+            config.samples,
+            false,
+            limits.max_lightmapped_draws > 0,
+            limits.max_indirect_shadow_capsules > 0,
+        );
         let compute = tiled.then(compute_program);
         prep.reserve_image(layout.image_desc(), 1)?;
         if let Some(desc) = mask {
@@ -221,6 +231,22 @@ impl PreparedScene {
         } else {
             None
         };
+        if limits.max_indirect_shadow_capsules > super::MAX_INDIRECT_SHADOW_CAPSULES {
+            return Err(GraphError::invalid_input(
+                "indirect shadow capsule limit exceeds the shader table",
+            ));
+        }
+        if limits.max_indirect_shadow_capsules > 0 {
+            preparation.reserve_buffer(super::indirect_shadow::DESC, 1)?;
+            preparation.add_graph_requirements(GraphRequirements {
+                resources: 1,
+                passes: 1,
+                accesses: 1,
+                upload_bytes: super::indirect_shadow::BYTES,
+                name_bytes: "indirect shadow viewindirect shadow upload".len(),
+                ..Default::default()
+            })?;
+        }
         let transient_camera = config.camera_storage == CameraStorage::Transient;
         let upload_camera = config.camera_storage != CameraStorage::PreUploaded;
         if transient_camera {
@@ -257,6 +283,7 @@ impl PreparedScene {
             config.samples,
             render_shadows || rect_count > 0,
             limits.max_lightmapped_draws > 0,
+            limits.max_indirect_shadow_capsules > 0,
         );
         let cascades: usize = if render_shadows { CASCADE_COUNT } else { 0 };
         let casters = if render_shadows || rect_count > 0 {
@@ -450,14 +477,16 @@ impl PreparedScene {
         bounds: impl Into<Option<Bounds>>,
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
-        PreparedView::prepare(
+        let mut prepared = PreparedView::prepare(
             view,
             sun,
             bounds.into(),
             environment,
             self.config.extent,
             self.config.shadows,
-        )
+        )?;
+        prepared.shadow_limit = self.limits.max_indirect_shadow_capsules;
+        Ok(prepared)
     }
 
     pub(crate) fn add_scene_using(
@@ -535,6 +564,7 @@ impl PreparedScene {
             point_lights = Some((view, atlas.unwrap_or(view)));
         }
         let opaque_bindings = Bindings::Scene {
+            shadow_view: frame.view.shadow_view,
             camera,
             lighting: if self.opaque_uses_lighting {
                 &extended[..count]
@@ -543,6 +573,7 @@ impl PreparedScene {
             },
         };
         let transparent_bindings = Bindings::Scene {
+            shadow_view: None,
             camera,
             lighting: &extended[..count],
         };
@@ -612,7 +643,10 @@ impl PreparedScene {
     }
 
     fn check_frame(&self, graph: &Graph, frame: &PbrDrawInput<'_>) -> Result<usize, GraphError> {
-        if !frame.view.matches(self.config.extent, self.config.shadows) {
+        if !frame.view.matches(self.config.extent, self.config.shadows)
+            || (frame.view.shadow_view.is_some()
+                && frame.view.shadow_limit > self.limits.max_indirect_shadow_capsules)
+        {
             return Err(GraphError::invalid_input(
                 "PBR view is incompatible with the prepared recipe",
             ));

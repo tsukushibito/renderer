@@ -657,7 +657,9 @@ impl State {
 }
 
 fn camera_seed(conditions: &Conditions, options: &Options) -> Result<Camera, Error> {
-    if options.fixture {
+    if options.shadow_demo.is_some() {
+        Ok(super::indirect_shadow_demo::camera())
+    } else if options.fixture {
         Ok(Camera::fixture())
     } else {
         conditions.camera(&options.view, 0)

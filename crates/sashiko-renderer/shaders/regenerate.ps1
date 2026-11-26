@@ -56,6 +56,14 @@ $variants = foreach ($name in $shaders) {
         HasInline = $hasInline
     }
 }
+$variants += foreach ($variant in $variants) {
+    if ($variant.Source -in @('pbr.frag.hlsl', 'gbuffer.frag.hlsl')) {
+        $shadow = $variant.Clone()
+        $shadow.Name = $variant.Name.Replace('.frag', '_indirect_shadow.frag')
+        $shadow.Defines = @($variant.Defines) + 'INDIRECT_SHADOW=1'
+        $shadow
+    }
+}
 # The runner reports this manifest for both display routes, including standard output.
 $coreManifest = Join-Path $PSScriptRoot '../../sashiko-renderer-core/shaders/dxil/manifest.json'
 $manifestFields = [ordered]@{

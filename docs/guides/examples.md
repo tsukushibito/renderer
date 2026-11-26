@@ -261,6 +261,22 @@ cargo run --release -p renderer-scenes --features vulkan --bin renderer-scenes -
 
 `--reflection-debug weights` は第 1 箱を赤、第 2 箱を緑、グローバル寄与を青で表示します。`--reflection-debug radiance --time-sweep` は材質 BRDF を掛ける前の HDR を昼・中間・夕方で保存します。`--reflection-spheres -10 0.85 0 --reflection-spheres-to 7 0.85 7` を標準の direct 描画に追加すると、粗さ 0.08 と 0.55 の金属球が路上からひさし下を通って客席へ移動します。通常表示、プローブ無効、重み表示、radiance の各出力を使う[数値比較と実機画像](../verification/current.md#bistro-local-reflections)も参照してください。
 
+### 動く物体でベイク済みの間接光を遮る
+
+標準 PBR で、歩く人物と移動する小物の影を床や壁のライトマップに落とせます。次のデモは外部アセット不要です。同じカメラとポーズで比較するには `on` を `off` に変え、別の出力先を指定してください。
+
+```powershell
+cargo run --release -p renderer-scenes --features vulkan --bin renderer-scenes -- --api vulkan --pipeline forward --indirect-shadow-demo on --width 960 --height 540 --frames 120 --output build/shadow-on
+```
+
+WebGPU ビューアでは `?scene=indirect-shadow` と `?scene=indirect-shadow-off` で同じシーンを開けます。Rust から使う場合は次の順序で設定します。
+
+1. Renderer の作成・再構成時に `SceneAssets::with_indirect_shadow_capacity(n)` で、同時に使うカプセル数を予約します。既定は 0、上限は 16 です。
+2. 静的配置のライトマップと対応する拡散プローブを `load_surface_lighting` でロードし、ビューに設定します。
+3. ポーズ更新後、脚や胴などの両端のワールド座標と半径から `pbr::ShadowCapsule::new(a, b, radius)?` を作り、再利用する配列を `SceneInput::indirect_shadow_capsules` に渡します。小物は両端を同じ座標にすると球になります。空スライスでそのフレームの遮蔽を解除できます。
+
+遮蔽がかかるのはライトマップを持つ OPAQUE / MASK 面の拡散間接光です。プローブの照度に方向性がある場所では明るい側と反対に影が伸び、等方的な場所では接地部を中心に暗くなります。[実機比較と測定条件](../verification/current.md#directional-indirect-shadows)
+
 ## メッシュと材質からビューを描く
 
 ```powershell

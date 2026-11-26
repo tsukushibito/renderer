@@ -295,6 +295,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
             && surfaces.is_none_or(|s| s.pages.is_empty())
         {
             return Ok(ResidentBakedLighting {
+                shadow_probes: None,
                 complete: true,
                 pages: Vec::new(),
                 placements: Default::default(),
@@ -350,6 +351,10 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         })?;
         let mut pool = GraphPool::new(startup.graph_capacity(Default::default())?, 1)?;
         let streaming_transfer = self.include_streaming(&mut startup)?;
+        let shadow_probes = assets
+            .diffuse
+            .filter(|_| self.limits.max_indirect_shadow_capsules > 0 && surfaces.is_some())
+            .cloned();
         let runtime = self.runtime();
         runtime.prepare_fitted_working_set(&startup, footprint.max(streaming_transfer), 0)?;
         let mut upload =
@@ -362,6 +367,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
                 Ok(image)
             };
         Ok(ResidentBakedLighting {
+            shadow_probes,
             complete: surfaces.is_none_or(|s| s.complete),
             pages: surfaces
                 .into_iter()

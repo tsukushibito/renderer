@@ -17,6 +17,21 @@ use sashiko_renderer_core::{
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
+#[cfg(feature = "memory-profiling")]
+#[global_allocator]
+static ALLOCATOR: sashiko_renderer_core::measurement::CountingAllocator<std::alloc::System> =
+    sashiko_renderer_core::measurement::CountingAllocator::new(std::alloc::System);
+
+/// Read one cumulative allocator entry point without allocating in the observer.
+#[cfg(feature = "memory-profiling")]
+#[wasm_bindgen(js_name = heapCalls)]
+pub fn heap_calls(event: usize) -> f64 {
+    sashiko_renderer_core::measurement::Snapshot::now()
+        .rust
+        .get(event)
+        .map_or(f64::NAN, |entry| entry.calls as f64)
+}
+
 fn js_error(error: impl std::fmt::Display) -> JsValue {
     js_sys::Error::new(&error.to_string()).into()
 }
@@ -97,7 +112,15 @@ async fn load(
     options.api = "webgpu".into();
     options.width = canvas.width().max(1);
     options.height = canvas.height().max(1);
-    options.fixture = url == "fixture";
+    options.shadow_demo = match url {
+        "indirect-shadow" => Some(true),
+        "indirect-shadow-off" => Some(false),
+        _ => None,
+    };
+    options.fixture = url == "fixture" || options.shadow_demo.is_some();
+    if options.shadow_demo.is_some() {
+        options.shadows = false;
+    }
     options.inflight = 1;
     let (mut scene, mut environment, lightmaps) = if options.fixture {
         options.view = "fixture".into();
@@ -110,6 +133,9 @@ async fn load(
         options.reflection_probes = Some(url.into());
         (data.scene, data.environment, Some(data.lighting))
     };
+    if options.shadow_demo.is_some() {
+        super::indirect_shadow_demo::populate(&mut scene, &mut environment)?;
+    }
     let mut conditions = Conditions::parse(&serde_json::from_slice(options.condition_bytes())?)?;
     if !options.fixture && !conditions.ambient_occlusion {
         scene.disable_environment_occlusion();
@@ -121,7 +147,9 @@ async fn load(
         conditions.light_color = light.sun;
         conditions.background = light.sky;
     }
-    let camera = if options.fixture {
+    let camera = if options.shadow_demo.is_some() {
+        super::indirect_shadow_demo::camera()
+    } else if options.fixture {
         Camera::fixture()
     } else {
         conditions.camera(&options.view, 0)?
@@ -209,7 +237,9 @@ impl Drop for AttachedCanvas {
 impl SceneSession {
     /// Select a native reference camera, including its exact target and field of view.
     pub fn preset(&mut self, name: &str) -> Result<(), JsValue> {
-        self.camera = if self.options.fixture && name == "fixture" {
+        self.camera = if self.options.shadow_demo.is_some() && name == "fixture" {
+            super::indirect_shadow_demo::camera()
+        } else if self.options.fixture && name == "fixture" {
             Camera::fixture()
         } else {
             self.conditions.camera(name, 0).map_err(js_error)?

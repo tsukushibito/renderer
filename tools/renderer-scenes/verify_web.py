@@ -314,6 +314,73 @@ def run_views(page, args, result):
                 page.evaluate("() => view.dispose()")
 
 
+def verify_indirect_shadows(page, args, result):
+    captures = []
+    for name in ("indirect-shadow-off", "indirect-shadow"):
+        attach(page, name, 320, 180)
+        try:
+            planes, details = capture(page, args.output / name, 320, 180)
+            result["views"][name] = details
+            if args.shadow_reference:
+                native = np.fromfile(args.shadow_reference / name / "sdr.bin", np.uint8).reshape(180, 320, 4)
+                difference = np.abs(native.astype(float) - planes["sdr"])
+                details["native_sdr_mean_abs"] = float(difference.mean())
+                if details["native_sdr_mean_abs"] > 0.5:
+                    raise ValueError(f"{name} differs from the native reference: {details}")
+            captures.append(planes)
+            result["timing"][name] = advance(page, 24)
+            if args.shadow_memory:
+                details["steady_memory"] = measure_shadow_memory(page)
+        finally:
+            page.evaluate("() => view.dispose()")
+    base, shadow = captures
+    loss = base["hdr"][:, :, :3].astype(float) - shadow["hdr"][:, :, :3]
+    if not np.array_equal(base["depth"], shadow["depth"]) or np.min(loss) < -0.001 or np.count_nonzero(loss > 0.01) < 100:
+        raise ValueError("Capsules must darken the static diffuse receivers while preserving depth")
+    if args.shadow_memory:
+        off, on = (result["views"][key]["steady_memory"] for key in ("indirect-shadow-off", "indirect-shadow"))
+        if off["heap"] != on["heap"] or any(on["resources"].values()):
+            raise ValueError(f"Steady-state indirect shadow allocations: {off} -> {on}")
+
+
+def measure_shadow_memory(page):
+    return page.evaluate("""async () => {
+        const {heapCalls} = await import('./pkg/renderer_scenes.js');
+        const snapshot = () => [0, 1, 2, 3].map(heapCalls);
+        // wasm-bindgen can release completion closures through JS finalizers.
+        // Drain both endpoints so releases are charged to the same 60 frames.
+        async function drain() {
+            await lastSceneDevice.queue.onSubmittedWorkDone();
+            for (let i = 0; i < 3; ++i) {
+                globalThis.gc();
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+        }
+        const resources = {}, restore = [];
+        for (const [proto, names] of [
+            [GPUDevice.prototype, ['createBuffer', 'createTexture', 'createBindGroup',
+                'createRenderPipeline', 'createComputePipeline', 'createSampler']],
+            [GPUBuffer.prototype, ['destroy']], [GPUTexture.prototype, ['destroy']]]) {
+            for (const name of names) {
+                const original = proto[name], label = proto.constructor.name + '.' + name;
+                resources[label] = 0;
+                proto[name] = function(...args) { ++resources[label]; return original.apply(this,args); };
+                restore.push(() => { proto[name] = original; });
+            }
+        }
+        try {
+            await drain();
+            const before = snapshot();
+            for (let i = 0; i < 60; ++i) {
+                if (!await view.frame(await new Promise(requestAnimationFrame))) throw Error('Skipped measured frame');
+                await lastSceneDevice.queue.onSubmittedWorkDone();
+            }
+            await drain();
+            return {frames: 60, heap: snapshot().map((value,i) => value-before[i]), resources};
+        } finally { restore.forEach(fn => fn()); }
+    }""")
+
+
 def verify_device_loss(page):
     attach(page, "fixture", 320, 180)
     try:
@@ -368,9 +435,11 @@ def main():
     parser.add_argument("site", type=Path)
     parser.add_argument("--scenes", nargs="+", choices=["fixture", *VIEWS], default=["fixture"])
     parser.add_argument("--references", type=Path)
+    parser.add_argument("--shadow-reference", type=Path, help="Native 320x180 frame-zero captures of the two shadow demo modes")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--channel", choices=["chrome", "msedge", "chromium"], default="chrome")
     parser.add_argument("--software", action="store_true", help="Use SwiftShader for the CI fixture")
+    parser.add_argument("--shadow-memory", action="store_true", help="Compare warmed frames with a --memory-profiling viewer")
     args = parser.parse_args()
     if any(s != "fixture" for s in args.scenes) and (not args.references or args.software):
         parser.error("Full-scene acceptance requires --references and a hardware GPU")
@@ -378,6 +447,8 @@ def main():
     errors = []
     result = {"timing": {}, "views": {}, "rectangle_shadows": {}, "browser_errors": errors, "passed": False}
     flags = ["--enable-gpu", "--force-color-profile=srgb"]
+    if args.shadow_memory:
+        flags.append("--js-flags=--expose-gc")
     if args.software:
         flags += [
             "--enable-unsafe-webgpu",
@@ -408,6 +479,8 @@ def main():
                     )
                     harness(page, base)
                     run_views(page, args, result)
+                    if "fixture" in args.scenes:
+                        verify_indirect_shadows(page, args, result)
                     verify_device_loss(page)
                     gpu = result["gpu"] = page.evaluate(
                         "async () => { await Promise.all(compilationChecks); return gpuEvidence; }"
