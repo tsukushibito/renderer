@@ -234,6 +234,8 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
       - run: cargo fmt --all -- --check
+      - name: Check game physics and math dependencies
+        run: python3 tools/check_game_dependencies.py
       - run: cargo fmt --manifest-path tools/d3d12-bindings/Cargo.toml -- --check
 
   check:
