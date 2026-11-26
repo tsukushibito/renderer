@@ -88,16 +88,15 @@ impl Surfaces {
         models: &[AnimatedModel],
     ) -> PipelineResult<Self> {
         let mut images = Vec::with_capacity(6 + models.len());
-        let drawing = renderer.asset_renderer();
         for format in [COLOR, LINEAR] {
-            drawing.check_texture_support(format, true)?;
+            renderer.check_texture_support(format, true)?;
         }
         let mut upload =
             |desc: ImageDesc, pixels: &[u8]| -> PipelineResult<Option<MaterialTexture>> {
                 let (id, image) =
-                    drawing.upload_texture_mips(LABEL, desc, 0..desc.mip_levels, pixels)?;
+                    renderer.upload_texture_mips(LABEL, desc, 0..desc.mip_levels, pixels)?;
                 let start = Instant::now();
-                while !drawing.poll_texture_upload(id)? {
+                while !renderer.poll_texture_upload(id)? {
                     if start.elapsed() > Duration::from_secs(30) {
                         return Err("lab surface upload timed out".into());
                     }

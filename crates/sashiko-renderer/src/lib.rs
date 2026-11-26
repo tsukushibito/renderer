@@ -116,10 +116,25 @@ impl From<core::runtime::ExecutionError> for AssetPrepareError {
         Self(Box::new(error))
     }
 }
+impl From<core::runtime::TextureUploadError> for AssetPrepareError {
+    fn from(error: core::runtime::TextureUploadError) -> Self {
+        Self(Box::new(error))
+    }
+}
 impl AssetPrepareError {
+    fn causes(&self) -> impl Iterator<Item = &(dyn std::error::Error + 'static)> {
+        std::iter::successors(Some(self.0.as_ref()), |error| error.source())
+    }
+
+    /// Native-independent cause when a runtime operation failed during the change.
+    pub fn execution_kind(&self) -> Option<core::runtime::ExecutionErrorKind> {
+        self.causes()
+            .find_map(|error| error.downcast_ref::<core::runtime::ExecutionError>())
+            .map(|error| error.kind())
+    }
+
     pub fn capacity(&self) -> Option<AssetCapacity> {
-        let mut cause = Some(self.0.as_ref());
-        while let Some(error) = cause {
+        for error in self.causes() {
             if let Some(details) = error.downcast_ref::<RuntimeCapacityError>() {
                 return Some(AssetCapacity::Runtime(*details));
             }
@@ -135,7 +150,6 @@ impl AssetPrepareError {
             {
                 return Some(AssetCapacity::Graph(details));
             }
-            cause = error.source();
         }
         None
     }
@@ -154,6 +168,18 @@ impl std::error::Error for AssetPrepareError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn texture_transfer_keeps_graph_capacity_recovery() {
+        let graph_error =
+            core::graph::GraphError::capacity_error(GraphCapacityKind::Slots, 1, Some(2));
+        let error = AssetPrepareError::from(core::runtime::TextureUploadError::Graph(graph_error));
+        assert_eq!(
+            error.capacity().unwrap().recovery(),
+            CapacityRecovery::ReleaseOwners
+        );
+        assert_eq!(error.execution_kind(), None);
+    }
 
     #[test]
     fn pending_window_frame_preserves_poll_recovery() {

@@ -6,7 +6,8 @@ use sashiko_renderer::{
     model::{Model, ModelInstance, ModelLod, ModelPart},
     pbr::{Bounds, PbrVertex, Projection, Sun, Transform, ViewInput},
     pipeline::{
-        CameraView, MeshIndexRange, PipelineResult, RenderObject, SceneAssets, SceneInput, ViewId,
+        AssetPreparation, CameraView, MeshIndexRange, PipelineResult, RenderObject, SceneAssets,
+        SceneInput, ViewId,
     },
     unlit_forward::IDENTITY,
 };
@@ -355,17 +356,17 @@ impl Yard {
     /// Poll the latest requests, keeping each actor's current draw until publication succeeds.
     pub fn advance_equipment(
         &mut self,
-        renderer: &mut impl sashiko_renderer::pipeline::AssetPreparation,
+        renderer: &mut impl AssetPreparation,
     ) -> PipelineResult<()> {
         self.equipment.advance(
             renderer,
             &mut self.meshes,
             &mut self.materials,
-            |r, name, desc, bytes| r.asset_renderer().upload_texture(name, desc, bytes),
+            AssetPreparation::upload_texture,
         )
     }
 
-    pub fn apply<R: sashiko_renderer::pipeline::AssetPreparation>(
+    pub fn apply<R: AssetPreparation>(
         &mut self,
         action: Action,
         renderer: &mut R,
@@ -442,9 +443,10 @@ mod tests {
     use super::PipelineResult;
     use crate::validation;
     use sashiko_renderer::core::runtime::RuntimeConfig;
+    use std::error::Error;
     fn exercise_shared_equipment(config: RuntimeConfig) -> PipelineResult<()> {
         use super::{Action, EquipmentAsset, Yard};
-        use sashiko_renderer::Renderer;
+        use sashiko_renderer::{Renderer, pipeline::AssetPreparation};
         let fixture = super::distribution::Distribution::cook()?;
         let mut yard = Yard::with_asset_catalog(&fixture.root, 2)?;
         let camera = super::camera(1, [48, 24])?;
@@ -491,7 +493,7 @@ mod tests {
                 |r, name, desc, bytes| {
                     if !injected {
                         injected = true;
-                        return Err("injected texture failure".into());
+                        return Err(Box::<dyn Error>::from("injected texture failure").into());
                     }
                     uploads += 1;
                     r.upload_texture(name, desc, bytes)
@@ -533,7 +535,7 @@ mod tests {
                 &mut renderer,
                 &mut yard.meshes,
                 &mut yard.materials,
-                |_, _, _, _| Err("paint was uploaded twice".into()),
+                |_, _, _, _| Err(Box::<dyn Error>::from("paint was uploaded twice").into()),
             )?;
             std::thread::yield_now();
         }

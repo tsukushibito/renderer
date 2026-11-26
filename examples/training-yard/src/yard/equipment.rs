@@ -6,6 +6,7 @@ use cooked::LoadedPart;
 use resources::{Requirements, Reservations};
 use sashiko_asset::{AssetId, Digest, ObjectBytes, ObjectStore, Primitive};
 use sashiko_renderer::{
+    AssetPrepareError,
     core::{
         capacity::{GraphRequirements, Preparation},
         graph::{BufferDesc, GraphError, ImageDesc},
@@ -308,7 +309,7 @@ impl Equipment {
     ) -> PipelineResult<()> {
         let mut next = self.slots.clone();
         *next.get_mut(owner).ok_or("unknown equipment slot")? = Slot::default();
-        self.publish(None, next, renderer, meshes, materials)
+        Ok(self.publish(None, next, renderer, meshes, materials)?)
     }
     fn publish(
         &mut self,
@@ -317,7 +318,7 @@ impl Equipment {
         renderer: &mut impl AssetPreparation,
         meshes: &mut Meshes,
         materials: &mut Materials,
-    ) -> PipelineResult<()> {
+    ) -> Result<(), AssetPrepareError> {
         let retiring = std::array::from_fn(|i| {
             matches!(self.items[i], State::Resident(_))
                 && !next.iter().any(|s| {
@@ -431,13 +432,18 @@ impl Equipment {
         renderer: &mut R,
         meshes: &mut Meshes,
         materials: &mut Materials,
-        upload: impl FnOnce(&mut R, &str, ImageDesc, &[u8]) -> PipelineResult<(FrameId, ManagedImage)>,
+        upload: impl FnOnce(
+            &mut R,
+            &str,
+            ImageDesc,
+            &[u8],
+        ) -> Result<(FrameId, ManagedImage), AssetPrepareError>,
     ) -> PipelineResult<()> {
         if self.collect {
             self.collect = renderer.collect_assets(meshes, materials)? != 0
         }
         if let Some((id, _)) = &self.pending_image {
-            if !renderer.asset_renderer().poll_texture_upload(*id)? {
+            if !renderer.poll_texture_upload(*id)? {
                 return Ok(());
             }
             self.pending_image = None;
@@ -602,28 +608,25 @@ impl Equipment {
         }
         Ok(())
     }
-    fn handle_upload_error(
-        &mut self,
-        i: usize,
-        error: Box<dyn std::error::Error>,
-    ) -> PipelineResult<()> {
-        use sashiko_renderer::core::runtime::{ExecutionError, ExecutionErrorKind};
-        if let Some(runtime) = error.downcast_ref::<ExecutionError>() {
-            if runtime.capacity().is_some_and(|c| can_retry(c.recovery)) {
-                self.collect = true;
-                return Ok(());
-            }
-            if matches!(
-                runtime.kind(),
-                ExecutionErrorKind::Unsupported
-                    | ExecutionErrorKind::InvalidInput
-                    | ExecutionErrorKind::CapacityExhausted
-            ) {
-                self.fail(i, error.to_string());
-                return Ok(());
-            }
+    fn handle_upload_error(&mut self, i: usize, error: AssetPrepareError) -> PipelineResult<()> {
+        use sashiko_renderer::core::runtime::ExecutionErrorKind;
+        if error.capacity().is_some_and(|c| can_retry(c.recovery())) {
+            self.collect = true;
+        } else if error.capacity().is_some()
+            || matches!(
+                error.execution_kind(),
+                Some(
+                    ExecutionErrorKind::Unsupported
+                        | ExecutionErrorKind::InvalidInput
+                        | ExecutionErrorKind::CapacityExhausted
+                )
+            )
+        {
+            self.fail(i, error.to_string());
+        } else {
+            return Err(error.into());
         }
-        Err(error)
+        Ok(())
     }
     fn register(
         &mut self,
@@ -724,16 +727,11 @@ impl Equipment {
             }
         }
         match self.publish(Some(i), next, renderer, meshes, materials) {
-            Err(error)
-                if error
-                    .downcast_ref::<sashiko_renderer::AssetPrepareError>()
-                    .and_then(|e| e.capacity())
-                    .is_some_and(|c| can_retry(c.recovery())) =>
-            {
+            Err(error) if error.capacity().is_some_and(|c| can_retry(c.recovery())) => {
                 self.collect = true;
                 Ok(())
             }
-            result => result,
+            result => Ok(result?),
         }
     }
     pub fn finish_upload(

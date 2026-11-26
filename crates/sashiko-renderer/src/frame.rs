@@ -11,7 +11,7 @@ use sashiko_renderer_core::{
     ImageFormat,
     capacity::Preparation,
     graph::{Graph, GraphError, ImageDesc, ImageHandle, LoadOp, PassHandle, SampleCount},
-    runtime::{FrameId, FrameSubmission, ManagedImage, Runtime, RuntimeConfig},
+    runtime::{FrameId, FrameSubmission, Runtime, RuntimeConfig},
 };
 use std::{num::NonZeroUsize, time::Duration};
 
@@ -259,13 +259,9 @@ impl Renderer {
         Ok(base)
     }
 
-    /// Check format/extent and filtering on the device used by this renderer.
-    pub fn check_texture_support(
-        &mut self,
-        desc: ImageDesc,
-        linear_filtering: bool,
-    ) -> PipelineResult<()> {
-        self.drawing.check_texture_support(desc, linear_filtering)
+    /// Read runtime limits and backend telemetry at observation boundaries.
+    pub fn runtime_info(&mut self) -> &Runtime {
+        self.drawing.runtime()
     }
 
     /// Add a texture reservation at an explicit capacity-change boundary.
@@ -287,43 +283,6 @@ impl Renderer {
         self.host = host;
         self.working_set = working_set;
         Ok(())
-    }
-
-    /// Upload one complete texture. Retain the returned owner until its last use is submitted.
-    pub fn upload_texture(
-        &mut self,
-        name: &str,
-        desc: ImageDesc,
-        bytes: &[u8],
-    ) -> PipelineResult<(FrameId, ManagedImage)> {
-        self.drawing.upload_texture(name, desc, bytes)
-    }
-
-    /// Upload a contiguous mip range from level-major packed data.
-    pub fn upload_texture_mips(
-        &mut self,
-        name: &str,
-        desc: ImageDesc,
-        levels: std::ops::Range<u32>,
-        bytes: &[u8],
-    ) -> PipelineResult<(FrameId, ManagedImage)> {
-        self.drawing.upload_texture_mips(name, desc, levels, bytes)
-    }
-
-    /// Create a candidate from an existing version and the supplied new mip contents.
-    pub fn promote_texture(
-        &mut self,
-        name: &str,
-        previous: &ManagedImage,
-        levels: std::ops::Range<u32>,
-        bytes: &[u8],
-    ) -> PipelineResult<(FrameId, ManagedImage)> {
-        self.drawing.promote_texture(name, previous, levels, bytes)
-    }
-
-    /// Consume the upload completion without waiting on the GPU.
-    pub fn poll_texture_upload(&mut self, id: FrameId) -> PipelineResult<bool> {
-        self.drawing.poll_texture_upload(id)
     }
 
     /// Upload the static surface pages and the corresponding dynamic probe volume.
