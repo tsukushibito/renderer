@@ -6,6 +6,8 @@ Sashiko は、少人数のチームと AI が同じシーンを編集し、同�
 
 ゲームは `sashiko` の `physics` feature を有効にし、位置・変位・力積・命中点・法線に `sashiko::math::Vec3`、剛体の回転に `sashiko::math::Rotation3` を使う。これらは `sashiko-math` が定義する型で、ゲームが持っている値をそのまま物理 API に渡せる。`BodyId` と `ColliderId` の内部表現、および Rapier 型への変換は `sashiko-physics` に閉じる。
 
+`Pose3` は平行移動と回転を持つ。点には回転と平行移動、方向には回転を適用する。`add_box` はワールド座標の `Pose3` と剛体のローカル軸に沿った半サイズを取り、`pose` は現在のワールド姿勢を返す。箱の掃引・候補判定・重なり問い合わせは、ワールド軸に沿った `Aabb3` を受け取る。`Aabb3::from_center_half_extents` は中心と各軸の半サイズを受け取り、各成分は有限、半サイズはゼロ以上とする。数学層の `contains` と `overlaps` は境界を含む。
+
 ゲームから Rapier、Parry、glam、nalgebra への直接依存を禁止する。CI は workspace の `examples/` 配下のクレートと、`sashiko` に直接依存するクレートの Cargo マニフェストを検査する。別名・任意 feature・ターゲット別・開発用・ビルド用の依存も対象とする。外部のゲーム workspace でも、そのルートから [依存チェッカー](../../tools/check_game_dependencies.py) を実行できる。
 
 `sashiko` の `physics` feature は `sashiko-physics` の固定時間更新ワールドを公開する。初版のバックエンドは Rapier 3D。箱形状の静的・動的剛体を登録でき、位置・回転の取得、インパルス、線分・箱の掃引・重なり判定に対応する。配置を更新した後、時間を進めずに問い合わせるには `synchronize` を呼ぶ。掃引・レイの命中距離は指定した移動量に対する割合で、点と法線はワールド座標で返す。ハンドルは生成元のワールド内で使う。リプレイにはシーンと入力を記録する。

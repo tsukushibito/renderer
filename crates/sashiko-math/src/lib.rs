@@ -2,6 +2,11 @@
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Div, Index, IndexMut, Mul, Neg, Sub};
 
+mod aabb;
+mod pose;
+pub use aabb::Aabb3;
+pub use pose::Pose3;
+
 macro_rules! vector {
     ($name:ident, $size:literal, $array:literal, $($axis:ident),+) => {
         #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]

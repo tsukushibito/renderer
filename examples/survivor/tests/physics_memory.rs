@@ -10,13 +10,17 @@ static HEAP: CountingAllocator<std::alloc::System> = CountingAllocator::new(std:
 #[ignore = "run in isolation to measure process-wide allocations"]
 fn push_cargo_after_warmup() {
     use sashiko::{
-        math::Vec3,
+        math::{Pose3, Vec3},
         physics::{BodyKind, PhysicsWorld},
     };
     let mut world = PhysicsWorld::new(Vec3::Y * -9.81, 1. / 60.);
-    world.add_box(-Vec3::Y, Vec3::new(32., 1., 32.), BodyKind::Fixed);
+    world.add_box(
+        Pose3::from_translation(-Vec3::Y),
+        Vec3::new(32., 1., 32.),
+        BodyKind::Fixed,
+    );
     let (body, _) = world.add_box(
-        Vec3::Y * 0.5,
+        Pose3::from_translation(Vec3::Y * 0.5),
         Vec3::ONE * 0.5,
         BodyKind::Dynamic {
             lock_rotation: true,
