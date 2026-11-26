@@ -7,12 +7,14 @@ blender -b -t 1 --factory-startup --python-exit-code 1 -P tools/survivor/cook_ch
 import json
 import math
 from pathlib import Path
-import struct
 import sys
 
 import bpy
 from mathutils import Matrix, Vector
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sashiko-asset-cook" / "python"))
+import sashiko_skin
 
 
 def geometry(rig, objects):
@@ -60,15 +62,15 @@ def geometry(rig, objects):
                 u, v = mesh.uv_layers.active.data[loop_id].uv
                 uv = ((atlas_offset + 0.5 + min(1, max(0, u)) * (atlas_width - 1)) / 256,
                       1 - min(1, max(0, v)))
-                record = struct.pack("<12f4H4f", *(placement @ vertex.co),
-                                     *(normals @ loop.normal).normalized(),
-                                     *(placement.to_3x3() @ loop.tangent).normalized(),
-                                     -loop.bitangent_sign, *uv, *joints, *weights)
+                record = sashiko_skin.pack_vertex(
+                    placement @ vertex.co, (normals @ loop.normal).normalized(),
+                    (*(placement.to_3x3() @ loop.tangent).normalized(), -loop.bitangent_sign),
+                    uv, joints, weights)
                 indices.append(vertices.setdefault(record, len(vertices)))
         evaluated.to_mesh_clear()
     # Blender's evaluated modifier mesh can enumerate identical faces in
     # different orders. Canonicalize vertices spatially and preserve winding.
-    ordered = sorted(vertices, key=lambda v: (struct.unpack_from("<3f", v), v))
+    ordered = sorted(vertices, key=sashiko_skin.vertex_sort_key)
     remap = {vertices[record]: i for i, record in enumerate(ordered)}
     triangles = []
     for i in range(0, len(indices), 3):
@@ -109,7 +111,7 @@ def palettes(target, source, joint_names, to_game, action):
             posed[bone.name] = Matrix.LocRotScale(point, orientation, Vector((1, 1, 1)))
         for name in joint_names:
             skin = to_game @ posed[name] @ target.data.bones[name].matrix_local.inverted() @ inv_game
-            result.extend(struct.pack("<12f", *(x for row in list(skin)[:3] for x in row)))
+            result.extend(sashiko_skin.pack_transform(list(skin)[:3]))
     return frames, result
 
 
@@ -146,22 +148,18 @@ def cook(src, dest, variant, recipe):
         poses.extend(matrices)
 
     dest.mkdir(parents=True, exist_ok=True)
-    with (dest / f"{variant}.skin").open("wb") as f:
-        f.write(struct.pack("<8s4I", b"SURSKIN2", len(vertices), len(indices), len(names), frames))
-        f.writelines(vertices)
-        f.write(struct.pack(f"<{len(indices)}I", *indices))
-        f.write(poses)
-        # Skin matrices map mesh-space bind points to posed mesh-space points.
-        # Preserve bind frames and nearest retained parents for local-space blends.
-        joint_ids = {name: i for i, name in enumerate(names)}
-        for name in names:
-            bone = rig.data.bones[name]
-            parent = bone.parent
-            while parent and parent.name not in joint_ids:
-                parent = parent.parent
-            parent_id = joint_ids[parent.name] if parent else 0xffffffff
-            bind = to_game @ bone.matrix_local
-            f.write(struct.pack("<I12f", parent_id, *(x for row in list(bind)[:3] for x in row)))
+    # Retain the nearest exported parent and mesh-space bind frame for local blends.
+    joint_ids = {name: i for i, name in enumerate(names)}
+    bind_joints = []
+    for name in names:
+        bone = rig.data.bones[name]
+        parent = bone.parent
+        while parent and parent.name not in joint_ids:
+            parent = parent.parent
+        bind_joints.append((joint_ids[parent.name] if parent else None,
+                            list(to_game @ bone.matrix_local)[:3]))
+    skin = sashiko_skin.encode_skin(vertices, indices, len(names), poses, bind_joints=bind_joints)
+    (dest / f"{variant}.skin").write_bytes(skin)
     atlas = np.concatenate([image_bytes(src / recipe["albedo"], 224),
                             image_bytes(src / "T_Eye_Brown.png", 32)], axis=1)
     (dest / f"{variant}.rgba").write_bytes(atlas.tobytes())

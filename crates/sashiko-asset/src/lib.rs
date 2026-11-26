@@ -1,8 +1,9 @@
-//! Versioned, local-file distribution contract shared by the equipment cooker and game.
+//! Cooked asset formats shared by authoring tools and game loaders.
 mod blob;
 mod catalog;
 #[cfg(feature = "renderer")]
 mod renderer;
+pub mod skin;
 mod store;
 #[cfg(feature = "renderer")]
 pub use renderer::{MaterialBlob, Sampler};

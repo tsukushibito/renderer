@@ -361,99 +361,37 @@ pub struct SkinnedModel {
 }
 
 #[cfg(feature = "rendering")]
-fn record_bytes<'a>(input: &mut &'a [u8], count: usize, stride: usize) -> PipelineResult<&'a [u8]> {
-    let size = count.checked_mul(stride).ok_or("character size overflow")?;
-    let (records, next) = input.split_at_checked(size).ok_or("short character data")?;
-    *input = next;
-    Ok(records)
-}
-
-#[cfg(feature = "rendering")]
-fn floats<const N: usize>(record: &[u8], offset: usize) -> [f32; N] {
-    std::array::from_fn(|i| {
-        let start = offset + i * 4;
-        f32::from_le_bytes(record[start..start + 4].try_into().unwrap())
-    })
-}
-
-#[cfg(feature = "rendering")]
 impl SkinnedModel {
-    /// Decode the cooked mesh and joint matrix stream at asset preparation time.
+    /// Prepare renderer vertices, bind transforms and sampled palettes from a cooked skin.
     pub fn decode(input: &[u8]) -> PipelineResult<Self> {
-        let (mut data, has_skeleton) = if let Some(payload) = input.strip_prefix(b"SURSKIN2") {
-            (payload, true)
-        } else {
-            (
-                input.strip_prefix(b"SURSKIN1").ok_or("character schema")?,
-                false,
-            )
-        };
-        let header = record_bytes(&mut data, 4, 4)?;
-        let [points, elements, joints, frames] = std::array::from_fn(|i| {
-            u32::from_le_bytes(header[i * 4..i * 4 + 4].try_into().unwrap()) as usize
-        });
-        if joints == 0 || frames == 0 {
-            return Err("empty walk clip".into());
-        }
-        let vertex_bytes = record_bytes(&mut data, points, 72)?;
-        let index_bytes = record_bytes(&mut data, elements, 4)?;
-        let all_joints = frames.checked_mul(joints).ok_or("walk clip overflow")?;
-        let matrices = record_bytes(&mut data, all_joints, 48)?;
-        let skeleton = if has_skeleton {
-            Some(Rig::decode(record_bytes(&mut data, joints, 52)?)?)
-        } else {
-            None
-        };
-        if !data.is_empty() {
-            return Err("trailing character data".into());
-        }
-        let mut vertices = Vec::with_capacity(points);
-        let mut weights = Vec::with_capacity(points);
-        for v in vertex_bytes.as_chunks::<72>().0 {
+        let skin = sashiko_asset::skin::Skin::decode(input)?;
+        let poses = skin
+            .poses()
+            .map(Transform::new)
+            .collect::<Result<Vec<_>, _>>()?;
+        let skeleton = skin.bind_joints.map(Rig::from_bind_joints).transpose()?;
+        let mut vertices = Vec::with_capacity(skin.vertices.len());
+        let mut weights = Vec::with_capacity(skin.vertices.len());
+        for vertex in skin.vertices {
+            let surface = vertex.surface;
             vertices.push(PbrVertex::new(
-                floats(v, 0),
-                floats(v, 12),
-                floats(v, 24),
-                floats(v, 40),
+                surface.position,
+                surface.normal,
+                surface.tangent,
+                surface.uv,
             )?);
             weights.push(JointWeights {
-                joints: std::array::from_fn(|i| u16::from_le_bytes([v[48 + 2 * i], v[49 + 2 * i]])),
-                weights: floats(v, 56),
+                joints: vertex.joints,
+                weights: vertex.weights,
             });
-        }
-        for influence in &weights {
-            if influence.joints.iter().any(|&j| usize::from(j) >= joints)
-                || influence.weights.iter().any(|&w| !w.is_finite() || w < 0.)
-                || influence.weights.iter().all(|&w| w == 0.)
-            {
-                return Err("invalid cooked joint indices or weights".into());
-            }
-        }
-        let indices: Vec<u32> = index_bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|x| u32::from_le_bytes(*x))
-            .collect();
-        if indices.is_empty()
-            || !indices.len().is_multiple_of(3)
-            || indices.iter().any(|&index| index as usize >= points)
-        {
-            return Err("invalid cooked triangle indices".into());
-        }
-        let mut poses = Vec::with_capacity(all_joints);
-        for matrix in matrices.as_chunks::<48>().0 {
-            poses.push(Transform::new(std::array::from_fn(|i| {
-                floats(matrix, i * 16)
-            }))?);
         }
         Ok(Self {
             skeleton,
             vertices,
-            indices,
+            indices: skin.indices,
             weights,
-            joints,
-            frames,
+            joints: skin.joint_count,
+            frames: skin.frame_count,
             poses: poses.into(),
         })
     }
@@ -508,12 +446,8 @@ mod tests {
     }
     #[test]
     fn legacy_skin_prepares_direct_palette_playback() -> PipelineResult<()> {
-        let bytes = include_bytes!("../../../assets/survivor/characters/primary.skin");
-        assert_eq!(&bytes[..8], b"SURSKIN2");
-        let joints = u32::from_le_bytes(bytes[16..20].try_into()?) as usize;
-        let mut legacy = bytes[..bytes.len() - joints * 52].to_vec();
-        legacy[..8].copy_from_slice(b"SURSKIN1");
-        let mesh = SkinnedModel::decode(&legacy)?;
+        let legacy = include_bytes!("../../../assets/verification/animation/v1.skin");
+        let mesh = SkinnedModel::decode(legacy)?;
         let rate = NonZeroU32::new(60).unwrap();
         let clips = BTreeMap::from([(
             "legacy".into(),
@@ -528,7 +462,7 @@ mod tests {
             model: mesh,
             timelines: BTreeMap::new(),
             clips,
-            content: [Digest::of(&legacy); 2],
+            content: [Digest::of(legacy); 2],
             color: vec![],
             extent: [0, 0],
         };
