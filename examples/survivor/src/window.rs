@@ -33,7 +33,7 @@ use survivor::visual::Visual;
 use survivor::{Game, Input, Phase, benchmark_input};
 pub struct Options {
     pub config: RuntimeConfig,
-    pub engine: sashiko::EngineConfig,
+    pub parallelism: std::num::NonZeroUsize,
     pub extent: [u32; 2],
     pub warmup: usize,
     pub volume: f32,
@@ -272,7 +272,7 @@ pub fn run(
         )
         .into());
     }
-    let jobs = sashiko::jobs::SharedJobs::from(o.engine.create_jobs()?);
+    let jobs = sashiko::jobs::SharedJobs::from(sashiko::jobs::JobSystem::new(o.parallelism)?);
     let mut visual = Visual::new(&game, &o.catalog, &o.character, o.characters, jobs.clone())?;
     let content = (initial.visual.is_some() || o.record.is_some() || o.capture.is_some())
         .then(|| visual.content(&o.character));

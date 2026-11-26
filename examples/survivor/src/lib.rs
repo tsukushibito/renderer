@@ -182,13 +182,22 @@ impl Game {
     pub const MAX_HP: u32 = 100;
 
     pub fn new(arena: Arena, scenario: Scenario, seed: u64) -> Self {
+        Self::with_physics_workers(arena, scenario, seed, Default::default())
+    }
+
+    pub fn with_physics_workers(
+        arena: Arena,
+        scenario: Scenario,
+        seed: u64,
+        workers: sashiko::physics::PhysicsWorkers,
+    ) -> Self {
         let nav = CrowdNavigation::new(arena.floor(), ENEMY_RADIUS, MAX_ENEMIES)
             .expect("validated arena");
         let scene = authoring::game_world(&arena);
         let mut game = Self {
             locomotion: Locomotion::default(),
             player: arena.player_spawn,
-            hall: physics::Hall::new(&arena),
+            hall: physics::Hall::new(&arena, workers),
             arena,
             tick: 0,
             phase: Phase::Playing,
@@ -273,7 +282,12 @@ impl Game {
             Phase::Defeated => {
                 if input.restart {
                     let locomotion = self.locomotion.restarted();
-                    *self = Self::new(self.arena.clone(), self.scenario, self.seed);
+                    *self = Self::with_physics_workers(
+                        self.arena.clone(),
+                        self.scenario,
+                        self.seed,
+                        self.hall.workers(),
+                    );
                     self.locomotion = locomotion;
                     self.tick = tick;
                 }
@@ -502,6 +516,32 @@ pub fn benchmark_input(game: &Game) -> Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn configured_physics_and_game_budgets_agree_after_restart() {
+        use sashiko::{EngineConfig, jobs::JobSystem, physics::PhysicsWorkers};
+        for n in [1, 4] {
+            let config: EngineConfig =
+                serde_json::from_value(serde_json::json!({"jobs":{"parallelism":n}})).unwrap();
+            let budget = config.host_parallelism();
+            let jobs = JobSystem::new(budget).unwrap();
+            let mut game = Game::with_physics_workers(
+                Arena::default(),
+                Scenario::Early,
+                506,
+                PhysicsWorkers::new(budget).unwrap(),
+            );
+            assert_eq!(game.hall.workers().parallelism(), Some(jobs.parallelism()));
+            game.phase = Phase::Defeated;
+            game.step(Input {
+                restart: true,
+                ..Input::default()
+            });
+            assert_eq!(game.phase, Phase::Playing);
+            assert_eq!(game.hall.workers().parallelism(), Some(jobs.parallelism()));
+        }
+    }
 
     #[test]
     fn same_tick_inputs_ignore_frame_grouping_and_respect_edited_bench() {

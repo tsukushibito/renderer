@@ -49,7 +49,7 @@ rstar = { path = "../sashiko/crates/sashiko-physics/compat/rstar" }
 
 ホストが所有する `JobSystem` に、参加スレッドの総数を指定する。1 ならホストだけで実行する。`scope` から戻ると、投入したすべての仕事とその子孫が完了し、結果の領域を再び借用できる。
 
-`sashiko::EngineConfig` は `jobs.parallelism` を読み、ネイティブの `create_jobs()` で指定人数のチームを生成する。ホストは設定ファイルの場所を選ぶか、メモリ上の JSON をデシリアライズできる。自動設定の解決にはホストが取得した並列度も渡せる。Survivor のウィンドウ描画と最終キャプチャは起動時に作成したチームを共有する。[設定例と探索順](../guides/development.md#cpu-jobs)
+`sashiko::EngineConfig` は `jobs.parallelism` を読み、ホストは `host_parallelism()` で起動時に一度だけ人数を決める。ネイティブ版 Survivor はその人数で物理用の `PhysicsWorkers` を作り、描画する場合は同じ人数を `JobSystem::new` に渡す。ウィンドウ描画と最終キャプチャはゲーム用チームを共有する。ホストは設定ファイルの場所を選ぶか、メモリ上の JSON をデシリアライズできる。[設定例と探索順](../guides/development.md#cpu-jobs)
 
 `scope` 本体は呼び出し元で実行し、`Rc` などの `!Send` な値を使える。補助ワーカーに渡すジョブには `Send` を要求する。入れ子のスコープでも同じ参加者を使う。unwind 構成の panic は合流後に伝播し、本体と子の両方が panic した場合は本体の panic を返す。
 
@@ -73,7 +73,7 @@ system.scope(|s| {
 
 それより小さいチーム・バッチでは、参加者数以下の連続範囲にまとめ、分割したスレッドが 1 範囲を直接処理する。盗まれた範囲は元のキューが空で待機中の参加者がいれば追加分割する。どちらの方式も同じワーカーのローカルキューを利用する。[負荷別の実測](../verification/current.md#job-range-profile)
 
-物理ワールドは Rapier の `parallel` feature を有効にしている。`step()` は同期呼び出しで、内部の並列処理には Rayon を使う。`sashiko-jobs` のワーカー数はこのプールには適用されず、ゲームのジョブと物理ステップを同時に走らせると CPU 時間を取り合う場合がある。
+物理ワールドは Rapier の `parallel` feature を有効にしている。ネイティブ版 Survivor の `step()` と衝突状態の同期は、専用の Rayon プールで処理を完了するまで呼び出し元が待つ。設定値 N は物理用ワーカー N 人、ゲーム側はホスト込みの N 人を意味する。リスタート時には新しいワールドに同じ物理用プールを渡す。両チームを同時に稼働させる場合、合計の参加者は N を超え得る。Web Canvas 版は従来の単一スレッド構成を使う。
 
 ホスト所有の Rayon プールを Rapier 0.36.1 の `set_thread_pool` に渡す方式を Windows と Web Worker で評価した。ゲームの固定更新とワールドのステップをホストが順序付け、独立な姿勢評価と可視判定はその予算の中で並行できた。製品では現行のジョブ実装を使う。採否を決めたのは、物理を除いた定常フレームでも共有プールへの投入で Rust ヒープの確保と解放が発生した点である。試作の `Jobs::run` と具体的な Rayon 型は計測ツール内に置く。[計測結果と適用範囲](../verification/current.md#shared-worker-budget)
 

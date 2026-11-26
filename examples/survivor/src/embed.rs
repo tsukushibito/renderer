@@ -23,6 +23,8 @@ struct Session {
     controls: DeviceInput<controls::Action>,
     #[cfg(windows)]
     view: Option<desktop::View>,
+    #[cfg(windows)]
+    parallelism: std::num::NonZeroUsize,
     #[cfg(target_arch = "wasm32")]
     scene: canvas::CanvasScene,
 }
@@ -61,7 +63,25 @@ extern "C" fn survivor_open(seed: u32) -> u32 {
         report("session handles exhausted".into());
         return 0;
     };
-    let game = Game::new(Default::default(), Scenario::Early, u64::from(seed));
+    #[cfg(windows)]
+    let (parallelism, workers) = match crate::engine_config(None).and_then(|config| {
+        let n = config.host_parallelism();
+        Ok((n, sashiko::physics::PhysicsWorkers::new(n)?))
+    }) {
+        Ok(team) => team,
+        Err(err) => {
+            report(err.into());
+            return 0;
+        }
+    };
+    #[cfg(target_arch = "wasm32")]
+    let workers = Default::default();
+    let game = Game::with_physics_workers(
+        Default::default(),
+        Scenario::Early,
+        u64::from(seed),
+        workers,
+    );
     #[cfg(target_arch = "wasm32")]
     let scene = canvas::CanvasScene::new(game.arena.obstacles.len());
     let session = Session {
@@ -69,6 +89,8 @@ extern "C" fn survivor_open(seed: u32) -> u32 {
         controls: controls::controls(),
         #[cfg(windows)]
         view: None,
+        #[cfg(windows)]
+        parallelism,
         #[cfg(target_arch = "wasm32")]
         scene,
     };

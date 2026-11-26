@@ -3,8 +3,41 @@ use rapier3d::{parry::query::ShapeCastOptions, prelude as r};
 use sashiko_math::{Aabb3, Pose3, Rotation3, Vec3};
 use std::{
     fmt,
+    num::NonZeroUsize,
+    sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
 };
+
+/// Execution context for physics worlds. Clones reuse the same team.
+/// Default worlds use the calling Rayon context, including on the Web.
+#[derive(Clone, Default)]
+pub struct PhysicsWorkers(Option<Arc<rapier3d::rayon::ThreadPool>>);
+
+impl PhysicsWorkers {
+    /// Start a dedicated team. The calling host waits while this team steps the world.
+    pub fn new(parallelism: NonZeroUsize) -> std::io::Result<Self> {
+        use rapier3d::rayon;
+        if parallelism.get() > rayon::max_num_threads() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "too many physics workers",
+            ));
+        }
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(parallelism.get())
+            .thread_name(|i| format!("sashiko-physics-{i}"))
+            .build()
+            .map_err(std::io::Error::other)?;
+        Ok(Self(Some(Arc::new(pool))))
+    }
+
+    /// Size of the dedicated team, or None when using the caller's context.
+    pub fn parallelism(&self) -> Option<NonZeroUsize> {
+        self.0
+            .as_ref()
+            .and_then(|pool| NonZeroUsize::new(pool.current_num_threads()))
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WorldId(u64);
@@ -90,6 +123,15 @@ impl PhysicsWorld {
             backend: world,
         }
     }
+    /// Use this team for simulation steps and collision synchronization.
+    pub fn set_workers(&mut self, workers: PhysicsWorkers) {
+        self.backend.set_thread_pool(workers.0);
+    }
+
+    /// Clone the current context to reuse its workers in another world.
+    pub fn workers(&self) -> PhysicsWorkers {
+        PhysicsWorkers(self.backend.thread_pool())
+    }
     /// Place a box at a world pose. Its half-extents are measured along its local axes.
     pub fn add_box(&mut self, pose: Pose3, half: Vec3, kind: BodyKind) -> (BodyId, ColliderId) {
         assert!(half.to_array().into_iter().all(|v| v.is_finite() && v > 0.));
@@ -147,7 +189,12 @@ impl PhysicsWorld {
         Ok(())
     }
     pub fn synchronize(&mut self) {
-        self.backend.detect_collisions(&(), &());
+        // Rapier's standalone collision pipeline does not enter the step's pool.
+        if let Some(pool) = self.backend.thread_pool() {
+            pool.install(|| self.backend.detect_collisions(&(), &()));
+        } else {
+            self.backend.detect_collisions(&(), &());
+        }
     }
     pub fn step(&mut self) {
         self.backend.step();

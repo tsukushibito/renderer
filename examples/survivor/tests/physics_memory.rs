@@ -9,11 +9,26 @@ static HEAP: CountingAllocator<std::alloc::System> = CountingAllocator::new(std:
 #[test]
 #[ignore = "run in isolation to measure process-wide allocations"]
 fn push_cargo_after_warmup() {
+    use sashiko::physics::PhysicsWorkers;
+    for (name, workers) in [
+        ("ambient", PhysicsWorkers::default()),
+        (
+            "dedicated 4",
+            PhysicsWorkers::new(4.try_into().unwrap()).unwrap(),
+        ),
+    ] {
+        println!("physics team: {name}");
+        measure_cargo(workers);
+    }
+}
+
+fn measure_cargo(workers: sashiko::physics::PhysicsWorkers) {
     use sashiko::{
         math::{Pose3, Vec3},
         physics::{BodyKind, PhysicsWorld},
     };
     let mut world = PhysicsWorld::new(Vec3::Y * -9.81, 1. / 60.);
+    world.set_workers(workers.clone());
     world.add_box(
         Pose3::from_translation(-Vec3::Y),
         Vec3::new(32., 1., 32.),
@@ -44,7 +59,7 @@ fn push_cargo_after_warmup() {
             clock.elapsed()
         );
     }
-    let mut game = Game::new(Arena::default(), Scenario::Early, 506);
+    let mut game = Game::with_physics_workers(Arena::default(), Scenario::Early, 506, workers);
     for _ in 0..60 {
         game.step(Input::default());
     }

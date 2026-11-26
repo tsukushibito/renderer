@@ -1,7 +1,7 @@
 use crate::Arena;
 use sashiko::{
     math::{Aabb3, Pose3, Vec2, Vec3},
-    physics::{Bodies, BodyId, BodyKind, ColliderId, PhysicsWorld},
+    physics::{Bodies, BodyId, BodyKind, ColliderId, PhysicsWorkers, PhysicsWorld},
 };
 
 pub(crate) struct Hall {
@@ -13,8 +13,12 @@ fn xyz(p: Vec2, y: f32) -> Vec3 {
     Vec3::new(p.x(), y, p.y())
 }
 impl Hall {
-    pub fn new(arena: &Arena) -> Self {
+    pub fn workers(&self) -> PhysicsWorkers {
+        self.world.workers()
+    }
+    pub fn new(arena: &Arena, workers: PhysicsWorkers) -> Self {
         let mut world = PhysicsWorld::new(Vec3::new(0., -9.81, 0.), 1. / crate::TICK_HZ as f32);
+        world.set_workers(workers);
         let [x, z] = arena.half_extent.to_array();
         world.add_box(
             Pose3::from_translation(Vec3::new(0., -0.5, 0.)),

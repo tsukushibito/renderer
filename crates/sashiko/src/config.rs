@@ -61,11 +61,15 @@ impl EngineConfig {
             .unwrap_or(NonZeroUsize::MIN)
     }
 
-    /// Start the configured native team, querying CPU availability only for auto.
+    /// Resolve once at startup and pass the same budget to the game and physics teams.
+    pub fn host_parallelism(&self) -> NonZeroUsize {
+        self.parallelism(|| std::thread::available_parallelism().ok())
+    }
+
+    /// Start a native game job team when it is the only consumer of the budget.
     #[cfg(all(feature = "animation", not(target_arch = "wasm32")))]
     pub fn create_jobs(&self) -> io::Result<crate::jobs::JobSystem> {
-        let n = self.parallelism(|| std::thread::available_parallelism().ok());
-        crate::jobs::JobSystem::new(n)
+        crate::jobs::JobSystem::new(self.host_parallelism())
     }
 }
 
@@ -97,6 +101,7 @@ mod tests {
                     .get(),
                 n
             );
+            assert_eq!(config.host_parallelism().get(), n);
             #[cfg(all(feature = "animation", not(target_arch = "wasm32")))]
             assert_eq!(config.create_jobs().unwrap().parallelism().get(), n);
         }

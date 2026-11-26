@@ -19,11 +19,12 @@ impl View {
         size: [u32; 2],
         game: &Game,
         catalog: &std::path::Path,
+        parallelism: std::num::NonZeroUsize,
     ) -> Result<Self> {
         if size.contains(&0) {
             return Err("attach requires a non-empty client area".into());
         }
-        let jobs = crate::engine_config(None)?.create_jobs()?.into();
+        let jobs = sashiko::jobs::JobSystem::new(parallelism)?.into();
         let mut visual = Visual::new(game, catalog, "primary", Default::default(), jobs)?;
         let camera = visual.camera(game, size)?;
         #[cfg(feature = "d3d12")]
@@ -97,6 +98,7 @@ unsafe extern "C" fn survivor_attach(
             [width, height],
             &s.app.game,
             catalog_path,
+            s.parallelism,
         )?);
         s.app.game.locomotion.replace_tracks(locomotion);
         Ok(0)

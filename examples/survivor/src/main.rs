@@ -25,11 +25,12 @@ struct RunStart {
 }
 
 impl RunStart {
-    fn game(&self) -> Result<Game, String> {
-        Ok(Game::new(
+    fn game(&self, workers: sashiko::physics::PhysicsWorkers) -> Result<Game, String> {
+        Ok(Game::with_physics_workers(
             Arena::from_value(self.arena.clone())?,
             self.scenario,
             self.seed,
+            workers,
         ))
     }
 }
@@ -162,7 +163,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         (requested()?, None)
     };
-    let mut game = initial.game()?;
+    let parallelism = engine.host_parallelism();
+    let mut game = initial.game(sashiko::physics::PhysicsWorkers::new(parallelism)?)?;
     let explicit = args
         .get_one::<String>("character")
         .map(String::as_str)
@@ -236,7 +238,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             replay,
             &args,
             &mut profile,
-            engine,
+            parallelism,
             (character, catalog_path),
         )?
     };
@@ -255,7 +257,7 @@ fn play(
     replay: Option<Vec<Input>>,
     args: &clap::ArgMatches,
     profile: &mut profile::Player,
-    engine: sashiko::EngineConfig,
+    parallelism: std::num::NonZeroUsize,
     (character, catalog_path): (String, PathBuf),
 ) -> Result<Game, Box<dyn Error>> {
     use sashiko_renderer::core::runtime::RuntimeConfig;
@@ -288,7 +290,7 @@ fn play(
         initial,
         window::Options {
             config,
-            engine,
+            parallelism,
             replay,
             extent: [profile.prefs.width, profile.prefs.height],
             volume: profile.prefs.volume,
@@ -323,7 +325,7 @@ fn play(
     _: Option<Vec<Input>>,
     _: &clap::ArgMatches,
     _: &mut profile::Player,
-    _: sashiko::EngineConfig,
+    _: std::num::NonZeroUsize,
     _: (String, PathBuf),
 ) -> Result<Game, Box<dyn Error>> {
     Err("use --headless or enable presentation and a graphics backend on Windows".into())
@@ -353,7 +355,7 @@ mod tests {
             rate(),
         )
         .unwrap();
-        let mut game = loaded.initial.game().unwrap();
+        let mut game = loaded.initial.game(Default::default()).unwrap();
         assert!(game.step(loaded.inputs[0]).reached_marker);
     }
 }
