@@ -1,0 +1,9 @@
+[package]
+name = "rstar"
+version = "0.13.1"
+edition = "2024"
+publish = false
+description = "Local adapter for Parry's mesh intersection queries using upstream rstar 0.14"
+
+[dependencies]
+rstar-upstream = { package = "rstar", version = "0.14" }

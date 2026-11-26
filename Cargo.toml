@@ -46,3 +46,8 @@ undocumented_unsafe_blocks = "deny"
 inherits = "release"
 debug = 2
 strip = "none"
+
+# Parry 0.31 requires rstar 0.13, which pins heapless 0.8 (RUSTSEC-2026-0575..0582).
+# Remove the adapter when Parry can select rstar 0.14 directly.
+[patch.crates-io]
+rstar = { path = "crates/sashiko-physics/compat/rstar" }
