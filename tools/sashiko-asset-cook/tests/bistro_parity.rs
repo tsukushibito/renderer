@@ -32,7 +32,7 @@ fn cooked_material_preserves_bistro_maps_and_sampler_settings() -> project::Resu
     assert_eq!(primitive.images[0], primitive.images[3]);
     let bytes = store.load(&primitive.material).unwrap();
     let material = bytes.material().unwrap();
-    let factors = material.factors().unwrap();
+    let factors = material.factors;
     assert_eq!(
         factors.alpha_mode,
         sashiko_renderer::material::AlphaMode::Mask

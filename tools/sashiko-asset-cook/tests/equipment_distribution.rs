@@ -66,9 +66,10 @@ fn clean_cook_matches_reference_generation_and_loads_without_sources() -> Result
         generation.id().to_string(),
         "cf05211e283db404a55445283f3a99501925d7da73b536759f3799d64b93095f"
     );
-    let catalog: Catalog = serde_json::from_slice(&fs::read(
-        actual.join("catalogs").join(generation.id().to_string()),
-    )?)?;
+    let catalog = Catalog::decode(
+        &fs::read(actual.join("catalogs").join(generation.id().to_string()))?,
+        *generation.id(),
+    )?;
     let store = ObjectStore::new(&actual);
     let mut expected = BTreeSet::new();
     for asset in catalog.assets.values() {

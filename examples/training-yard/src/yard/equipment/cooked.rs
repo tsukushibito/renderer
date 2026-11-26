@@ -34,12 +34,8 @@ fn read_inner(
     id: AssetId,
 ) -> Result<Vec<LoadedPart>, Box<dyn std::error::Error>> {
     let recipe = generation.equipment(&id)?;
-    if recipe.primitives.is_empty() || recipe.primitives.len() > super::MAX_PARTS {
-        return Err(format!(
-            "armor requires between 1 and {} primitives",
-            super::MAX_PARTS
-        )
-        .into());
+    if recipe.primitives.len() > super::MAX_PARTS {
+        return Err(format!("armor exceeds its limit of {} primitives", super::MAX_PARTS).into());
     }
     recipe
         .primitives

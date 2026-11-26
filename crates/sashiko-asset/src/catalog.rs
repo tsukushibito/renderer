@@ -124,10 +124,9 @@ pub struct Equipment {
     pub primitives: Vec<Primitive>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Catalog {
     pub version: u32,
-    #[serde(deserialize_with = "read_assets")]
     pub assets: BTreeMap<AssetId, Equipment>,
 }
 
@@ -137,19 +136,22 @@ impl Catalog {
         if Digest::of(bytes) != id {
             return Err(invalid("catalog digest mismatch"));
         }
-        let catalog: Catalog = serde_json::from_slice(bytes).map_err(invalid)?;
-        if catalog.version != 1 {
-            return Err(invalid(format!(
-                "unsupported catalog version {}",
-                catalog.version
-            )));
+        #[derive(Deserialize)]
+        struct Record {
+            version: u32,
+            #[serde(deserialize_with = "read_assets")]
+            assets: BTreeMap<AssetId, Equipment>,
         }
-        for (asset, equipment) in &catalog.assets {
+        let Record { version, assets } = serde_json::from_slice(bytes).map_err(invalid)?;
+        if version != 1 {
+            return Err(invalid(format!("unsupported catalog version {version}")));
+        }
+        for (asset, equipment) in &assets {
             if equipment.primitives.is_empty() {
                 return Err(invalid(format!("no primitives for equipment {asset}")));
             }
         }
-        Ok(catalog)
+        Ok(Self { version, assets })
     }
 
     /// Payloads referenced by every equipment primitive, including shared objects.
