@@ -140,7 +140,7 @@ fn host_body_and_nested_scopes_respect_the_team_budget() {
             let mut jobs = create(n.try_into().unwrap()).unwrap();
             let host = std::rc::Rc::new(std::thread::current().id());
             let threads = std::sync::Mutex::new(std::collections::HashSet::from([*host]));
-            jobs.scope(|scope| {
+            let returned = jobs.scope(|scope| {
                 assert_eq!(scope.parallelism().get(), n);
                 assert_eq!(std::thread::current().id(), *host);
                 for _ in 0..32 {
@@ -153,7 +153,9 @@ fn host_body_and_nested_scopes_respect_the_team_budget() {
                         })
                     });
                 }
+                std::rc::Rc::clone(&host)
             });
+            assert!(std::rc::Rc::ptr_eq(&host, &returned));
             assert!(threads.into_inner().unwrap().len() <= n);
         }
     }
