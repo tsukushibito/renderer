@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "models": {
+    "figure": {
+      "id": "00000000000000000000000000000001",
+      "skin": "figure.skin",
+      "color": "white.rgba",
+      "extent": [
+        1,
+        1
+      ],
+      "clips": {
+        "walk": {
+          "first": 0,
+          "frames": 4,
+          "hz": 60,
+          "looping": true
+        },
+        "jog": {
+          "first": 4,
+          "frames": 4,
+          "hz": 60,
+          "looping": true
+        },
+        "reload": {
+          "first": 8,
+          "frames": 6,
+          "hz": 60,
+          "looping": false
+        },
+        "dodge": {
+          "first": 14,
+          "frames": 4,
+          "hz": 60,
+          "looping": false
+        }
+      },
+      "tracks": {
+        "jog": {
+          "events": [
+            {
+              "frame": 1,
+              "id": 1
+            },
+            {
+              "frame": 3,
+              "id": 1
+            }
+          ]
+        },
+        "reload": {
+          "events": [
+            {
+              "frame": 3,
+              "id": 7
+            }
+          ]
+        },
+        "dodge": {
+          "root_translation": [
+            [
+              0.0,
+              0,
+              0
+            ],
+            [
+              0.25,
+              0,
+              0
+            ],
+            [
+              0.5,
+              0,
+              0
+            ],
+            [
+              0.75,
+              0,
+              0
+            ],
+            [
+              1.0,
+              0,
+              0
+            ]
+          ]
+        }
+      }
+    }
+  }
+}

@@ -90,6 +90,10 @@ pub struct JointMask {
     weights: Vec<f32>,
 }
 impl JointMask {
+    pub fn skeleton(&self) -> &Arc<Skeleton> {
+        &self.rig
+    }
+
     pub fn new(rig: &Arc<Skeleton>, weights: Vec<f32>) -> Result<Self, AnimationError> {
         if weights.len() != rig.joint_count() || weights.iter().any(|w| !(0.0..=1.0).contains(w)) {
             return Err(Invalid("invalid joint mask"));

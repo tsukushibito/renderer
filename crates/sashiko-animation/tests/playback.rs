@@ -147,3 +147,18 @@ fn turning_parent_and_partial_pose_agree_through_transition() {
             .is_err()
     );
 }
+
+#[test]
+fn synchronized_root_intervals_cross_the_seam_from_a_negative_phase() {
+    let rig = Skeleton::new(vec![None]).unwrap();
+    let looping = walking(rig.clone(), true);
+    assert_eq!(
+        looping.timeline().phase_displacement(-0.25, 1.25).unwrap(),
+        DVec3::X * 3.
+    );
+    let once = walking(rig, false);
+    assert_eq!(
+        once.timeline().phase_displacement(-0.25, 1.25).unwrap(),
+        DVec3::X * 2.
+    );
+}

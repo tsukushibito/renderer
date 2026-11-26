@@ -82,6 +82,8 @@ fn check(backend: &str) -> Result<(), Box<dyn Error>> {
                 "vma_host_free",
             ]
             .map(index);
+            let mut intervals = Vec::new();
+            let mut pose_bytes = Vec::new();
             let mut frames = 0;
             for line in lines {
                 let row: Vec<_> = line.split(',').collect();
@@ -98,10 +100,22 @@ fn check(backend: &str) -> Result<(), Box<dyn Error>> {
                 assert_eq!(!row[index("graph_gpu_ms")].is_empty(), timings);
                 assert_eq!(row[index("active")], "500");
                 assert_eq!(row[index("tick")].parse::<usize>()?, 13 + frames);
-                assert!(row[index("recorded_pose_bytes")].parse::<u64>()? > 0);
+                let bytes = row[index("recorded_pose_bytes")].parse::<u64>()?;
+                assert!(bytes > 0);
+                intervals.push(row[index("interval_ms")].parse::<f64>()?);
+                pose_bytes.push(bytes);
                 frames += 1;
             }
             assert_eq!(frames, 40);
+            intervals.sort_by(f64::total_cmp);
+            pose_bytes.sort_unstable();
+            println!(
+                "{backend} {skin} gpu_timing={timings}: presented p50 {:.3} ms p95 {:.3} ms, pose upload {}..{} B/frame",
+                (intervals[19] + intervals[20]) / 2.,
+                intervals[37],
+                pose_bytes[0],
+                pose_bytes[39]
+            );
         }
     }
     fs::remove_dir_all(dir)?;

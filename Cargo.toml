@@ -2,6 +2,7 @@
 members = [
     "crates/sashiko",
     "crates/sashiko-animation",
+    "crates/sashiko-animation-character",
     "crates/sashiko-jobs",
     "examples/jobs-web",
     "crates/sashiko-asset",

@@ -1752,6 +1752,7 @@ dependencies = [
  "hound",
  "raw-window-handle",
  "sashiko-animation",
+ "sashiko-animation-character",
  "sashiko-asset",
  "sashiko-renderer",
  "serde",
@@ -1767,6 +1768,14 @@ dependencies = [
  "glam",
  "sashiko-jobs",
  "sashiko-renderer-core",
+]
+
+[[package]]
+name = "sashiko-animation-character"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "sashiko-animation",
 ]
 
 [[package]]

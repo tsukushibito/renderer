@@ -1,11 +1,13 @@
 //! Load-time skin preparation and deterministic playback of sampled model-space poses.
+pub use sashiko_animation_character as character;
 use sashiko_asset::{AssetId, Digest};
 use serde::{Deserialize, Serialize};
 mod rig;
 use rig::Rig;
 pub use rig::{PaletteBatch, PaletteRequest, PaletteWorkspace, PhaseAnimation, PreparedAnimation};
 pub use sashiko_animation::{
-    Clip as PoseClip, ClipTimeline, LocalBuffer, PhaseMap, Playback, PoseSample,
+    AnimationError, Clip as PoseClip, ClipTimeline, JointMask, LocalBuffer, PhaseMap, Playback,
+    PoseSample, PoseWorkspace,
 };
 use std::{
     collections::{BTreeMap, HashSet},

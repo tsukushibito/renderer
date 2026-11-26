@@ -25,5 +25,8 @@ clap = { version = "4", default-features = false, features = ["std", "help", "us
 [target.'cfg(windows)'.dependencies]
 sashiko-renderer = { version = "0.1.0", path = "../../crates/sashiko-renderer", optional = true }
 
+[dev-dependencies]
+sashiko-renderer = { version = "0.1.0", path = "../../crates/sashiko-renderer", default-features = false }
+
 [lints]
 workspace = true

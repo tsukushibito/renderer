@@ -69,6 +69,10 @@ impl ClipTimeline {
         };
         (first, required)
     }
+    pub fn event_count_at(&self, tick: u64, rate: NonZeroU32) -> u128 {
+        self.event_range(tick.saturating_sub(1), tick, rate).1
+    }
+
     /// Visit the markers crossed on this single simulation tick, in asset order.
     pub fn events_at(&self, tick: u64, rate: NonZeroU32) -> impl Iterator<Item = u32> + '_ {
         let (first, mut remaining) = self.event_range(tick.saturating_sub(1), tick, rate);
@@ -134,6 +138,43 @@ impl ClipTimeline {
         Ok(count)
     }
 
+    /// Root displacement over unwrapped normalized cycles, including mapped negative phases.
+    pub fn phase_displacement(&self, from: f64, to: f64) -> Result<DVec3, AnimationError> {
+        if !from.is_finite() || !to.is_finite() || to < from {
+            return Err(Invalid("invalid phase interval"));
+        }
+        if self.root.is_empty() {
+            return Ok(DVec3::ZERO);
+        }
+        let endpoint = self.root[self.frames];
+        let cursor = |phase: f64| {
+            let (cycle, unit) = if self.looping {
+                (phase.floor(), phase.rem_euclid(1.))
+            } else {
+                (0., phase.clamp(0., 1.))
+            };
+            let frame = unit * self.frames as f64;
+            let i = frame as usize;
+            let value = if i >= self.frames {
+                endpoint
+            } else {
+                self.root[i].lerp(self.root[i + 1], frame.fract())
+            };
+            (cycle, value)
+        };
+        let (a, p) = cursor(from);
+        let (b, q) = cursor(to);
+        Ok(endpoint * (b - a) + (q - p))
+    }
+
+    pub fn finished_at(&self, tick: u64, rate: NonZeroU32) -> bool {
+        !self.looping && self.frame(tick, rate) >= self.frames as u128
+    }
+
+    pub fn translation_at_tick(&self, tick: u64, rate: NonZeroU32) -> DVec3 {
+        self.displacement(tick.saturating_sub(1), tick, rate)
+    }
+
     fn displacement(&self, from: u64, to: u64, rate: NonZeroU32) -> DVec3 {
         if self.root.is_empty() || from == to {
             return DVec3::ZERO;
@@ -187,8 +228,7 @@ impl<'a> Playback<'a> {
     /// The active one-shot has displayed its last frame for its full duration.
     pub fn is_finished(&self) -> bool {
         let timeline = &self.active.clip.timeline;
-        !timeline.looping
-            && timeline.frame(self.active.elapsed(self.tick), self.rate) >= timeline.frames as u128
+        timeline.finished_at(self.active.elapsed(self.tick), self.rate)
     }
     /// Begin the target at zero. Finish the current fade before starting another.
     pub fn crossfade(
