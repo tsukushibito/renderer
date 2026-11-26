@@ -11,6 +11,8 @@
 
 ## オフラインの拡散照明ベイク
 
+ベイク専用の HLSL、バリアント定義、生成済み SPIR-V・DXIL と反射情報は `sashiko-lighting-bake/shaders/` が所有する。プローブ L1・L2、表面ベイク、表面ベイクの Vulkan ray query 版を同じソースから生成し、ベイククレートへ直接組み込む。[再生成と照合](../guides/tooling.md#bake-shaders)
+
 `sashiko-lighting-bake` は両バックエンド共通の管理下 Compute を使用する。読み取り専用のシーン・BVH は完全な RGBA32F 画像ビューに一度アップロードし、各バッチの受光点と出力には範囲指定した別バッファを使う。1 グループが 1 個の受光点と最大 2 条件を処理する。3 条件以上は同じシーン画像を保持して時刻を 2 個ずつ dispatch し、固定長の応答を CPU 側で一つのアトラスに格納する。Graph に upload・dispatch・readback を宣言し、転送と計算の同期を通常の lowering に任せる。CPU が結果を読む前と、アップロードした入力を再利用する前に完了を確認する。ベイク終了時に検証レポートを確認する。これはオフライン処理で、描画中の待機やネイティブ資源作成を追加しない。[実機検証](../verification/current.md#bistro-baked-lighting)
 
 プローブの SH 次数をベイク開始時に選び、同じ HLSL から生成した L1・L2 の Compute と、それぞれに対応するバッファ範囲・dispatch 契約を組にする。1 受光点・最大 2 条件の出力は、可視距離を含めて L1 が 160 バイト、L2 が 320 バイト。静的ライトマップは従来の 160 バイトの経路を使う。描画シェーダーはアトラスのタグから係数数を選ぶ。既存の画像 binding、キュー同期、画像寿命の契約を使う。[形式と補間](implementation-policy.md)・[次数別の検証](../verification/current.md#probe-sh-order)

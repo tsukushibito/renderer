@@ -121,7 +121,7 @@ impl Pipeline {
                     .push_next(&mut as_info),
             );
             d.update_descriptor_sets(&writes, &[]);
-            let bytes = include_bytes!("../../sashiko-renderer/shaders/bake_surface_rt.comp.spv");
+            let bytes = include_bytes!("../shaders/bake_surface_rt.comp.spv");
             let words: Vec<_> = bytes
                 .as_chunks::<4>()
                 .0
@@ -182,7 +182,7 @@ impl<const N: usize> Transport<N> {
         let execution = crate::BakeExecution::vulkan(
             &runtime,
             crate::BakeMethod::VulkanRayQuery,
-            include_bytes!("../../sashiko-renderer/shaders/bake_surface_rt.comp.spv"),
+            include_bytes!("../shaders/bake_surface_rt.comp.spv"),
         );
         let dev = Device::new(runtime.external_device())?;
         drop(runtime);

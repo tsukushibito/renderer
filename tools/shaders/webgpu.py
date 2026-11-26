@@ -113,7 +113,7 @@ def main():
     modules = [
         module for folder in (CORE, STANDARD, STANDARD / "output")
         for module in sorted(folder.glob("*.spv"))
-        if not module.name.startswith("bake_") and module.name != "composite.frag.spv"
+        if module.name != "composite.frag.spv"
     ]
     # The native manifest fixes the HLSL file and defines for each Slang stage.
     # Include source contents as well, so checking doesn't depend on a native rebuild.
