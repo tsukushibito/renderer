@@ -19,7 +19,7 @@ memory-profiling = ["sashiko-renderer-core/memory-profiling", "sashiko-renderer?
 sashiko = { version = "0.1.0", path = "../../crates/sashiko", default-features = false, optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
-sashiko-asset = { version = "0.1.0", path = "../../crates/sashiko-asset", optional = true }
+sashiko-asset = { version = "0.1.0", path = "../../crates/sashiko-asset", features = ["renderer"], optional = true }
 sashiko-renderer = { version = "0.1.0", path = "../../crates/sashiko-renderer", optional = true }
 sashiko-renderer-core = { version = "0.1.0", path = "../../crates/sashiko-renderer-core" }
 

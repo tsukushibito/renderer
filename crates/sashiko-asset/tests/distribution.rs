@@ -98,7 +98,7 @@ fn rejects_truncated_overflowing_and_invalid_payloads() -> io::Result<()> {
     bytes[8..16].fill(255);
     assert!(ImageBlob::decode(&bytes).is_err());
     let mesh = MeshBlob {
-        vertices: vec![[0.; 12]; 3],
+        vertices: vec![sashiko_asset::MeshVertex::default(); 3],
         indices: vec![0, 1, 2],
     };
     let mut data = mesh.encode()?;

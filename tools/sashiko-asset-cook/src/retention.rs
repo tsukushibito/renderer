@@ -283,31 +283,9 @@ impl StoreGuard {
         let mut objects = BTreeSet::new();
         for id in catalogs {
             let bytes = fs::read(self.root.join("catalogs").join(id.to_string()))?;
-            if Digest::of(&bytes) != *id {
-                return Err(invalid(format!(
-                    "protected catalog {id} failed integrity check"
-                )));
-            }
-            let catalog: Catalog = serde_json::from_slice(&bytes)?;
-            if catalog.version != 1 {
-                return Err(invalid(format!(
-                    "unsupported protected catalog version {} in {id}",
-                    catalog.version
-                )));
-            }
-            for equipment in catalog.assets.into_values() {
-                for primitive in equipment.primitives {
-                    objects.insert(primitive.mesh.hash);
-                    objects.insert(primitive.material.hash);
-                    objects.extend(
-                        primitive
-                            .images
-                            .into_iter()
-                            .flatten()
-                            .map(|image| image.hash),
-                    );
-                }
-            }
+            let catalog = Catalog::decode(&bytes, *id)
+                .map_err(|error| invalid(format!("protected catalog {id}: {error}")))?;
+            objects.extend(catalog.objects().map(|reference| reference.hash));
         }
         Ok(objects)
     }

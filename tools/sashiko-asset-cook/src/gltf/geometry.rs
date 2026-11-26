@@ -4,7 +4,7 @@ use gltf::{
     Accessor, Primitive, Semantic,
     accessor::{DataType, Dimensions},
 };
-use sashiko_asset::MeshBlob;
+use sashiko_asset::{MeshBlob, MeshVertex};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
@@ -248,21 +248,18 @@ pub(super) fn cook(
             "transformed tangent",
         )?;
         let uv = uvs[i];
-        let vertex = [
-            pos.x,
-            pos.y,
-            pos.z,
-            normal.x,
-            normal.y,
-            normal.z,
-            t.x,
-            t.y,
-            t.z,
-            sign * det.signum(),
-            uv[0],
-            uv[1],
-        ];
-        let key = vertex.map(f32::to_bits);
+        let vertex = MeshVertex {
+            position: pos.to_array(),
+            normal: normal.to_array(),
+            tangent: [t.x, t.y, t.z, sign * det.signum()],
+            uv,
+        };
+        let key = (
+            vertex.position.map(f32::to_bits),
+            vertex.normal.map(f32::to_bits),
+            vertex.tangent.map(f32::to_bits),
+            vertex.uv.map(f32::to_bits),
+        );
         let id = match remap.entry(key) {
             std::collections::hash_map::Entry::Occupied(e) => *e.get(),
             std::collections::hash_map::Entry::Vacant(e) => {

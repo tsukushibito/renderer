@@ -8,9 +8,10 @@ description = "Immutable cooked equipment catalogs and shared offline asset read
 
 [features]
 metrics = []
+renderer = ["dep:sashiko-renderer"]
 
 [dependencies]
-sashiko-renderer = { version = "0.1.0", path = "../sashiko-renderer", default-features = false }
+sashiko-renderer = { version = "0.1.0", path = "../sashiko-renderer", default-features = false, optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10.9"

@@ -92,6 +92,25 @@ impl BlobRef {
     }
 }
 
+/// Texture channels in their serialized catalog and material order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaterialSlot {
+    BaseColor,
+    Normal,
+    Orm,
+    Emissive,
+}
+impl MaterialSlot {
+    pub const ALL: [Self; 4] = [Self::BaseColor, Self::Normal, Self::Orm, Self::Emissive];
+
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+    pub const fn is_srgb(self) -> bool {
+        matches!(self, Self::BaseColor | Self::Emissive)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Primitive {
     pub mesh: BlobRef,
@@ -110,6 +129,40 @@ pub struct Catalog {
     pub version: u32,
     #[serde(deserialize_with = "read_assets")]
     pub assets: BTreeMap<AssetId, Equipment>,
+}
+
+impl Catalog {
+    /// Read one immutable generation, verifying its content address and format.
+    pub fn decode(bytes: &[u8], id: Digest) -> io::Result<Self> {
+        if Digest::of(bytes) != id {
+            return Err(invalid("catalog digest mismatch"));
+        }
+        let catalog: Catalog = serde_json::from_slice(bytes).map_err(invalid)?;
+        if catalog.version != 1 {
+            return Err(invalid(format!(
+                "unsupported catalog version {}",
+                catalog.version
+            )));
+        }
+        for (asset, equipment) in &catalog.assets {
+            if equipment.primitives.is_empty() {
+                return Err(invalid(format!("no primitives for equipment {asset}")));
+            }
+        }
+        Ok(catalog)
+    }
+
+    /// Payloads referenced by every equipment primitive, including shared objects.
+    pub fn objects(&self) -> impl Iterator<Item = &BlobRef> {
+        self.assets
+            .values()
+            .flat_map(|equipment| &equipment.primitives)
+            .flat_map(|part| {
+                [&part.mesh, &part.material]
+                    .into_iter()
+                    .chain(part.images.iter().flatten())
+            })
+    }
 }
 
 // An ambiguous ID must never silently replace another definition while importing JSON.
@@ -158,21 +211,7 @@ impl Generation {
 
     pub fn open_id(root: impl AsRef<Path>, id: Digest) -> io::Result<Self> {
         let bytes = fs::read(root.as_ref().join("catalogs").join(id.to_string()))?;
-        if Digest::of(&bytes) != id {
-            return Err(invalid("catalog digest mismatch"));
-        }
-        let catalog: Catalog = serde_json::from_slice(&bytes).map_err(invalid)?;
-        if catalog.version != 1 {
-            return Err(invalid(format!(
-                "unsupported catalog version {}",
-                catalog.version
-            )));
-        }
-        for (asset, equipment) in &catalog.assets {
-            if equipment.primitives.is_empty() {
-                return Err(invalid(format!("no primitives for equipment {asset}")));
-            }
-        }
+        let catalog = Catalog::decode(&bytes, id)?;
         Ok(Self {
             id,
             catalog,

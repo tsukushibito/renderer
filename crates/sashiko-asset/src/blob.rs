@@ -1,11 +1,8 @@
 use crate::invalid;
-use sashiko_renderer::{core::program::SamplerDescriptor, pbr::MaterialFactors};
-use serde::{Deserialize, Serialize};
 use std::io;
 
 pub(super) const MESH: &[u8] = b"RMESH001";
 pub(super) const IMAGE: &[u8] = b"RIMAG001";
-const MATERIAL: &[u8] = b"RMATL001";
 
 fn word(bytes: &mut &[u8]) -> io::Result<u32> {
     let value = bytes
@@ -14,10 +11,44 @@ fn word(bytes: &mut &[u8]) -> io::Result<u32> {
     Ok(u32::from_le_bytes(value.try_into().unwrap()))
 }
 
+/// Model-local vertex attributes of an RMESH001 payload.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MeshVertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub tangent: [f32; 4],
+    pub uv: [f32; 2],
+}
+
+impl MeshVertex {
+    fn components(self) -> impl Iterator<Item = f32> {
+        self.position
+            .into_iter()
+            .chain(self.normal)
+            .chain(self.tangent)
+            .chain(self.uv)
+    }
+
+    fn decode(record: &[u8; 48]) -> Self {
+        let mut values = record
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&v| f32::from_le_bytes(v));
+        let mut next = |_| values.next().expect("48-byte vertex record");
+        Self {
+            position: std::array::from_fn(&mut next),
+            normal: std::array::from_fn(&mut next),
+            tangent: std::array::from_fn(&mut next),
+            uv: std::array::from_fn(next),
+        }
+    }
+}
+
 /// Model-local positions, normals, tangents (including sign), and first UV channel.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeshBlob {
-    pub vertices: Vec<[f32; 12]>,
+    pub vertices: Vec<MeshVertex>,
     pub indices: Vec<u32>,
 }
 
@@ -33,7 +64,13 @@ impl MeshBlob {
         {
             return Err(invalid("invalid triangle mesh indices"));
         }
-        if !self.vertices.iter().flatten().all(|v| v.is_finite()) {
+        if !self
+            .vertices
+            .iter()
+            .copied()
+            .flat_map(MeshVertex::components)
+            .all(f32::is_finite)
+        {
             return Err(invalid("nonfinite mesh attribute"));
         }
         Ok(())
@@ -51,7 +88,13 @@ impl MeshBlob {
                 .map_err(invalid)?
                 .to_le_bytes(),
         );
-        out.extend(self.vertices.iter().flatten().flat_map(|v| v.to_le_bytes()));
+        out.extend(
+            self.vertices
+                .iter()
+                .copied()
+                .flat_map(MeshVertex::components)
+                .flat_map(f32::to_le_bytes),
+        );
         out.extend(self.indices.iter().flat_map(|v| v.to_le_bytes()));
         Ok(out)
     }
@@ -70,11 +113,7 @@ impl MeshBlob {
                 .as_chunks::<48>()
                 .0
                 .iter()
-                .map(|v| {
-                    std::array::from_fn(|i| {
-                        f32::from_le_bytes(v[i * 4..i * 4 + 4].try_into().unwrap())
-                    })
-                })
+                .map(MeshVertex::decode)
                 .collect(),
             indices: indices
                 .as_chunks::<4>()
@@ -85,64 +124,6 @@ impl MeshBlob {
         };
         mesh.check()?;
         Ok(mesh)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Sampler {
-    pub wrap_s: u32,
-    pub wrap_t: u32,
-    pub mag_filter: Option<u32>,
-    pub min_filter: Option<u32>,
-}
-
-impl Sampler {
-    pub fn descriptor(&self) -> io::Result<SamplerDescriptor> {
-        SamplerDescriptor::from_gltf(
-            Some(self.wrap_s),
-            Some(self.wrap_t),
-            self.mag_filter,
-            self.min_filter,
-        )
-        .map_err(invalid)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MaterialBlob {
-    pub uniform: Vec<u8>,
-    pub samplers: [Option<Sampler>; 4],
-}
-
-impl MaterialBlob {
-    pub fn factors(&self) -> io::Result<MaterialFactors> {
-        let uniform = self
-            .uniform
-            .as_slice()
-            .try_into()
-            .map_err(|_| invalid("invalid PBR uniform length"))?;
-        MaterialFactors::decode(uniform).map_err(invalid)
-    }
-    fn check(&self) -> io::Result<()> {
-        self.factors()?;
-        for sampler in self.samplers.iter().flatten() {
-            sampler.descriptor()?;
-        }
-        Ok(())
-    }
-    pub fn encode(&self) -> io::Result<Vec<u8>> {
-        self.check()?;
-        let mut out = MATERIAL.to_vec();
-        serde_json::to_writer(&mut out, self).map_err(invalid)?;
-        Ok(out)
-    }
-    pub fn decode(bytes: &[u8]) -> io::Result<Self> {
-        let data = bytes
-            .strip_prefix(MATERIAL)
-            .ok_or_else(|| invalid("unknown material format"))?;
-        let mat: Self = serde_json::from_slice(data).map_err(invalid)?;
-        mat.check()?;
-        Ok(mat)
     }
 }
 

@@ -8,7 +8,7 @@ description = "Offline cook and publication of static equipment assets"
 
 [dependencies]
 bevy_mikktspace = "1.0.0"
-sashiko-asset = { version = "0.1.0", path = "../../crates/sashiko-asset" }
+sashiko-asset = { version = "0.1.0", path = "../../crates/sashiko-asset", features = ["renderer"] }
 sashiko-renderer = { version = "0.1.0", path = "../../crates/sashiko-renderer", default-features = false }
 getrandom = "0.4.3"
 glam = "0.30"

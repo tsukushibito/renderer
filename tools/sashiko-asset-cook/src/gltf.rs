@@ -352,10 +352,11 @@ mod tests {
         assert_eq!(mesh.indices.len(), expected.len());
         for (&index, [x, y, tx, ty, u, v]) in mesh.indices.iter().zip(expected) {
             let vertex = mesh.vertices[index as usize];
-            assert_eq!(vertex[..6], [x, y, 0.5, 0., 0., -1.]);
-            assert_eq!(vertex[9], 1., "tangent handedness");
-            assert_eq!(vertex[10..], [u, v]);
-            for (actual, reference) in vertex[6..9].iter().zip([tx, ty, 0.]) {
+            assert_eq!(vertex.position, [x, y, 0.5]);
+            assert_eq!(vertex.normal, [0., 0., -1.]);
+            assert_eq!(vertex.tangent[3], 1., "tangent handedness");
+            assert_eq!(vertex.uv, [u, v]);
+            for (actual, reference) in vertex.tangent[..3].iter().zip([tx, ty, 0.]) {
                 assert!(
                     (actual - reference).abs() <= 2e-6,
                     "{actual} vs {reference}"
@@ -383,9 +384,12 @@ mod tests {
             {
                 let a = mesh.vertices[a as usize];
                 let b = mirrored.vertices[b as usize];
-                assert_eq!(b[..3], [-2. * a[0], 3. * a[1], 1.5 * a[2]]);
-                assert_eq!(b[9], -a[9]);
-                assert_eq!(b[10..], a[10..]);
+                assert_eq!(
+                    b.position,
+                    [-2. * a.position[0], 3. * a.position[1], 1.5 * a.position[2]]
+                );
+                assert_eq!(b.tangent[3], -a.tangent[3]);
+                assert_eq!(b.uv, a.uv);
             }
         }
         Ok(())

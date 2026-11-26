@@ -1,4 +1,4 @@
-use crate::{BlobRef, Digest, ImageBlob, MaterialBlob, MeshBlob, invalid};
+use crate::{BlobRef, Digest, ImageBlob, MeshBlob, invalid};
 #[cfg(feature = "metrics")]
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::{
@@ -117,7 +117,8 @@ impl SharedError {
 
 enum Decoded {
     Mesh(MeshBlob),
-    Material(MaterialBlob),
+    #[cfg(feature = "renderer")]
+    Material(crate::MaterialBlob),
     Image(ImageBlob),
 }
 impl Decoded {
@@ -125,6 +126,7 @@ impl Decoded {
     fn bytes(&self) -> u64 {
         match self {
             Self::Mesh(m) => (m.vertices.capacity() * 48 + m.indices.capacity() * 4) as u64,
+            #[cfg(feature = "renderer")]
             Self::Material(m) => m.uniform.capacity() as u64,
             Self::Image(i) => i.pixels.capacity() as u64,
         }
@@ -147,7 +149,14 @@ impl ObjectBytes {
                 } else if self.starts_with(crate::blob::IMAGE) {
                     ImageBlob::decode(self).map(Decoded::Image)
                 } else {
-                    MaterialBlob::decode(self).map(Decoded::Material)
+                    #[cfg(feature = "renderer")]
+                    {
+                        crate::MaterialBlob::decode(self).map(Decoded::Material)
+                    }
+                    #[cfg(not(feature = "renderer"))]
+                    {
+                        Err(invalid("expected mesh or image object"))
+                    }
                 };
                 #[cfg(feature = "metrics")]
                 if let (Ok(value), Some(shared)) = (&result, self.shared.upgrade()) {
@@ -170,7 +179,8 @@ impl ObjectBytes {
             _ => Err(invalid("expected image object")),
         }
     }
-    pub fn material(&self) -> io::Result<&MaterialBlob> {
+    #[cfg(feature = "renderer")]
+    pub fn material(&self) -> io::Result<&crate::MaterialBlob> {
         match self.decode()? {
             Decoded::Material(m) => Ok(m),
             _ => Err(invalid("expected material object")),
