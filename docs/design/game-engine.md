@@ -10,9 +10,31 @@ Sashiko は、少人数のチームと AI が同じシーンを編集し、同�
 
 ゲームから Rapier、Parry、glam、nalgebra への直接依存を禁止する。CI は workspace の `examples/` 配下のクレートと、`sashiko` に直接依存するクレートの Cargo マニフェストを検査する。別名・任意 feature・ターゲット別・開発用・ビルド用の依存も対象とする。外部のゲーム workspace でも、そのルートから [依存チェッカー](../../tools/check_game_dependencies.py) を実行できる。
 
-`sashiko` の `physics` feature は `sashiko-physics` の固定時間更新ワールドを公開する。初版のバックエンドは Rapier 3D。箱形状の静的・動的剛体を登録でき、位置・回転の取得、インパルス、線分・箱の掃引・重なり判定に対応する。配置を更新した後、時間を進めずに問い合わせるには `synchronize` を呼ぶ。掃引・レイの命中距離は指定した移動量に対する割合で、点と法線はワールド座標で返す。ハンドルは生成元のワールド内で使う。リプレイにはシーンと入力を記録する。
+`sashiko` の `physics` feature は `sashiko-physics` の固定時間更新ワールドを公開する。初版のバックエンドは Rapier 3D。箱形状の静的・動的剛体を登録でき、位置・回転の取得、インパルス、線分・箱の掃引・重なり判定に対応する。配置を更新した後、時間を進めずに問い合わせるには `synchronize` を呼ぶ。掃引・レイの命中距離は指定した移動量に対する割合で、点と法線はワールド座標で返す。
+
+剛体・コライダーの ID には生成元のワールド識別子を含める。同じプロセスでワールドを作り直すと、その最初の剛体にも以前とは異なる ID が付く。`pose`、`set_translation`、`impulse` は別ワールドの剛体 ID に `WrongWorld` を返す。リプレイにはシーンと入力を記録する。
 
 Survivor は 60 Hz のプレイ更新でプレイヤーの移動と押す力を適用し、剛体を1回進め、その配置で敵と弾を更新する。群衆の経路グリッドは静的配置から作り、実移動で運搬箱も検査する。壁と箱は弾を遮り、敵の被弾・報酬はゲームが決める。再挑戦では配置から物理ワールドを作り直す。録画のゲーム規則版は3。
+
+### 外部ゲームで物理を有効にする
+
+Rapier 0.36.1 が使う Parry 0.31.1 は rstar 0.13 を要求する。Sashiko は同梱の rstar 0.13.1 アダプターを通して rstar 0.14 と heapless 0.9 を使用する。Cargo はアプリの workspace ルートに置かれた patch を解決に使うため、外部ゲームにも下記の設定を入れる。[Cargo の patch 規則](https://doc.rust-lang.org/cargo/reference/overriding-dependencies.html#the-patch-section)
+
+ゲームと Sashiko のチェックアウトが隣接する場合、ゲームパッケージの `Cargo.toml` に依存を追加する。
+
+```toml
+[dependencies]
+sashiko = { path = "../sashiko/crates/sashiko", default-features = false, features = ["physics"] }
+```
+
+ゲームの **workspace ルート**の `Cargo.toml` に次の表を追加する。各パスはそのマニフェストから同じ Sashiko チェックアウトを指すように調整する。
+
+```toml
+[patch.crates-io]
+rstar = { path = "../sashiko/crates/sashiko-physics/compat/rstar" }
+```
+
+ゲーム側で `cargo build` を実行してロックファイルを更新し、`cargo tree --locked -p sashiko-physics` で Parry からローカルの rstar 0.13.1、上流の rstar 0.14、heapless 0.9 への経路を確認する。ゲームの `Cargo.lock` を保存して以後は `cargo build --locked` で同じ依存を再現する。
 
 ## 設計判断
 

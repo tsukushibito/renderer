@@ -34,7 +34,7 @@ fn push_cargo_after_warmup() {
         let start = Snapshot::now();
         for _ in 0..90 {
             if push {
-                world.impulse(body, Vec3::X * 0.12);
+                world.impulse(body, Vec3::X * 0.12).unwrap();
             }
             world.step();
         }
