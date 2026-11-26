@@ -230,6 +230,7 @@ impl Engine {
     }
 
     fn record_and_submit(&mut self, graph: &CompiledGraph) -> Result<Submission, Error> {
+        let storage = graph.data();
         self.health.check()?;
         if self.frames.pending.len() == self.limits.frames {
             return Err(capacity(
@@ -257,7 +258,7 @@ impl Engine {
                     self.limits.results + 1,
                 )
             })?;
-        let exports = if graph.exports.is_empty() {
+        let exports = if storage.exports.is_empty() {
             None
         } else {
             Some(
@@ -281,7 +282,7 @@ impl Engine {
             .bind(graph, self.completed.load(Ordering::Acquire))?;
         self.registry.snapshots(graph, &mut self.updates)?;
         let id = FrameId::new(self.owner, serial);
-        let receipt = Submission::new(id, graph.id, exports.clone());
+        let receipt = Submission::new(id, storage.id, exports.clone());
         if let Some(exports) = &exports {
             let mut values = exports.borrow_mut();
             for (i, snapshot) in self.updates.iter().filter(|(i, _)| graph.has_export(*i)) {
@@ -296,8 +297,8 @@ impl Engine {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        for &p in &graph.order {
-            match &graph.passes[p].operation {
+        for &p in &storage.order {
+            match &storage.passes[p].operation {
                 Operation::Raster { .. } | Operation::AttachmentPass { .. } => {
                     self.raster
                         .record(&self.device, &resources, graph, p, &mut encoder)?
@@ -350,7 +351,7 @@ impl Engine {
         });
         self.frames.pending.push(Completion {
             id,
-            graph: graph.id,
+            graph: storage.id,
             serial,
             slot: result,
         });

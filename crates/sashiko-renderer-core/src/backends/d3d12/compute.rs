@@ -92,6 +92,7 @@ pub(super) fn requirements(
     bindings: &Range<usize>,
     workgroups: [u32; 3],
 ) -> Result<usize, D3D12RuntimeError> {
+    let graph = graph.data();
     if workgroups.iter().any(|count| *count == 0 || *count > 65535) {
         return Err(D3D12RuntimeError::unsupported(
             "Compute dispatch exceeds D3D12 group limits",
@@ -194,7 +195,7 @@ pub(super) fn record(
         program,
         bindings,
         workgroups,
-    } = &graph.passes[pass].operation
+    } = &graph.data().passes[pass].operation
     else {
         unreachable!()
     };
@@ -202,9 +203,9 @@ pub(super) fn record(
         .iter()
         .find(|native| native.matches(*program))
         .expect("prepared Compute pipeline");
-    for access in graph.accesses(pass) {
+    for access in graph.data().accesses(pass) {
         let physical = slot.resource_map[access.resource];
-        match graph.resources[access.resource].desc {
+        match graph.data().resources[access.resource].desc {
             ResourceDesc::Buffer(_) => {
                 slot.buffer_scopes[physical] |= match access.purpose {
                     AccessPurpose::Uniform => D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
@@ -234,9 +235,9 @@ pub(super) fn record(
             }
         }
     }
-    for access in graph.accesses(pass) {
+    for access in graph.data().accesses(pass) {
         if matches!(
-            graph.resources[access.resource].desc,
+            graph.data().resources[access.resource].desc,
             ResourceDesc::Buffer(_)
         ) {
             let physical = slot.resource_map[access.resource];
@@ -260,10 +261,10 @@ pub(super) fn record(
         }
     }
     // Drain all scope scratch before this fallible provenance operation.
-    for access in graph.accesses(pass) {
+    for access in graph.data().accesses(pass) {
         if access.purpose == AccessPurpose::StorageWrite
             && matches!(
-                graph.resources[access.resource].desc,
+                graph.data().resources[access.resource].desc,
                 ResourceDesc::Buffer(_)
             )
             && slot.provenance_needed[access.resource]
@@ -302,7 +303,7 @@ pub(super) fn record(
         .managed()
         .bindings()
         .iter()
-        .zip(graph.raster_bindings(bindings))
+        .zip(graph.data().raster_bindings(bindings))
         .enumerate()
     {
         match operand {
@@ -434,6 +435,7 @@ mod tests {
     }
 
     fn dispatch(graph: &CompiledGraph) -> (usize, &Range<usize>) {
+        let graph = graph.data();
         graph
             .order
             .iter()

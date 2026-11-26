@@ -48,6 +48,7 @@ fn sliced_uploads_share_backing_and_initialize_only_selected_bytes() {
         .unwrap();
     graph.export_buffer(buffer).unwrap();
     let plan = graph.compile().unwrap();
+    let plan = plan.data();
     for (pass, expected_source, expected_target) in [(first, 1..5, 0..4), (second, 5..9, 4..8)] {
         let Operation::UploadBuffer {
             data: UploadSource::Shared { bytes, source },
@@ -83,7 +84,7 @@ fn invalid_upload_slices_preserve_builder_context_without_a_pass() {
         assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
         assert_eq!(error.pass_name(), Some("invalid chunk"));
         assert_eq!(error.resource_name(), Some("destination"));
-        assert!(graph.passes.is_empty());
+        assert!(graph.data().passes.is_empty());
     }
     // Keep the existing copy contract: offsets are aligned, but a source
     // slice may start anywhere and need not contain a multiple of four bytes.
@@ -121,9 +122,9 @@ fn many_exports_keep_declaration_order_and_indexed_membership() {
         .rev()
         .map(|buffer| buffer.index)
         .collect::<Vec<_>>();
-    assert_eq!(graph.exports, expected);
+    assert_eq!(graph.data().exports, expected);
     let compiled = graph.compile().unwrap();
-    assert_eq!(compiled.exports, expected);
+    assert_eq!(compiled.data().exports, expected);
     assert_eq!(compiled.pass_count(), buffers.len());
     assert!(
         buffers
@@ -175,21 +176,22 @@ fn compilation_retains_anchored_mesh_bytes_and_captured_uploads_until_recycle() 
     graph.export_image(image).unwrap();
 
     let plan = graph.compile().unwrap();
+    let storage = plan.data();
     let Operation::UploadBuffer {
         data: UploadSource::Shared { bytes, .. },
         ..
-    } = &plan.passes[buffer_upload.index].operation
+    } = &storage.passes[buffer_upload.index].operation
     else {
         panic!("live buffer upload must remain executable");
     };
     assert!(Arc::ptr_eq(bytes, &buffer_bytes));
     assert_eq!(
-        plan.upload_data(&plan.passes[image_upload.index].operation),
+        storage.upload_data(&storage.passes[image_upload.index].operation),
         &[2; 4]
     );
     assert_eq!(plan.pass_count(), 2);
-    assert!(!plan.order.contains(&dead_buffer_upload.index));
-    assert!(!plan.order.contains(&dead_image_upload.index));
+    assert!(!storage.order.contains(&dead_buffer_upload.index));
+    assert!(!storage.order.contains(&dead_image_upload.index));
     assert_eq!(
         plan.ordered_pass_names().collect::<Vec<_>>(),
         ["live buffer upload", "live image upload"]
@@ -206,7 +208,9 @@ fn compilation_retains_anchored_mesh_bytes_and_captured_uploads_until_recycle() 
         GraphErrorKind::CapacityExhausted
     );
     assert_eq!(
-        consumer.upload_data(&consumer.passes[image_upload.index].operation),
+        consumer
+            .data()
+            .upload_data(&consumer.data().passes[image_upload.index].operation),
         &[2; 4]
     );
     drop(consumer);
@@ -229,7 +233,7 @@ fn typed_handles_reject_foreign_undefined_and_wrong_kind_resources() {
             .upload_buffer(
                 "undefined",
                 BufferHandle {
-                    graph: graph.id,
+                    graph: graph.graph_id(),
                     index: 100
                 },
                 0,
@@ -242,7 +246,7 @@ fn typed_handles_reject_foreign_undefined_and_wrong_kind_resources() {
             .upload_buffer(
                 "wrong kind",
                 BufferHandle {
-                    graph: graph.id,
+                    graph: graph.graph_id(),
                     index: image.index
                 },
                 0,
@@ -294,7 +298,7 @@ fn repeated_imports_share_one_identity_and_reject_changed_snapshots() {
     let first = graph.import_buffer("first", &import).unwrap();
     let again = graph.import_buffer("again", &import).unwrap();
     assert_eq!(first, again);
-    assert_eq!(graph.resources.len(), 1);
+    assert_eq!(graph.data().resources.len(), 1);
     let changed = ImportBuffer::new(
         import.key(),
         import.revision() + 1,
@@ -338,11 +342,11 @@ fn image_metadata_preserves_imports_and_rejects_invalid_local_handles() {
     let buffer = graph.buffer("buffer", BufferDesc { size: 4 }).unwrap();
     for invalid in [
         ImageHandle {
-            graph: graph.id,
+            graph: graph.graph_id(),
             index: buffer.index,
         },
         ImageHandle {
-            graph: graph.id,
+            graph: graph.graph_id(),
             index: usize::MAX,
         },
     ] {
@@ -439,7 +443,7 @@ fn declaration_conflicts_keep_first_pair_context_and_validate_inputs_first() {
         access(first_access, 8..16, true),
         access(earlier_resource, 0..4, true),
     ];
-    let before = graph.passes.len();
+    let before = graph.data().passes.len();
     let error = graph
         .declare_analysis_pass("conflicts", PassKind::Copy, &accesses, false)
         .unwrap_err();
@@ -447,7 +451,7 @@ fn declaration_conflicts_keep_first_pair_context_and_validate_inputs_first() {
     assert_eq!(error.pass_name(), Some("conflicts"));
     assert_eq!(error.resource(), Some(first_access.into()));
     assert_eq!(error.range(), Some(&AccessRange::Buffer(4..12)));
-    assert_eq!(graph.passes.len(), before);
+    assert_eq!(graph.data().passes.len(), before);
 
     accesses.push(access(earlier_resource, 16..20, false));
     let error = graph
@@ -456,7 +460,7 @@ fn declaration_conflicts_keep_first_pair_context_and_validate_inputs_first() {
     assert_eq!(error.resource(), Some(earlier_resource.into()));
     assert_eq!(error.range(), Some(&AccessRange::Buffer(16..20)));
     assert!(error.message.contains("byte range"));
-    assert_eq!(graph.passes.len(), before);
+    assert_eq!(graph.data().passes.len(), before);
 }
 
 #[test]
@@ -816,7 +820,7 @@ fn batch_same_buffer_can_supply_vertex_and_index_reads() {
 fn batch_rejections_preserve_builder_context_without_partial_declarations() {
     let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let (vertices, indices, color, depth) = mesh(&mut graph);
-    let before = graph.passes.len();
+    let before = graph.data().passes.len();
     let error = graph
         .raster(
             "invalid opaque input",
@@ -849,7 +853,7 @@ fn batch_rejections_preserve_builder_context_without_partial_declarations() {
     assert_eq!(error.pass(), None);
     assert_eq!(error.resource(), Some(indices.into()));
     assert_eq!(error.resource_name(), Some("indices"));
-    assert_eq!(graph.passes.len(), before);
+    assert_eq!(graph.data().passes.len(), before);
 
     let (_other_pool, mut other) = prepared_graph(GraphCapacity::default());
     let foreign = other
@@ -883,7 +887,7 @@ fn batch_rejections_preserve_builder_context_without_partial_declarations() {
     assert_eq!(error.pass_name(), Some("foreign opaque input"));
     assert_eq!(error.resource(), Some(foreign.into()));
     assert_eq!(error.resource_name(), None);
-    assert_eq!(graph.passes.len(), before);
+    assert_eq!(graph.data().passes.len(), before);
 }
 
 #[test]
@@ -930,7 +934,7 @@ fn import_identity_survives_interleaved_transients_and_failed_aliases() {
         graph.import_buffer("still canonical", first).unwrap(),
         handles[0]
     );
-    assert_eq!(graph.resources.len(), sources.len() * 2);
+    assert_eq!(graph.data().resources.len(), sources.len() * 2);
 }
 
 #[test]
@@ -960,7 +964,7 @@ fn import_and_batch_limits_report_their_distinct_capacity_dimensions() {
         .unwrap();
     assert_eq!(details.kind, GraphCapacityKind::InitialRanges);
     assert_eq!((details.limit, details.required), (0, Some(1)));
-    assert!(graph.resources.is_empty());
+    assert!(graph.data().resources.is_empty());
     let vertices = graph.buffer("vertices", BufferDesc { size: 84 }).unwrap();
     let indices = graph.buffer("indices", BufferDesc { size: 12 }).unwrap();
     let color = graph.image("color", ImageDesc::rgba8(1, 1)).unwrap();
@@ -992,7 +996,7 @@ fn import_and_batch_limits_report_their_distinct_capacity_dimensions() {
     let details = error.capacity().unwrap();
     assert_eq!(details.kind, GraphCapacityKind::Draws);
     assert_eq!((details.limit, details.required), (0, Some(1)));
-    assert!(graph.passes.is_empty());
-    assert!(graph.draws.is_empty());
-    assert!(graph.accesses.is_empty());
+    assert!(graph.data().passes.is_empty());
+    assert!(graph.data().draws.is_empty());
+    assert!(graph.data().accesses.is_empty());
 }

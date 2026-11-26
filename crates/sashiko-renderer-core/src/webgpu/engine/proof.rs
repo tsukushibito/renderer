@@ -81,19 +81,20 @@ impl IndexBounds {
         graph: &CompiledGraph,
         lookup: impl Fn(usize) -> Option<usize>,
     ) {
+        let storage = graph.data();
         self.slots.clear();
-        self.slots.resize(graph.resources.len(), None);
-        for (i, r) in graph.resources.iter().enumerate() {
+        self.slots.resize(storage.resources.len(), None);
+        for (i, r) in storage.resources.iter().enumerate() {
             if matches!(r.desc, ResourceDesc::Buffer(_))
                 && (r.import.is_some() || graph.has_export(i))
             {
                 self.slots[i] = lookup(i);
             }
         }
-        for &p in graph.order.iter().rev() {
-            match &graph.passes[p].operation {
+        for &p in storage.order.iter().rev() {
+            match &storage.passes[p].operation {
                 Operation::Raster { draws, .. } => {
-                    for d in graph
+                    for d in storage
                         .raster_draws(draws)
                         .iter()
                         .filter_map(|d| d.indexed.as_ref())
@@ -114,19 +115,20 @@ impl IndexBounds {
         graph: &CompiledGraph,
         proofs: &mut [Proof],
     ) -> Result<(), Error> {
+        let storage = graph.data();
         for (i, v) in self.slots.iter().enumerate() {
             if let Some(slot) = v {
-                proofs[*slot].begin(graph.resources[i].import.is_some())?;
+                proofs[*slot].begin(storage.resources[i].import.is_some())?;
             }
         }
-        for &p in &graph.order {
-            match &graph.passes[p].operation {
+        for &p in &storage.order {
+            match &storage.passes[p].operation {
                 Operation::UploadBuffer {
                     dst, offset, mesh, ..
                 } => {
                     if let Some(slot) = self.slots[*dst] {
                         let proof = &mut proofs[slot].trial;
-                        let size = graph.upload_data(&graph.passes[p].operation).len();
+                        let size = storage.upload_data(&storage.passes[p].operation).len();
                         let range = *offset..offset + size as u64;
                         match mesh {
                             Some(MeshUpload::Indices { byte_len, maximum }) => {
@@ -165,7 +167,7 @@ impl IndexBounds {
                     }
                 }
                 Operation::Dispatch { .. } => {
-                    for access in graph.accesses(p) {
+                    for access in storage.accesses(p) {
                         if access.write
                             && let Some(slot) = self.slots[access.resource]
                         {
@@ -177,18 +179,18 @@ impl IndexBounds {
                     }
                 }
                 Operation::Raster { batches, .. } => {
-                    for batch in graph.raster_batches(batches) {
+                    for batch in storage.raster_batches(batches) {
                         let &(_, stride, secondary) = self
                             .strides
                             .iter()
                             .find(|s| s.0 == batch.program)
                             .ok_or_else(|| unsupported("WebGPU raster program is not prepared"))?;
-                        for d in graph
+                        for d in storage
                             .raster_draws(&batch.draws)
                             .iter()
                             .filter_map(|d| d.indexed.as_ref())
                         {
-                            let mut count = graph.resources[d.vertices]
+                            let mut count = storage.resources[d.vertices]
                                 .desc
                                 .units()
                                 .checked_div(u64::from(stride))
@@ -196,7 +198,7 @@ impl IndexBounds {
                                     Error::invalid("indexed draw requires a vertex stride")
                                 })?;
                             if let Some(stream) = d.secondary_vertices {
-                                let limit = graph.resources[stream]
+                                let limit = storage.resources[stream]
                                     .desc
                                     .units()
                                     .checked_div(u64::from(secondary))
@@ -229,7 +231,7 @@ impl IndexBounds {
     pub(super) fn commit(&self, graph: &CompiledGraph, proofs: &mut [Proof]) {
         for (i, slot) in self.slots.iter().enumerate() {
             if let Some(slot) = slot {
-                if graph.resources[i].import.is_some() || graph.has_export(i) {
+                if graph.data().resources[i].import.is_some() || graph.has_export(i) {
                     proofs[*slot].commit();
                 } else {
                     proofs[*slot].discard();

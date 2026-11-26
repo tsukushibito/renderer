@@ -202,16 +202,20 @@ impl Runtime {
         image: ImageHandle,
         buffer: crate::graph::BufferHandle,
     ) -> Result<(FrameSubmission, ManagedImage, ManagedBuffer), ExecutionError> {
+        let storage = graph.data();
         if buffer.graph != graph.graph_id()
             || !graph.has_export(buffer.index)
-            || !matches!(graph.resources[buffer.index].desc, ResourceDesc::Buffer(_))
+            || !matches!(
+                storage.resources[buffer.index].desc,
+                ResourceDesc::Buffer(_)
+            )
         {
             return Err(ExecutionError::invalid(
                 "expected an exported buffer from this graph",
             ));
         }
         self.collect_released_images()?;
-        let mut ticket = graph.resources[buffer.index]
+        let mut ticket = storage.resources[buffer.index]
             .import
             .is_none()
             .then(|| self.image_releases.reserve())
@@ -243,7 +247,8 @@ impl Runtime {
         graph: &CompiledGraph,
         outputs: [ImageHandle; N],
     ) -> Result<(FrameSubmission, [ManagedImage; N]), ExecutionError> {
-        if graph
+        let storage = graph.data();
+        if storage
             .frame_image
             .is_some_and(|image| !outputs.contains(&image))
         {
@@ -256,14 +261,14 @@ impl Runtime {
         for (index, output) in outputs.iter().enumerate() {
             if output.graph != graph.graph_id()
                 || !graph.has_export(output.index)
-                || !matches!(graph.resources[output.index].desc, ResourceDesc::Image(_))
+                || !matches!(storage.resources[output.index].desc, ResourceDesc::Image(_))
                 || outputs[..index].contains(output)
             {
                 return Err(ExecutionError::invalid(
                     "expected distinct exported images from this graph",
                 ));
             }
-            if graph.resources[output.index].import.is_none() {
+            if storage.resources[output.index].import.is_none() {
                 tickets[index] = Some(self.image_releases.reserve()?);
             }
         }

@@ -584,28 +584,29 @@ impl Registry {
     }
 
     pub(super) fn bind(&mut self, graph: &CompiledGraph, completed: u64) -> Result<(), Error> {
+        let storage = graph.data();
         self.begin()?;
-        if graph.resources.len() > self.limits.graph.resources {
+        if storage.resources.len() > self.limits.graph.resources {
             return Err(capacity(
                 Capacity::Resources,
                 Recovery::Reconfigure,
                 self.limits.graph.resources,
-                graph.resources.len(),
+                storage.resources.len(),
             ));
         }
         self.uses.clear();
-        self.uses.resize(graph.resources.len(), Usage::default());
-        for &p in &graph.order {
-            for access in graph.accesses(p) {
+        self.uses.resize(storage.resources.len(), Usage::default());
+        for &p in &storage.order {
+            for access in storage.accesses(p) {
                 let u = &mut self.uses[access.resource];
                 u.live = true;
                 u.changed |= access.write || access.discard_after;
             }
         }
-        for &i in &graph.exports {
+        for &i in &storage.exports {
             self.uses[i].live = true;
         }
-        for (i, r) in graph.resources.iter().enumerate() {
+        for (i, r) in storage.resources.iter().enumerate() {
             let slot = if let Some(key) = r.import {
                 let (_, snapshot) = self.lookup(key)?;
                 if snapshot.revision() != r.import_revision {
@@ -647,10 +648,11 @@ impl Registry {
         graph: &CompiledGraph,
         updates: &mut Vec<(usize, Snapshot)>,
     ) -> Result<(), Error> {
+        let storage = graph.data();
         updates.clear();
         for (i, u) in self.uses.iter().enumerate() {
             let Some(physical) = u.slot else { continue };
-            let r = &graph.resources[i];
+            let r = &storage.resources[i];
             let export = graph.has_export(i);
             if !export && !(r.import.is_some() && u.changed) {
                 continue;
@@ -672,7 +674,7 @@ impl Registry {
                 },
             };
             let revision = r.import_revision + u64::from(u.changed);
-            let initialized = graph.final_contents(i);
+            let initialized = storage.final_contents(i);
             let snapshot = match r.desc {
                 ResourceDesc::Buffer(desc) => {
                     let ranges = self

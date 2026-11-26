@@ -158,7 +158,7 @@ impl Runtime {
     /// A successful return exposes scheduled exports for same-runtime follow-up
     /// work. CPU readback becomes available only upon observed GPU completion.
     pub fn submit(&mut self, graph: &CompiledGraph) -> Result<FrameSubmission, ExecutionError> {
-        if let Some(image) = graph.frame_image {
+        if let Some(image) = graph.data().frame_image {
             let (mut receipt, owner) = self.submit_with_image(graph, image)?;
             receipt.frame_image = Some(owner);
             return Ok(receipt);

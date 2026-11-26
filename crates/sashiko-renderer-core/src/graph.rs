@@ -29,7 +29,7 @@
 //! ```
 
 use std::{
-    ops::{Deref, Range},
+    ops::Range,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -78,8 +78,8 @@ pub use resource::{
     PassHandle, ResourceKey, SampleCount,
 };
 pub(crate) use resource::{Resource, ResourceDesc};
-pub use storage::{GraphCapacity, GraphPool, GraphStorage, RasterBuildMetrics};
-use storage::{Slot, capacity_error};
+pub use storage::{GraphCapacity, GraphPool, RasterBuildMetrics};
+use storage::{GraphStorage, Slot, capacity_error};
 
 static NEXT_GRAPH: AtomicU64 = AtomicU64::new(1);
 pub(crate) fn next_id() -> u64 {
@@ -124,25 +124,29 @@ impl Graph {
         record(restore.graph)
     }
 }
-impl Deref for Graph {
-    type Target = GraphStorage;
-    fn deref(&self) -> &Self::Target {
-        self.slot.data()
-    }
-}
 impl std::fmt::Debug for Graph {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let storage = self.data();
         f.debug_struct("Graph")
-            .field("id", &self.id)
-            .field("resources", &self.resources.len())
-            .field("passes", &self.passes.len())
+            .field("id", &storage.id)
+            .field("resources", &storage.resources.len())
+            .field("passes", &storage.passes.len())
             .finish()
     }
 }
 impl Graph {
+    pub(crate) fn data(&self) -> &GraphStorage {
+        self.slot.data()
+    }
+
+    /// Raster build measurements for this checkout when profiling is enabled on the pool.
+    pub fn raster_build_metrics(&self) -> Option<RasterBuildMetrics> {
+        self.data().raster_metrics
+    }
+
     /// Identity retained by this Graph's compiled plan and submission.
     pub fn graph_id(&self) -> u64 {
-        self.id
+        self.data().id
     }
 
     /// Correctness-test preparation only. Allocation acceptance must keep an
@@ -174,16 +178,16 @@ impl Graph {
     ) -> Result<(), GraphError> {
         let pass = self.pass_id(pass)?;
         let dependency = self.pass_id(dependency)?;
-        let list = self.passes[pass].dependencies;
+        let list = self.data().passes[pass].dependencies;
         if !list
-            .iter(&self.dependencies)
+            .iter(&self.data().dependencies)
             .any(|target| target == dependency)
         {
-            if self.dependencies.len() == self.capacity.dependencies {
+            if self.data().dependencies.len() == self.data().capacity.dependencies {
                 return Err(capacity_error(
                     GraphCapacityKind::Dependencies,
-                    self.capacity.dependencies,
-                    self.dependencies.len().checked_add(1),
+                    self.data().capacity.dependencies,
+                    self.data().dependencies.len().checked_add(1),
                 ));
             }
             let data = self.data_mut();
@@ -224,15 +228,15 @@ impl Graph {
         accesses: Range<usize>,
         side_effect: bool,
     ) -> Result<PassHandle, GraphError> {
-        if self.passes.len() == self.capacity.passes {
+        if self.data().passes.len() == self.data().capacity.passes {
             return Err(capacity_error(
                 GraphCapacityKind::Passes,
-                self.capacity.passes,
-                self.passes.len().checked_add(1),
+                self.data().capacity.passes,
+                self.data().passes.len().checked_add(1),
             ));
         }
         let name = self.store_name(name)?;
-        let index = self.passes.len();
+        let index = self.data().passes.len();
         let dependencies = DependencyList::default();
         self.data_mut().passes.push(Pass {
             name,
@@ -242,19 +246,23 @@ impl Graph {
             dependencies,
         });
         Ok(PassHandle {
-            graph: self.id,
+            graph: self.graph_id(),
             index,
         })
     }
     fn store_name(&mut self, name: &str) -> Result<Range<usize>, GraphError> {
-        let start = self.names.len();
+        let start = self.data().names.len();
         let end = start.checked_add(name.len()).ok_or_else(|| {
-            capacity_error(GraphCapacityKind::NameBytes, self.capacity.name_bytes, None)
+            capacity_error(
+                GraphCapacityKind::NameBytes,
+                self.data().capacity.name_bytes,
+                None,
+            )
         })?;
-        if end > self.capacity.name_bytes {
+        if end > self.data().capacity.name_bytes {
             return Err(capacity_error(
                 GraphCapacityKind::NameBytes,
-                self.capacity.name_bytes,
+                self.data().capacity.name_bytes,
                 Some(end),
             ));
         }
@@ -263,11 +271,11 @@ impl Graph {
     }
     fn append_access(&mut self, access: ResourceAccess) -> Result<(), GraphError> {
         self.check_input_access(&access)?;
-        if self.accesses.len() == self.capacity.accesses {
+        if self.data().accesses.len() == self.data().capacity.accesses {
             return Err(capacity_error(
                 GraphCapacityKind::Accesses,
-                self.capacity.accesses,
-                self.accesses.len().checked_add(1),
+                self.data().capacity.accesses,
+                self.data().accesses.len().checked_add(1),
             ));
         }
         self.data_mut().accesses.push(access);
@@ -277,22 +285,22 @@ impl Graph {
         &mut self,
         accesses: [ResourceAccess; N],
     ) -> Result<Range<usize>, GraphError> {
-        let start = self.accesses.len();
+        let start = self.data().accesses.len();
         for access in &accesses {
             self.check_input_access(access)?;
         }
-        if N > self.capacity.accesses.saturating_sub(start) {
+        if N > self.data().capacity.accesses.saturating_sub(start) {
             return Err(capacity_error(
                 GraphCapacityKind::Accesses,
-                self.capacity.accesses,
+                self.data().capacity.accesses,
                 start.checked_add(N),
             ));
         }
         self.data_mut().accesses.extend(accesses);
-        Ok(start..self.accesses.len())
+        Ok(start..self.data().accesses.len())
     }
     fn check_input_access(&self, access: &ResourceAccess) -> Result<(), GraphError> {
-        if access.write && self.resources[access.resource].read_only_input {
+        if access.write && self.data().resources[access.resource].read_only_input {
             return Err(self.resource_error(
                 GraphErrorKind::InvalidInput,
                 "snapshot mesh input is read-only; copy to an independent buffer",
@@ -302,18 +310,18 @@ impl Graph {
         Ok(())
     }
     fn append_upload(&mut self, bytes: &[u8]) -> Result<UploadSource, GraphError> {
-        let start = self.uploads.len();
+        let start = self.data().uploads.len();
         let end = start.checked_add(bytes.len()).ok_or_else(|| {
             capacity_error(
                 GraphCapacityKind::UploadBytes,
-                self.capacity.upload_bytes,
+                self.data().capacity.upload_bytes,
                 None,
             )
         })?;
-        if end > self.capacity.upload_bytes {
+        if end > self.data().capacity.upload_bytes {
             return Err(capacity_error(
                 GraphCapacityKind::UploadBytes,
-                self.capacity.upload_bytes,
+                self.data().capacity.upload_bytes,
                 Some(end),
             ));
         }
@@ -321,13 +329,14 @@ impl Graph {
         Ok(UploadSource::Frame(start..end))
     }
     fn pass_id(&self, handle: PassHandle) -> Result<usize, GraphError> {
-        if handle.graph != self.id {
+        let storage = self.data();
+        if handle.graph != storage.id {
             return Err(
                 GraphError::new(GraphErrorKind::WrongOwner, "foreign graph pass handle")
                     .with_pass(handle, None),
             );
         }
-        if handle.index >= self.passes.len() {
+        if handle.index >= storage.passes.len() {
             return Err(GraphError::new(
                 GraphErrorKind::InvalidHandle,
                 "undefined graph pass handle",

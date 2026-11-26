@@ -110,22 +110,23 @@ pub(super) fn record(
     programs: &[RasterPipeline],
     team: &RecordingTeam,
 ) -> Result<(), D3D12RuntimeError> {
+    let storage = graph.data();
     for bundle in &mut slot.bundles {
         bundle.pipeline = None;
     }
     let mut end = 0;
-    for &pass in &graph.order {
+    for &pass in &storage.order {
         let Operation::Raster {
             batches,
             colors,
             depth,
             ..
-        } = &graph.passes[pass].operation
+        } = &storage.passes[pass].operation
         else {
             continue;
         };
         let samples = super::raster::target_samples(graph, colors, *depth);
-        for (index, batch) in batches.clone().zip(graph.raster_batches(batches)) {
+        for (index, batch) in batches.clone().zip(storage.raster_batches(batches)) {
             let Some(bundle) = slot.bundles.get_mut(index) else {
                 break;
             };
@@ -151,7 +152,7 @@ pub(super) fn record(
             .iter()
             .enumerate()
             .filter(|(_, b)| b.pipeline.is_some())
-            .map(|(i, _)| graph.raster_batches(&(i..i + 1))[0].draws.len()),
+            .map(|(i, _)| storage.raster_batches(&(i..i + 1))[0].draws.len()),
     ) {
         for bundle in &mut slot.bundles[..end] {
             bundle.pipeline = None;
@@ -169,7 +170,7 @@ pub(super) fn record(
             scope.for_each_chunk_mut(bundles, NonZeroUsize::MIN, |index, chunk| {
                 let bundle = &mut chunk[0];
                 if let Some(pipeline) = bundle.pipeline {
-                    let batch = &graph.raster_batches(&(index..index + 1))[0];
+                    let batch = &storage.raster_batches(&(index..index + 1))[0];
                     bundle.error = bundle
                         .record(owner, &programs[pipeline], buffers, map, graph, batch)
                         .err();

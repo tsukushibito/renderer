@@ -287,7 +287,7 @@ impl PreparedOperation {
             Operation::UploadBuffer { dst, offset, .. } => Self::UploadBuffer {
                 dst,
                 offset,
-                size: graph.upload_data(operation).len() as u64,
+                size: graph.data().upload_data(operation).len() as u64,
             },
             Operation::CopyBuffer {
                 src,
@@ -372,31 +372,32 @@ fn index_error(error: IndexError) -> RuntimeError {
 }
 
 fn provenance_requirements(graph: &CompiledGraph, needed: &mut [bool], retained: &mut [bool]) {
+    let storage = graph.data();
     // Every canonical buffer may become indices in a future graph, even when
     // this graph does not export it again. Transient vertex/transfer-only data
     // needs no CPU provenance. Mark sources of copies feeding required buffers.
-    for (index, resource) in graph.resources.iter().enumerate() {
+    for (index, resource) in storage.resources.iter().enumerate() {
         retained[index] =
             resource.import.is_some() && matches!(resource.desc, ResourceDesc::Buffer(_));
     }
-    for &resource in &graph.exports {
-        if matches!(graph.resources[resource].desc, ResourceDesc::Buffer(_)) {
+    for &resource in &storage.exports {
+        if matches!(storage.resources[resource].desc, ResourceDesc::Buffer(_)) {
             retained[resource] = true;
         }
     }
-    let resources = graph.resources.len();
+    let resources = storage.resources.len();
     needed[..resources].copy_from_slice(&retained[..resources]);
-    for &pass in &graph.order {
-        if let Operation::Raster { draws, .. } = &graph.passes[pass].operation {
-            for draw in graph.raster_draws(draws) {
+    for &pass in &storage.order {
+        if let Operation::Raster { draws, .. } = &storage.passes[pass].operation {
+            for draw in storage.raster_draws(draws) {
                 if let Some(indexed) = &draw.indexed {
                     needed[indexed.indices] = true;
                 }
             }
         }
     }
-    for &pass in graph.order.iter().rev() {
-        if let Operation::CopyBuffer { src, dst, .. } = graph.passes[pass].operation
+    for &pass in storage.order.iter().rev() {
+        if let Operation::CopyBuffer { src, dst, .. } = storage.passes[pass].operation
             && needed[dst]
         {
             needed[src] = true;
@@ -450,24 +451,25 @@ impl GraphWork {
         graph: &CompiledGraph,
         serial: u64,
     ) -> Result<Self, RuntimeError> {
+        let storage = graph.data();
         let mut data = work.acquire()?;
         let limit = data.limit.graph;
-        let draws = graph
+        let draws = storage
             .order
             .iter()
-            .filter_map(|&pass| match &graph.passes[pass].operation {
+            .filter_map(|&pass| match &storage.passes[pass].operation {
                 Operation::Raster { draws, .. } => Some(draws.len()),
                 _ => None,
             })
             .try_fold(0usize, usize::checked_add);
         if draws.is_none_or(|draws| draws > limit.draws)
-            || graph.resources.len() > limit.resources
-            || graph.binding_count() > limit.bindings
-            || graph.order.len() > limit.passes
-            || graph
+            || storage.resources.len() > limit.resources
+            || storage.binding_count() > limit.bindings
+            || storage.order.len() > limit.passes
+            || storage
                 .order
                 .iter()
-                .map(|&pass| graph.accesses(pass).len())
+                .map(|&pass| storage.accesses(pass).len())
                 .sum::<usize>()
                 > limit.accesses
         {
@@ -489,7 +491,7 @@ impl GraphWork {
         })?;
         // Set before any logical resource or partial preparation can retain a
         // lease/state. Every failure then resets precisely this active prefix.
-        data.active_resources = graph.resources.len();
+        data.active_resources = storage.resources.len();
         Ok(Self {
             owner,
             data: Some(data),
@@ -514,6 +516,7 @@ impl GraphWork {
         readback: &SharedStaging,
         #[cfg(feature = "graph-diagnostics")] mut diagnostic: Option<&mut String>,
     ) -> Result<Self, RuntimeError> {
+        let storage = graph.data();
         #[cfg(feature = "tracy")]
         let _span = tracy_client::Client::running().map(|client| {
             client.span(
@@ -552,7 +555,7 @@ impl GraphWork {
                 0,
             )
         });
-        for (index, physical) in physical.iter().enumerate().take(graph.resources.len()) {
+        for (index, physical) in physical.iter().enumerate().take(storage.resources.len()) {
             if let Some(physical) = physical {
                 states[index]
                     .as_mut()
@@ -564,7 +567,7 @@ impl GraphWork {
         drop(snapshots);
         provenance_requirements(graph, provenance_needed, retain_provenance);
         let mut raster_program_cursor = 0;
-        for &index in &graph.order {
+        for &index in &storage.order {
             #[cfg(feature = "tracy")]
             let _span = tracy_client::Client::running().map(|client| {
                 client.span(
@@ -572,7 +575,7 @@ impl GraphWork {
                     0,
                 )
             });
-            let pass = &graph.passes[index];
+            let pass = &storage.passes[index];
             #[cfg(feature = "graph-diagnostics")]
             if let Some(output) = diagnostic.as_deref_mut() {
                 diagnostics::pass(output, graph, index);
@@ -580,7 +583,7 @@ impl GraphWork {
             let mut prepared = PreparedPass {
                 #[cfg(feature = "vulkan-diagnostics")]
                 name: {
-                    let name = graph.pass_name(index).as_bytes();
+                    let name = storage.pass_name(index).as_bytes();
                     if name.contains(&0) {
                         return Err(RuntimeError::invalid("pass debug name contains a NUL byte"));
                     }
@@ -612,7 +615,7 @@ impl GraphWork {
             // Aggregate one pass's uses before modifying previous-access state;
             // disjoint self-copies must not appear to depend on themselves.
             touched.clear();
-            for access in graph.accesses(index) {
+            for access in storage.accesses(index) {
                 let current = usage(access.purpose, access.stages);
                 if !used[access.resource] {
                     used[access.resource] = true;
@@ -622,7 +625,7 @@ impl GraphWork {
                 // Transfer purposes also describe buffers. Their layout hints
                 // must not reject a legal disjoint same-buffer copy.
                 if matches!(
-                    graph.resources[access.resource].desc,
+                    storage.resources[access.resource].desc,
                     ResourceDesc::Image(_)
                 ) && target.layout != vk::ImageLayout::UNDEFINED
                     && current.layout != vk::ImageLayout::UNDEFINED
@@ -721,7 +724,7 @@ impl GraphWork {
                     Operation::UploadBuffer {
                         dst, offset, mesh, ..
                     } => {
-                        let slice = graph.upload_data(&pass.operation);
+                        let slice = storage.upload_data(&pass.operation);
                         let mut range = upload.allocate(slice.len() as u64).map_err(|error| {
                             staging_capacity_context(
                                 error,
@@ -803,7 +806,7 @@ impl GraphWork {
                         }
                     }
                     Operation::UploadImage { .. } => {
-                        let bytes = graph.upload_data(&pass.operation);
+                        let bytes = storage.upload_data(&pass.operation);
                         let mut range = upload.allocate(bytes.len() as u64).map_err(|error| {
                             staging_capacity_context(
                                 error,
@@ -830,7 +833,7 @@ impl GraphWork {
                         readbacks.push((index, Some(range)));
                     }
                     Operation::ReadbackImage { src } => {
-                        let ResourceDesc::Image(desc) = graph.resources[*src].desc else {
+                        let ResourceDesc::Image(desc) = storage.resources[*src].desc else {
                             unreachable!()
                         };
                         prepared.staging = Some(readbacks.len());
@@ -856,17 +859,17 @@ impl GraphWork {
                     } => {
                         prepared.compute = Some(compute.as_mut().unwrap().prepare(
                             *program,
-                            graph.raster_bindings(bindings),
+                            storage.raster_bindings(bindings),
                             physical,
                             *workgroups,
                         )?);
                         // Shader writes invalidate any prior CPU index proof,
                         // including proofs retained by imported/exported buffers.
-                        for access in graph.accesses(index) {
+                        for access in storage.accesses(index) {
                             if access.write
                                 && provenance_needed[access.resource]
                                 && matches!(
-                                    graph.resources[access.resource].desc,
+                                    storage.resources[access.resource].desc,
                                     ResourceDesc::Buffer(_)
                                 )
                             {
@@ -903,7 +906,7 @@ impl GraphWork {
                             )
                         });
                         let programs = programs.as_ref().unwrap();
-                        for batch in graph.raster_batches(batches) {
+                        for batch in storage.raster_batches(batches) {
                             let slot = raster_programs[raster_program_cursor];
                             raster_program_cursor += 1;
                             let native_program = programs.raster_program(slot);
@@ -915,7 +918,7 @@ impl GraphWork {
                                 key
                             });
                             for (draw_index, draw) in
-                                graph.raster_draws(&batch.draws).iter().enumerate()
+                                storage.raster_draws(&batch.draws).iter().enumerate()
                             {
                                 #[cfg(feature = "tracy")]
                                 let _span = tracy_client::Client::running().map(|client| {
@@ -928,7 +931,7 @@ impl GraphWork {
                                 });
                                 if let Some(indexed) = &draw.indexed {
                                     let vertex_count =
-                                        graph.resources[indexed.vertices].desc.units()
+                                        storage.resources[indexed.vertices].desc.units()
                                             / u64::from(program.vertex_stride());
                                     states[indexed.indices]
                                         .as_mut()
@@ -956,7 +959,7 @@ impl GraphWork {
                                             if validate_sampled {
                                                 validate_sampled_operands(
                                                     program.bindings(),
-                                                    graph.raster_bindings(&draw.bindings),
+                                                    storage.raster_bindings(&draw.bindings),
                                                     physical,
                                                     Some(program.sampling_pairs()),
                                                 )?;
@@ -975,7 +978,7 @@ impl GraphWork {
                                                 .bindings()
                                                 .iter()
                                                 .copied()
-                                                .zip(graph.raster_bindings(&draw.bindings))
+                                                .zip(storage.raster_bindings(&draw.bindings))
                                                 .map(|(slot, operand)| {
                                                     (slot, native_raster_binding(operand, physical))
                                                 });
@@ -1001,15 +1004,15 @@ impl GraphWork {
                 }
                 Ok(())
             })()
-            .map_err(|error| error.context(format_args!("pass {:?}", graph.pass_name(index))))?;
+            .map_err(|error| error.context(format_args!("pass {:?}", storage.pass_name(index))))?;
             passes.push(prepared);
         }
-        for (index, state) in states.iter_mut().enumerate().take(graph.resources.len()) {
+        for (index, state) in states.iter_mut().enumerate().take(storage.resources.len()) {
             if physical[index].is_some()
                 && let Some(state) = state
             {
                 state.serial = serial;
-                state.set_initialized(graph.final_contents(index))?;
+                state.set_initialized(storage.final_contents(index))?;
                 // Transient index validation has finished. Only canonical imports
                 // and exports can acquire a future index role in another graph.
                 if !retain_provenance[index] {
@@ -1022,7 +1025,7 @@ impl GraphWork {
             diagnostics::finish(
                 output,
                 graph,
-                &states[..graph.resources.len()],
+                &states[..storage.resources.len()],
                 !readbacks.is_empty(),
             );
         }
@@ -1482,7 +1485,8 @@ mod tests {
         graph.readback_buffer("read", buffer, 0, 4).unwrap();
         let plan = graph.compile().unwrap();
         let operation =
-            PreparedOperation::from_graph(&plan, &plan.passes[upload.index].operation).unwrap();
+            PreparedOperation::from_graph(&plan, &plan.data().passes[upload.index].operation)
+                .unwrap();
         assert!(matches!(
             &operation,
             PreparedOperation::UploadBuffer {
@@ -1573,8 +1577,9 @@ mod tests {
             .readback_buffer("persistent.read", imported, 0, 12)
             .unwrap();
         let plan = graph.compile().unwrap();
-        let mut needed = vec![false; plan.resources.len()];
-        let mut retained = vec![false; plan.resources.len()];
+        let storage = plan.data();
+        let mut needed = vec![false; storage.resources.len()];
+        let mut retained = vec![false; storage.resources.len()];
         provenance_requirements(&plan, &mut needed, &mut retained);
         assert!(
             !needed[vertices.index],

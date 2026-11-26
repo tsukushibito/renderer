@@ -294,6 +294,7 @@ fn attachment_samples(
     colors: &Range<usize>,
     depth: Option<usize>,
 ) -> SampleCount {
+    let graph = graph.data();
     let attachment = graph
         .raster_attachments(colors)
         .first()
@@ -1478,6 +1479,7 @@ impl VulkanRuntime {
         graph: &CompiledGraph,
         #[cfg(feature = "graph-diagnostics")] capture_diagnostics: bool,
     ) -> Result<(Submission, LoweringCapture), RuntimeError> {
+        let storage = graph.data();
         #[cfg(feature = "tracy")]
         let prepare_prelude = tracy_client::Client::running().map(|client| {
             client.span(
@@ -1538,8 +1540,8 @@ impl VulkanRuntime {
         )?;
         let max_color_attachments = crate::program::MAX_RASTER_COLOR_ATTACHMENTS
             .min(self.owner.device.limits().max_color_attachments as usize);
-        for &pass in &graph.order {
-            match &graph.passes[pass].operation {
+        for &pass in &storage.order {
+            match &storage.passes[pass].operation {
                 Operation::Raster { colors, .. } | Operation::AttachmentPass { colors, .. }
                     if colors.len() > max_color_attachments =>
                 {
@@ -1565,7 +1567,7 @@ impl VulkanRuntime {
                         )
                     })?;
                     let sample_count = attachment_samples(graph, colors, *depth);
-                    for batch in graph.raster_batches(batches) {
+                    for batch in storage.raster_batches(batches) {
                         if let Some(indirect) = batch.indirect
                             && indirect.command_count > self.owner.device.max_draw_indirect_count()
                         {
@@ -1585,7 +1587,7 @@ impl VulkanRuntime {
                 }
                 _ => {}
             }
-            if let Operation::Dispatch { program, .. } = &graph.passes[pass].operation
+            if let Operation::Dispatch { program, .. } = &storage.passes[pass].operation
                 && !self
                     .compute_programs
                     .as_ref()
@@ -1601,26 +1603,26 @@ impl VulkanRuntime {
                     ),
                 ));
             }
-            if let Operation::Declared(kind) = &graph.passes[pass].operation {
+            if let Operation::Declared(kind) = &storage.passes[pass].operation {
                 return Err(RuntimeError::unsupported(format!(
                     "pass {} is declaration-only {kind:?}; native execution unsupported",
-                    graph.pass_name(pass)
+                    storage.pass_name(pass)
                 )));
             }
-            for access in graph.accesses(pass) {
+            for access in storage.accesses(pass) {
                 if matches!(
                     access.purpose,
                     crate::graph::AccessPurpose::ColorAttachment
                         | crate::graph::AccessPurpose::DepthAttachment
                         | crate::graph::AccessPurpose::ColorResolve
                 ) && (access.range != (0..1)
-                    || matches!(graph.resources[access.resource].desc, ResourceDesc::Image(desc) if desc.mip_levels != 1))
+                    || matches!(storage.resources[access.resource].desc, ResourceDesc::Image(desc) if desc.mip_levels != 1))
                 {
                     return Err(RuntimeError::unsupported(
                         "native attachments require a single-mip single-layer image",
                     ));
                 }
-                if matches!(graph.resources[access.resource].desc, ResourceDesc::Image(desc) if desc.array_layers != 1)
+                if matches!(storage.resources[access.resource].desc, ResourceDesc::Image(desc) if desc.array_layers != 1)
                 {
                     return Err(RuntimeError::unsupported(
                         "native images require one array layer",
@@ -1629,7 +1631,7 @@ impl VulkanRuntime {
                 work.needed[access.resource] = true;
             }
         }
-        for &resource in &graph.exports {
+        for &resource in &storage.exports {
             work.needed[resource] = true;
         }
         // Validate logical contents, including culled imports, before allocation.
@@ -1642,7 +1644,7 @@ impl VulkanRuntime {
                 0,
             )
         });
-        for (resource_index, resource) in graph.resources.iter().enumerate() {
+        for (resource_index, resource) in storage.resources.iter().enumerate() {
             if let Some(key) = resource.import {
                 let physical = self.entry(key)?.physical();
                 let state = physical.lock();
@@ -1654,11 +1656,11 @@ impl VulkanRuntime {
                 #[cfg(feature = "development-validation")]
                 let inconsistent = inconsistent
                     || physical.desc != resource.desc
-                    || state.scheduled.initialized != graph.initial_contents(resource_index);
+                    || state.scheduled.initialized != storage.initial_contents(resource_index);
                 if inconsistent {
                     return Err(RuntimeError::stale(format!(
                         "stale or inconsistent import snapshot for {}; refresh and recompile",
-                        graph.resource_name(resource_index)
+                        storage.resource_name(resource_index)
                     )));
                 }
             }
@@ -1672,14 +1674,14 @@ impl VulkanRuntime {
                 0,
             )
         });
-        for (index, resource) in graph.resources.iter().enumerate() {
+        for (index, resource) in storage.resources.iter().enumerate() {
             if !work.needed[index] {
                 continue;
             }
             let (key, value) = if let Some(key) = resource.import {
                 (key, self.lease(key)?)
             } else {
-                self.acquire(resource.desc, graph.resource_name(index))
+                self.acquire(resource.desc, storage.resource_name(index))
                     .map_err(|error| {
                         self.resource_capacity_context(error, resource.desc, &work.keys[..index])
                     })?
@@ -1692,14 +1694,14 @@ impl VulkanRuntime {
         let mut uses_raster = false;
         let mut binding_count = 0usize;
         let mut textured_raster = false;
-        for &pass in &graph.order {
-            let count = match &graph.passes[pass].operation {
+        for &pass in &storage.order {
+            let count = match &storage.passes[pass].operation {
                 Operation::Raster { batches, depth, .. } => {
                     uses_raster = true;
-                    let count = graph
+                    let count = storage
                         .raster_batches(batches)
                         .iter()
-                        .map(|batch| graph.raster_draws(&batch.draws))
+                        .map(|batch| storage.raster_draws(&batch.draws))
                         // A batch contains at least one draw and uses one Program ABI.
                         .filter(|draws| !draws[0].bindings.is_empty())
                         .flatten()
@@ -1749,10 +1751,10 @@ impl VulkanRuntime {
         } else {
             None
         };
-        let compute = if graph
+        let compute = if storage
             .order
             .iter()
-            .any(|&pass| matches!(graph.passes[pass].operation, Operation::Dispatch { .. }))
+            .any(|&pass| matches!(storage.passes[pass].operation, Operation::Dispatch { .. }))
         {
             Some(self.compute_programs.as_ref().unwrap().acquire()?)
         } else {
@@ -1764,8 +1766,8 @@ impl VulkanRuntime {
                 graph,
                 serial,
                 self.owner.device.queue_family(),
-                &work.keys[..graph.resources.len()],
-                &work.physical[..graph.resources.len()],
+                &work.keys[..storage.resources.len()],
+                &work.physical[..storage.resources.len()],
             )
         });
         #[cfg(not(feature = "graph-diagnostics"))]
@@ -1808,22 +1810,22 @@ impl VulkanRuntime {
                 )
             })?
             .acquire()?;
-        for &index in &graph.exports {
+        for &index in &storage.exports {
             let key = work.keys[index].unwrap();
             let snapshot = work.final_states[index].as_ref().unwrap();
             exports.insert(
                 index,
-                export_snapshot(self, key, graph.resources[index].desc, snapshot).map_err(
+                export_snapshot(self, key, storage.resources[index].desc, snapshot).map_err(
                     |error| {
                         if let Some(capacity) = error.capacity().filter(|capacity| {
                             capacity.resource == RuntimeCapacityKind::ImportRanges
                         }) {
-                            let required = graph
+                            let required = storage
                                 .exports
                                 .iter()
                                 .filter(|&&resource| {
                                     matches!(
-                                        graph.resources[resource].desc,
+                                        storage.resources[resource].desc,
                                         ResourceDesc::Buffer(_)
                                     )
                                 })
@@ -1847,7 +1849,7 @@ impl VulkanRuntime {
         if let (Some(cpu), Some(started)) = (&cpu_pending, record_started) {
             cpu.lock().unwrap_or_else(|error| error.into_inner())[0] = started.elapsed();
         }
-        for &logical in &graph.exports {
+        for &logical in &storage.exports {
             let key = exports.get(logical).expect("prepared exported key").key();
             let index = key.index as usize;
             if !self.entries[index].registered {
@@ -1865,7 +1867,7 @@ impl VulkanRuntime {
         let mut registration = Registration {
             entries: &mut self.entries,
             exports: &exports,
-            logical: &graph.exports,
+            logical: &storage.exports,
             serial,
             keep: false,
         };
@@ -1879,7 +1881,7 @@ impl VulkanRuntime {
         Ok((
             Submission {
                 id: FrameId::new(self.id, serial),
-                graph: graph.id,
+                graph: storage.id,
                 pending,
                 exports,
             },

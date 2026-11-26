@@ -344,15 +344,19 @@ mod tests {
         drop(geometry);
         let compiled = graph.compile().unwrap();
         assert_eq!(
-            compiled.upload_data(&compiled.passes[vertex_upload.index].operation),
+            compiled
+                .data()
+                .upload_data(&compiled.data().passes[vertex_upload.index].operation),
             &[7; 144]
         );
         assert_eq!(
-            compiled.upload_data(&compiled.passes[index_upload.index].operation),
+            compiled
+                .data()
+                .upload_data(&compiled.data().passes[index_upload.index].operation),
             &[2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
         );
         assert!(matches!(
-            compiled.passes[index_upload.index].operation,
+            compiled.data().passes[index_upload.index].operation,
             Operation::UploadBuffer {
                 mesh: Some(MeshUpload::Indices {
                     byte_len: 12,
@@ -395,7 +399,7 @@ mod tests {
                 .kind(),
             GraphErrorKind::InvalidInput
         );
-        assert!(graph.passes.is_empty());
+        assert!(graph.data().passes.is_empty());
         let ib = graph.buffer("indices", BufferDesc { size: 12 }).unwrap();
         let vb = graph.buffer("vertices", BufferDesc { size: 144 }).unwrap();
         geometry.upload_indices(&mut graph, "indices", ib).unwrap();
@@ -403,6 +407,6 @@ mod tests {
             .upload_vertices(&mut graph, "full", vb)
             .unwrap_err();
         assert_eq!(error.capacity().unwrap().kind, GraphCapacityKind::Passes);
-        assert_eq!(graph.passes.len(), 1);
+        assert_eq!(graph.data().passes.len(), 1);
     }
 }

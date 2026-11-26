@@ -55,7 +55,8 @@ impl WindowPresenter {
                 "display image belongs to another Graph",
             ));
         }
-        let Some(ResourceDesc::Image(desc)) = graph.resources.get(image.index).map(|r| r.desc)
+        let Some(ResourceDesc::Image(desc)) =
+            graph.data().resources.get(image.index).map(|r| r.desc)
         else {
             return Err(ExecutionError::invalid(
                 "display output must identify an image",

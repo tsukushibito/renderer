@@ -443,9 +443,11 @@ impl<'a> BufferLookup<'a> {
 impl Graph {
     /// Whether an earlier pass may write this image before the next declared pass.
     pub fn image_has_pending_write(&self, image: &ImportImage) -> bool {
-        self.imports
+        let storage = self.data();
+        storage
+            .imports
             .get(&image.key())
-            .is_some_and(|&i| self.resources[i].written_in_graph)
+            .is_some_and(|&i| storage.resources[i].written_in_graph)
     }
 
     fn add_resource(
@@ -456,29 +458,30 @@ impl Graph {
         revision: u64,
         initial: &[Range<u64>],
     ) -> Result<usize, GraphError> {
-        if self.resources.len() == self.capacity.resources {
+        let data = self.data();
+        if data.resources.len() == data.capacity.resources {
             return Err(super::storage::capacity_error(
                 GraphCapacityKind::Resources,
-                self.capacity.resources,
-                self.resources.len().checked_add(1),
+                data.capacity.resources,
+                data.resources.len().checked_add(1),
             ));
         }
         if initial.len()
-            > self
+            > data
                 .capacity
                 .initial_ranges
-                .saturating_sub(self.initial_ranges.len())
+                .saturating_sub(data.initial_ranges.len())
         {
             return Err(super::storage::capacity_error(
                 GraphCapacityKind::InitialRanges,
-                self.capacity.initial_ranges,
-                self.initial_ranges.len().checked_add(initial.len()),
+                data.capacity.initial_ranges,
+                data.initial_ranges.len().checked_add(initial.len()),
             ));
         }
         let name = self.store_name(name)?;
-        let index = self.resources.len();
-        let start = self.initial_ranges.len();
         let data = self.data_mut();
+        let index = data.resources.len();
+        let start = data.initial_ranges.len();
         data.initial_ranges.extend_from_slice(initial);
         data.resources.push(Resource {
             name,
@@ -506,7 +509,7 @@ impl Graph {
         }
         let index = self.add_resource(name, ResourceDesc::Buffer(desc), None, 0, &[])?;
         Ok(BufferHandle {
-            graph: self.id,
+            graph: self.graph_id(),
             index,
         })
     }
@@ -524,7 +527,7 @@ impl Graph {
         }
         let index = self.add_resource(name, ResourceDesc::Image(desc), None, 0, &[])?;
         Ok(ImageHandle {
-            graph: self.id,
+            graph: self.graph_id(),
             index,
         })
     }
@@ -538,7 +541,7 @@ impl Graph {
         desc: ImageDesc,
         bytes: &[u8],
     ) -> Result<ImageHandle, GraphError> {
-        let name_end = self.names.len();
+        let name_end = self.data().names.len();
         let image = self.image(name, desc)?;
         if let Err(error) = self.upload_image(name, image, bytes) {
             // upload_image has already returned its unpublished pass storage.
@@ -560,7 +563,7 @@ impl Graph {
     /// Foreign handles, including an earlier checkout of this pool, are rejected.
     pub fn buffer_desc(&self, buffer: BufferHandle) -> Result<BufferDesc, GraphError> {
         let id = self.buffer_id(buffer)?;
-        let ResourceDesc::Buffer(desc) = self.resources[id].desc else {
+        let ResourceDesc::Buffer(desc) = self.data().resources[id].desc else {
             unreachable!("buffer_id established the resource kind")
         };
         Ok(desc)
@@ -672,7 +675,7 @@ impl Graph {
             source.initialized(),
         )?;
         Ok(BufferHandle {
-            graph: self.id,
+            graph: self.graph_id(),
             index,
         })
     }
@@ -684,7 +687,7 @@ impl Graph {
         name: &str,
         source: &ImportBuffer,
     ) -> Result<BufferHandle, GraphError> {
-        let previous_len = self.resources.len();
+        let previous_len = self.data().resources.len();
         let buffer = self.import_buffer(name, source)?;
         self.protect_input(buffer, buffer.index >= previous_len)?;
         Ok(buffer)
@@ -724,7 +727,7 @@ impl Graph {
             initial,
         )?;
         Ok(ImageHandle {
-            graph: self.id,
+            graph: self.graph_id(),
             index,
         })
     }
@@ -736,11 +739,11 @@ impl Graph {
         revision: u64,
         initial: &[Range<u64>],
     ) -> Result<usize, GraphError> {
-        if let Some(&index) = self.imports.get(&key) {
-            let existing = &self.resources[index];
+        if let Some(&index) = self.data().imports.get(&key) {
+            let existing = &self.data().resources[index];
             if existing.desc != desc
                 || existing.import_revision != revision
-                || &self.initial_ranges[existing.initial.clone()] != initial
+                || &self.data().initial_ranges[existing.initial.clone()] != initial
             {
                 return Err(self.resource_error(
                     GraphErrorKind::InconsistentImport,
@@ -770,7 +773,7 @@ impl Graph {
     /// independent buffer rather than exported directly.
     pub fn export_buffer(&mut self, buffer: BufferHandle) -> Result<(), GraphError> {
         let id = self.buffer_id(buffer)?;
-        if self.resources[id].read_only_input {
+        if self.data().resources[id].read_only_input {
             return Err(self.resource_error(
                 GraphErrorKind::InvalidInput,
                 "snapshot mesh inputs cannot be exported; copy to an independent buffer",
@@ -812,7 +815,7 @@ impl Graph {
                 id,
             ));
         }
-        if !self.exported[id] || self.resources[id].export_mips != 0 {
+        if !self.data().exported[id] || self.data().resources[id].export_mips != 0 {
             self.data_mut().resources[id].export_mips |= mip_mask(levels);
         }
         self.export(id);
@@ -822,7 +825,11 @@ impl Graph {
     /// frame. Its submission receipt holds the image until taken or dropped.
     /// An imported target keeps its original registration owner.
     pub fn export_frame_image(&mut self, image: ImageHandle) -> Result<(), GraphError> {
-        if self.frame_image.is_some_and(|selected| selected != image) {
+        if self
+            .data()
+            .frame_image
+            .is_some_and(|selected| selected != image)
+        {
             return Err(GraphError::invalid_input(
                 "a frame image is already selected",
             ));
@@ -832,10 +839,10 @@ impl Graph {
         Ok(())
     }
     fn export(&mut self, id: usize) {
-        if self.exported.len() <= id {
+        if self.data().exported.len() <= id {
             self.data_mut().exported.resize(id + 1, false);
         }
-        if !self.exported[id] {
+        if !self.data().exported[id] {
             self.data_mut().exported[id] = true;
             self.data_mut().exports.push(id);
         }
@@ -849,12 +856,13 @@ impl Graph {
         created_here: bool,
     ) -> Result<(), GraphError> {
         let id = self.buffer_id(buffer)?;
-        if self.resources[id].read_only_input {
+        if self.data().resources[id].read_only_input {
             return Ok(());
         }
-        if self.exported[id]
+        if self.data().exported[id]
             || (!created_here
                 && self
+                    .data()
                     .accesses
                     .iter()
                     .any(|access| access.resource == id && access.write))
@@ -868,18 +876,23 @@ impl Graph {
         self.data_mut().resources[id].read_only_input = true;
         Ok(())
     }
+    pub(super) fn buffer_lookup(&self) -> BufferLookup<'_> {
+        let storage = self.data();
+        BufferLookup::new(storage.id, &storage.resources, &storage.names)
+    }
     pub(super) fn buffer_id(&self, handle: BufferHandle) -> Result<usize, GraphError> {
-        BufferLookup::new(self.id, &self.resources, &self.names).buffer_id(handle)
+        self.buffer_lookup().buffer_id(handle)
     }
     pub(super) fn image_id(&self, handle: ImageHandle) -> Result<usize, GraphError> {
-        if handle.graph != self.id {
+        let storage = self.data();
+        if handle.graph != storage.id {
             return Err(
                 GraphError::new(GraphErrorKind::WrongOwner, "foreign graph image handle")
                     .with_resource(handle.into(), None),
             );
         }
         if !matches!(
-            self.resources.get(handle.index).map(|r| r.desc),
+            storage.resources.get(handle.index).map(|r| r.desc),
             Some(ResourceDesc::Image(_))
         ) {
             return Err(GraphError::new(
@@ -888,7 +901,10 @@ impl Graph {
             )
             .with_resource(
                 handle.into(),
-                self.resources.get(handle.index).map(|r| self.name(&r.name)),
+                storage
+                    .resources
+                    .get(handle.index)
+                    .map(|r| storage.name(&r.name)),
             ));
         }
         Ok(handle.index)
@@ -904,7 +920,7 @@ impl Graph {
             self.resource_error(GraphErrorKind::InvalidInput, "byte range overflow", id)
         })?;
         if size == 0
-            || end > self.resources[id].desc.units()
+            || end > self.data().resources[id].desc.units()
             || (copy_alignment && !offset.is_multiple_of(4))
         {
             return Err(self.resource_error(GraphErrorKind::InvalidInput,
@@ -915,7 +931,7 @@ impl Graph {
         Ok(offset..end)
     }
     pub(super) fn image_desc_at(&self, id: usize) -> Result<ImageDesc, GraphError> {
-        match self.resources[id].desc {
+        match self.data().resources[id].desc {
             ResourceDesc::Image(d) => Ok(d),
             _ => Err(self.resource_error(GraphErrorKind::InvalidHandle, "expected image", id)),
         }
@@ -973,25 +989,26 @@ impl Graph {
         self.resource_context(GraphError::new(kind, message), id)
     }
     pub(super) fn resource_context(&self, error: GraphError, id: usize) -> GraphError {
-        let Some(resource) = self.resources.get(id) else {
+        let storage = self.data();
+        let Some(resource) = storage.resources.get(id) else {
             return error;
         };
         let handle = match resource.desc {
             ResourceDesc::Buffer(_) => BufferHandle {
-                graph: self.id,
+                graph: storage.id,
                 index: id,
             }
             .into(),
             ResourceDesc::Image(_) => ImageHandle {
-                graph: self.id,
+                graph: storage.id,
                 index: id,
             }
             .into(),
         };
-        error.with_resource(handle, Some(self.name(&resource.name)))
+        error.with_resource(handle, Some(storage.name(&resource.name)))
     }
     pub(super) fn access_range(&self, id: usize, range: Range<u64>) -> AccessRange {
-        match self.resources[id].desc {
+        match self.data().resources[id].desc {
             ResourceDesc::Buffer(_) => AccessRange::Buffer(range),
             ResourceDesc::Image(desc) => AccessRange::Image {
                 // Errors spanning several cells identify the first undefined

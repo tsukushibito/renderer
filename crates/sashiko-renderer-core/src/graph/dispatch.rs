@@ -148,8 +148,8 @@ impl Graph {
         program: &ManagedRasterProgram,
         bindings: &[Binding],
     ) -> Result<RasterBindings, GraphError> {
-        let first = self.bindings.len();
-        let first_access = self.binding_accesses.len();
+        let first = self.data().bindings.len();
+        let first_access = self.data().binding_accesses.len();
         let result = self.append_bindings_into(
             program.bindings(),
             program.binding_bytes(),
@@ -160,11 +160,11 @@ impl Graph {
         match result {
             Ok(owned) => {
                 if !owned.is_empty() {
-                    let accesses = first_access..self.binding_accesses.len();
+                    let accesses = first_access..self.data().binding_accesses.len();
                     self.data_mut().raster_binding_access_ranges[first] = accesses;
                 }
                 Ok(RasterBindings {
-                    graph: self.id,
+                    graph: self.graph_id(),
                     program: program.identity(),
                     first,
                     len: owned.len(),
@@ -194,7 +194,7 @@ impl Graph {
         program: &ManagedRasterProgram,
         bindings: Option<RasterBindings>,
     ) -> Result<std::ops::Range<usize>, GraphError> {
-        let range = RasterBindings::resolve(bindings, self.id, program)?;
+        let range = RasterBindings::resolve(bindings, self.graph_id(), program)?;
         self.register_raster_binding_reads(&range)?;
         Ok(range)
     }
@@ -207,18 +207,18 @@ impl Graph {
         // Both arenas are append-only for this Graph identity, and rollback
         // removes only unpublished additions after all existing handles. There
         // is no public invalidation operation within the same Graph.
-        if !bindings.is_empty() && !self.raster_binding_seen[bindings.start] {
-            let accesses = self.raster_binding_access_ranges[bindings.start].clone();
+        if !bindings.is_empty() && !self.data().raster_binding_seen[bindings.start] {
+            let accesses = self.data().raster_binding_access_ranges[bindings.start].clone();
             // The trusted Raster contract allows only read-only descriptors
             // and forbids shader side effects/inter-draw synchronization.
             // Creation already validated their immutable ranges and input
             // permissions. Only remaining pass capacity changes on reuse.
             // Compute write footprints keep the separate dispatch path.
-            let required = self.accesses.len().checked_add(accesses.len());
-            if required.is_none_or(|required| required > self.capacity.accesses) {
+            let required = self.data().accesses.len().checked_add(accesses.len());
+            if required.is_none_or(|required| required > self.data().capacity.accesses) {
                 return Err(capacity_error(
                     GraphCapacityKind::Accesses,
-                    self.capacity.accesses,
+                    self.data().capacity.accesses,
                     required,
                 ));
             }
@@ -269,7 +269,7 @@ impl Graph {
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
             let contract = program.dispatch_contract();
-            let first_access = graph.accesses.len();
+            let first_access = graph.data().accesses.len();
             let buffer_grid = BufferGrid::from_dispatch(contract.workgroups, active_grid)?;
             let owned =
                 graph.append_bindings(program.bindings(), contract.bytes, bindings, buffer_grid)?;
@@ -278,9 +278,9 @@ impl Graph {
                 Some([x, y]) => [x, y, 1],
                 None => graph.derive_dispatch_workgroups(program, owned.clone())?,
             };
-            let accesses = first_access..graph.accesses.len();
+            let accesses = first_access..graph.data().accesses.len();
             if let Some(left) = graph.conflicting_pass_access(accesses.clone())? {
-                let access = &graph.accesses[accesses.start + left];
+                let access = &graph.data().accesses[accesses.start + left];
                 // Samplers do not append a content access, so resolve its slot
                 // from the reviewed non-sampler ordering rather than arena index.
                 let slot = program
@@ -323,14 +323,15 @@ impl Graph {
             if slot.kind != BindingType::SampledImage {
                 continue;
             }
-            let BindingOperands::ImageView(sampled) = self.bindings[owned.start + index] else {
+            let BindingOperands::ImageView(sampled) = self.data().bindings[owned.start + index]
+            else {
                 unreachable!("canonical sampled image operand");
             };
             for (other_index, other_slot) in layout.iter().enumerate() {
                 if matches!(
                     other_slot.kind,
                     BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_)
-                ) && matches!(self.bindings[owned.start + other_index], BindingOperands::ImageView(view)
+                ) && matches!(self.data().bindings[owned.start + other_index], BindingOperands::ImageView(view)
                     if view.image == sampled.image && view.layer == sampled.layer
                         && view.mip < sampled.mip + sampled.mip_count
                         && sampled.mip < view.mip + view.mip_count)
@@ -367,14 +368,15 @@ impl Graph {
                     .iter()
                     .position(|slot| slot.group == group && slot.binding == binding)
                     .expect("trusted image dispatch target is a declared slot");
-                let BindingOperands::ImageView(view) = self.bindings[owned.start + target] else {
+                let BindingOperands::ImageView(view) = self.data().bindings[owned.start + target]
+                else {
                     unreachable!("trusted image dispatch target is a storage image");
                 };
                 let extent = self
                     .image_desc_at(view.image.index)?
                     .mip_extent(view.mip)
                     .expect("immutable View has a valid mip extent");
-                for (slot, operand) in program.bindings().iter().zip(&self.bindings[owned]) {
+                for (slot, operand) in program.bindings().iter().zip(&self.data().bindings[owned]) {
                     if matches!(
                         slot.kind,
                         BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_)
@@ -426,11 +428,11 @@ impl Graph {
             return self.append_access(access);
         }
         self.check_input_access(&access)?;
-        if self.binding_accesses.len() == self.capacity.bindings {
+        if self.data().binding_accesses.len() == self.data().capacity.bindings {
             return Err(capacity_error(
                 GraphCapacityKind::Bindings,
-                self.capacity.bindings,
-                self.binding_accesses.len().checked_add(1),
+                self.data().capacity.bindings,
+                self.data().binding_accesses.len().checked_add(1),
             ));
         }
         self.data_mut().binding_accesses.push(access);
@@ -451,12 +453,12 @@ impl Graph {
                 "bindings must cover the complete Program layout",
             ));
         }
-        let first = self.bindings.len();
+        let first = self.data().bindings.len();
         let required = first.checked_add(layout.len());
-        if required.is_none_or(|required| required > self.capacity.bindings) {
+        if required.is_none_or(|required| required > self.data().capacity.bindings) {
             return Err(capacity_error(
                 GraphCapacityKind::Bindings,
-                self.capacity.bindings,
+                self.data().capacity.bindings,
                 required,
             ));
         }
@@ -618,7 +620,7 @@ impl Graph {
             })();
             result.map_err(|error: GraphError| error.with_binding(slot.group, slot.binding))?;
         }
-        Ok(first..self.bindings.len())
+        Ok(first..self.data().bindings.len())
     }
 
     pub(super) fn conflicting_pass_access(
@@ -690,16 +692,16 @@ mod tests {
             graph.raster_bindings(&program, &inputs).unwrap_err().kind(),
             GraphErrorKind::InvalidInput
         );
-        assert!(graph.bindings.is_empty());
-        assert!(graph.binding_accesses.is_empty());
+        assert!(graph.data().bindings.is_empty());
+        assert!(graph.data().binding_accesses.is_empty());
         assert!(
-            graph.accesses.is_empty(),
+            graph.data().accesses.is_empty(),
             "set creation must not select resource contents"
         );
         inputs[2].resource = BindingResource::Sampler(SamplerDescriptor::NearestClamp);
         let published = graph.raster_bindings(&program, &inputs).unwrap();
-        assert_eq!(graph.bindings.len(), 3);
-        assert_eq!(graph.binding_accesses.len(), 2);
+        assert_eq!(graph.data().bindings.len(), 3);
+        assert_eq!(graph.data().binding_accesses.len(), 2);
         assert_eq!(
             graph.raster_bindings(&program, &inputs).unwrap_err().kind(),
             GraphErrorKind::CapacityExhausted
@@ -710,7 +712,7 @@ mod tests {
                 .unwrap(),
             0..3
         );
-        assert_eq!(graph.accesses.len(), 2);
+        assert_eq!(graph.data().accesses.len(), 2);
         assert_eq!(
             graph
                 .use_raster_bindings(&program, Some(published))
@@ -718,7 +720,7 @@ mod tests {
             0..3
         );
         assert_eq!(
-            graph.accesses.len(),
+            graph.data().accesses.len(),
             2,
             "each pass consumes a set only once"
         );
@@ -786,9 +788,9 @@ mod tests {
         for _ in 0..128 {
             assert_eq!(graph.raster_bindings(&program, &[]).unwrap(), published);
         }
-        assert!(graph.bindings.is_empty());
-        assert!(graph.binding_accesses.is_empty());
-        assert!(graph.raster_binding_sets.is_empty());
+        assert!(graph.data().bindings.is_empty());
+        assert!(graph.data().binding_accesses.is_empty());
+        assert!(graph.data().raster_binding_sets.is_empty());
         assert_eq!(
             graph
                 .use_raster_bindings(&ManagedRasterProgram::mesh_hdr(), Some(published))
@@ -1000,11 +1002,11 @@ mod tests {
             // placeholder native shader that cannot initialize the grid.
             graph
                 .build_pass("tile lists", |graph| {
-                    let start = graph.accesses.len();
+                    let start = graph.data().accesses.len();
                     graph.append_bindings(&layout, &[8], &bindings, grid)?;
                     Ok((
                         Operation::Declared(crate::graph::PassKind::Compute),
-                        start..graph.accesses.len(),
+                        start..graph.data().accesses.len(),
                         false,
                     ))
                 })
@@ -1111,6 +1113,7 @@ mod tests {
         };
         graph.readback_buffer("result", output, 32, 16).unwrap();
         let plan = graph.compile().unwrap();
+        let plan = plan.data();
         let Operation::Dispatch {
             program,
             bindings,

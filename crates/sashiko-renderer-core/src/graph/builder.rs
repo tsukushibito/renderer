@@ -29,15 +29,16 @@ struct PassTransaction<'a> {
 
 impl<'a> PassTransaction<'a> {
     fn new(graph: &'a mut Graph) -> Self {
+        let data = graph.data();
         Self {
-            accesses: graph.accesses.len(),
-            draws: graph.draws.len(),
-            raster_batches: graph.raster_batches.len(),
-            raster_constant_words: graph.raster_constant_words.len(),
-            uploads: graph.uploads.len(),
-            names: graph.names.len(),
-            bindings: graph.bindings.len(),
-            attachments: graph.attachments.len(),
+            accesses: data.accesses.len(),
+            draws: data.draws.len(),
+            raster_batches: data.raster_batches.len(),
+            raster_constant_words: data.raster_constant_words.len(),
+            uploads: data.uploads.len(),
+            names: data.names.len(),
+            bindings: data.bindings.len(),
+            attachments: data.attachments.len(),
             graph,
             committed: false,
         }
@@ -111,7 +112,7 @@ impl Graph {
         mesh: MeshUpload,
     ) -> Result<PassHandle, GraphError> {
         let id = self.buffer_id(dst)?;
-        if self.resources[id].desc.units() != bytes.len() as u64
+        if self.data().resources[id].desc.units() != bytes.len() as u64
             || !source.start.is_multiple_of(4)
             || !source.end.is_multiple_of(4)
         {
@@ -324,13 +325,13 @@ impl Graph {
         side_effect: bool,
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
-            let first_access = graph.accesses.len();
+            let first_access = graph.data().accesses.len();
             for access in accesses {
                 let id = match access.resource {
                     ResourceHandle::Buffer(h) => graph.buffer_id(h)?,
                     ResourceHandle::Image(h) => graph.image_id(h)?,
                 };
-                let range = match (&access.range, graph.resources[id].desc) {
+                let range = match (&access.range, graph.data().resources[id].desc) {
                     (AccessRange::Buffer(range), ResourceDesc::Buffer(_)) => {
                         let size = range.end.checked_sub(range.start).ok_or_else(|| {
                             graph
@@ -368,7 +369,7 @@ impl Graph {
                             .with_range(access.range.clone()));
                     }
                 };
-                validate_purpose(kind, graph.resources[id].desc, access.kind, access.purpose)
+                validate_purpose(kind, graph.data().resources[id].desc, access.kind, access.purpose)
                     .map_err(|error| {
                         graph
                             .resource_context(error, id)
@@ -393,7 +394,7 @@ impl Graph {
             }
             // This public input boundary establishes pass-local disjointness.
             // Rechecking the immutable encoded accesses at submit is unnecessary.
-            let encoded = first_access..graph.accesses.len();
+            let encoded = first_access..graph.data().accesses.len();
             let conflict = {
                 let data = graph.data_mut();
                 conflicting_accesses_in(
@@ -410,7 +411,7 @@ impl Graph {
                 })?
             };
             if let Some((left, _)) = conflict {
-                let access = &graph.accesses[encoded.start + left];
+                let access = &graph.data().accesses[encoded.start + left];
                 return Err(graph
                     .resource_error(
                         GraphErrorKind::InvalidInput,
@@ -655,6 +656,7 @@ mod tests {
             .unwrap();
         graph.export_image(target).unwrap();
         let plan = graph.compile().unwrap();
+        let plan = plan.data();
         assert!(
             plan.accesses(pass.index)
                 .iter()
@@ -756,35 +758,41 @@ mod tests {
                 })
                 .unwrap();
             graph.export_image(image).unwrap();
+            let recorded = graph.raster_build_metrics().map(|m| m.generated_draws);
+            assert_eq!(recorded, (participants != 0).then_some(9));
             let plan = graph.compile().unwrap();
             assert_eq!(
                 plan.raster_build_metrics().map(|m| m.generated_draws),
-                (participants != 0).then_some(9)
+                recorded
             );
+            let storage = plan.data();
             assert!(
-                plan.accesses(pass.index)
+                storage
+                    .accesses(pass.index)
                     .iter()
                     .filter(|a| a.purpose == AccessPurpose::Index)
                     .map(|a| a.range.clone())
                     .eq([0..12, 24..48])
             );
-            let Operation::Raster { batches, draws, .. } = &plan.passes[pass.index].operation
+            let Operation::Raster { batches, draws, .. } = &storage.passes[pass.index].operation
             else {
                 panic!("raster")
             };
             assert!(
-                plan.raster_batches(batches)
+                storage
+                    .raster_batches(batches)
                     .iter()
                     .map(|b| b.draws.len())
                     .eq([3, 3, 3])
             );
-            for (n, (out, words)) in plan
+            for (n, (out, words)) in storage
                 .raster_draws(draws)
                 .iter()
                 .zip(
-                    plan.raster_batches(batches)
+                    storage
+                        .raster_batches(batches)
                         .iter()
-                        .flat_map(|b| plan.raster_constants(b)),
+                        .flat_map(|b| storage.raster_constants(b)),
                 )
                 .enumerate()
             {
@@ -907,9 +915,9 @@ mod tests {
             ..mesh
         };
         let before = (
-            graph.accesses.len(),
-            graph.draws.len(),
-            graph.attachments.len(),
+            graph.data().accesses.len(),
+            graph.data().draws.len(),
+            graph.data().attachments.len(),
         );
         assert_eq!(
             graph
@@ -930,9 +938,9 @@ mod tests {
         );
         assert_eq!(
             (
-                graph.accesses.len(),
-                graph.draws.len(),
-                graph.attachments.len()
+                graph.data().accesses.len(),
+                graph.data().draws.len(),
+                graph.data().attachments.len()
             ),
             before
         );
@@ -953,6 +961,7 @@ mod tests {
             .unwrap();
         graph.readback_image("read output", output).unwrap();
         let plan = graph.compile().unwrap();
+        let plan = plan.data();
         let Operation::Raster {
             batches,
             draws: owned,
@@ -1022,9 +1031,9 @@ mod tests {
             store: StoreOp::Store,
         }];
         let before = (
-            graph.accesses.len(),
-            graph.draws.len(),
-            graph.attachments.len(),
+            graph.data().accesses.len(),
+            graph.data().draws.len(),
+            graph.data().attachments.len(),
         );
         let error = graph
             .raster(
@@ -1052,14 +1061,14 @@ mod tests {
         assert_eq!(error.capacity().unwrap().required, Some(14));
         assert_eq!(
             (
-                graph.accesses.len(),
-                graph.draws.len(),
-                graph.attachments.len()
+                graph.data().accesses.len(),
+                graph.data().draws.len(),
+                graph.data().attachments.len()
             ),
             before,
         );
-        assert_eq!(graph.bindings.len(), 9);
-        assert_eq!(graph.binding_accesses.len(), 6);
+        assert_eq!(graph.data().bindings.len(), 9);
+        assert_eq!(graph.data().binding_accesses.len(), 6);
         let pass = graph
             .raster(
                 "retry published set",
@@ -1080,7 +1089,7 @@ mod tests {
             .unwrap();
         graph.export_image(output).unwrap();
         let plan = graph.compile().unwrap();
-        assert_eq!(plan.accesses(pass.index).len(), 5);
+        assert_eq!(plan.data().accesses(pass.index).len(), 5);
         assert_eq!(
             plan.pass_count(),
             5,
@@ -1169,7 +1178,7 @@ mod tests {
             let depth_view = graph.image_view(depth, 0, 0).unwrap();
             for draws in [&[][..], &[draw][..]] {
                 for load in [None, Some(LoadOp::Clear(1.0)), Some(LoadOp::Discard)] {
-                    let before = graph.passes.len();
+                    let before = graph.data().passes.len();
                     let error = graph
                         .raster(
                             "invalid prepass continuation",
@@ -1187,7 +1196,11 @@ mod tests {
                         .unwrap_err();
                     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
                     assert_eq!(error.pass_name(), Some("invalid prepass continuation"));
-                    assert_eq!(graph.passes.len(), before, "rejection appends no pass");
+                    assert_eq!(
+                        graph.data().passes.len(),
+                        before,
+                        "rejection appends no pass"
+                    );
                 }
             }
             graph
@@ -1304,6 +1317,7 @@ mod tests {
             )
             .unwrap();
         let plan = graph.compile().unwrap();
+        let plan = plan.data();
         let Operation::Raster {
             batches,
             draws,
@@ -1403,6 +1417,7 @@ mod tests {
             .unwrap();
         graph.readback_image("output pixels", output).unwrap();
         let plan = graph.compile().unwrap();
+        let plan = plan.data();
         let Operation::Raster {
             batches,
             draws,
@@ -1483,7 +1498,7 @@ mod tests {
                 required: Some(60),
             })
         );
-        assert!(graph.raster_constant_words.is_empty());
+        assert!(graph.data().raster_constant_words.is_empty());
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _ = graph.raster("unwound", attachments, |raster| {
@@ -1493,7 +1508,7 @@ mod tests {
             }))
             .is_err()
         );
-        assert!(graph.raster_constant_words.is_empty());
+        assert!(graph.data().raster_constant_words.is_empty());
         graph
             .raster("retry", attachments, |raster| {
                 raster.draw(&program, [mesh])?;
@@ -1506,11 +1521,11 @@ mod tests {
             plan.ordered_pass_names()
                 .eq(["geometry", "geometry", "retry", "output pixels"])
         );
-        assert_eq!(plan.raster_constant_words.len(), 40);
+        assert_eq!(plan.data().raster_constant_words.len(), 40);
         drop(plan);
         let reused = pool.begin().unwrap();
-        assert!(reused.raster_constant_words.is_empty());
-        assert_eq!(reused.raster_constant_word_limit, 40);
+        assert!(reused.data().raster_constant_words.is_empty());
+        assert_eq!(reused.data().raster_constant_word_limit, 40);
     }
 
     #[test]
@@ -1716,6 +1731,7 @@ mod tests {
             .unwrap();
         graph.readback_buffer("bytes", result, 16, 64).unwrap();
         let plan = graph.compile().unwrap();
+        let plan = plan.data();
         let Operation::Raster { draws, .. } = &plan.passes[pass.index].operation else {
             panic!()
         };

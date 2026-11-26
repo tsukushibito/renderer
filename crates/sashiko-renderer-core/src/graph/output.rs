@@ -49,7 +49,7 @@ impl FrameGraph {
         readback: Option<&str>,
     ) -> Result<Self, GraphError> {
         graph.export_image(output)?;
-        let output_ownership = if graph.resources[output.index].import.is_some() {
+        let output_ownership = if graph.data().resources[output.index].import.is_some() {
             FrameOutputOwnership::Caller
         } else {
             FrameOutputOwnership::Frame

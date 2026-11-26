@@ -2,13 +2,10 @@
 
 use super::storage::Slot;
 use super::{
-    Graph, GraphError, GraphErrorKind, GraphStorage, Pass, PassHandle, Resource, ResourceAccess,
-    analysis,
+    Graph, GraphError, GraphErrorKind, GraphStorage, Pass, PassHandle, RasterBuildMetrics,
+    Resource, ResourceAccess, analysis,
 };
-use std::{
-    ops::{Deref, Range},
-    sync::Arc,
-};
+use std::{ops::Range, sync::Arc};
 
 /// Immutable frame plan. Cloning only pins its already-prepared slot. The pool
 /// can reuse that slot after every plan/native consumer has released its pin.
@@ -16,77 +13,85 @@ use std::{
 pub struct CompiledGraph {
     slot: Arc<Slot>,
 }
-impl Deref for CompiledGraph {
-    type Target = GraphStorage;
-    fn deref(&self) -> &Self::Target {
-        self.slot.data()
-    }
-}
 impl std::fmt::Debug for CompiledGraph {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let storage = self.data();
         f.debug_struct("CompiledGraph")
-            .field("id", &self.id)
-            .field("passes", &self.order.len())
+            .field("id", &storage.id)
+            .field("passes", &storage.order.len())
             .finish()
     }
 }
 impl CompiledGraph {
+    pub(crate) fn data(&self) -> &GraphStorage {
+        self.slot.data()
+    }
+
+    /// Raster build measurements retained from the checkout that produced this plan.
+    pub fn raster_build_metrics(&self) -> Option<RasterBuildMetrics> {
+        self.data().raster_metrics
+    }
+
     #[cfg_attr(
         not(feature = "vulkan"),
         allow(dead_code, reason = "used by the Vulkan engine")
     )]
     pub(crate) fn has_export(&self, resource: usize) -> bool {
-        self.exported.get(resource).copied().unwrap_or(false)
+        self.data().exported.get(resource).copied().unwrap_or(false)
     }
     pub fn graph_id(&self) -> u64 {
-        self.id
+        self.data().id
     }
     pub fn pass_count(&self) -> usize {
-        self.order.len()
+        self.data().order.len()
     }
     pub fn ordered_pass_names(&self) -> impl Iterator<Item = &str> {
-        self.order.iter().map(|&index| self.pass_name(index))
+        let storage = self.data();
+        storage.order.iter().map(|&index| storage.pass_name(index))
     }
     #[cfg(feature = "graph-diagnostics")]
     pub fn culled_pass_names(&self) -> impl Iterator<Item = &str> {
-        self.passes
+        let storage = self.data();
+        storage
+            .passes
             .iter()
             .enumerate()
-            .filter(|(index, _)| !self.output.live[*index])
-            .map(|(index, _)| self.pass_name(index))
+            .filter(|(index, _)| !storage.output.live[*index])
+            .map(|(index, _)| storage.pass_name(index))
     }
     #[cfg(feature = "graph-diagnostics")]
     pub fn dump(&self) -> &str {
-        self.dump.get_or_init(|| self.make_dump())
+        self.data().dump.get_or_init(|| self.make_dump())
     }
     #[cfg(feature = "graph-diagnostics")]
     fn make_dump(&self) -> String {
         use std::fmt::Write;
+        let storage = self.data();
         let mut text = String::from("RenderGraph plan (construction-order contents)\n");
-        for (index, resource) in self.resources.iter().enumerate() {
+        for (index, resource) in storage.resources.iter().enumerate() {
             writeln!(
                 text,
                 "resource {index} {:?} size={} external={} lifetime={:?}",
-                self.resource_name(index),
+                storage.resource_name(index),
                 resource.desc.units(),
                 resource.import.is_some(),
-                self.output.lifetimes[index]
+                storage.output.lifetimes[index]
             )
             .expect("String writing");
         }
-        for index in 0..self.passes.len() {
+        for index in 0..storage.passes.len() {
             writeln!(
                 text,
                 "pass {index} {:?} {}",
-                self.pass_name(index),
-                if self.output.live[index] {
+                storage.pass_name(index),
+                if storage.output.live[index] {
                     "live"
                 } else {
                     "culled"
                 }
             )
             .expect("String writing");
-            for access in self.accesses(index) {
+            for access in storage.accesses(index) {
                 writeln!(
                     text,
                     "  resource={} range={:?} purpose={:?} read={} write={} valid_after={} stages={:?}",
@@ -101,11 +106,11 @@ impl CompiledGraph {
                 .expect("String writing");
             }
         }
-        for edge in &self.output.ordering_edges {
+        for edge in &storage.output.ordering_edges {
             writeln!(text, "order {} -> {} {:?}", edge.from, edge.to, edge.kind)
                 .expect("String writing");
         }
-        writeln!(text, "execution {:?}", self.order).expect("String writing");
+        writeln!(text, "execution {:?}", storage.order).expect("String writing");
         text
     }
 }
@@ -187,7 +192,7 @@ pub(super) fn compile(mut graph: Graph) -> Result<CompiledGraph, GraphError> {
     if let Err(error) = result {
         let kind = match error.kind {
             analysis::ErrorKind::Capacity(kind) => {
-                return Err(graph.capacity.analysis_capacity_error(kind));
+                return Err(graph.data().capacity.analysis_capacity_error(kind));
             }
             analysis::ErrorKind::UninitializedRead => GraphErrorKind::UninitializedRead,
             analysis::ErrorKind::DependencyCycle => GraphErrorKind::DependencyCycle,
@@ -201,15 +206,15 @@ pub(super) fn compile(mut graph: Graph) -> Result<CompiledGraph, GraphError> {
                 if let Some(pass) = error.pass {
                     format!(
                         "pass {:?} reads uninitialized resource {:?} at {}..{}",
-                        graph.pass_name(pass),
-                        graph.resource_name(resource),
+                        graph.data().pass_name(pass),
+                        graph.data().resource_name(resource),
                         range.start,
                         range.end
                     )
                 } else {
                     format!(
                         "export reads uninitialized resource {:?} at {}..{}",
-                        graph.resource_name(resource),
+                        graph.data().resource_name(resource),
                         range.start,
                         range.end
                     )
@@ -218,11 +223,11 @@ pub(super) fn compile(mut graph: Graph) -> Result<CompiledGraph, GraphError> {
             analysis::ErrorKind::DependencyCycle => {
                 use std::fmt::Write;
                 let mut message = String::from("dependency cycle: ");
-                for (position, &pass) in graph.output.cycle.iter().enumerate() {
+                for (position, &pass) in graph.data().output.cycle.iter().enumerate() {
                     if position != 0 {
                         message.push_str(" -> ");
                     }
-                    write!(message, "{:?}", graph.pass_name(pass)).expect("String writing");
+                    write!(message, "{:?}", graph.data().pass_name(pass)).expect("String writing");
                 }
                 message
             }
@@ -232,10 +237,10 @@ pub(super) fn compile(mut graph: Graph) -> Result<CompiledGraph, GraphError> {
         if let Some(pass) = error.pass {
             reported = reported.with_pass(
                 PassHandle {
-                    graph: graph.id,
+                    graph: graph.graph_id(),
                     index: pass,
                 },
-                Some(graph.pass_name(pass)),
+                Some(graph.data().pass_name(pass)),
             );
         }
         if let Some(resource) = error.resource {
@@ -244,14 +249,15 @@ pub(super) fn compile(mut graph: Graph) -> Result<CompiledGraph, GraphError> {
                 reported = reported.with_range(graph.access_range(resource, range));
             }
         }
-        if !graph.output.cycle.is_empty() {
+        if !graph.data().output.cycle.is_empty() {
             reported = reported.with_cycle_passes(
                 graph
+                    .data()
                     .output
                     .cycle
                     .iter()
                     .map(|&index| PassHandle {
-                        graph: graph.id,
+                        graph: graph.graph_id(),
                         index,
                     })
                     .collect(),

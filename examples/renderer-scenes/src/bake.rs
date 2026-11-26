@@ -5,7 +5,7 @@ use crate::{
     shared::{asset::Scene, camera::Look},
 };
 use sashiko_lighting_bake::{
-    BakeScene, Lighting, Material, ProbeSettings, ProbeShOrder, Texture, Triangle,
+    BakeBenchmark, BakeScene, Lighting, Material, ProbeSettings, ProbeShOrder, Texture, Triangle,
 };
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, io::Write, path::PathBuf};
@@ -770,7 +770,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Error> {
         // Exercise real output I/O without publishing the partially populated asset.
         let scratch = output.with_extension(format!("{}.scratch", std::process::id()));
         let file = std::fs::File::create_new(&scratch)?;
-        let measured = (|| -> Result<_, Error> {
+        let measured = (|| -> Result<BakeBenchmark, Error> {
             let mut writer = std::io::BufWriter::new(file);
             writer.write_all(identity.as_bytes())?;
             let pages = surfaces.benchmark_to(&bake, lights[0], settings, &mut writer, seed)?;

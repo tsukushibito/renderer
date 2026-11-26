@@ -61,7 +61,9 @@ enum SourceBytes {
 impl SourceBytes {
     fn bytes(&self) -> &[u8] {
         match self {
-            Self::Graph { graph, pass } => graph.upload_data(&graph.passes[*pass].operation),
+            Self::Graph { graph, pass } => graph
+                .data()
+                .upload_data(&graph.data().passes[*pass].operation),
             #[cfg(test)]
             Self::Asset(bytes) => bytes,
         }
@@ -223,7 +225,8 @@ impl BufferProvenance {
         pass: usize,
         source: Range<usize>,
     ) -> Result<(), ProvenanceCapacityError> {
-        let bytes = graph.upload_data(&graph.passes[pass].operation);
+        let storage = graph.data();
+        let bytes = storage.upload_data(&storage.passes[pass].operation);
         debug_assert!(bytes.get(source.clone()).is_some());
         debug_assert_eq!(target.end - target.start, source.len() as u64);
         self.write_into(target, source, || SourceBytes::Graph {

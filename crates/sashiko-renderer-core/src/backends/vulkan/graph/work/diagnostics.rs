@@ -16,11 +16,12 @@ pub(in super::super) fn begin(
     keys: &[Option<ResourceKey>],
     physical: &[Option<PhysicalLease>],
 ) -> String {
+    let storage = graph.data();
     let mut output = format!(
         "Vulkan Graph lowering graph={} submission={serial} queue_family={queue_family} queue_index=0\n",
-        graph.id
+        storage.id
     );
-    for (index, resource) in graph.resources.iter().enumerate() {
+    for (index, resource) in storage.resources.iter().enumerate() {
         let Some(physical) = &physical[index] else {
             continue;
         };
@@ -28,7 +29,7 @@ pub(in super::super) fn begin(
         writeln!(
             output,
             "resource {index} {:?} physical_key owner={} index={} generation={} desc={:?} imported={} import_revision={}",
-            graph.resource_name(index), key.owner, key.index, key.generation, resource.desc,
+            storage.resource_name(index), key.owner, key.index, key.generation, resource.desc,
             resource.import.is_some(), resource.import_revision,
         )
         .expect("writing String");
@@ -62,6 +63,7 @@ fn state(output: &mut String, label: &str, snapshot: &Snapshot) {
 }
 
 pub(super) fn pass(output: &mut String, graph: &CompiledGraph, index: usize) {
+    let graph = graph.data();
     writeln!(output, "pass {index} {:?}", graph.pass_name(index)).expect("writing String");
     for access in graph.accesses(index) {
         writeln!(

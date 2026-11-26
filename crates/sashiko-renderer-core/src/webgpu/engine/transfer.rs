@@ -452,7 +452,7 @@ impl Readbacks {
 }
 
 fn description(graph: &CompiledGraph, resource: usize) -> ImageDesc {
-    let ResourceDesc::Image(desc) = graph.resources[resource].desc else {
+    let ResourceDesc::Image(desc) = graph.data().resources[resource].desc else {
         unreachable!("image transfer built from a checked Graph image handle");
     };
     desc
@@ -466,10 +466,11 @@ pub(super) fn record(
     upload: &mut Upload,
     result: &mut Readbacks,
 ) -> Result<()> {
-    let op = &graph.passes[pass].operation;
+    let storage = graph.data();
+    let op = &storage.passes[pass].operation;
     match *op {
         Operation::UploadBuffer { dst, offset, .. } => {
-            let bytes = graph.upload_data(op);
+            let bytes = storage.upload_data(op);
             let size = bytes
                 .len()
                 .checked_next_multiple_of(4)
@@ -504,7 +505,7 @@ pub(super) fn record(
         Operation::UploadImage { dst, region, .. } => {
             let desc = description(graph, dst);
             let texture = resources.texture(dst)?;
-            let mut bytes = graph.upload_data(op);
+            let mut bytes = storage.upload_data(op);
             if let Some(region) = region {
                 upload.image(encoder, texture, desc, region, bytes)?;
             } else {

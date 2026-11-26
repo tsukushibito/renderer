@@ -102,16 +102,16 @@ impl Graph {
                 "attachment pass requires at least one target",
             ));
         }
-        let required = count.and_then(|count| self.attachments.len().checked_add(count));
-        if required.is_none_or(|required| required > self.capacity.attachments) {
+        let required = count.and_then(|count| self.data().attachments.len().checked_add(count));
+        if required.is_none_or(|required| required > self.data().capacity.attachments) {
             return Err(capacity_error(
                 GraphCapacityKind::Attachments,
-                self.capacity.attachments,
+                self.data().capacity.attachments,
                 required,
             ));
         }
-        let first = self.attachments.len();
-        let first_access = self.accesses.len();
+        let first = self.data().attachments.len();
+        let first_access = self.data().accesses.len();
         if !attachments.color_resolves.is_empty()
             && attachments.color_resolves.len() != attachments.colors.len()
         {
@@ -145,7 +145,7 @@ impl Graph {
                 &mut shape,
             )?;
         }
-        let colors = first..self.attachments.len();
+        let colors = first..self.data().attachments.len();
         let depth = if let Some(attachment) = attachments.depth {
             let value = match attachment.load {
                 LoadOp::Clear(value)
@@ -164,7 +164,7 @@ impl Graph {
                 }
                 _ => 0.0,
             };
-            let index = self.attachments.len();
+            let index = self.data().attachments.len();
             self.append_attachment(
                 AttachmentOperand {
                     view: attachment.view,
@@ -180,7 +180,7 @@ impl Graph {
         } else {
             None
         };
-        let accesses = first_access..self.accesses.len();
+        let accesses = first_access..self.data().accesses.len();
         Ok(AttachmentPlan {
             colors,
             depth,
@@ -208,7 +208,7 @@ impl Graph {
             })?
         };
         if let Some((left, _)) = conflict {
-            let access = &self.accesses[accesses.start + left];
+            let access = &self.data().accesses[accesses.start + left];
             return Err(self
                 .resource_error(
                     GraphErrorKind::InvalidInput,
@@ -376,6 +376,7 @@ mod tests {
         };
         graph.export_image(b.image()).unwrap();
         let plan = graph.compile().unwrap();
+        let plan = plan.data();
         let Operation::AttachmentPass { colors, depth } = &plan.passes[pass.index].operation else {
             panic!("expected owned attachment pass");
         };
@@ -421,20 +422,21 @@ mod tests {
             .unwrap();
         graph.export_image(color).unwrap();
         let plan = graph.compile().unwrap();
+        let storage = plan.data();
         let Operation::AttachmentPass {
             colors,
             depth: depth_index,
-        } = &plan.passes[pass.index].operation
+        } = &storage.passes[pass.index].operation
         else {
             panic!("expected owned attachment pass");
         };
         assert_eq!(colors.len(), 1);
-        let color_operand = &plan.attachments[colors.start];
+        let color_operand = &storage.attachments[colors.start];
         assert_eq!(color_operand.view.image(), color);
         assert_eq!(color_operand.clear, [0.25, 0.5, 0.75, 1.0]);
         assert_eq!(color_operand.ops.load, LoadAction::Clear);
         assert_eq!(color_operand.ops.store, StoreOp::Store);
-        let depth_operand = &plan.attachments[depth_index.unwrap()];
+        let depth_operand = &storage.attachments[depth_index.unwrap()];
         assert_eq!(depth_operand.view.image(), depth);
         assert_eq!(depth_operand.clear[0], 0.625);
         assert_eq!(depth_operand.ops.load, LoadAction::Clear);

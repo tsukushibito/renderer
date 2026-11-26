@@ -154,8 +154,8 @@ impl RasterPass<'_, '_> {
         }
         self.validate_attachments(program)?;
         let graph = &mut *self.graph;
-        let first_draw = graph.draws.len();
-        let constants_start = graph.raster_constant_words.len();
+        let first_draw = graph.data().draws.len();
+        let constants_start = graph.data().raster_constant_words.len();
         let words = parameters.words();
         graph.check_raster_draw_storage(program, words)?;
         let bindings = graph.capture_fullscreen_bindings(program, bindings)?;
@@ -187,8 +187,8 @@ impl RasterPass<'_, '_> {
         self.validate_attachments(program)?;
         let graph = &mut *self.graph;
         let buffer = graph.buffer_id(arguments.buffer)?;
-        let first_draw = graph.draws.len();
-        let constants_start = graph.raster_constant_words.len();
+        let first_draw = graph.data().draws.len();
+        let constants_start = graph.data().raster_constant_words.len();
         // The templates validate the topology of each actual draw. The
         // representative draw covers their entire prefix for GPU preflight.
         graph.capture_raster_draw(
@@ -231,14 +231,15 @@ impl RasterPass<'_, '_> {
     {
         let started = self
             .graph
+            .data()
             .raster_metrics
             .as_ref()
             .map(|_| std::time::Instant::now());
         Self::require_indexed_program(program)?;
         self.validate_attachments(program)?;
         let graph = &mut *self.graph;
-        let first_draw = graph.draws.len();
-        let constants_start = graph.raster_constant_words.len();
+        let first_draw = graph.data().draws.len();
+        let constants_start = graph.data().raster_constant_words.len();
         #[cfg(feature = "tracy")]
         let _span = tracy_client::Client::running().map(|client| {
             client.span(
@@ -248,10 +249,10 @@ impl RasterPass<'_, '_> {
         });
         for draw in draws {
             let draw = draw.borrow();
-            BufferLookup::new(graph.id, &graph.resources, &graph.names).check_triangles(draw)?;
+            graph.buffer_lookup().check_triangles(draw)?;
             graph.capture_raster_draw(program, draw)?;
         }
-        let draws = first_draw..graph.draws.len();
+        let draws = first_draw..graph.data().draws.len();
         if !draws.is_empty() {
             // Each stored batch owns at least one draw, so the batch arena
             // reserved at the draw limit always has capacity here.
@@ -331,8 +332,7 @@ impl Graph {
     ) -> Result<(), GraphError> {
         let words = draw.parameters.words();
         self.check_raster_draw_storage(program, words)?;
-        let lookup = BufferLookup::new(self.id, &self.resources, &self.names);
-        let indexed = lookup.indexed_draw(program, draw)?;
+        let indexed = self.buffer_lookup().indexed_draw(program, draw)?;
         let bindings = self.use_raster_bindings(program, draw.bindings)?;
         self.register_indexed_reads(indexed, indexed.byte_range());
         let data = self.data_mut();
@@ -351,11 +351,12 @@ impl Graph {
         program: &ManagedRasterProgram,
         words: &[u32],
     ) -> Result<(), GraphError> {
-        if self.draws.len() == self.capacity.draws {
+        let storage = self.data();
+        if storage.draws.len() == storage.capacity.draws {
             return Err(capacity_error(
                 GraphCapacityKind::Draws,
-                self.capacity.draws,
-                self.draws.len().checked_add(1),
+                storage.capacity.draws,
+                storage.draws.len().checked_add(1),
             ));
         }
         if size_of_val(words) != program.parameter_size() as usize {
@@ -365,11 +366,11 @@ impl Graph {
             ));
         }
         if !words.is_empty() {
-            let required = self.raster_constant_words.len().checked_add(words.len());
-            if required.is_none_or(|required| required > self.raster_constant_word_limit) {
+            let required = storage.raster_constant_words.len().checked_add(words.len());
+            if required.is_none_or(|required| required > storage.raster_constant_word_limit) {
                 return Err(capacity_error(
                     GraphCapacityKind::RasterConstantWords,
-                    self.raster_constant_word_limit,
+                    storage.raster_constant_word_limit,
                     required,
                 ));
             }
@@ -391,9 +392,9 @@ impl Graph {
         let _span = tracy_client::Client::running()
             .map(|client| client.span(tracy_client::span_location!("renderer.graph.raster"), 0));
         self.build_pass(name, |graph| {
-            let first_draw = graph.draws.len();
-            let first_batch = graph.raster_batches.len();
-            let first_access = graph.accesses.len();
+            let first_draw = graph.data().draws.len();
+            let first_batch = graph.data().raster_batches.len();
+            let first_access = graph.data().accesses.len();
             graph.data_mut().clear_raster_ranges();
             let mut raster = RasterPass {
                 graph,
@@ -414,8 +415,9 @@ impl Graph {
                     0,
                 )
             });
-            let has_shader_accesses = graph.accesses.len() != first_access;
+            let has_shader_accesses = graph.data().accesses.len() != first_access;
             let started = graph
+                .data()
                 .raster_metrics
                 .as_ref()
                 .map(|_| std::time::Instant::now());
@@ -432,12 +434,12 @@ impl Graph {
             // Only shader-accessed images can overlap a color, depth or resolve
             // target. Vertex and index inputs are read-only buffers.
             let checked = if has_shader_accesses {
-                first_access..graph.accesses.len()
+                first_access..graph.data().accesses.len()
             } else {
                 plan.accesses.clone()
             };
             if let Some(left) = graph.conflicting_pass_access(checked.clone())? {
-                let access = &graph.accesses[checked.start + left];
+                let access = &graph.data().accesses[checked.start + left];
                 return Err(graph
                     .resource_error(
                         GraphErrorKind::InvalidInput,
@@ -446,7 +448,7 @@ impl Graph {
                     )
                     .with_range(graph.access_range(access.resource, access.range.clone())));
             }
-            let batches = first_batch..graph.raster_batches.len();
+            let batches = first_batch..graph.data().raster_batches.len();
             let operation = if batches.is_empty() {
                 Operation::AttachmentPass {
                     colors: plan.colors,
@@ -455,21 +457,21 @@ impl Graph {
             } else {
                 Operation::Raster {
                     batches,
-                    draws: first_draw..graph.draws.len(),
+                    draws: first_draw..graph.data().draws.len(),
                     colors: plan.colors,
                     depth: plan.depth,
                 }
             };
-            Ok((operation, first_access..graph.accesses.len(), false))
+            Ok((operation, first_access..graph.data().accesses.len(), false))
         })
     }
 
     fn append_raster_buffer_accesses(&mut self) -> Result<(), GraphError> {
         // Preserve resource-order accesses without scanning unused resources.
         self.data_mut().raster_resources.sort_unstable();
-        for index in 0..self.raster_resources.len() {
-            let resource = self.raster_resources[index];
-            let [vertices, indices] = self.raster_ranges[resource];
+        for index in 0..self.data().raster_resources.len() {
+            let resource = self.data().raster_resources[index];
+            let [vertices, indices] = self.data().raster_ranges[resource];
             if vertices != 0 {
                 self.append_access(read(resource, 0..vertices, AccessPurpose::Vertex))?;
             }
@@ -477,7 +479,7 @@ impl Graph {
                 self.append_access(read(resource, 0..indices, AccessPurpose::Index))?;
             }
         }
-        if !self.raster_index_ranges.is_empty() {
+        if !self.data().raster_index_ranges.is_empty() {
             self.append_ranged_index_accesses()?;
         }
         Ok(())
@@ -488,10 +490,10 @@ impl Graph {
             .raster_index_ranges
             .sort_unstable_by_key(|(resource, range)| (*resource, range.start));
         let mut pending = None::<(usize, Range<u64>)>;
-        for index in 0..self.raster_index_ranges.len() {
-            let (resource, mut range) = self.raster_index_ranges[index].clone();
+        for index in 0..self.data().raster_index_ranges.len() {
+            let (resource, mut range) = self.data().raster_index_ranges[index].clone();
             // The offset-zero fast path has already emitted this prefix.
-            range.start = range.start.max(self.raster_ranges[resource][1]);
+            range.start = range.start.max(self.data().raster_ranges[resource][1]);
             if range.is_empty() {
                 continue;
             }

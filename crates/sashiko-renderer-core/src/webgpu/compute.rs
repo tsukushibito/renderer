@@ -122,7 +122,7 @@ impl ComputePrograms {
         let groups = self.groups.resolve(
             device,
             &pipeline.layout,
-            graph.raster_bindings(&bindings),
+            graph.data().raster_bindings(&bindings),
             resources,
             None,
         )?;

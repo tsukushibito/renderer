@@ -80,6 +80,10 @@ RasterバッチはProgramと定数の開始位置を持ち、Programが定める
 したがって、Operationがdraw用Vecやattachment用Vecを個別に所有する図にはしません。
 借用した入力sliceから必要な値を構築時にcaptureし、短命な呼出元をplanの寿命へ持ち込みません。
 
+`GraphStorage` はクレート内部の型です。ラスタ構築の計測値は、記録中は
+`Graph::raster_build_metrics()`、コンパイル後は `CompiledGraph::raster_build_metrics()` で取得できます。
+計測を有効にせずに開始したフレームでは、どちらも `None` を返します。
+
 Rasterバッチは`ManagedRasterProgram`、Dispatchは別の`ManagedProgram`の値を持ちます。
 どちらも不変static descriptorに結び付くCPU契約で、native PSOの所有型ではありません。
 `BindingOperands`はBuffer・ImageView・Samplerの列挙型です。Bufferは論理資源indexと完全なdescriptor範囲、

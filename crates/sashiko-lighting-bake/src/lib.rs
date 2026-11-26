@@ -29,7 +29,7 @@ mod bvh;
 mod lightmaps;
 mod surface_pages;
 pub use surface_pages::{
-    BakePageTiming, LightmapVertex, StaticReceiver, SurfaceLayout, SurfaceRegion,
+    BakeBenchmark, BakePageTiming, LightmapVertex, StaticReceiver, SurfaceLayout, SurfaceRegion,
 };
 mod probes;
 mod reflection_placement;

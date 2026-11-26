@@ -87,6 +87,7 @@ impl Raster {
         pass: usize,
         encoder: &mut wgpu::CommandEncoder,
     ) -> Result<(), ExecutionError> {
+        let graph = graph.data();
         let (colors, depth, batches) = match &graph.passes[pass].operation {
             Operation::Raster {
                 colors,

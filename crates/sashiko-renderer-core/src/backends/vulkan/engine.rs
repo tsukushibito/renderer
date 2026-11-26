@@ -229,7 +229,7 @@ impl PreparedEngineGraph {
         output: ImageHandle,
         readback: bool,
     ) -> Result<PreparedEngineFrame, GraphError> {
-        if self.source_graph != self.graph.id {
+        if self.source_graph != self.graph.graph_id() {
             return Err(GraphError::new(
                 crate::graph::GraphErrorKind::WrongOwner,
                 "replaced prepared Graph",
@@ -248,7 +248,7 @@ impl PreparedEngineGraph {
     }
 
     pub fn compile(self) -> Result<CompiledEngineGraph, GraphError> {
-        if self.source_graph != self.graph.id {
+        if self.source_graph != self.graph.graph_id() {
             return Err(GraphError::new(
                 crate::graph::GraphErrorKind::WrongOwner,
                 "replaced prepared Graph",
@@ -439,7 +439,7 @@ impl VulkanEngine {
         let scratch = self.frame_scratch.acquire()?;
         let graph = self.graph_pool.begin()?;
         Ok(PreparedEngineGraph {
-            source_graph: graph.id,
+            source_graph: graph.graph_id(),
             graph,
             owner: Arc::clone(&self.owner),
             scratch,
@@ -454,7 +454,7 @@ impl VulkanEngine {
         frame: &mut PreparedEngineGraph,
         snapshot: &'a MeshSnapshot,
     ) -> Result<SnapshotInputs<'a>, EngineRenderError> {
-        if !Arc::ptr_eq(&frame.owner, &self.owner) || frame.source_graph != frame.graph.id {
+        if !Arc::ptr_eq(&frame.owner, &self.owner) || frame.source_graph != frame.graph.graph_id() {
             return Err(
                 MeshError::invalid_input("prepared Graph belongs to another owner/Graph").into(),
             );
@@ -490,7 +490,7 @@ impl VulkanEngine {
                 .filter(|entry| entry.ready() && !entry.retiring)
                 .ok_or(MeshPreparationError::NotResident)?;
             let buffers = resident.buffers.as_ref().expect("ready mesh owns buffers");
-            let first_resource = graph.resources.len();
+            let first_resource = graph.data().resources.len();
             let vertices = graph.import_buffer(
                 "resident mesh vertices",
                 &self.runtime.refresh_buffer(buffers.vertices)?,

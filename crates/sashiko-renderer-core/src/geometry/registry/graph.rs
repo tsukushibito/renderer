@@ -193,7 +193,7 @@ mod tests {
             offset,
             mesh,
             ..
-        } = &graph.passes[uploaded.index].operation
+        } = &graph.data().passes[uploaded.index].operation
         else {
             panic!("mesh chunk upload")
         };
@@ -207,7 +207,7 @@ mod tests {
                 maximum: 2
             })
         ));
-        assert_eq!(graph.passes.len(), 1);
+        assert_eq!(graph.data().passes.len(), 1);
 
         for invalid in [1..5, 12..16] {
             let error = data
@@ -215,13 +215,17 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
             assert_eq!(error.resource(), Some(indices.into()));
-            assert_eq!(graph.passes.len(), 1, "failed mesh upload appends nothing");
+            assert_eq!(
+                graph.data().passes.len(),
+                1,
+                "failed mesh upload appends nothing"
+            );
         }
         graph
             .upload_buffer("raw bytes", indices, 0, &[0; 4])
             .unwrap();
         assert!(matches!(
-            graph.passes.last().unwrap().operation,
+            graph.data().passes.last().unwrap().operation,
             Operation::UploadBuffer { mesh: None, .. }
         ));
     }
@@ -259,7 +263,7 @@ mod tests {
             assert!(plan.has_export(output.index));
             if let Some(pass) = readback_pass {
                 assert!(matches!(
-                    plan.passes[pass.index].operation,
+                    plan.data().passes[pass.index].operation,
                     crate::graph::Operation::ReadbackImage { src } if src == output.index
                 ));
             }

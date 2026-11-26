@@ -153,6 +153,7 @@ impl RasterPass<'_, '_> {
     ) -> Result<(), GraphError> {
         let started = self
             .graph
+            .data()
             .raster_metrics
             .as_ref()
             .map(|_| std::time::Instant::now());
@@ -248,14 +249,14 @@ impl RasterPass<'_, '_> {
             let start = first + group * chunk_size;
             if summary.mixed {
                 for n in start..start.saturating_add(chunk_size).min(end) {
-                    let operand = &graph.draws[n];
+                    let operand = &graph.data().draws[n];
                     let indexed = operand.indexed.expect("generated indexed run");
                     let bindings = operand.bindings.clone();
                     graph.register_raster_binding_reads(&bindings)?;
                     graph.register_indexed_reads(indexed, indexed.byte_range());
                 }
             } else {
-                let operand = &graph.draws[start];
+                let operand = &graph.data().draws[start];
                 let indexed = operand.indexed.expect("generated indexed run");
                 let bindings = operand.bindings.clone();
                 graph.register_raster_binding_reads(&bindings)?;

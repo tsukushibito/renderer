@@ -154,10 +154,8 @@ pub struct RasterBuildMetrics {
     pub generated_draws: usize,
 }
 
-/// Opaque prepared backing. Its fields and all mutable access are private to
-/// Renderer; dereferencing a Graph or plan only exposes an immutable value.
-#[doc(hidden)]
-pub struct GraphStorage {
+/// Prepared backing shared by a checkout and its compiled plan.
+pub(crate) struct GraphStorage {
     pub(super) raster_metrics: Option<RasterBuildMetrics>,
     pub(crate) id: u64,
     pub(crate) resources: Vec<Resource>,
@@ -287,11 +285,6 @@ impl GraphStorage {
             dump: std::sync::OnceLock::new(),
         })
     }
-    /// Measured phases for this checkout when the pool enabled raster profiling.
-    pub fn raster_build_metrics(&self) -> Option<RasterBuildMetrics> {
-        self.raster_metrics
-    }
-
     fn reset(&mut self, id: u64) {
         self.clear_raster_ranges();
         self.id = id;
@@ -645,6 +638,7 @@ mod tests {
             .upload_buffer("one", resource, 0, &[1, 2, 3, 4])
             .unwrap();
         let plan = graph.compile().unwrap();
+        let plan = plan.data();
         assert_eq!(plan.passes.len(), 1);
         assert_eq!(plan.accesses(0).len(), 1);
     }
@@ -659,8 +653,12 @@ mod tests {
             .unwrap();
         graph.export_buffer(resource).unwrap();
         let plan = graph.compile().unwrap();
+        let storage = plan.data();
         drop(pool);
         assert_eq!(plan.ordered_pass_names().collect::<Vec<_>>(), ["upload"]);
-        assert_eq!(plan.upload_data(&plan.passes[0].operation), [1, 2, 3, 4]);
+        assert_eq!(
+            storage.upload_data(&storage.passes[0].operation),
+            [1, 2, 3, 4]
+        );
     }
 }

@@ -26,7 +26,7 @@ fn use_buffer(
     if resource_map[index] != usize::MAX {
         return Ok(());
     }
-    let resource = &graph.resources[index];
+    let resource = &graph.data().resources[index];
     let ResourceDesc::Buffer(desc) = resource.desc else {
         return Err(D3D12RuntimeError::unsupported(
             "D3D12 Graph image execution is not implemented",
@@ -93,7 +93,7 @@ pub(super) fn requirements(
 }
 
 pub(super) fn initialize_raster_read_promotions(graph: &CompiledGraph, promotions: &mut [bool]) {
-    for (eligible, resource) in promotions.iter_mut().zip(&graph.resources) {
+    for (eligible, resource) in promotions.iter_mut().zip(&graph.data().resources) {
         *eligible = resource.import.is_some()
             && !matches!(resource.desc, ResourceDesc::Image(desc) if desc.format.aspect() == crate::graph::ImageAspect::Depth);
     }
@@ -104,6 +104,7 @@ pub(super) fn preflight_accesses(
     pass: usize,
     promotions: &mut [bool],
 ) -> Result<(), D3D12RuntimeError> {
+    let graph = graph.data();
     let raster = matches!(graph.passes[pass].operation, Operation::Raster { .. });
     for access in graph.accesses(pass) {
         if !raster
@@ -148,10 +149,10 @@ fn requirements_inner(
             0,
         )
     });
-    if graph.resources.len() > capacity.resources
-        || graph.resources.len() > resource_map.len()
-        || graph.resources.len() > raster_read_promotions.len()
-        || graph.order.len() > capacity.operations
+    if graph.data().resources.len() > capacity.resources
+        || graph.data().resources.len() > resource_map.len()
+        || graph.data().resources.len() > raster_read_promotions.len()
+        || graph.data().order.len() > capacity.operations
     {
         return Err(D3D12RuntimeError::capacity_with(
             "prepared Graph metadata capacity exhausted",
@@ -165,7 +166,7 @@ fn requirements_inner(
     }
     // Each Graph uses only this prefix; later checkouts reinitialize their own
     // full active range, including when it grows after a smaller Graph.
-    resource_map[..graph.resources.len()].fill(usize::MAX);
+    resource_map[..graph.data().resources.len()].fill(usize::MAX);
     initialize_raster_read_promotions(graph, raster_read_promotions);
     let mut used = 0;
     let mut upload_bytes = 0;
@@ -175,9 +176,9 @@ fn requirements_inner(
     let mut raster_descriptors = 0usize;
     // Establish support and all variable capacity requirements before recording.
     // This scans changing work; it does not revalidate Graph byte-range contents.
-    for &pass in &graph.order {
+    for &pass in &graph.data().order {
         preflight_accesses(graph, pass, raster_read_promotions)?;
-        match &graph.passes[pass].operation {
+        match &graph.data().passes[pass].operation {
             Operation::UploadBuffer { dst, .. } => {
                 use_buffer(
                     graph,
@@ -189,7 +190,10 @@ fn requirements_inner(
                 )?;
                 add_bytes(
                     &mut upload_bytes,
-                    graph.upload_data(&graph.passes[pass].operation).len() as u64,
+                    graph
+                        .data()
+                        .upload_data(&graph.data().passes[pass].operation)
+                        .len() as u64,
                     capacity.upload_bytes,
                     RuntimeCapacityKind::UploadBytes,
                 )?;
@@ -253,7 +257,7 @@ fn requirements_inner(
                 })?;
                 super::raster::use_image(graph, *dst, resource_map, storage)?;
                 let image = &storage.images[resource_map[*dst]];
-                let (total, size, limit, kind) = match graph.passes[pass].operation {
+                let (total, size, limit, kind) = match graph.data().passes[pass].operation {
                     Operation::UploadImage { region, .. } => (
                         &mut upload_bytes,
                         super::raster::upload_bytes(image, region),
@@ -315,8 +319,8 @@ fn requirements_inner(
                         ),
                     )
                 })?;
-                for access in graph.accesses(pass) {
-                    match graph.resources[access.resource].desc {
+                for access in graph.data().accesses(pass) {
+                    match graph.data().resources[access.resource].desc {
                         ResourceDesc::Buffer(_) => use_buffer(
                             graph,
                             access.resource,
@@ -385,8 +389,8 @@ fn requirements_inner(
                         ),
                     )
                 })?;
-                for access in graph.accesses(pass) {
-                    match graph.resources[access.resource].desc {
+                for access in graph.data().accesses(pass) {
+                    match graph.data().resources[access.resource].desc {
                         ResourceDesc::Buffer(_) => use_buffer(
                             graph,
                             access.resource,
@@ -413,7 +417,7 @@ fn requirements_inner(
                     }
                 }
                 let mut last_pipeline: Option<&RasterPipeline> = None;
-                for batch in graph.raster_batches(batches) {
+                for batch in graph.data().raster_batches(batches) {
                     let pipeline = last_pipeline
                         .filter(|pipeline| pipeline.managed.identity() == batch.program)
                         .or_else(|| {
@@ -433,7 +437,7 @@ fn requirements_inner(
                             )
                         })?;
                     last_pipeline = Some(pipeline);
-                    for draw in graph.raster_draws(&batch.draws) {
+                    for draw in graph.data().raster_draws(&batch.draws) {
                         raster_descriptors = raster_descriptors
                             .checked_add(super::raster::binding_requirements(
                                 graph,
@@ -468,7 +472,7 @@ fn requirements_inner(
                         ),
                     )
                 })?;
-                for access in graph.accesses(pass) {
+                for access in graph.data().accesses(pass) {
                     super::raster::use_image(graph, access.resource, resource_map, storage)?;
                     if matches!(
                         access.purpose,
@@ -485,8 +489,8 @@ fn requirements_inner(
             }
         }
     }
-    for &index in &graph.exports {
-        match graph.resources[index].desc {
+    for &index in &graph.data().exports {
+        match graph.data().resources[index].desc {
             ResourceDesc::Buffer(_) => use_buffer(
                 graph,
                 index,
@@ -529,15 +533,15 @@ pub(super) fn prepare(
         )
     });
     let started = pool.profiling_enabled().then(std::time::Instant::now);
-    let needs_result = graph.order.iter().any(|&pass| {
+    let needs_result = graph.data().order.iter().any(|&pass| {
         matches!(
-            &graph.passes[pass].operation,
+            &graph.data().passes[pass].operation,
             Operation::ReadbackBuffer { .. } | Operation::ReadbackImage { .. }
         )
     });
     let mut work = pool.acquire(needs_result)?;
     work.begin_profile(started);
-    work.set_graph(graph.id);
+    work.set_graph(graph.graph_id());
     let capacity = work.capacity();
     let slot = work.slot_mut();
     let used = requirements_inner(
@@ -570,7 +574,7 @@ pub(super) fn prepare(
     let list = work.slot().list.clone();
     let readback = work.result().map(|result| result.buffer.raw().clone());
     if let Some(result) = work.result_mut() {
-        result.graph = graph.id;
+        result.graph = graph.graph_id();
         result.used = 0;
         result.readbacks.clear();
     }
@@ -590,10 +594,12 @@ pub(super) fn prepare(
             work.poison_recording();
             return Err(error);
         }
-        for &pass in &graph.order {
-            match &graph.passes[pass].operation {
+        for &pass in &graph.data().order {
+            match &graph.data().passes[pass].operation {
                 Operation::UploadBuffer { dst, offset, .. } => {
-                    let bytes = graph.upload_data(&graph.passes[pass].operation);
+                    let bytes = graph
+                        .data()
+                        .upload_data(&graph.data().passes[pass].operation);
                     let slot = work.slot_mut();
                     let destination = slot.resource_map[*dst];
                     let start = slot.upload_used;
@@ -621,7 +627,7 @@ pub(super) fn prepare(
                     if slot.provenance_needed[*dst] {
                         let provenance = &mut slot.provenance[destination];
                         let target = *offset..*offset + bytes.len() as u64;
-                        match &graph.passes[pass].operation {
+                        match &graph.data().passes[pass].operation {
                             Operation::UploadBuffer {
                                 mesh: Some(crate::graph::MeshUpload::Indices { byte_len, maximum }),
                                 ..
@@ -792,7 +798,7 @@ pub(super) fn prepare(
                     graph,
                     *dst,
                     *region,
-                    &graph.passes[pass].operation,
+                    &graph.data().passes[pass].operation,
                 )?,
                 Operation::CopyImage {
                     src,

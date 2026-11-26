@@ -220,6 +220,7 @@ impl TransferPayload for GraphWork {
                             )
                         });
                         let plan = self.plan.as_ref().unwrap();
+                        let storage = plan.data();
                         let programs = self.programs.as_ref().unwrap();
                         let attachments = rendering_attachments(self, colors, *depth);
                         if let Some(secondary) = &self.secondary
@@ -237,7 +238,7 @@ impl TransferPayload for GraphWork {
                             programs.begin_raster(command, &attachments);
                             let mut regions = None;
                             let mut descriptor_start = pass.raster_descriptors.start;
-                            for (batch, &slot) in plan
+                            for (batch, &slot) in storage
                                 .raster_batches(batches)
                                 .iter()
                                 .zip(&self.raster_programs[pass.raster_programs.clone()])
@@ -250,7 +251,7 @@ impl TransferPayload for GraphWork {
                                     );
                                     regions = Some(batch.regions);
                                 }
-                                let draw_operands = plan.raster_draws(&batch.draws);
+                                let draw_operands = storage.raster_draws(&batch.draws);
                                 let descriptor_end = descriptor_start + draw_operands.len();
                                 let descriptor_sets =
                                     &self.raster_descriptors[descriptor_start..descriptor_end];
@@ -275,6 +276,7 @@ impl TransferPayload for GraphWork {
                             self.plan
                                 .as_ref()
                                 .unwrap()
+                                .data()
                                 .raster_attachment(index)
                                 .depth_clear_rect
                         });
@@ -387,6 +389,7 @@ fn rendering_attachments(
     depth: Option<usize>,
 ) -> RenderingAttachments<'static> {
     let plan = work.plan.as_ref().unwrap();
+    let plan = plan.data();
     let prepare_attachment = |attachment: &crate::graph::AttachmentOperand| {
         let image = work.resource(attachment.view.image().index).image();
         let resolve = attachment
@@ -466,6 +469,7 @@ unsafe fn record_batch(
     descriptor_sets: &[[vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS]],
     physical: &[Option<super::super::PhysicalLease>],
 ) {
+    let plan = plan.data();
     let draw_operands = plan.raster_draws(&batch.draws);
     let indirect = batch.indirect.map(|args| NativeIndexedDraw::Indirect {
         buffer: physical[args.buffer].as_ref().unwrap().buffer().handle,
@@ -518,12 +522,15 @@ impl GraphWork {
             return Ok(());
         }
         let plan = self.plan.as_ref().unwrap();
+        let storage = plan.data();
         if recorder.team.automatic {
             let sizes = self
                 .passes
                 .iter()
                 .filter_map(|pass| match &pass.operation {
-                    PreparedOperation::Raster { batches, .. } => Some(plan.raster_batches(batches)),
+                    PreparedOperation::Raster { batches, .. } => {
+                        Some(storage.raster_batches(batches))
+                    }
                     _ => None,
                 })
                 .flatten()
@@ -546,7 +553,7 @@ impl GraphWork {
                     lane.pass = pass_index;
                     lane.batch = batch;
                     lane.descriptors = descriptors;
-                    descriptors += plan.raster_batches(&(batch..batch + 1))[0].draws.len();
+                    descriptors += storage.raster_batches(&(batch..batch + 1))[0].draws.len();
                 }
             }
         }
@@ -571,7 +578,8 @@ impl GraphWork {
                     let mut formats =
                         [vk::Format::UNDEFINED; crate::program::MAX_RASTER_COLOR_ATTACHMENTS];
                     let mut extent = vk::Extent2D::default();
-                    for (format, target) in formats.iter_mut().zip(plan.raster_attachments(colors))
+                    for (format, target) in
+                        formats.iter_mut().zip(storage.raster_attachments(colors))
                     {
                         let image = physical[target.view.image().index]
                             .as_ref()
@@ -581,7 +589,7 @@ impl GraphWork {
                         extent = image.extent;
                     }
                     let depth_format = depth.map_or(vk::Format::UNDEFINED, |target| {
-                        let image = physical[plan.raster_attachment(target).view.image().index]
+                        let image = physical[storage.raster_attachment(target).view.image().index]
                             .as_ref()
                             .unwrap()
                             .image();
@@ -596,7 +604,7 @@ impl GraphWork {
                         );
                     let inheritance =
                         vk::CommandBufferInheritanceInfo::default().push_next(&mut rendering);
-                    let batch = &plan.raster_batches(&(lane.batch..lane.batch + 1))[0];
+                    let batch = &storage.raster_batches(&(lane.batch..lane.batch + 1))[0];
                     let sets = &descriptors[lane.descriptors..lane.descriptors + batch.draws.len()];
                     lane.error = lane
                         .record(&inheritance, |command| {

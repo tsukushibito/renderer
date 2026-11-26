@@ -614,6 +614,7 @@ impl Registry {
         graph: &CompiledGraph,
         slot: &mut ExecutionSlot,
     ) -> Result<(), Error> {
+        let graph = graph.data();
         // Check every declared import, including culled ones, at the mutable
         // external-state boundary. Immutable descriptors do not need rescanning.
         for (logical, resource) in graph.resources.iter().enumerate() {
@@ -780,7 +781,7 @@ impl Registry {
         Ok(())
     }
     pub(super) fn validate(&self, graph: &CompiledGraph) -> Result<(), Error> {
-        for resource in &graph.resources {
+        for resource in &graph.data().resources {
             if let Some(key) = resource.import
                 && self.entry(key)?.revision != resource.import_revision
             {
@@ -794,7 +795,8 @@ impl Registry {
         graph: &CompiledGraph,
         slot: &ExecutionSlot,
     ) -> Result<Option<ExportLease>, Error> {
-        if graph.exports.is_empty() {
+        let storage = graph.data();
+        if storage.exports.is_empty() {
             return Ok(None);
         }
         let export_slots = self.exports.len() as u64;
@@ -821,16 +823,16 @@ impl Registry {
             })?;
         let lease = ExportLease {
             slot: Arc::clone(available),
-            graph: graph.id,
+            graph: storage.id,
         };
         {
             let mut values = lease.slot.0.lock().unwrap_or_else(|e| e.into_inner());
             values.clear();
-            for &logical in &graph.exports {
+            for &logical in &storage.exports {
                 let usage = slot.resource_uses[logical].expect("export physical lease");
-                let initialized = graph.final_contents(logical);
+                let initialized = storage.final_contents(logical);
                 let revision = usage.revision + u64::from(usage.changed);
-                let export = match graph.resources[logical].desc {
+                let export = match storage.resources[logical].desc {
                     ResourceDesc::Buffer(desc) => Export::Buffer(
                         ImportBuffer::new(
                             usage.key,
@@ -841,12 +843,12 @@ impl Registry {
                                     "prepared export range snapshots exhausted",
                                     crate::capacity::import_ranges_capacity(&error)
                                         .simultaneous_slots(
-                                            graph
+                                            storage
                                                 .exports
                                                 .iter()
                                                 .filter(|&&resource| {
                                                     matches!(
-                                                        graph.resources[resource].desc,
+                                                        storage.resources[resource].desc,
                                                         ResourceDesc::Buffer(_)
                                                     )
                                                 })
@@ -882,7 +884,7 @@ impl Registry {
             entry.initialized.clear();
             entry
                 .initialized
-                .extend_from_slice(graph.final_contents(logical));
+                .extend_from_slice(graph.data().final_contents(logical));
             if matches!(entry.desc, ResourceDesc::Buffer(_)) {
                 std::mem::swap(
                     &mut entry.provenance,

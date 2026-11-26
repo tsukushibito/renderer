@@ -152,10 +152,10 @@ impl Graph {
 
         // Only transient buffers and two passes are appended before publishing
         // the token. Restore the whole group if a later reservation fails.
-        let resources = self.resources.len();
-        let passes = self.passes.len();
-        let accesses = self.accesses.len();
-        let names = self.names.len();
+        let resources = self.data().resources.len();
+        let passes = self.data().passes.len();
+        let accesses = self.data().accesses.len();
+        let names = self.data().names.len();
         let result = (|| {
             let template_desc = table.template_buffer_desc();
             let command_desc = table.command_buffer_desc();
@@ -299,6 +299,7 @@ mod tests {
             .unwrap();
         graph.readback_image("color pixels", output).unwrap();
         let plan = graph.compile().unwrap();
+        let storage = plan.data();
         assert!(plan.ordered_pass_names().eq([
             "vertices",
             "indices",
@@ -308,10 +309,10 @@ mod tests {
             "draw",
             "color pixels",
         ]));
-        let Operation::Raster { batches, .. } = &plan.passes[pass.index].operation else {
+        let Operation::Raster { batches, .. } = &storage.passes[pass.index].operation else {
             panic!("indirect Raster operation");
         };
-        let [batch] = plan.raster_batches(batches) else {
+        let [batch] = storage.raster_batches(batches) else {
             panic!("one indirect batch");
         };
         let indirect = batch.indirect.unwrap();
@@ -319,19 +320,19 @@ mod tests {
         assert_eq!(indirect.command_count, 65);
         assert_eq!(indirect.buffer, args.buffer.index);
         assert_eq!(
-            plan.raster_draws(&batch.draws)[0]
+            storage.raster_draws(&batch.draws)[0]
                 .indexed
                 .unwrap()
                 .index_count,
             4
         );
-        assert!(plan.raster_constants(batch).eq([constants.words()]));
-        assert!(plan.accesses(pass.index).iter().any(|access| {
+        assert!(storage.raster_constants(batch).eq([constants.words()]));
+        assert!(storage.accesses(pass.index).iter().any(|access| {
             access.purpose == AccessPurpose::Indirect
                 && access.resource == indirect.buffer
                 && access.range == (0..1300)
         }));
-        assert!(plan.accesses(pass.index - 1).iter().any(|access| {
+        assert!(storage.accesses(pass.index - 1).iter().any(|access| {
             access.purpose == AccessPurpose::StorageRead
                 && access.resource == visibility.index
                 && access.range == (256..768)
@@ -356,13 +357,13 @@ mod tests {
         let visibility = graph
             .buffer("visibility", BufferDesc { size: 256 })
             .unwrap();
-        let export_capacity = graph.exported.capacity();
+        let export_capacity = graph.data().exported.capacity();
         for _ in 0..64 {
             let err = graph
                 .encode_indexed_indirect("encode", &table, vertices, indices, visibility, 0)
                 .unwrap_err();
             assert_eq!(err.capacity().unwrap().kind, GraphCapacityKind::Passes);
-            assert_eq!(graph.exported.len(), graph.resources.len());
+            assert_eq!(graph.data().exported.len(), graph.data().resources.len());
         }
         let result = graph
             .buffer("remaining buffer", BufferDesc { size: 4 })
@@ -374,7 +375,7 @@ mod tests {
             .upload_buffer("retained upload", result, 0, &[0; 4])
             .unwrap();
         graph.export_buffer(result).unwrap();
-        assert_eq!(graph.exported.capacity(), export_capacity);
+        assert_eq!(graph.data().exported.capacity(), export_capacity);
         assert!(
             graph
                 .compile()

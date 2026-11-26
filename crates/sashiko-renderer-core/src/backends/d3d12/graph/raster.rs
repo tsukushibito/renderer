@@ -43,7 +43,7 @@ pub(super) fn binding_requirements(
     for (layout, operand) in program
         .bindings()
         .iter()
-        .zip(graph.raster_bindings(bindings))
+        .zip(graph.data().raster_bindings(bindings))
     {
         match operand {
             BindingOperands::Buffer { range, .. } => {
@@ -91,7 +91,7 @@ pub(super) fn use_image(
     if map[index] != usize::MAX {
         return Ok(());
     }
-    let ResourceDesc::Image(desc) = graph.resources[index].desc else {
+    let ResourceDesc::Image(desc) = graph.data().resources[index].desc else {
         unreachable!()
     };
     if desc.array_layers != 1 {
@@ -118,6 +118,7 @@ pub(super) fn target_samples(
     colors: &Range<usize>,
     depth: Option<usize>,
 ) -> SampleCount {
+    let graph = graph.data();
     let attachment = graph
         .raster_attachments(colors)
         .first()
@@ -137,6 +138,7 @@ fn pass_scopes(
     read_promotions: &[bool],
     scopes: &mut PassScopes,
 ) {
+    let graph = graph.data();
     // Immutable Graph accesses establish these purposes. Aggregate every use
     // once, preserving each resource's first access order in its native class.
     for access in graph.accesses(pass) {
@@ -176,6 +178,7 @@ fn pass_scopes(
 }
 
 pub(super) fn provenance_requirements(graph: &CompiledGraph, needed: &mut [bool]) {
+    let graph = graph.data();
     needed[..graph.resources.len()].fill(false);
     for &pass in &graph.order {
         if let Operation::Raster { draws, .. } = &graph.passes[pass].operation {
@@ -198,6 +201,7 @@ pub(super) fn provenance_requirements(graph: &CompiledGraph, needed: &mut [bool]
 }
 
 pub(super) fn retain_provenance(graph: &CompiledGraph, needed: &mut [bool]) {
+    let graph = graph.data();
     for (index, resource) in graph.resources.iter().enumerate() {
         if resource.import.is_some() && matches!(resource.desc, ResourceDesc::Buffer(_)) {
             needed[index] = true;
@@ -289,7 +293,7 @@ pub(super) fn upload_image(
     region: Option<ImageRegion>,
     operation: &Operation,
 ) -> Result<(), D3D12RuntimeError> {
-    let bytes = graph.upload_data(operation);
+    let bytes = graph.data().upload_data(operation);
     let image = &mut slot.raster.as_mut().unwrap().images[slot.resource_map[dst]];
     let base = align_transfer(slot.upload_used)?;
     transition(
@@ -450,13 +454,18 @@ pub(super) fn record(
             0,
         )
     });
-    let (batches, first_batch, colors, depth) = match &graph.passes[pass].operation {
+    let (batches, first_batch, colors, depth) = match &graph.data().passes[pass].operation {
         Operation::Raster {
             batches,
             colors,
             depth,
             ..
-        } => (graph.raster_batches(batches), batches.start, colors, depth),
+        } => (
+            graph.data().raster_batches(batches),
+            batches.start,
+            colors,
+            depth,
+        ),
         Operation::AttachmentPass { colors, depth, .. } => (&[][..], 0, colors, depth),
         _ => unreachable!(),
     };
@@ -486,7 +495,7 @@ pub(super) fn record(
         image.uav_write = false;
     });
     let depth = depth.map(|index| {
-        let attachment = graph.raster_attachment(index);
+        let attachment = graph.data().raster_attachment(index);
         (
             attachment,
             &storage.images[slot.resource_map[attachment.view.image().index]],
@@ -497,7 +506,7 @@ pub(super) fn record(
     let mut extent = [0, 0];
     for (handle, attachment) in color_handles
         .iter_mut()
-        .zip(graph.raster_attachments(colors))
+        .zip(graph.data().raster_attachments(colors))
     {
         let image = &storage.images[slot.resource_map[attachment.view.image().index]];
         *handle = image.rtv.unwrap();
@@ -604,13 +613,13 @@ pub(super) fn record(
             // Earlier uploads/copies in this Graph have now established the index
             // contents. A failed proof cancels the entire unsubmitted recording.
             let pipeline = &programs[bundle.pipeline.unwrap()];
-            for draw in graph.raster_draws(&batch.draws) {
+            for draw in graph.data().raster_draws(&batch.draws) {
                 if let Some(indexed) = &draw.indexed {
                     validate_indices(
                         &mut slot.provenance[slot.resource_map[indexed.indices]],
                         indexed.first_index,
                         indexed.index_count,
-                        graph.resources[indexed.vertices].desc.units()
+                        graph.data().resources[indexed.vertices].desc.units()
                             / u64::from(pipeline.managed.vertex_stride()),
                     )?;
                 }
@@ -724,6 +733,7 @@ pub(super) fn record_draws(
     mut storage: Option<&mut RasterStorage>,
     mut validate: impl FnMut(usize, u32, u32, u64) -> Result<(), D3D12RuntimeError>,
 ) -> Result<(), D3D12RuntimeError> {
+    let graph = graph.data();
     let indirect = batch.indirect.as_ref().map(|command| {
         let signature = indexed_indirect
             .expect("preflight checked the encoder that owns this prepared signature");
@@ -935,7 +945,7 @@ fn record_resolves(
     list: &ID3D12GraphicsCommandList,
     storage: &mut RasterStorage,
 ) {
-    for attachment in graph.raster_attachments(colors) {
+    for attachment in graph.data().raster_attachments(colors) {
         let Some(resolve) = attachment.resolve else {
             continue;
         };
@@ -1133,12 +1143,12 @@ mod tests {
     #[test]
     fn pass_read_scopes_combine_once_in_native_first_use_order() {
         let fixture = scope_fixture(false);
-        let mut map = vec![usize::MAX; fixture.plan.resources.len()];
+        let mut map = vec![usize::MAX; fixture.plan.data().resources.len()];
         for (index, buffer) in fixture.buffers.iter().enumerate() {
             map[buffer.index] = index;
         }
         let mut image = 0;
-        for (index, resource) in fixture.plan.resources.iter().enumerate() {
+        for (index, resource) in fixture.plan.data().resources.iter().enumerate() {
             if matches!(resource.desc, ResourceDesc::Image(_)) {
                 map[index] = image;
                 image += 1;
@@ -1190,9 +1200,9 @@ mod tests {
         let fixture = scope_fixture(true);
         let plan = &fixture.plan;
         let [shared, updated] = fixture.buffers;
-        let mut promotions = vec![true; plan.resources.len()];
+        let mut promotions = vec![true; plan.data().resources.len()];
         initialize_raster_read_promotions(plan, &mut promotions);
-        for &pass in &plan.order {
+        for &pass in &plan.data().order {
             preflight_accesses(plan, pass, &mut promotions).unwrap();
         }
         let promoted: Vec<_> = promotions
@@ -1201,7 +1211,7 @@ mod tests {
             .filter_map(|(index, &eligible)| eligible.then_some(index))
             .collect();
         assert_eq!(promoted, [shared.index, fixture.texture.index]);
-        let mut map = vec![usize::MAX; plan.resources.len()];
+        let mut map = vec![usize::MAX; plan.data().resources.len()];
         map[shared.index] = 0;
         map[updated.index] = 1;
         map[fixture.texture.index] = 0;

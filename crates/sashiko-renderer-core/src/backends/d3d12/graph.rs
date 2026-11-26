@@ -287,7 +287,7 @@ mod tests {
     }
 
     fn requirements(graph: &CompiledGraph) -> Result<usize, D3D12RuntimeError> {
-        let mut mapping = vec![usize::MAX; graph.resources.len()];
+        let mut mapping = vec![usize::MAX; graph.data().resources.len()];
         bounded::requirements(
             graph,
             &mut mapping,
