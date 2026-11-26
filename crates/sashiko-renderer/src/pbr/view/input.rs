@@ -32,6 +32,7 @@ pub enum Projection {
 /// projection.
 #[derive(Clone, Copy, Debug)]
 pub struct ViewInput {
+    pub indirect_shadows: crate::pbr::IndirectShadowMode,
     pub(super) matrix: [[f32; 4]; 4],
     pub(super) eye: [f32; 3],
     pub(super) forward: [f64; 3],
@@ -180,6 +181,7 @@ impl ViewInput {
             }
         };
         Ok(Self {
+            indirect_shadows: Default::default(),
             matrix: clip_from_world,
             eye,
             forward,

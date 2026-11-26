@@ -62,7 +62,17 @@ $variants += foreach ($variant in $variants) {
         $shadow.Name = $variant.Name.Replace('.frag', '_indirect_shadow.frag')
         $shadow.Defines = @($variant.Defines) + 'INDIRECT_SHADOW=1'
         $shadow
+        $half = $shadow.Clone()
+        $half.Name = "half_" + $shadow.Name
+        $half.Defines = @($shadow.Defines) + 'SHADOW_HALF_RESOLVE=1'
+        $half
     }
+}
+$variants += foreach ($name in @('pbr_indirect_shadow.frag', 'pbr_transformed_indirect_shadow.frag')) {
+    $receiver = ($variants | Where-Object Name -eq $name).Clone()
+    $receiver.Name = "receiver_" + $name
+    $receiver.Defines = @($receiver.Defines) + 'SHADOW_RECEIVER=1'
+    $receiver
 }
 # The runner reports this manifest for both display routes, including standard output.
 $coreManifest = Join-Path $PSScriptRoot '../../sashiko-renderer-core/shaders/dxil/manifest.json'

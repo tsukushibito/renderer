@@ -46,13 +46,12 @@ struct CameraData_std140_0
     @align(16) shadow_depth_scale_0 : vec4<f32>,
     @align(16) camera_forward_blend_0 : vec4<f32>,
     @align(16) shadow_bias_0 : vec4<f32>,
-    @align(16) shadow_tile_scale_0 : vec4<f32>,
-    @align(16) shadow_masks_0 : array<vec4<u32>, i32(64)>,
-    @align(16) capsule_data_0 : array<vec4<f32>, i32(48)>,
 };
 
 @binding(0) @group(0) var<uniform> camera_0 : CameraData_std140_0;
 @binding(0) @group(2) var irradiance_image_0 : texture_2d<f32>;
+
+@binding(5) @group(0) var shadow_table_0 : texture_2d<f32>;
 
 @binding(3) @group(2) var environment_sampler_0 : sampler;
 
@@ -317,81 +316,105 @@ fn surface_texel_0( index_1 : u32,  dims_1 : vec2<u32>,  keys_0 : u32,  phase_0 
     return value_3;
 }
 
+fn shadow_texel_0( at_1 : u32,  width_0 : u32) -> vec4<f32>
+{
+    var _S23 : u32 = at_1 % width_0;
+    var _S24 : i32 = i32(_S23);
+    var _S25 : u32 = at_1 / width_0;
+    var _S26 : vec3<i32> = vec3<i32>(_S24, i32(_S25), i32(0));
+    return (textureLoad((shadow_table_0), ((_S26)).xy, ((_S26)).z));
+}
+
 fn indirect_visibility_0( position_0 : vec3<f32>,  normal_1 : vec3<f32>,  pixel_0 : vec2<f32>) -> f32
 {
-    var tile_0 : vec2<u32> = min(vec2<u32>(pixel_0 * camera_0.shadow_tile_scale_0.xy), vec2<u32>(u32(15)));
-    var index_2 : u32 = tile_0.y * u32(16) + tile_0.x;
-    var _S23 : u32 = ((camera_0.shadow_masks_0[index_2 / u32(4)][index_2 % u32(4)]) & (u32(65535)));
+    var width_1 : u32;
+    var height_0 : u32;
+    {var dim = textureDimensions((shadow_table_0));((width_1)) = dim.x;((height_0)) = dim.y;};
+    var texels_0 : u32 = width_1 * height_0;
+    if(texels_0 < u32(260))
+    {
+        return 1.0f;
+    }
+    var _S27 : vec4<f32> = shadow_texel_0(u32(0), width_1);
+    var _S28 : vec2<u32> = vec2<u32>(clamp(pixel_0 * _S27.xy, vec2<f32>(0.0f), vec2<f32>(15.0f)));
+    var _S29 : vec4<f32> = shadow_texel_0(u32(1) + _S28.y * u32(16) + _S28.x, width_1);
+    var range_0 : vec2<f32> = _S29.xy;
+    var _S30 : u32 = texels_0 * u32(4);
+    var _S31 : u32 = min(u32(range_0.x), _S30);
+    var _S32 : u32 = min(u32(range_0.y), _S30 - _S31);
     var occlusion_1 : f32 = 0.0f;
-    var mask_0 : u32 = _S23;
+    var j_0 : u32 = u32(0);
     for(;;)
     {
-        if(mask_0 != u32(0))
+        if(j_0 < _S32)
         {
         }
         else
         {
             break;
         }
-        var i_0 : u32 = firstTrailingBit(mask_0) * u32(3);
-        var mask_1 : u32 = (mask_0 & ((mask_0 - u32(1))));
-        var _S24 : vec3<f32> = camera_0.capsule_data_0[i_0].xyz;
-        var segment_0 : vec3<f32> = camera_0.capsule_data_0[i_0 + u32(1)].xyz - _S24;
-        var lighting_0 : vec4<f32> = camera_0.capsule_data_0[i_0 + u32(2)];
-        var delta_0 : vec3<f32> = _S24 + segment_0 * vec3<f32>(saturate(dot(position_0 - _S24, segment_0) / max(dot(segment_0, segment_0), 9.99999968265522539e-21f))) - position_0;
+        var word_0 : u32 = _S31 + j_0;
+        var _S33 : vec4<f32> = shadow_texel_0(word_0 / u32(4), width_1);
+        var _S34 : u32 = min(u32(_S33[word_0 % u32(4)]), texels_0 - u32(3));
+        var a_0 : vec4<f32> = shadow_texel_0(_S34, width_1);
+        var _S35 : vec4<f32> = shadow_texel_0(_S34 + u32(1), width_1);
+        var _S36 : vec3<f32> = a_0.xyz;
+        var segment_0 : vec3<f32> = _S35.xyz - _S36;
+        var lighting_0 : vec4<f32> = shadow_texel_0(_S34 + u32(2), width_1);
+        var delta_0 : vec3<f32> = _S36 + segment_0 * vec3<f32>(saturate(dot(position_0 - _S36, segment_0) / max(dot(segment_0, segment_0), 9.99999968265522539e-21f))) - position_0;
         var distance_0 : f32 = length(delta_0);
-        var _S25 : f32 = camera_0.capsule_data_0[i_0].w;
-        var _S26 : bool;
-        if(distance_0 >= (6.0f * _S25))
+        var _S37 : f32 = a_0.w;
+        var _S38 : bool;
+        if(distance_0 >= (6.0f * _S37))
         {
-            _S26 = true;
+            _S38 = true;
         }
         else
         {
-            _S26 = (dot(delta_0, normal_1)) <= (- _S25);
+            _S38 = (dot(delta_0, normal_1)) <= (- _S37);
         }
-        if(_S26)
+        if(_S38)
         {
-            mask_0 = mask_1;
+            j_0 = j_0 + u32(1);
             continue;
         }
-        var _S27 : f32 = max(distance_0, 1.00000001335143196e-10f);
-        var axis_0 : vec3<f32> = delta_0 / vec3<f32>(_S27);
-        var ratio_0 : f32 = saturate(_S25 / _S27);
+        var _S39 : f32 = max(distance_0, 1.00000001335143196e-10f);
+        var axis_0 : vec3<f32> = delta_0 / vec3<f32>(_S39);
+        var ratio_0 : f32 = saturate(_S37 / _S39);
         var angle_0 : f32 = asin(ratio_0);
-        occlusion_1 = max(occlusion_1, (1.0f - smoothstep(4.0f, 6.0f, distance_0 / _S25)) * mix(ratio_0 * ratio_0 * saturate(dot(axis_0, normal_1)), smoothstep(0.0f, 1.0f, (angle_0 + 0.64999997615814209f - acos(clamp(dot(axis_0, lighting_0.xyz), -1.0f, 1.0f))) / (2.0f * min(angle_0, 0.64999997615814209f))) * saturate(angle_0 * angle_0 / 0.42249995470046997f), lighting_0.w));
-        mask_0 = mask_1;
+        occlusion_1 = max(occlusion_1, (1.0f - smoothstep(4.0f, 6.0f, distance_0 / _S37)) * mix(ratio_0 * ratio_0 * saturate(dot(axis_0, normal_1)), smoothstep(0.0f, 1.0f, (angle_0 + 0.64999997615814209f - acos(clamp(dot(axis_0, lighting_0.xyz), -1.0f, 1.0f))) / (2.0f * min(angle_0, 0.64999997615814209f))) * saturate(angle_0 * angle_0 / 0.42249995470046997f), lighting_0.w));
+        j_0 = j_0 + u32(1);
     }
     return 1.0f - occlusion_1;
 }
 
-fn apply_lightmap_0( s_0 : ptr<function, Surface_0>,  slot_0 : u32,  front_0 : bool,  uv_0 : vec2<f32>,  position_1 : vec3<f32>,  pixel_1 : vec2<f32>)
+fn apply_lightmap_0( s_0 : ptr<function, Surface_0>,  slot_0 : u32,  front_0 : bool,  uv_0 : vec2<f32>,  position_1 : vec3<f32>,  pixel_1 : vec3<f32>)
 {
-    var _S28 : u32 = baked_debug_0();
-    if(_S28 > u32(0))
+    var _S40 : u32 = baked_debug_0();
+    if(_S40 > u32(0))
     {
         (*s_0).occlusion_0 = 1.0f;
         (*s_0).emissive_0 = vec3<f32>(0.0f);
     }
-    var _S29 : bool;
+    var _S41 : bool;
     if(slot_0 == u32(0))
     {
-        _S29 = true;
+        _S41 = true;
     }
     else
     {
-        _S29 = (camera_0.shadow_bias_0.w) == 0.0f;
+        _S41 = (camera_0.shadow_bias_0.w) == 0.0f;
     }
-    if(_S29)
+    if(_S41)
     {
         return;
     }
     var dims_2 : vec2<u32>;
-    var _S30 : u32 = dims_2[i32(0)];
-    var _S31 : u32 = dims_2[i32(1)];
-    {var dim = textureDimensions((irradiance_image_0));((_S30)) = dim.x;((_S31)) = dim.y;};
-    dims_2[i32(0)] = _S30;
-    dims_2[i32(1)] = _S31;
+    var _S42 : u32 = dims_2[i32(0)];
+    var _S43 : u32 = dims_2[i32(1)];
+    {var dim = textureDimensions((irradiance_image_0));((_S42)) = dim.x;((_S43)) = dim.y;};
+    dims_2[i32(0)] = _S42;
+    dims_2[i32(1)] = _S43;
     var last_0 : u32 = dims_2.x * dims_2.y - u32(1);
     var header_0 : vec4<f32> = probe_load_0(u32(0), dims_2);
     if(slot_0 > (probe_index_0(header_0.x, last_0 / u32(2))))
@@ -400,8 +423,8 @@ fn apply_lightmap_0( s_0 : ptr<function, Surface_0>,  slot_0 : u32,  front_0 : b
     }
     var keys_1 : u32 = clamp(probe_index_0(header_0.y, u32(16)), u32(1), u32(16));
     var start_1 : u32 = probe_index_0(header_0.z, last_0);
-    var _S32 : u32 = u32(2) * slot_0;
-    var rect_0 : vec4<f32> = probe_load_0(_S32 - u32(1), dims_2);
+    var _S44 : u32 = u32(2) * slot_0;
+    var rect_0 : vec4<f32> = probe_load_0(_S44 - u32(1), dims_2);
     var blend_0 : f32;
     if(front_0)
     {
@@ -421,10 +444,10 @@ fn apply_lightmap_0( s_0 : ptr<function, Surface_0>,  slot_0 : u32,  front_0 : b
         blend_0 = rect_0.w;
     }
     var pitch_0 : u32 = probe_index_0(blend_0, u32(2048));
-    var _S33 : vec4<f32> = probe_load_0(_S32, dims_2);
-    var coord_0 : vec2<f32> = saturate(uv_0) * clamp(_S33.xy, vec2<f32>(1.0f), vec2<f32>(2048.0f)) - vec2<f32>(0.5f);
-    var _S34 : vec2<i32> = vec2<i32>(floor(coord_0));
-    var i_1 : u32 = u32(i32(origin_0) + _S34.x + _S34.y * i32(pitch_0));
+    var _S45 : vec4<f32> = probe_load_0(_S44, dims_2);
+    var coord_0 : vec2<f32> = saturate(uv_0) * clamp(_S45.xy, vec2<f32>(1.0f), vec2<f32>(2048.0f)) - vec2<f32>(0.5f);
+    var _S46 : vec2<i32> = vec2<i32>(floor(coord_0));
+    var i_0 : u32 = u32(i32(origin_0) + _S46.x + _S46.y * i32(pitch_0));
     if((camera_0.shadow_bias_0.w) < 0.0f)
     {
         blend_0 = saturate(-1.0f - camera_0.shadow_bias_0.w);
@@ -434,30 +457,32 @@ fn apply_lightmap_0( s_0 : ptr<function, Surface_0>,  slot_0 : u32,  front_0 : b
         blend_0 = baked_blend_0();
     }
     var phase_1 : f32 = blend_0 * f32(keys_1 - u32(1));
-    var _S35 : vec3<f32> = surface_texel_0(i_1, dims_2, keys_1, phase_1, start_1);
-    var _S36 : vec3<f32> = surface_texel_0(i_1 + u32(1), dims_2, keys_1, phase_1, start_1);
-    var _S37 : vec3<f32> = vec3<f32>(fract(coord_0.x));
-    var a_0 : vec3<f32> = mix(_S35, _S36, _S37);
-    var _S38 : u32 = i_1 + pitch_0;
-    var _S39 : vec3<f32> = surface_texel_0(_S38, dims_2, keys_1, phase_1, start_1);
-    var _S40 : vec3<f32> = surface_texel_0(_S38 + u32(1), dims_2, keys_1, phase_1, start_1);
-    var irradiance_0 : vec3<f32> = mix(a_0, mix(_S39, _S40, _S37), vec3<f32>(fract(coord_0.y))) * vec3<f32>(indirect_visibility_0(position_1, (*s_0).geometric_normal_0, pixel_1));
-    if(_S28 == u32(0))
+    var _S47 : vec3<f32> = surface_texel_0(i_0, dims_2, keys_1, phase_1, start_1);
+    var _S48 : vec3<f32> = surface_texel_0(i_0 + u32(1), dims_2, keys_1, phase_1, start_1);
+    var _S49 : vec3<f32> = vec3<f32>(fract(coord_0.x));
+    var a_1 : vec3<f32> = mix(_S47, _S48, _S49);
+    var _S50 : u32 = i_0 + pitch_0;
+    var _S51 : vec3<f32> = surface_texel_0(_S50, dims_2, keys_1, phase_1, start_1);
+    var _S52 : vec3<f32> = surface_texel_0(_S50 + u32(1), dims_2, keys_1, phase_1, start_1);
+    var irradiance_0 : vec3<f32> = mix(a_1, mix(_S51, _S52, _S49), vec3<f32>(fract(coord_0.y)));
+    var _S53 : f32 = indirect_visibility_0(position_1, (*s_0).geometric_normal_0, pixel_1.xy);
+    var irradiance_1 : vec3<f32> = irradiance_0 * vec3<f32>(_S53);
+    if(_S40 == u32(0))
     {
-        (*s_0).emissive_0 = (*s_0).emissive_0 + irradiance_0 * (*s_0).base_color_0 * vec3<f32>((1.0f - (*s_0).metallic_0)) * vec3<f32>((*s_0).occlusion_0) / vec3<f32>(3.14159274101257324f);
+        (*s_0).emissive_0 = (*s_0).emissive_0 + irradiance_1 * (*s_0).base_color_0 * vec3<f32>((1.0f - (*s_0).metallic_0)) * vec3<f32>((*s_0).occlusion_0) / vec3<f32>(3.14159274101257324f);
     }
     else
     {
-        var _S41 : vec3<f32>;
-        if(_S28 == u32(1))
+        var _S54 : vec3<f32>;
+        if(_S40 == u32(1))
         {
-            _S41 = irradiance_0 / vec3<f32>(3.14159274101257324f);
+            _S54 = irradiance_1 / vec3<f32>(3.14159274101257324f);
         }
         else
         {
-            _S41 = vec3<f32>(0.89999997615814209f, 0.30000001192092896f, 0.03999999910593033f);
+            _S54 = vec3<f32>(0.89999997615814209f, 0.30000001192092896f, 0.03999999910593033f);
         }
-        (*s_0).emissive_0 = _S41;
+        (*s_0).emissive_0 = _S54;
     }
     (*s_0).occlusion_0 = 0.0f;
     return;
@@ -490,27 +515,27 @@ fn make_brdf_inputs_0( position_2 : vec3<f32>,  surface_1 : Surface_0) -> BrdfIn
 
 fn lighting_keys_0( tag_0 : f32) -> u32
 {
-    var _S42 : u32;
+    var _S55 : u32;
     if(tag_0 == 0.0f)
     {
-        _S42 = u32(2);
+        _S55 = u32(2);
     }
     else
     {
-        _S42 = clamp(probe_index_0(abs(tag_0), u32(16)), u32(1), u32(16));
+        _S55 = clamp(probe_index_0(abs(tag_0), u32(16)), u32(1), u32(16));
     }
-    return _S42;
+    return _S55;
 }
 
 fn probe_coefficient_0( at_key_0 : u32,  coefficients_0 : u32,  mix_0 : f32,  dims_3 : vec2<u32>) -> vec3<f32>
 {
-    var _S43 : vec4<f32> = probe_load_0(at_key_0, dims_3);
-    var value_4 : vec3<f32> = _S43.xyz;
+    var _S56 : vec4<f32> = probe_load_0(at_key_0, dims_3);
+    var value_4 : vec3<f32> = _S56.xyz;
     var value_5 : vec3<f32>;
     if(mix_0 > 0.0f)
     {
-        var _S44 : vec4<f32> = probe_load_0(at_key_0 + coefficients_0, dims_3);
-        value_5 = mix(value_4, _S44.xyz, vec3<f32>(mix_0));
+        var _S57 : vec4<f32> = probe_load_0(at_key_0 + coefficients_0, dims_3);
+        value_5 = mix(value_4, _S57.xyz, vec3<f32>(mix_0));
     }
     else
     {
@@ -522,24 +547,24 @@ fn probe_coefficient_0( at_key_0 : u32,  coefficients_0 : u32,  mix_0 : f32,  di
 fn sample_probe_volume_0( dims_4 : vec2<u32>,  bounds_0 : vec4<f32>,  f_0 : vec3<f32>,  n_2 : vec3<f32>,  layout_0 : vec4<f32>,  header_1 : u32,  stride_0 : u32,  coefficients_1 : u32,  key_0 : u32,  mix_1 : f32) -> vec3<f32>
 {
     var maximum_1 : u32 = dims_4.x * dims_4.y - u32(1);
-    var _S45 : bool;
+    var _S58 : bool;
     if((any((f_0 < vec3<f32>(0.0f)))))
     {
-        _S45 = true;
+        _S58 = true;
     }
     else
     {
-        _S45 = (any((f_0 > vec3<f32>(1.0f))));
+        _S58 = (any((f_0 > vec3<f32>(1.0f))));
     }
     var sky_0 : vec3<f32>;
-    if(_S45)
+    if(_S58)
     {
-        var _S46 : vec4<f32> = probe_load_0(u32(2) + key_0, dims_4);
-        var sky_1 : vec3<f32> = _S46.xyz;
+        var _S59 : vec4<f32> = probe_load_0(u32(2) + key_0, dims_4);
+        var sky_1 : vec3<f32> = _S59.xyz;
         if(mix_1 > 0.0f)
         {
-            var _S47 : vec4<f32> = probe_load_0(u32(3) + key_0, dims_4);
-            sky_0 = mix(sky_1, _S47.xyz, vec3<f32>(mix_1));
+            var _S60 : vec4<f32> = probe_load_0(u32(3) + key_0, dims_4);
+            sky_0 = mix(sky_1, _S60.xyz, vec3<f32>(mix_1));
         }
         else
         {
@@ -548,12 +573,12 @@ fn sample_probe_volume_0( dims_4 : vec2<u32>,  bounds_0 : vec4<f32>,  f_0 : vec3
         return sky_0;
     }
     var node_count_0 : u32 = probe_index_0(layout_0.x, maximum_1 / u32(3));
-    var _S48 : u32 = header_1 + node_count_0 * u32(3);
-    var _S49 : f32 = bounds_0.w;
+    var _S61 : u32 = header_1 + node_count_0 * u32(3);
+    var _S62 : f32 = bounds_0.w;
     var node_0 : u32 = u32(0);
     sky_0 = f_0;
     var depth_0 : u32 = u32(0);
-    var size_0 : f32 = _S49;
+    var size_0 : f32 = _S62;
     for(;;)
     {
         if(depth_0 <= u32(10))
@@ -563,86 +588,86 @@ fn sample_probe_volume_0( dims_4 : vec2<u32>,  bounds_0 : vec4<f32>,  f_0 : vec3
         {
             break;
         }
-        var at_1 : u32 = header_1 + node_0 * u32(3);
-        var _S50 : vec4<f32> = probe_load_0(at_1, dims_4);
-        var first_0 : u32 = probe_index_0(_S50.x, node_count_0);
+        var at_2 : u32 = header_1 + node_0 * u32(3);
+        var _S63 : vec4<f32> = probe_load_0(at_2, dims_4);
+        var first_0 : u32 = probe_index_0(_S63.x, node_count_0);
         if(first_0 == u32(0))
         {
-            var _S51 : vec4<f32> = probe_load_0(at_1 + u32(1), dims_4);
-            var _S52 : vec4<f32> = probe_load_0(at_1 + u32(2), dims_4);
-            var _S53 : vec3<f32> = vec3<f32>(0.0f);
-            var i_2 : u32 = u32(0);
-            var sum_0 : vec3<f32> = _S53;
+            var _S64 : vec4<f32> = probe_load_0(at_2 + u32(1), dims_4);
+            var _S65 : vec4<f32> = probe_load_0(at_2 + u32(2), dims_4);
+            var _S66 : vec3<f32> = vec3<f32>(0.0f);
+            var i_1 : u32 = u32(0);
+            var sum_0 : vec3<f32> = _S66;
             var weights_0 : f32 = 0.0f;
             for(;;)
             {
-                if(i_2 < u32(8))
+                if(i_1 < u32(8))
                 {
                 }
                 else
                 {
                     break;
                 }
-                var corner_0 : vec3<f32> = vec3<f32>(f32((i_2 & (u32(1)))), f32((((i_2 >> (u32(1)))) & (u32(1)))), f32((i_2 >> (u32(2)))));
-                var _S54 : vec3<f32> = vec3<f32>(1.0f);
-                var trilinear_0 : vec3<f32> = mix(_S54 - sky_0, sky_0, corner_0);
+                var corner_0 : vec3<f32> = vec3<f32>(f32((i_1 & (u32(1)))), f32((((i_1 >> (u32(1)))) & (u32(1)))), f32((i_1 >> (u32(2)))));
+                var _S67 : vec3<f32> = vec3<f32>(1.0f);
+                var trilinear_0 : vec3<f32> = mix(_S67 - sky_0, sky_0, corner_0);
                 var weight_0 : f32 = trilinear_0.x * trilinear_0.y * trilinear_0.z;
-                var _S55 : f32;
-                if(i_2 < u32(4))
+                var _S68 : f32;
+                if(i_1 < u32(4))
                 {
-                    _S55 = _S51[(i_2 & (u32(3)))];
+                    _S68 = _S64[(i_1 & (u32(3)))];
                 }
                 else
                 {
-                    _S55 = _S52[(i_2 & (u32(3)))];
+                    _S68 = _S65[(i_1 & (u32(3)))];
                 }
-                var _S56 : u32 = maximum_1 / stride_0;
-                var p_0 : u32 = _S48 + stride_0 * probe_index_0(_S55, _S56);
+                var _S69 : u32 = maximum_1 / stride_0;
+                var p_0 : u32 = _S61 + stride_0 * probe_index_0(_S68, _S69);
                 var delta_1 : vec3<f32> = (sky_0 - corner_0) * vec3<f32>(size_0);
-                var _S57 : u32 = p_0 + u32(2);
-                var _S58 : vec4<f32> = probe_load_0(_S57, dims_4);
-                var _S59 : f32 = _S58.w;
-                var _S60 : vec4<f32> = probe_load_0(p_0 + u32(3), dims_4);
-                var _S61 : f32 = _S60.w;
-                var _S62 : vec4<f32> = probe_load_0(p_0 + u32(4), dims_4);
-                var delta_2 : vec3<f32> = delta_1 - vec3<f32>(_S59, _S61, _S62.w);
+                var _S70 : u32 = p_0 + u32(2);
+                var _S71 : vec4<f32> = probe_load_0(_S70, dims_4);
+                var _S72 : f32 = _S71.w;
+                var _S73 : vec4<f32> = probe_load_0(p_0 + u32(3), dims_4);
+                var _S74 : f32 = _S73.w;
+                var _S75 : vec4<f32> = probe_load_0(p_0 + u32(4), dims_4);
+                var delta_2 : vec3<f32> = delta_1 - vec3<f32>(_S72, _S74, _S75.w);
                 var minus_0 : vec4<f32> = probe_load_0(p_0, dims_4);
                 var weight_1 : f32 = weight_0 * saturate(minus_0.w);
                 var neg_0 : vec3<f32> = minus_0.xyz;
-                var _S63 : vec4<f32> = probe_load_0(p_0 + u32(1), dims_4);
-                var pos_0 : vec3<f32> = _S63.xyz;
-                var _S64 : f32;
+                var _S76 : vec4<f32> = probe_load_0(p_0 + u32(1), dims_4);
+                var pos_0 : vec3<f32> = _S76.xyz;
+                var _S77 : f32;
                 if((delta_2.x) >= 0.0f)
                 {
-                    _S64 = pos_0.x;
+                    _S77 = pos_0.x;
                 }
                 else
                 {
-                    _S64 = neg_0.x;
+                    _S77 = neg_0.x;
                 }
-                var _S65 : f32;
+                var _S78 : f32;
                 if((delta_2.y) >= 0.0f)
                 {
-                    _S65 = pos_0.y;
+                    _S78 = pos_0.y;
                 }
                 else
                 {
-                    _S65 = neg_0.y;
+                    _S78 = neg_0.y;
                 }
-                var _S66 : f32;
+                var _S79 : f32;
                 if((delta_2.z) >= 0.0f)
                 {
-                    _S66 = pos_0.z;
+                    _S79 = pos_0.z;
                 }
                 else
                 {
-                    _S66 = neg_0.z;
+                    _S79 = neg_0.z;
                 }
-                var visibility_0 : vec3<f32> = saturate(_S54 + (vec3<f32>(_S64, _S65, _S66) - abs(delta_2)) / vec3<f32>(max(size_0 * 0.05000000074505806f, 9.99999997475242708e-07f)));
+                var visibility_0 : vec3<f32> = saturate(_S67 + (vec3<f32>(_S77, _S78, _S79) - abs(delta_2)) / vec3<f32>(max(size_0 * 0.05000000074505806f, 9.99999997475242708e-07f)));
                 var weight_2 : f32 = weight_1 * min(visibility_0.x, min(visibility_0.y, visibility_0.z));
-                var _S67 : u32 = _S57 + coefficients_1 * key_0;
+                var _S80 : u32 = _S70 + coefficients_1 * key_0;
                 var k_0 : u32 = u32(0);
-                var sh_0 : vec3<f32> = _S53;
+                var sh_0 : vec3<f32> = _S66;
                 for(;;)
                 {
                     if(k_0 < u32(4))
@@ -652,18 +677,18 @@ fn sample_probe_volume_0( dims_4 : vec2<u32>,  bounds_0 : vec4<f32>,  f_0 : vec3
                     {
                         break;
                     }
-                    var _S68 : vec3<f32> = probe_coefficient_0(_S67 + k_0, coefficients_1, mix_1, dims_4);
-                    var sh_1 : vec3<f32> = sh_0 + _S68 * vec3<f32>(vec4<f32>(1.0f, n_2)[k_0]);
+                    var _S81 : vec3<f32> = probe_coefficient_0(_S80 + k_0, coefficients_1, mix_1, dims_4);
+                    var sh_1 : vec3<f32> = sh_0 + _S81 * vec3<f32>(vec4<f32>(1.0f, n_2)[k_0]);
                     k_0 = k_0 + u32(1);
                     sh_0 = sh_1;
                 }
                 var sh_2 : vec3<f32>;
                 if(coefficients_1 == u32(9))
                 {
-                    var _S69 : f32 = n_2.x;
-                    var _S70 : f32 = n_2.y;
-                    var _S71 : f32 = n_2.z;
-                    var _S72 : array<f32, i32(5)> = array<f32, i32(5)>( _S69 * _S70, _S70 * _S71, _S69 * _S71, _S69 * _S69 - _S70 * _S70, 3.0f * _S71 * _S71 - 1.0f );
+                    var _S82 : f32 = n_2.x;
+                    var _S83 : f32 = n_2.y;
+                    var _S84 : f32 = n_2.z;
+                    var _S85 : array<f32, i32(5)> = array<f32, i32(5)>( _S82 * _S83, _S83 * _S84, _S82 * _S84, _S82 * _S82 - _S83 * _S83, 3.0f * _S84 * _S84 - 1.0f );
                     var k_1 : u32 = u32(0);
                     sh_2 = sh_0;
                     for(;;)
@@ -675,8 +700,8 @@ fn sample_probe_volume_0( dims_4 : vec2<u32>,  bounds_0 : vec4<f32>,  f_0 : vec3
                         {
                             break;
                         }
-                        var _S73 : vec3<f32> = probe_coefficient_0(_S67 + u32(4) + k_1, coefficients_1, mix_1, dims_4);
-                        var sh_3 : vec3<f32> = sh_2 + _S73 * vec3<f32>(_S72[k_1]);
+                        var _S86 : vec3<f32> = probe_coefficient_0(_S80 + u32(4) + k_1, coefficients_1, mix_1, dims_4);
+                        var sh_3 : vec3<f32> = sh_2 + _S86 * vec3<f32>(_S85[k_1]);
                         k_1 = k_1 + u32(1);
                         sh_2 = sh_3;
                     }
@@ -687,28 +712,28 @@ fn sample_probe_volume_0( dims_4 : vec2<u32>,  bounds_0 : vec4<f32>,  f_0 : vec3
                 }
                 var sum_1 : vec3<f32> = sum_0 + sh_2 * vec3<f32>(weight_2);
                 var weights_1 : f32 = weights_0 + weight_2;
-                i_2 = i_2 + u32(1);
+                i_1 = i_1 + u32(1);
                 sum_0 = sum_1;
                 weights_0 = weights_1;
             }
-            var _S74 : u32 = baked_debug_0();
-            if(_S74 == u32(2))
+            var _S87 : u32 = baked_debug_0();
+            if(_S87 == u32(2))
             {
                 return vec3<f32>(0.07999999821186066f, 0.25f + 0.07000000029802322f * f32(depth_0), 0.80000001192092896f);
             }
-            if(_S74 == u32(3))
+            if(_S87 == u32(3))
             {
                 return vec3<f32>(saturate(weights_0));
             }
-            return max(sum_0 / vec3<f32>(max(weights_0, 9.99999997475242708e-07f)), _S53);
+            return max(sum_0 / vec3<f32>(max(weights_0, 9.99999997475242708e-07f)), _S66);
         }
-        var _S75 : vec3<u32> = vec3<u32>(step(vec3<f32>(0.5f), sky_0));
-        var _S76 : u32 = min(first_0 + _S75.x + u32(2) * _S75.y + u32(4) * _S75.z, node_count_0);
-        var _S77 : vec3<f32> = saturate(vec3<f32>(2.0f) * sky_0 - vec3<f32>(_S75));
+        var _S88 : vec3<u32> = vec3<u32>(step(vec3<f32>(0.5f), sky_0));
+        var _S89 : u32 = min(first_0 + _S88.x + u32(2) * _S88.y + u32(4) * _S88.z, node_count_0);
+        var _S90 : vec3<f32> = saturate(vec3<f32>(2.0f) * sky_0 - vec3<f32>(_S88));
         var size_1 : f32 = size_0 * 0.5f;
         var depth_1 : u32 = depth_0 + u32(1);
-        node_0 = _S76;
-        sky_0 = _S77;
+        node_0 = _S89;
+        sky_0 = _S90;
         depth_0 = depth_1;
         size_0 = size_1;
     }
@@ -718,22 +743,22 @@ fn sample_probe_volume_0( dims_4 : vec2<u32>,  bounds_0 : vec4<f32>,  f_0 : vec3
 fn probe_irradiance_0( position_3 : vec3<f32>,  n_3 : vec3<f32>,  blend_1 : f32) -> vec3<f32>
 {
     var dims_5 : vec2<u32>;
-    var _S78 : u32 = dims_5[i32(0)];
-    var _S79 : u32 = dims_5[i32(1)];
-    {var dim = textureDimensions((irradiance_image_0));((_S78)) = dim.x;((_S79)) = dim.y;};
-    dims_5[i32(0)] = _S78;
-    dims_5[i32(1)] = _S79;
+    var _S91 : u32 = dims_5[i32(0)];
+    var _S92 : u32 = dims_5[i32(1)];
+    {var dim = textureDimensions((irradiance_image_0));((_S91)) = dim.x;((_S92)) = dim.y;};
+    dims_5[i32(0)] = _S91;
+    dims_5[i32(1)] = _S92;
     var bounds_1 : vec4<f32> = probe_load_0(u32(0), dims_5);
     var f_1 : vec3<f32> = (position_3 - bounds_1.xyz) / vec3<f32>(max(bounds_1.w, 9.99999968265522539e-21f));
     var layout_1 : vec4<f32> = probe_load_0(u32(1), dims_5);
-    var _S80 : f32 = layout_1.w;
-    var count_0 : u32 = lighting_keys_0(_S80);
+    var _S93 : f32 = layout_1.w;
+    var count_0 : u32 = lighting_keys_0(_S93);
     var phase_2 : f32 = saturate(blend_1) * f32(count_0 - u32(1));
     var key_1 : u32 = u32(phase_2);
     var mix_2 : f32 = fract(phase_2);
     var header_2 : u32 = u32(2) + max(count_0, u32(2));
     var coefficients_2 : u32;
-    if(_S80 < 0.0f)
+    if(_S93 < 0.0f)
     {
         coefficients_2 = u32(9);
     }
@@ -744,100 +769,100 @@ fn probe_irradiance_0( position_3 : vec3<f32>,  n_3 : vec3<f32>,  blend_1 : f32)
     var stride_1 : u32 = u32(2) + coefficients_2 * count_0;
     if(phase_2 == 0.0f)
     {
-        var _S81 : vec3<f32> = sample_probe_volume_0(dims_5, bounds_1, f_1, n_3, layout_1, header_2, stride_1, coefficients_2, u32(0), 0.0f);
-        return _S81;
+        var _S94 : vec3<f32> = sample_probe_volume_0(dims_5, bounds_1, f_1, n_3, layout_1, header_2, stride_1, coefficients_2, u32(0), 0.0f);
+        return _S94;
     }
-    var _S82 : vec3<f32> = sample_probe_volume_0(dims_5, bounds_1, f_1, n_3, layout_1, header_2, stride_1, coefficients_2, key_1, mix_2);
-    return _S82;
+    var _S95 : vec3<f32> = sample_probe_volume_0(dims_5, bounds_1, f_1, n_3, layout_1, header_2, stride_1, coefficients_2, key_1, mix_2);
+    return _S95;
 }
 
 fn evaluate_brdf_0( nl_0 : f32,  nv_0 : f32,  nh_0 : f32,  vh_0 : f32,  f0_1 : vec3<f32>,  diffuse_color_1 : vec3<f32>,  roughness_1 : f32) -> vec3<f32>
 {
-    var _S83 : f32 = max(roughness_1 * roughness_1, 0.00100000004749745f);
-    var a2_0 : f32 = _S83 * _S83;
+    var _S96 : f32 = max(roughness_1 * roughness_1, 0.00100000004749745f);
+    var a2_0 : f32 = _S96 * _S96;
     var denominator_0 : f32 = nh_0 * nh_0 * (a2_0 - 1.0f) + 1.0f;
-    var _S84 : f32 = 1.0f - a2_0;
-    var _S85 : vec3<f32> = vec3<f32>(1.0f);
-    var fresnel_0 : vec3<f32> = f0_1 + (_S85 - f0_1) * vec3<f32>(pow(clamp(1.0f - vh_0, 0.0f, 1.0f), 5.0f));
-    return (_S85 - fresnel_0) * diffuse_color_1 / vec3<f32>(3.14159274101257324f) + fresnel_0 * vec3<f32>((a2_0 / max(3.14159274101257324f * denominator_0 * denominator_0, 9.999999960041972e-13f))) * vec3<f32>((0.5f / max(nv_0 * sqrt(a2_0 + _S84 * nl_0 * nl_0) + nl_0 * sqrt(a2_0 + _S84 * nv_0 * nv_0), 9.99999997475242708e-07f)));
+    var _S97 : f32 = 1.0f - a2_0;
+    var _S98 : vec3<f32> = vec3<f32>(1.0f);
+    var fresnel_0 : vec3<f32> = f0_1 + (_S98 - f0_1) * vec3<f32>(pow(clamp(1.0f - vh_0, 0.0f, 1.0f), 5.0f));
+    return (_S98 - fresnel_0) * diffuse_color_1 / vec3<f32>(3.14159274101257324f) + fresnel_0 * vec3<f32>((a2_0 / max(3.14159274101257324f * denominator_0 * denominator_0, 9.999999960041972e-13f))) * vec3<f32>((0.5f / max(nv_0 * sqrt(a2_0 + _S97 * nl_0 * nl_0) + nl_0 * sqrt(a2_0 + _S97 * nv_0 * nv_0), 9.99999997475242708e-07f)));
 }
 
 fn environment_uv_0( direction_0 : vec3<f32>) -> vec2<f32>
 {
     var c_0 : f32 = cos(camera_0.environment_0.y);
     var s_1 : f32 = sin(camera_0.environment_0.y);
-    var _S86 : f32 = direction_0.x;
-    var _S87 : f32 = direction_0.z;
-    var _S88 : f32 = c_0 * _S86 - s_1 * _S87;
-    var _S89 : f32 = direction_0.y;
-    var _S90 : f32 = s_1 * _S86 + c_0 * _S87;
-    var _S91 : vec2<f32> = vec2<f32>(_S88, _S90);
+    var _S99 : f32 = direction_0.x;
+    var _S100 : f32 = direction_0.z;
+    var _S101 : f32 = c_0 * _S99 - s_1 * _S100;
+    var _S102 : f32 = direction_0.y;
+    var _S103 : f32 = s_1 * _S99 + c_0 * _S100;
+    var _S104 : vec2<f32> = vec2<f32>(_S101, _S103);
     var u_0 : f32;
-    if((dot(_S91, _S91)) > 9.99999968265522539e-21f)
+    if((dot(_S104, _S104)) > 9.99999968265522539e-21f)
     {
-        u_0 = fract(0.5f + atan2(_S90, _S88) / 6.28318548202514648f);
+        u_0 = fract(0.5f + atan2(_S103, _S101) / 6.28318548202514648f);
     }
     else
     {
         u_0 = 0.5f;
     }
-    return vec2<f32>(u_0, acos(clamp(_S89, -1.0f, 1.0f)) / 3.14159274101257324f);
+    return vec2<f32>(u_0, acos(clamp(_S102, -1.0f, 1.0f)) / 3.14159274101257324f);
 }
 
 fn texture_size_0( image_0 : texture_2d<f32>) -> vec2<f32>
 {
-    var width_0 : u32;
-    var height_0 : u32;
+    var width_2 : u32;
+    var height_1 : u32;
     var levels_0 : u32;
-    {var dim = textureDimensions((image_0), (u32(0)));((width_0)) = dim.x;((height_0)) = dim.y;((levels_0)) = textureNumLevels((image_0));};
-    return vec2<f32>(f32(width_0), f32(height_0));
+    {var dim = textureDimensions((image_0), (u32(0)));((width_2)) = dim.x;((height_1)) = dim.y;((levels_0)) = textureNumLevels((image_0));};
+    return vec2<f32>(f32(width_2), f32(height_1));
 }
 
 fn isinf_0( x_2 : f32) -> bool
 {
-    var _S92 : u32 = (bitcast<u32>((x_2)));
-    var _S93 : u32 = (_S92 & (u32(8388607)));
-    var _S94 : bool;
-    if(((((_S92 >> (u32(23)))) & (u32(255)))) == u32(255))
+    var _S105 : u32 = (bitcast<u32>((x_2)));
+    var _S106 : u32 = (_S105 & (u32(8388607)));
+    var _S107 : bool;
+    if(((((_S105 >> (u32(23)))) & (u32(255)))) == u32(255))
     {
-        _S94 = _S93 == u32(0);
+        _S107 = _S106 == u32(0);
     }
     else
     {
-        _S94 = false;
+        _S107 = false;
     }
-    return _S94;
+    return _S107;
 }
 
 fn isfinite_0( x_3 : f32) -> bool
 {
-    var _S95 : bool;
+    var _S108 : bool;
     if(isinf_0(x_3))
     {
-        _S95 = true;
+        _S108 = true;
     }
     else
     {
-        _S95 = isnan_0(x_3);
+        _S108 = isnan_0(x_3);
     }
-    return !_S95;
+    return !_S108;
 }
 
 fn isfinite_1( x_4 : vec3<f32>) -> vec3<bool>
 {
     var result_2 : vec3<bool>;
-    var i_3 : i32 = i32(0);
+    var i_2 : i32 = i32(0);
     for(;;)
     {
-        if(i_3 < i32(3))
+        if(i_2 < i32(3))
         {
         }
         else
         {
             break;
         }
-        result_2[i_3] = isfinite_0(x_4[i_3]);
-        i_3 = i_3 + i32(1);
+        result_2[i_2] = isfinite_0(x_4[i_2]);
+        i_2 = i_2 + i32(1);
     }
     return result_2;
 }
@@ -845,87 +870,87 @@ fn isfinite_1( x_4 : vec3<f32>) -> vec3<bool>
 fn probe_level_0( uv_1 : vec2<f32>,  level_0 : u32,  first_row_0 : u32,  atlas_height_0 : f32) -> vec3<f32>
 {
     var rows_0 : u32 = (u32(64) >> (level_0));
-    var _S96 : u32;
+    var _S109 : u32;
     if(level_0 == u32(6))
     {
-        _S96 = u32(128);
+        _S109 = u32(128);
     }
     else
     {
-        _S96 = u32(128) - u32(2) * rows_0;
+        _S109 = u32(128) - u32(2) * rows_0;
     }
-    var _S97 : f32 = f32(rows_0);
-    return (textureSampleLevel((reflection_probes_0), (environment_sampler_0), (vec2<f32>(uv_1.x, (f32(first_row_0 + _S96) + clamp(uv_1.y * _S97, 0.5f, _S97 - 0.5f)) / atlas_height_0)), (0.0f))).xyz;
+    var _S110 : f32 = f32(rows_0);
+    return (textureSampleLevel((reflection_probes_0), (environment_sampler_0), (vec2<f32>(uv_1.x, (f32(first_row_0 + _S109) + clamp(uv_1.y * _S110, 0.5f, _S110 - 0.5f)) / atlas_height_0)), (0.0f))).xyz;
 }
 
-fn probe_specular_0( row_0 : u32,  ray_0 : vec3<f32>,  roughness_2 : f32,  blend_2 : f32,  height_1 : f32,  single_0 : bool) -> vec3<f32>
+fn probe_specular_0( row_0 : u32,  ray_0 : vec3<f32>,  roughness_2 : f32,  blend_2 : f32,  height_2 : f32,  single_0 : bool) -> vec3<f32>
 {
-    var _S98 : vec2<f32> = ray_0.xz;
-    var _S99 : f32;
-    if((dot(_S98, _S98)) > 9.99999968265522539e-21f)
+    var _S111 : vec2<f32> = ray_0.xz;
+    var _S112 : f32;
+    if((dot(_S111, _S111)) > 9.99999968265522539e-21f)
     {
-        _S99 = 0.5f + atan2(ray_0.z, ray_0.x) / 6.28318548202514648f;
+        _S112 = 0.5f + atan2(ray_0.z, ray_0.x) / 6.28318548202514648f;
     }
     else
     {
-        _S99 = 0.5f;
+        _S112 = 0.5f;
     }
-    var uv_2 : vec2<f32> = vec2<f32>(_S99, acos(clamp(ray_0.y, -1.0f, 1.0f)) / 3.14159274101257324f);
+    var uv_2 : vec2<f32> = vec2<f32>(_S112, acos(clamp(ray_0.y, -1.0f, 1.0f)) / 3.14159274101257324f);
     var lod_0 : f32 = saturate(roughness_2) * 6.0f;
-    var a_1 : u32 = u32(lod_0);
-    var _S100 : u32 = min(a_1 + u32(1), u32(6));
-    var _S101 : bool;
+    var a_2 : u32 = u32(lod_0);
+    var _S113 : u32 = min(a_2 + u32(1), u32(6));
+    var _S114 : bool;
     if(!single_0)
     {
-        _S101 = blend_2 == 1.0f;
+        _S114 = blend_2 == 1.0f;
     }
     else
     {
-        _S101 = false;
+        _S114 = false;
     }
-    var _S102 : u32;
-    if(_S101)
+    var _S115 : u32;
+    if(_S114)
     {
-        _S102 = row_0 + u32(132);
+        _S115 = row_0 + u32(132);
     }
     else
     {
-        _S102 = row_0;
+        _S115 = row_0;
     }
-    var _S103 : vec3<f32> = vec3<f32>(fract(lod_0));
-    var day_0 : vec3<f32> = mix(probe_level_0(uv_2, a_1, _S102, height_1), probe_level_0(uv_2, _S100, _S102, height_1), _S103);
+    var _S116 : vec3<f32> = vec3<f32>(fract(lod_0));
+    var day_0 : vec3<f32> = mix(probe_level_0(uv_2, a_2, _S115, height_2), probe_level_0(uv_2, _S113, _S115, height_2), _S116);
     if(single_0)
     {
-        _S101 = true;
+        _S114 = true;
     }
     else
     {
-        _S101 = blend_2 == 0.0f;
+        _S114 = blend_2 == 0.0f;
     }
-    if(_S101)
+    if(_S114)
     {
-        _S101 = true;
+        _S114 = true;
     }
     else
     {
-        _S101 = blend_2 == 1.0f;
+        _S114 = blend_2 == 1.0f;
     }
-    if(_S101)
+    if(_S114)
     {
         return day_0;
     }
-    var _S104 : u32 = _S102 + u32(132);
-    return mix(day_0, mix(probe_level_0(uv_2, a_1, _S104, height_1), probe_level_0(uv_2, _S100, _S104, height_1), _S103), vec3<f32>(blend_2));
+    var _S117 : u32 = _S115 + u32(132);
+    return mix(day_0, mix(probe_level_0(uv_2, a_2, _S117, height_2), probe_level_0(uv_2, _S113, _S117, height_2), _S116), vec3<f32>(blend_2));
 }
 
 fn local_specular_0( world_0 : vec3<f32>,  reflected_0 : vec3<f32>,  roughness_3 : f32,  global_0 : vec3<f32>,  parameter_0 : f32,  weights_2 : ptr<function, vec3<f32>>) -> vec3<f32>
 {
-    var width_1 : u32;
-    var height_2 : u32;
-    {var dim = textureDimensions((reflection_probes_0));((width_1)) = dim.x;((height_2)) = dim.y;};
-    var _S105 : vec3<f32> = vec3<f32>(0.0f);
-    (*weights_2) = _S105;
-    var _S106 : f32 = saturate(parameter_0 - floor(parameter_0 * 0.5f) * 2.0f);
+    var width_3 : u32;
+    var height_3 : u32;
+    {var dim = textureDimensions((reflection_probes_0));((width_3)) = dim.x;((height_3)) = dim.y;};
+    var _S118 : vec3<f32> = vec3<f32>(0.0f);
+    (*weights_2) = _S118;
+    var _S119 : f32 = saturate(parameter_0 - floor(parameter_0 * 0.5f) * 2.0f);
     var single_1 : bool = (ReflectionMetadata_0.scenario_count_0) == u32(1);
     var rows_1 : u32;
     if(single_1)
@@ -937,10 +962,10 @@ fn local_specular_0( world_0 : vec3<f32>,  reflected_0 : vec3<f32>,  roughness_3
         rows_1 = u32(264);
     }
     var count_1 : u32;
-    if(width_1 == u32(128))
+    if(width_3 == u32(128))
     {
-        var _S107 : u32 = height_2 / rows_1;
-        count_1 = min(min(_S107, ReflectionMetadata_0.probe_count_0), u32(32));
+        var _S120 : u32 = height_3 / rows_1;
+        count_1 = min(min(_S120, ReflectionMetadata_0.probe_count_0), u32(32));
     }
     else
     {
@@ -955,26 +980,26 @@ fn local_specular_0( world_0 : vec3<f32>,  reflected_0 : vec3<f32>,  roughness_3
     {
         candidates_0 = ((u32(1) << (count_1))) - u32(1);
     }
-    var _S108 : bool;
+    var _S121 : bool;
     if(count_1 > u32(4))
     {
-        _S108 = (ReflectionMetadata_0.grid_scale_0.x) > 0.0f;
+        _S121 = (ReflectionMetadata_0.grid_scale_0.x) > 0.0f;
     }
     else
     {
-        _S108 = false;
+        _S121 = false;
     }
-    if(_S108)
+    if(_S121)
     {
         var coord_1 : vec3<f32> = (world_0 - ReflectionMetadata_0.grid_origin_0) * ReflectionMetadata_0.grid_scale_0;
         if((all((isfinite_1(coord_1)))))
         {
-            var _S109 : vec3<u32> = vec3<u32>(clamp(coord_1, _S105, vec3<f32>(3.0f)));
-            var index_3 : u32 = _S109.x + u32(4) * _S109.y + u32(16) * _S109.z;
-            candidates_0 = (candidates_0 & ((ReflectionMetadata_0.candidate_masks_0[(index_3 >> (u32(2)))][(index_3 & (u32(3)))])));
+            var _S122 : vec3<u32> = vec3<u32>(clamp(coord_1, _S118, vec3<f32>(3.0f)));
+            var index_2 : u32 = _S122.x + u32(4) * _S122.y + u32(16) * _S122.z;
+            candidates_0 = (candidates_0 & ((ReflectionMetadata_0.candidate_masks_0[(index_2 >> (u32(2)))][(index_2 & (u32(3)))])));
         }
     }
-    var radiance_0 : vec3<f32> = _S105;
+    var radiance_0 : vec3<f32> = _S118;
     var total_0 : f32 = 0.0f;
     for(;;)
     {
@@ -985,43 +1010,43 @@ fn local_specular_0( world_0 : vec3<f32>,  reflected_0 : vec3<f32>,  roughness_3
         {
             break;
         }
-        var i_4 : u32 = firstTrailingBit(candidates_0);
+        var i_3 : u32 = firstTrailingBit(candidates_0);
         var candidates_1 : u32 = (candidates_0 & ((candidates_0 - u32(1))));
-        var row_1 : u32 = i_4 * rows_1;
-        var _S110 : u32 = u32(3) * i_4;
-        var capture_0 : vec4<f32> = ReflectionMetadata_0.probe_records_0[_S110];
-        var _S111 : vec3<f32> = world_0 - ReflectionMetadata_0.probe_records_0[_S110 + u32(1)].xyz;
-        var _S112 : vec3<f32> = ReflectionMetadata_0.probe_records_0[_S110 + u32(2)].xyz - world_0;
-        var inside_0 : vec3<f32> = min(_S111, _S112);
-        var _S113 : f32 = min(inside_0.x, min(inside_0.y, inside_0.z));
-        if(_S113 > 0.0f)
+        var row_1 : u32 = i_3 * rows_1;
+        var _S123 : u32 = u32(3) * i_3;
+        var capture_0 : vec4<f32> = ReflectionMetadata_0.probe_records_0[_S123];
+        var _S124 : vec3<f32> = world_0 - ReflectionMetadata_0.probe_records_0[_S123 + u32(1)].xyz;
+        var _S125 : vec3<f32> = ReflectionMetadata_0.probe_records_0[_S123 + u32(2)].xyz - world_0;
+        var inside_0 : vec3<f32> = min(_S124, _S125);
+        var _S126 : f32 = min(inside_0.x, min(inside_0.y, inside_0.z));
+        if(_S126 > 0.0f)
         {
-            _S108 = (capture_0.w) > 0.0f;
+            _S121 = (capture_0.w) > 0.0f;
         }
         else
         {
-            _S108 = false;
+            _S121 = false;
         }
-        if(!_S108)
+        if(!_S121)
         {
             candidates_0 = candidates_1;
             continue;
         }
-        var w_0 : f32 = saturate(_S113 / capture_0.w);
-        var t_1 : vec3<f32> = mix(_S111, _S112, step(_S105, reflected_0)) / max(abs(reflected_0), vec3<f32>(9.99999968265522539e-21f));
-        var radiance_1 : vec3<f32> = radiance_0 + vec3<f32>(w_0) * probe_specular_0(row_1, unit_or_0(world_0 - capture_0.xyz + vec3<f32>(min(t_1.x, min(t_1.y, t_1.z))) * reflected_0, reflected_0), roughness_3, _S106, f32(height_2), single_1);
+        var w_0 : f32 = saturate(_S126 / capture_0.w);
+        var t_1 : vec3<f32> = mix(_S124, _S125, step(_S118, reflected_0)) / max(abs(reflected_0), vec3<f32>(9.99999968265522539e-21f));
+        var radiance_1 : vec3<f32> = radiance_0 + vec3<f32>(w_0) * probe_specular_0(row_1, unit_or_0(world_0 - capture_0.xyz + vec3<f32>(min(t_1.x, min(t_1.y, t_1.z))) * reflected_0, reflected_0), roughness_3, _S119, f32(height_3), single_1);
         var total_1 : f32 = total_0 + w_0;
-        (*weights_2)[i_4 % u32(2)] = (*weights_2)[i_4 % u32(2)] + w_0;
+        (*weights_2)[i_3 % u32(2)] = (*weights_2)[i_3 % u32(2)] + w_0;
         candidates_0 = candidates_1;
         radiance_0 = radiance_1;
         total_0 = total_1;
     }
-    var _S114 : f32 = max(1.0f, total_0);
-    var _S115 : vec2<f32> = (*weights_2).xy / vec2<f32>(_S114);
-    (*weights_2).x = _S115.x;
-    (*weights_2).y = _S115.y;
+    var _S127 : f32 = max(1.0f, total_0);
+    var _S128 : vec2<f32> = (*weights_2).xy / vec2<f32>(_S127);
+    (*weights_2).x = _S128.x;
+    (*weights_2).y = _S128.y;
     (*weights_2)[i32(2)] = saturate(1.0f - total_0);
-    return radiance_0 / vec3<f32>(_S114) + vec3<f32>((*weights_2).z) * global_0;
+    return radiance_0 / vec3<f32>(_S127) + vec3<f32>((*weights_2).z) * global_0;
 }
 
 fn shadow_depth_0( cascade_0 : u32,  uv_3 : vec2<f32>) -> f32
@@ -1043,51 +1068,51 @@ fn shadow_depth_0( cascade_0 : u32,  uv_3 : vec2<f32>) -> f32
 
 fn cascade_visibility_0( cascade_1 : u32,  position_4 : vec3<f32>,  geometric_normal_1 : vec3<f32>,  light_0 : vec3<f32>) -> f32
 {
-    var _S116 : u32 = min(cascade_1, u32(3));
+    var _S129 : u32 = min(cascade_1, u32(3));
     var slope_0 : f32 = 1.0f - max(dot(geometric_normal_1, light_0), 0.0f);
-    var texel_world_0 : f32 = camera_0.shadow_texel_world_0[_S116];
-    var clip_0 : vec4<f32> = (((mat4x4<f32>(camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(0)][i32(0)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(0)][i32(1)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(0)][i32(2)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(0)][i32(3)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(1)][i32(0)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(1)][i32(1)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(1)][i32(2)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(1)][i32(3)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(2)][i32(0)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(2)][i32(1)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(2)][i32(2)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(2)][i32(3)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(3)][i32(0)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(3)][i32(1)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(3)][i32(2)], camera_0.shadow_view_projection_0.data_1[_S116].data_0[i32(3)][i32(3)])) * (vec4<f32>(position_4 + geometric_normal_1 * vec3<f32>((camera_0.shadow_texel_world_0[_S116] * camera_0.shadow_bias_0.z * slope_0)), 1.0f))));
-    var _S117 : f32 = clip_0.w;
-    if(!(_S117 > 9.99999968265522539e-21f))
+    var texel_world_0 : f32 = camera_0.shadow_texel_world_0[_S129];
+    var clip_0 : vec4<f32> = (((mat4x4<f32>(camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(0)][i32(0)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(0)][i32(1)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(0)][i32(2)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(0)][i32(3)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(1)][i32(0)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(1)][i32(1)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(1)][i32(2)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(1)][i32(3)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(2)][i32(0)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(2)][i32(1)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(2)][i32(2)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(2)][i32(3)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(3)][i32(0)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(3)][i32(1)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(3)][i32(2)], camera_0.shadow_view_projection_0.data_1[_S129].data_0[i32(3)][i32(3)])) * (vec4<f32>(position_4 + geometric_normal_1 * vec3<f32>((camera_0.shadow_texel_world_0[_S129] * camera_0.shadow_bias_0.z * slope_0)), 1.0f))));
+    var _S130 : f32 = clip_0.w;
+    if(!(_S130 > 9.99999968265522539e-21f))
     {
         return 1.0f;
     }
-    var ndc_0 : vec3<f32> = clip_0.xyz / vec3<f32>(_S117);
-    var _S118 : vec2<f32> = vec2<f32>(0.5f);
-    var uv_4 : vec2<f32> = ndc_0.xy * _S118 + _S118;
-    var _S119 : vec2<f32> = vec2<f32>(0.0f);
-    var _S120 : bool;
-    if((any((uv_4 < _S119))))
+    var ndc_0 : vec3<f32> = clip_0.xyz / vec3<f32>(_S130);
+    var _S131 : vec2<f32> = vec2<f32>(0.5f);
+    var uv_4 : vec2<f32> = ndc_0.xy * _S131 + _S131;
+    var _S132 : vec2<f32> = vec2<f32>(0.0f);
+    var _S133 : bool;
+    if((any((uv_4 < _S132))))
     {
-        _S120 = true;
+        _S133 = true;
     }
     else
     {
-        _S120 = (any((uv_4 > vec2<f32>(1.0f))));
+        _S133 = (any((uv_4 > vec2<f32>(1.0f))));
     }
-    if(_S120)
+    if(_S133)
     {
-        _S120 = true;
+        _S133 = true;
     }
     else
     {
-        _S120 = (ndc_0.z) < 0.0f;
+        _S133 = (ndc_0.z) < 0.0f;
     }
-    if(_S120)
+    if(_S133)
     {
-        _S120 = true;
+        _S133 = true;
     }
     else
     {
-        _S120 = (ndc_0.z) > 1.0f;
+        _S133 = (ndc_0.z) > 1.0f;
     }
-    if(_S120)
+    if(_S133)
     {
         return 1.0f;
     }
-    var _S121 : f32 = ndc_0.z - texel_world_0 * camera_0.shadow_depth_scale_0[_S116] * (camera_0.shadow_bias_0.x + camera_0.shadow_bias_0.y * slope_0);
-    var _S122 : vec2<f32> = vec2<f32>(1.0f);
-    var _S123 : vec2<f32> = _S122 / texture_size_0(shadow_image0_0);
+    var _S134 : f32 = ndc_0.z - texel_world_0 * camera_0.shadow_depth_scale_0[_S129] * (camera_0.shadow_bias_0.x + camera_0.shadow_bias_0.y * slope_0);
+    var _S135 : vec2<f32> = vec2<f32>(1.0f);
+    var _S136 : vec2<f32> = _S135 / texture_size_0(shadow_image0_0);
     var y_0 : i32 = i32(-1);
     var visible_0 : f32 = 0.0f;
     for(;;)
@@ -1109,23 +1134,23 @@ fn cascade_visibility_0( cascade_1 : u32,  position_4 : vec3<f32>,  geometric_no
             {
                 break;
             }
-            var tap_0 : vec2<f32> = uv_4 + vec2<f32>(f32(x_5), f32(y_0)) * _S123;
-            if((any((tap_0 < _S119))))
+            var tap_0 : vec2<f32> = uv_4 + vec2<f32>(f32(x_5), f32(y_0)) * _S136;
+            if((any((tap_0 < _S132))))
             {
-                _S120 = true;
+                _S133 = true;
             }
             else
             {
-                _S120 = (any((tap_0 > _S122)));
+                _S133 = (any((tap_0 > _S135)));
             }
             var visible_1 : f32;
-            if(_S120)
+            if(_S133)
             {
                 visible_1 = visible_0 + 1.0f;
             }
             else
             {
-                if(_S121 <= (shadow_depth_0(_S116, tap_0)))
+                if(_S134 <= (shadow_depth_0(_S129, tap_0)))
                 {
                     visible_1 = 1.0f;
                 }
@@ -1150,16 +1175,16 @@ fn sun_visibility_0( position_5 : vec3<f32>,  geometric_normal_2 : vec3<f32>,  l
         return 1.0f;
     }
     var distance_1 : f32 = dot(position_5 - camera_0.eye_0.xyz, camera_0.camera_forward_blend_0.xyz);
-    var _S124 : bool;
+    var _S137 : bool;
     if(distance_1 < (camera_0.eye_0.w))
     {
-        _S124 = true;
+        _S137 = true;
     }
     else
     {
-        _S124 = distance_1 > (camera_0.shadow_splits_0.w);
+        _S137 = distance_1 > (camera_0.shadow_splits_0.w);
     }
-    if(_S124)
+    if(_S137)
     {
         return 1.0f;
     }
@@ -1196,8 +1221,8 @@ fn sun_visibility_0( position_5 : vec3<f32>,  geometric_normal_2 : vec3<f32>,  l
     {
         start_2 = camera_0.shadow_splits_0[max(cascade_2, u32(1)) - u32(1)];
     }
-    var _S125 : f32 = max((camera_0.shadow_splits_0[cascade_2] - start_2) * clamp(camera_0.camera_forward_blend_0.w, 0.0f, 1.0f), 9.99999997475242708e-07f);
-    var weight_3 : f32 = clamp((distance_1 - (camera_0.shadow_splits_0[cascade_2] - _S125)) / _S125, 0.0f, 1.0f);
+    var _S138 : f32 = max((camera_0.shadow_splits_0[cascade_2] - start_2) * clamp(camera_0.camera_forward_blend_0.w, 0.0f, 1.0f), 9.99999997475242708e-07f);
+    var weight_3 : f32 = clamp((distance_1 - (camera_0.shadow_splits_0[cascade_2] - _S138)) / _S138, 0.0f, 1.0f);
     var visible_3 : f32;
     if(weight_3 > 0.0f)
     {
@@ -1220,90 +1245,90 @@ fn sun_visibility_0( position_5 : vec3<f32>,  geometric_normal_2 : vec3<f32>,  l
 
 fn evaluate_lighting_0( position_6 : vec3<f32>,  surface_2 : Surface_0,  brdf_inputs_0 : BrdfInputs_0) -> vec3<f32>
 {
-    var _S126 : u32 = baked_debug_0();
-    var irradiance_1 : vec3<f32>;
-    if(_S126 > u32(0))
+    var _S139 : u32 = baked_debug_0();
+    var irradiance_2 : vec3<f32>;
+    if(_S139 > u32(0))
     {
         if((surface_2.occlusion_0) == 0.0f)
         {
             return surface_2.emissive_0;
         }
         var value_6 : vec3<f32> = probe_irradiance_0(position_6, surface_2.normal_0, baked_blend_0());
-        if(_S126 == u32(1))
+        if(_S139 == u32(1))
         {
-            irradiance_1 = value_6 / vec3<f32>(3.14159274101257324f);
+            irradiance_2 = value_6 / vec3<f32>(3.14159274101257324f);
         }
         else
         {
-            irradiance_1 = value_6;
+            irradiance_2 = value_6;
         }
-        return irradiance_1;
+        return irradiance_2;
     }
     var l_0 : vec3<f32> = unit_or_0(camera_0.light_direction_0.xyz, surface_2.normal_0);
     var h_0 : vec3<f32> = unit_or_0(brdf_inputs_0.view_0 + l_0, surface_2.normal_0);
-    var _S127 : f32 = max(dot(surface_2.normal_0, l_0), 0.0f);
-    var _S128 : f32 = max(dot(surface_2.normal_0, brdf_inputs_0.view_0), 0.0f);
-    var direct_brdf_0 : vec3<f32> = evaluate_brdf_0(_S127, _S128, max(dot(surface_2.normal_0, h_0), 0.0f), max(dot(brdf_inputs_0.view_0, h_0), 0.0f), brdf_inputs_0.f0_0, brdf_inputs_0.diffuse_color_0, surface_2.roughness_0);
-    var _S129 : f32 = max(camera_0.environment_0.x, 0.0f);
-    var _S130 : vec3<f32> = vec3<f32>(0.0f);
-    var _S131 : bool;
-    if(_S129 > 0.0f)
+    var _S140 : f32 = max(dot(surface_2.normal_0, l_0), 0.0f);
+    var _S141 : f32 = max(dot(surface_2.normal_0, brdf_inputs_0.view_0), 0.0f);
+    var direct_brdf_0 : vec3<f32> = evaluate_brdf_0(_S140, _S141, max(dot(surface_2.normal_0, h_0), 0.0f), max(dot(brdf_inputs_0.view_0, h_0), 0.0f), brdf_inputs_0.f0_0, brdf_inputs_0.diffuse_color_0, surface_2.roughness_0);
+    var _S142 : f32 = max(camera_0.environment_0.x, 0.0f);
+    var _S143 : vec3<f32> = vec3<f32>(0.0f);
+    var _S144 : bool;
+    if(_S142 > 0.0f)
     {
-        _S131 = true;
+        _S144 = true;
     }
     else
     {
-        _S131 = (camera_0.shadow_bias_0.w) >= 1.0f;
+        _S144 = (camera_0.shadow_bias_0.w) >= 1.0f;
     }
-    if(_S131)
+    if(_S144)
     {
-        _S131 = true;
+        _S144 = true;
     }
     else
     {
-        _S131 = (abs(camera_0.environment_0.w)) >= 2.0f;
+        _S144 = (abs(camera_0.environment_0.w)) >= 2.0f;
     }
     var indirect_0 : vec3<f32>;
     var shadow_visibility_0 : f32;
-    if(_S131)
+    if(_S144)
     {
         if((camera_0.shadow_bias_0.w) >= 1.0f)
         {
             if((surface_2.occlusion_0) > 0.0f)
             {
-                var _S132 : vec3<f32> = probe_irradiance_0(position_6, surface_2.normal_0, baked_blend_0());
-                irradiance_1 = _S132;
+                var _S145 : vec3<f32> = probe_irradiance_0(position_6, surface_2.normal_0, baked_blend_0());
+                irradiance_2 = _S145;
             }
             else
             {
-                irradiance_1 = _S130;
+                irradiance_2 = _S143;
             }
         }
         else
         {
-            irradiance_1 = (textureSampleLevel((irradiance_image_0), (environment_sampler_0), (environment_uv_0(surface_2.normal_0)), (0.0f))).xyz;
+            irradiance_2 = (textureSampleLevel((irradiance_image_0), (environment_sampler_0), (environment_uv_0(surface_2.normal_0)), (0.0f))).xyz;
         }
         var reflected_1 : vec3<f32> = reflect((vec3<f32>(0) - brdf_inputs_0.view_0), surface_2.normal_0);
         var prefiltered_0 : vec3<f32> = (textureSampleLevel((reflection_image_0), (environment_sampler_0), (environment_uv_0(reflected_1)), (surface_2.roughness_0 * max(camera_0.environment_0.z, 0.0f)))).xyz;
         var lut_size_0 : vec2<f32> = texture_size_0(brdf_image_0);
-        var _S133 : vec2<f32> = vec2<f32>(0.5f);
-        var brdf_0 : vec2<f32> = (textureSampleLevel((brdf_image_0), (environment_sampler_0), (clamp(vec2<f32>(_S128, surface_2.roughness_0), _S133 / lut_size_0, vec2<f32>(1.0f) - _S133 / lut_size_0)), (0.0f))).xy;
-        var indirect_diffuse_0 : vec3<f32> = irradiance_1 * brdf_inputs_0.diffuse_color_0 / vec3<f32>(3.14159274101257324f) * vec3<f32>(surface_2.occlusion_0);
+        var _S146 : vec2<f32> = vec2<f32>(0.5f);
+        var brdf_0 : vec2<f32> = (textureSampleLevel((brdf_image_0), (environment_sampler_0), (clamp(vec2<f32>(_S141, surface_2.roughness_0), _S146 / lut_size_0, vec2<f32>(1.0f) - _S146 / lut_size_0)), (0.0f))).xy;
+        var indirect_diffuse_0 : vec3<f32> = irradiance_2 * brdf_inputs_0.diffuse_color_0 / vec3<f32>(3.14159274101257324f) * vec3<f32>(surface_2.occlusion_0);
         var split_sum_0 : vec3<f32> = brdf_inputs_0.f0_0 * vec3<f32>(brdf_0.x) + vec3<f32>(brdf_0.y);
         var indirect_specular_0 : vec3<f32> = prefiltered_0 * split_sum_0;
         if((camera_0.shadow_bias_0.w) >= 1.0f)
         {
-            irradiance_1 = indirect_diffuse_0 + indirect_specular_0 * vec3<f32>(_S129);
+            irradiance_2 = indirect_diffuse_0 + indirect_specular_0 * vec3<f32>(_S142);
         }
         else
         {
-            irradiance_1 = (indirect_diffuse_0 + indirect_specular_0) * vec3<f32>(_S129);
+            irradiance_2 = (indirect_diffuse_0 + indirect_specular_0) * vec3<f32>(_S142);
         }
         var probe_parameter_0 : f32 = abs(camera_0.environment_0.w);
         if(probe_parameter_0 >= 2.0f)
         {
             var weights_3 : vec3<f32>;
-            var radiance_2 : vec3<f32> = local_specular_0(position_6, reflected_1, surface_2.roughness_0, prefiltered_0 * vec3<f32>(_S129), probe_parameter_0, &(weights_3));
+            var radiance_2 : vec3<f32> = local_specular_0(position_6, reflected_1, surface_2.roughness_0, prefiltered_0 * vec3<f32>(_S142), probe_parameter_0, &(weights_3));
             if(probe_parameter_0 >= 6.0f)
             {
                 return radiance_2;
@@ -1320,25 +1345,25 @@ fn evaluate_lighting_0( position_6 : vec3<f32>,  surface_2 : Surface_0,  brdf_in
                 }
                 else
                 {
-                    shadow_visibility_0 = _S129;
+                    shadow_visibility_0 = _S142;
                 }
                 indirect_0 = indirect_diffuse_0 * vec3<f32>(shadow_visibility_0) + radiance_2 * split_sum_0;
             }
             else
             {
-                indirect_0 = irradiance_1;
+                indirect_0 = irradiance_2;
             }
         }
         else
         {
-            indirect_0 = irradiance_1;
+            indirect_0 = irradiance_2;
         }
     }
     else
     {
-        indirect_0 = _S130;
+        indirect_0 = _S143;
     }
-    if(_S127 != 0.0f)
+    if(_S140 != 0.0f)
     {
         shadow_visibility_0 = sun_visibility_0(position_6, surface_2.geometric_normal_0, l_0);
     }
@@ -1346,49 +1371,71 @@ fn evaluate_lighting_0( position_6 : vec3<f32>,  surface_2 : Surface_0,  brdf_in
     {
         shadow_visibility_0 = 1.0f;
     }
-    return direct_brdf_0 * camera_0.light_color_0.xyz * vec3<f32>(_S127) * vec3<f32>(shadow_visibility_0) + indirect_0 + surface_2.emissive_0;
+    return direct_brdf_0 * camera_0.light_color_0.xyz * vec3<f32>(_S140) * vec3<f32>(shadow_visibility_0) + indirect_0 + surface_2.emissive_0;
+}
+
+fn local_light_region_0( size_2 : ptr<function, vec2<u32>>,  origin_1 : ptr<function, vec2<u32>>)
+{
+    var _S147 : u32 = (*size_2)[i32(0)];
+    var _S148 : u32 = (*size_2)[i32(1)];
+    {var dim = textureDimensions((local_lights_0));((_S147)) = dim.x;((_S148)) = dim.y;};
+    (*size_2)[i32(0)] = _S147;
+    (*size_2)[i32(1)] = _S148;
+    (*origin_1) = vec2<u32>(u32(0));
+    return;
+}
+
+fn local_light_region_1( size_3 : ptr<function, vec2<u32>>,  origin_2 : ptr<function, vec2<u32>>)
+{
+    var _S149 : u32 = (*size_3)[i32(0)];
+    var _S150 : u32 = (*size_3)[i32(1)];
+    {var dim = textureDimensions((local_lights_0));((_S149)) = dim.x;((_S150)) = dim.y;};
+    (*size_3)[i32(0)] = _S149;
+    (*size_3)[i32(1)] = _S150;
+    (*origin_2) = vec2<u32>(u32(0));
+    return;
 }
 
 fn header_component_0( value_7 : f32) -> u32
 {
-    var _S134 : bool;
+    var _S151 : bool;
     if(value_7 >= 0.0f)
     {
-        _S134 = value_7 <= 65535.0f;
+        _S151 = value_7 <= 65535.0f;
     }
     else
     {
-        _S134 = false;
+        _S151 = false;
     }
-    var _S135 : u32;
-    if(_S134)
+    var _S152 : u32;
+    if(_S151)
     {
-        _S135 = u32(value_7);
+        _S152 = u32(value_7);
     }
     else
     {
-        _S135 = u32(0);
+        _S152 = u32(0);
     }
-    return _S135;
+    return _S152;
 }
 
 fn local_light_header_0() -> vec4<u32>
 {
-    const _S136 : vec3<i32> = vec3<i32>(i32(0), i32(0), i32(0));
-    var fields_0 : vec4<f32> = (textureLoad((local_lights_0), ((_S136)).xy, ((_S136)).z));
+    var size_4 : vec2<u32>;
+    var origin_3 : vec2<u32>;
+    local_light_region_0(&(size_4), &(origin_3));
+    var _S153 : vec3<i32> = vec3<i32>(vec2<i32>(origin_3), i32(0));
+    var fields_0 : vec4<f32> = (textureLoad((local_lights_0), ((_S153)).xy, ((_S153)).z));
     return vec4<u32>(header_component_0(fields_0.x), header_component_0(fields_0.y), header_component_0(fields_0.z), header_component_0(fields_0.w));
 }
 
 fn local_light_count_0() -> u32
 {
-    var size_2 : vec2<u32>;
-    var _S137 : u32 = size_2[i32(0)];
-    var _S138 : u32 = size_2[i32(1)];
-    {var dim = textureDimensions((local_lights_0));((_S137)) = dim.x;((_S138)) = dim.y;};
-    size_2[i32(0)] = _S137;
-    size_2[i32(1)] = _S138;
+    var size_5 : vec2<u32>;
+    var origin_4 : vec2<u32>;
+    local_light_region_1(&(size_5), &(origin_4));
     var header_3 : vec4<u32> = local_light_header_0();
-    return min(((header_3.z) | ((((header_3.w) << (u32(16)))))), max(size_2.x / u32(4) * size_2.y, u32(1)) - u32(1));
+    return min(((header_3.z) | ((((header_3.w) << (u32(16)))))), max(size_5.x / u32(4) * size_5.y, u32(1)) - u32(1));
 }
 
 struct LocalLight_0
@@ -1400,29 +1447,27 @@ struct LocalLight_0
      shadow_slot_0 : f32,
 };
 
-fn load_local_light_0( index_4 : u32) -> LocalLight_0
+fn load_local_light_0( index_3 : u32) -> LocalLight_0
 {
-    var size_3 : vec2<u32>;
-    var _S139 : u32 = size_3[i32(0)];
-    var _S140 : u32 = size_3[i32(1)];
-    {var dim = textureDimensions((local_lights_0));((_S139)) = dim.x;((_S140)) = dim.y;};
-    size_3[i32(0)] = _S139;
-    size_3[i32(1)] = _S140;
-    var _S141 : u32 = max(size_3.x / u32(4), u32(1));
-    var slot_1 : u32 = index_4 + u32(1);
-    var _S142 : u32 = slot_1 % _S141;
-    var _S143 : u32 = u32(4) * _S142;
-    var _S144 : u32 = slot_1 / _S141;
-    var texel_0 : vec2<u32> = vec2<u32>(_S143, _S144);
+    var size_6 : vec2<u32>;
+    var origin_5 : vec2<u32>;
+    local_light_region_1(&(size_6), &(origin_5));
+    var _S154 : u32 = max(size_6.x / u32(4), u32(1));
+    var slot_1 : u32 = index_3 + u32(1);
+    var _S155 : vec2<u32> = origin_5;
+    var _S156 : u32 = slot_1 % _S154;
+    var _S157 : u32 = u32(4) * _S156;
+    var _S158 : u32 = slot_1 / _S154;
+    var texel_0 : vec2<u32> = _S155 + vec2<u32>(_S157, _S158);
     var light_2 : LocalLight_0;
-    var _S145 : vec3<i32> = vec3<i32>(vec2<i32>(texel_0), i32(0));
-    light_2.position_radius_0 = (textureLoad((local_lights_0), ((_S145)).xy, ((_S145)).z));
-    var _S146 : vec3<i32> = vec3<i32>(vec2<i32>(texel_0 + vec2<u32>(u32(1), u32(0))), i32(0));
-    light_2.color_intensity_0 = (textureLoad((local_lights_0), ((_S146)).xy, ((_S146)).z));
-    var _S147 : vec3<i32> = vec3<i32>(vec2<i32>(texel_0 + vec2<u32>(u32(2), u32(0))), i32(0));
-    light_2.half_width_range_0 = (textureLoad((local_lights_0), ((_S147)).xy, ((_S147)).z));
-    var _S148 : vec3<i32> = vec3<i32>(vec2<i32>(texel_0 + vec2<u32>(u32(3), u32(0))), i32(0));
-    var edge_0 : vec4<f32> = (textureLoad((local_lights_0), ((_S148)).xy, ((_S148)).z));
+    var _S159 : vec3<i32> = vec3<i32>(vec2<i32>(texel_0), i32(0));
+    light_2.position_radius_0 = (textureLoad((local_lights_0), ((_S159)).xy, ((_S159)).z));
+    var _S160 : vec3<i32> = vec3<i32>(vec2<i32>(texel_0 + vec2<u32>(u32(1), u32(0))), i32(0));
+    light_2.color_intensity_0 = (textureLoad((local_lights_0), ((_S160)).xy, ((_S160)).z));
+    var _S161 : vec3<i32> = vec3<i32>(vec2<i32>(texel_0 + vec2<u32>(u32(2), u32(0))), i32(0));
+    light_2.half_width_range_0 = (textureLoad((local_lights_0), ((_S161)).xy, ((_S161)).z));
+    var _S162 : vec3<i32> = vec3<i32>(vec2<i32>(texel_0 + vec2<u32>(u32(3), u32(0))), i32(0));
+    var edge_0 : vec4<f32> = (textureLoad((local_lights_0), ((_S162)).xy, ((_S162)).z));
     light_2.half_height_0 = edge_0.xyz;
     light_2.shadow_slot_0 = edge_0.w;
     return light_2;
@@ -1431,26 +1476,26 @@ fn load_local_light_0( index_4 : u32) -> LocalLight_0
 fn f16tof32_0( value_8 : vec3<u32>) -> vec3<f32>
 {
     var result_3 : vec3<f32>;
-    var i_5 : i32 = i32(0);
+    var i_4 : i32 = i32(0);
     for(;;)
     {
-        if(i_5 < i32(3))
+        if(i_4 < i32(3))
         {
         }
         else
         {
             break;
         }
-        result_3[i_5] = (unpack2x16float((value_8[i_5])).x);
-        i_5 = i_5 + i32(1);
+        result_3[i_4] = (unpack2x16float((value_8[i_4])).x);
+        i_4 = i_4 + i32(1);
     }
     return result_3;
 }
 
-fn ltc_coefficients_0( index_5 : u32,  matrix_0 : ptr<function, vec4<f32>>,  amplitude_0 : ptr<function, vec2<f32>>)
+fn ltc_coefficients_0( index_4 : u32,  matrix_0 : ptr<function, vec4<f32>>,  amplitude_0 : ptr<function, vec2<f32>>)
 {
-    var lo_0 : vec3<f32> = f16tof32_0(((LTC_FIT_0[index_5]) & (vec3<u32>(u32(65535)))));
-    var hi_0 : vec3<f32> = f16tof32_0(((LTC_FIT_0[index_5]) >> (vec3<u32>(u32(16)))));
+    var lo_0 : vec3<f32> = f16tof32_0(((LTC_FIT_0[index_4]) & (vec3<u32>(u32(65535)))));
+    var hi_0 : vec3<f32> = f16tof32_0(((LTC_FIT_0[index_4]) >> (vec3<u32>(u32(16)))));
     (*matrix_0) = vec4<f32>(lo_0.x, hi_0.x, lo_0.y, hi_0.y);
     (*amplitude_0) = vec2<f32>(lo_0.z, hi_0.z);
     return;
@@ -1460,59 +1505,59 @@ fn rect_cosine_integral_0( corners_0 : array<vec3<f32>, i32(4)>,  m_0 : vec4<f32
 {
     var count_2 : u32;
     var clipped_0 : array<vec3<f32>, i32(6)>;
-    var _S149 : f32 = m_0.x;
-    var _S150 : f32 = corners_0[i32(3)].x;
-    var _S151 : f32 = m_0.z;
-    var _S152 : f32 = corners_0[i32(3)].z;
-    var _S153 : f32 = m_0.y;
-    var _S154 : f32 = m_0.w;
-    var previous_0 : vec3<f32> = vec3<f32>(_S149 * _S150 + _S151 * _S152, corners_0[i32(3)].y, _S153 * _S150 + _S154 * _S152);
-    var i_6 : u32 = u32(0);
+    var _S163 : f32 = m_0.x;
+    var _S164 : f32 = corners_0[i32(3)].x;
+    var _S165 : f32 = m_0.z;
+    var _S166 : f32 = corners_0[i32(3)].z;
+    var _S167 : f32 = m_0.y;
+    var _S168 : f32 = m_0.w;
+    var previous_0 : vec3<f32> = vec3<f32>(_S163 * _S164 + _S165 * _S166, corners_0[i32(3)].y, _S167 * _S164 + _S168 * _S166);
+    var i_5 : u32 = u32(0);
     var count_3 : u32 = u32(0);
     for(;;)
     {
-        if(i_6 < u32(4))
+        if(i_5 < u32(4))
         {
         }
         else
         {
             break;
         }
-        var _S155 : f32 = corners_0[i_6].x;
-        var _S156 : f32 = corners_0[i_6].z;
-        var _S157 : f32 = _S153 * _S155 + _S154 * _S156;
-        var p_1 : vec3<f32> = vec3<f32>(_S149 * _S155 + _S151 * _S156, corners_0[i_6].y, _S157);
-        var _S158 : bool = _S157 > 0.0f;
-        var _S159 : f32 = previous_0.z;
-        if(_S158 != (_S159 > 0.0f))
+        var _S169 : f32 = corners_0[i_5].x;
+        var _S170 : f32 = corners_0[i_5].z;
+        var _S171 : f32 = _S167 * _S169 + _S168 * _S170;
+        var p_1 : vec3<f32> = vec3<f32>(_S163 * _S169 + _S165 * _S170, corners_0[i_5].y, _S171);
+        var _S172 : bool = _S171 > 0.0f;
+        var _S173 : f32 = previous_0.z;
+        if(_S172 != (_S173 > 0.0f))
         {
-            var _S160 : u32 = count_3 + u32(1);
-            clipped_0[count_3] = unit_or_0(mix(previous_0, p_1, vec3<f32>((_S159 / (_S159 - _S157)))), vec3<f32>(vec3<i32>(i32(0))));
-            count_2 = _S160;
+            var _S174 : u32 = count_3 + u32(1);
+            clipped_0[count_3] = unit_or_0(mix(previous_0, p_1, vec3<f32>((_S173 / (_S173 - _S171)))), vec3<f32>(vec3<i32>(i32(0))));
+            count_2 = _S174;
         }
         else
         {
             count_2 = count_3;
         }
-        if(_S158)
+        if(_S172)
         {
-            var _S161 : u32 = count_2 + u32(1);
+            var _S175 : u32 = count_2 + u32(1);
             clipped_0[count_2] = unit_or_0(p_1, vec3<f32>(vec3<i32>(i32(0))));
-            count_3 = _S161;
+            count_3 = _S175;
         }
         else
         {
             count_3 = count_2;
         }
-        var i_7 : u32 = i_6 + u32(1);
+        var i_6 : u32 = i_5 + u32(1);
         previous_0 = p_1;
-        i_6 = i_7;
+        i_5 = i_6;
     }
     if(count_3 < u32(3))
     {
         return 0.0f;
     }
-    var a_2 : vec3<f32> = clipped_0[count_3 - u32(1)];
+    var a_3 : vec3<f32> = clipped_0[count_3 - u32(1)];
     count_2 = u32(0);
     var sum_2 : f32 = 0.0f;
     for(;;)
@@ -1525,12 +1570,12 @@ fn rect_cosine_integral_0( corners_0 : array<vec3<f32>, i32(4)>,  m_0 : vec4<f32
             break;
         }
         var b_1 : vec3<f32> = clipped_0[count_2];
-        var axis_1 : vec3<f32> = cross(a_2, clipped_0[count_2]);
+        var axis_1 : vec3<f32> = cross(a_3, clipped_0[count_2]);
         var sine_0 : f32 = length(axis_1);
-        var sum_3 : f32 = sum_2 + axis_1.z * atan2(sine_0, clamp(dot(a_2, clipped_0[count_2]), -1.0f, 1.0f)) / max(sine_0, 9.999999960041972e-13f);
-        var j_0 : u32 = count_2 + u32(1);
-        a_2 = b_1;
-        count_2 = j_0;
+        var sum_3 : f32 = sum_2 + axis_1.z * atan2(sine_0, clamp(dot(a_3, clipped_0[count_2]), -1.0f, 1.0f)) / max(sine_0, 9.999999960041972e-13f);
+        var j_1 : u32 = count_2 + u32(1);
+        a_3 = b_1;
+        count_2 = j_1;
         sum_2 = sum_3;
     }
     return saturate(abs(sum_2) / 6.28318548202514648f);
@@ -1545,15 +1590,15 @@ fn rect_radiance_0( light_3 : LocalLight_0,  position_7 : vec3<f32>,  n_4 : vec3
         return vec3<f32>(vec3<i32>(i32(0)));
     }
     var nearest_0 : vec3<f32> = d_0 - u_1 * vec3<f32>(clamp(dot(d_0, u_1) / dot(u_1, u_1), -1.0f, 1.0f)) - light_3.half_height_0 * vec3<f32>(clamp(dot(d_0, light_3.half_height_0) / dot(light_3.half_height_0, light_3.half_height_0), -1.0f, 1.0f));
-    var range_0 : f32 = light_3.half_width_range_0.w;
-    var radial_0 : f32 = dot(nearest_0, nearest_0) / (range_0 * range_0);
+    var range_1 : f32 = light_3.half_width_range_0.w;
+    var radial_0 : f32 = dot(nearest_0, nearest_0) / (range_1 * range_1);
     if(radial_0 >= 1.0f)
     {
         return vec3<f32>(vec3<i32>(i32(0)));
     }
     var window_0 : f32 = 1.0f - radial_0 * radial_0;
-    var _S162 : f32 = dot(n_4, v_0);
-    var nv_1 : f32 = saturate(_S162);
+    var _S176 : f32 = dot(n_4, v_0);
+    var nv_1 : f32 = saturate(_S176);
     var axis_2 : vec3<f32>;
     if((abs(n_4.z)) < 0.89999997615814209f)
     {
@@ -1563,68 +1608,68 @@ fn rect_radiance_0( light_3 : LocalLight_0,  position_7 : vec3<f32>,  n_4 : vec3
     {
         axis_2 = vec3<f32>(0.0f, 1.0f, 0.0f);
     }
-    var t_2 : vec3<f32> = unit_or_0(v_0 - n_4 * vec3<f32>(_S162), normalize(cross(axis_2, n_4)));
+    var t_2 : vec3<f32> = unit_or_0(v_0 - n_4 * vec3<f32>(_S176), normalize(cross(axis_2, n_4)));
     var basis_0 : mat3x3<f32> = mat3x3<f32>(t_2, cross(n_4, t_2), n_4);
-    var _S163 : vec3<f32> = d_0 - u_1;
-    var _S164 : vec3<f32> = d_0 + u_1;
-    var corners_1 : array<vec3<f32>, i32(4)> = array<vec3<f32>, i32(4)>( (((_S163 - light_3.half_height_0) * (basis_0))), (((_S164 - light_3.half_height_0) * (basis_0))), (((_S164 + light_3.half_height_0) * (basis_0))), (((_S163 + light_3.half_height_0) * (basis_0))) );
+    var _S177 : vec3<f32> = d_0 - u_1;
+    var _S178 : vec3<f32> = d_0 + u_1;
+    var corners_1 : array<vec3<f32>, i32(4)> = array<vec3<f32>, i32(4)>( (((_S177 - light_3.half_height_0) * (basis_0))), (((_S178 - light_3.half_height_0) * (basis_0))), (((_S178 + light_3.half_height_0) * (basis_0))), (((_S177 + light_3.half_height_0) * (basis_0))) );
     var uv_5 : vec2<f32> = vec2<f32>(saturate(roughness_4), sqrt(1.0f - nv_1)) * vec2<f32>(31.0f);
     var cell_0 : vec2<u32> = min(vec2<u32>(uv_5), vec2<u32>(u32(30)));
     var f_2 : vec2<f32> = uv_5 - vec2<f32>(cell_0);
-    var index_6 : u32 = cell_0.y * u32(32) + cell_0.x;
+    var index_5 : u32 = cell_0.y * u32(32) + cell_0.x;
     var m0_0 : vec4<f32>;
     var a0_0 : vec2<f32>;
-    ltc_coefficients_0(index_6, &(m0_0), &(a0_0));
+    ltc_coefficients_0(index_5, &(m0_0), &(a0_0));
     var m1_0 : vec4<f32>;
     var a1_0 : vec2<f32>;
-    ltc_coefficients_0(index_6 + u32(1), &(m1_0), &(a1_0));
+    ltc_coefficients_0(index_5 + u32(1), &(m1_0), &(a1_0));
     var m2_0 : vec4<f32>;
     var a2_1 : vec2<f32>;
-    ltc_coefficients_0(index_6 + u32(32), &(m2_0), &(a2_1));
+    ltc_coefficients_0(index_5 + u32(32), &(m2_0), &(a2_1));
     var m3_0 : vec4<f32>;
     var a3_0 : vec2<f32>;
-    ltc_coefficients_0(index_6 + u32(33), &(m3_0), &(a3_0));
-    var _S165 : f32 = f_2.x;
-    var _S166 : vec4<f32> = vec4<f32>(_S165);
-    var _S167 : f32 = f_2.y;
-    var _S168 : vec2<f32> = vec2<f32>(_S165);
-    var amplitude_1 : vec2<f32> = mix(mix(a0_0, a1_0, _S168), mix(a2_1, a3_0, _S168), vec2<f32>(_S167));
-    var _S169 : vec3<f32> = vec3<f32>(window_0);
-    var _S170 : vec3<f32> = vec3<f32>(1.0f) - f0_2;
-    return light_3.color_intensity_0.xyz * _S169 * _S169 * (diffuse_color_2 * _S170 * vec3<f32>(rect_cosine_integral_0(corners_1, vec4<f32>(1.0f, 0.0f, 0.0f, 1.0f))) + (f0_2 * vec3<f32>(amplitude_1.x) + _S170 * vec3<f32>(amplitude_1.y)) * vec3<f32>(rect_cosine_integral_0(corners_1, mix(mix(m0_0, m1_0, _S166), mix(m2_0, m3_0, _S166), vec4<f32>(_S167)))));
+    ltc_coefficients_0(index_5 + u32(33), &(m3_0), &(a3_0));
+    var _S179 : f32 = f_2.x;
+    var _S180 : vec4<f32> = vec4<f32>(_S179);
+    var _S181 : f32 = f_2.y;
+    var _S182 : vec2<f32> = vec2<f32>(_S179);
+    var amplitude_1 : vec2<f32> = mix(mix(a0_0, a1_0, _S182), mix(a2_1, a3_0, _S182), vec2<f32>(_S181));
+    var _S183 : vec3<f32> = vec3<f32>(window_0);
+    var _S184 : vec3<f32> = vec3<f32>(1.0f) - f0_2;
+    return light_3.color_intensity_0.xyz * _S183 * _S183 * (diffuse_color_2 * _S184 * vec3<f32>(rect_cosine_integral_0(corners_1, vec4<f32>(1.0f, 0.0f, 0.0f, 1.0f))) + (f0_2 * vec3<f32>(amplitude_1.x) + _S184 * vec3<f32>(amplitude_1.y)) * vec3<f32>(rect_cosine_integral_0(corners_1, mix(mix(m0_0, m1_0, _S180), mix(m2_0, m3_0, _S180), vec4<f32>(_S181)))));
 }
 
 fn rect_face_0( p_2 : vec3<f32>) -> u32
 {
-    var a_3 : vec3<f32> = abs(p_2);
-    var _S171 : f32 = a_3.x;
-    var _S172 : f32 = a_3.y;
-    if((p_2.z) >= (max(_S171, _S172)))
+    var a_4 : vec3<f32> = abs(p_2);
+    var _S185 : f32 = a_4.x;
+    var _S186 : f32 = a_4.y;
+    if((p_2.z) >= (max(_S185, _S186)))
     {
         return u32(0);
     }
-    var _S173 : i32;
-    if(_S171 >= _S172)
+    var _S187 : i32;
+    if(_S185 >= _S186)
     {
         if((p_2.x) >= 0.0f)
         {
-            _S173 = i32(1);
+            _S187 = i32(1);
         }
         else
         {
-            _S173 = i32(2);
+            _S187 = i32(2);
         }
-        return u32(_S173);
+        return u32(_S187);
     }
     if((p_2.y) >= 0.0f)
     {
-        _S173 = i32(3);
+        _S187 = i32(3);
     }
     else
     {
-        _S173 = i32(4);
+        _S187 = i32(4);
     }
-    return u32(_S173);
+    return u32(_S187);
 }
 
 fn face_coords_0( face_0 : u32,  p_3 : vec3<f32>) -> vec3<f32>
@@ -1671,48 +1716,48 @@ fn from_face_0( face_1 : u32,  p_4 : vec3<f32>) -> vec3<f32>
 
 fn rect_visibility_0( light_4 : LocalLight_0,  position_8 : vec3<f32>) -> f32
 {
-    var width_2 : u32;
-    var height_3 : u32;
-    {var dim = textureDimensions((rect_shadow_atlas_0));((width_2)) = dim.x;((height_3)) = dim.y;};
-    var columns_0 : u32 = width_2 / u32(512);
-    var slots_0 : u32 = columns_0 * (height_3 / u32(512)) / u32(5);
-    var _S174 : bool;
+    var width_4 : u32;
+    var height_4 : u32;
+    {var dim = textureDimensions((rect_shadow_atlas_0));((width_4)) = dim.x;((height_4)) = dim.y;};
+    var columns_0 : u32 = width_4 / u32(512);
+    var slots_0 : u32 = columns_0 * (height_4 / u32(512)) / u32(5);
+    var _S188 : bool;
     if((light_4.shadow_slot_0) >= 1.0f)
     {
-        _S174 = (light_4.shadow_slot_0) <= f32(slots_0);
+        _S188 = (light_4.shadow_slot_0) <= f32(slots_0);
     }
     else
     {
-        _S174 = false;
+        _S188 = false;
     }
-    if(!_S174)
+    if(!_S188)
     {
         return 1.0f;
     }
-    var _S175 : u32 = (u32(light_4.shadow_slot_0) - u32(1)) * u32(5);
+    var _S189 : u32 = (u32(light_4.shadow_slot_0) - u32(1)) * u32(5);
     var u_2 : vec3<f32> = normalize(light_4.half_width_range_0.xyz);
     var v_1 : vec3<f32> = normalize(light_4.half_height_0);
     var delta_3 : vec3<f32> = position_8 - light_4.position_radius_0.xyz;
-    var _S176 : f32 = dot(delta_3, cross(u_2, v_1));
-    var p_5 : vec3<f32> = vec3<f32>(dot(delta_3, u_2), dot(delta_3, v_1), _S176);
+    var _S190 : f32 = dot(delta_3, cross(u_2, v_1));
+    var p_5 : vec3<f32> = vec3<f32>(dot(delta_3, u_2), dot(delta_3, v_1), _S190);
     var face_2 : u32 = rect_face_0(p_5);
     var q_0 : vec3<f32> = face_coords_0(face_2, p_5);
     var far_z_0 : f32 = light_4.position_radius_0.w;
-    var _S177 : f32 = min(0.00999999977648258f, far_z_0 * 0.00009999999747379f);
-    var _S178 : f32 = q_0.z;
-    if(_S178 <= _S177)
+    var _S191 : f32 = min(0.00999999977648258f, far_z_0 * 0.00009999999747379f);
+    var _S192 : f32 = q_0.z;
+    if(_S192 <= _S191)
     {
-        _S174 = true;
+        _S188 = true;
     }
     else
     {
-        _S174 = _S176 <= 0.0f;
+        _S188 = _S190 <= 0.0f;
     }
-    if(_S174)
+    if(_S188)
     {
         return 1.0f;
     }
-    var _S179 : vec2<f32> = q_0.xy / vec2<f32>(_S178);
+    var _S193 : vec2<f32> = q_0.xy / vec2<f32>(_S192);
     var y_1 : i32 = i32(-1);
     var visibility_1 : f32 = 0.0f;
     for(;;)
@@ -1734,25 +1779,25 @@ fn rect_visibility_0( light_4 : LocalLight_0,  position_8 : vec3<f32>) -> f32
             {
                 break;
             }
-            var ray_1 : vec3<f32> = from_face_0(face_2, vec3<f32>(_S179 + vec2<f32>(f32(x_6), f32(y_1)) * vec2<f32>(0.00390625f), 1.0f));
+            var ray_1 : vec3<f32> = from_face_0(face_2, vec3<f32>(_S193 + vec2<f32>(f32(x_6), f32(y_1)) * vec2<f32>(0.00390625f), 1.0f));
             var tap_face_0 : u32 = rect_face_0(ray_1);
             var tap_1 : vec3<f32> = face_coords_0(tap_face_0, ray_1);
-            var _S180 : vec2<f32> = vec2<f32>(0.5f);
-            var pixel_2 : vec2<u32> = min(vec2<u32>(saturate(tap_1.xy / vec2<f32>(tap_1.z) * _S180 + _S180) * vec2<f32>(512.0f)), vec2<u32>(u32(511)));
-            var tile_1 : u32 = _S175 + tap_face_0;
-            var _S181 : u32 = tile_1 % columns_0;
-            var _S182 : u32 = tile_1 / columns_0;
-            var _S183 : vec3<i32> = vec3<i32>(vec2<i32>(pixel_2 + vec2<u32>(_S181, _S182) * vec2<u32>(u32(512))), i32(0));
-            var _S184 : i32;
-            if((far_z_0 / (far_z_0 - _S177) * (1.0f - _S177 / max(_S177, face_coords_0(tap_face_0, p_5).z * 0.99609375f))) <= (textureLoad((rect_shadow_atlas_0), ((_S183)).xy, ((_S183)).z).x))
+            var _S194 : vec2<f32> = vec2<f32>(0.5f);
+            var pixel_2 : vec2<u32> = min(vec2<u32>(saturate(tap_1.xy / vec2<f32>(tap_1.z) * _S194 + _S194) * vec2<f32>(512.0f)), vec2<u32>(u32(511)));
+            var tile_0 : u32 = _S189 + tap_face_0;
+            var _S195 : u32 = tile_0 % columns_0;
+            var _S196 : u32 = tile_0 / columns_0;
+            var _S197 : vec3<i32> = vec3<i32>(vec2<i32>(pixel_2 + vec2<u32>(_S195, _S196) * vec2<u32>(u32(512))), i32(0));
+            var _S198 : i32;
+            if((far_z_0 / (far_z_0 - _S191) * (1.0f - _S191 / max(_S191, face_coords_0(tap_face_0, p_5).z * 0.99609375f))) <= (textureLoad((rect_shadow_atlas_0), ((_S197)).xy, ((_S197)).z).x))
             {
-                _S184 = i32(1);
+                _S198 = i32(1);
             }
             else
             {
-                _S184 = i32(0);
+                _S198 = i32(0);
             }
-            var visibility_2 : f32 = visibility_1 + f32(_S184);
+            var visibility_2 : f32 = visibility_1 + f32(_S198);
             x_6 = x_6 + i32(1);
             visibility_1 = visibility_2;
         }
@@ -1761,26 +1806,26 @@ fn rect_visibility_0( light_4 : LocalLight_0,  position_8 : vec3<f32>) -> f32
     return visibility_1 / 9.0f;
 }
 
-fn evaluate_local_light_0( index_7 : u32,  position_9 : vec3<f32>,  n_5 : vec3<f32>,  v_2 : vec3<f32>,  f0_3 : vec3<f32>,  diffuse_color_3 : vec3<f32>,  roughness_5 : f32) -> vec3<f32>
+fn evaluate_local_light_0( index_6 : u32,  position_9 : vec3<f32>,  n_5 : vec3<f32>,  v_2 : vec3<f32>,  f0_3 : vec3<f32>,  diffuse_color_3 : vec3<f32>,  roughness_5 : f32) -> vec3<f32>
 {
-    var light_5 : LocalLight_0 = load_local_light_0(index_7);
-    var _S185 : bool;
+    var light_5 : LocalLight_0 = load_local_light_0(index_6);
+    var _S199 : bool;
     if((light_5.half_width_range_0.w) > 0.0f)
     {
         var direct_0 : vec3<f32> = rect_radiance_0(light_5, position_9, n_5, v_2, f0_3, diffuse_color_3, roughness_5);
         if((light_5.shadow_slot_0) > 0.0f)
         {
-            _S185 = (any((direct_0 > vec3<f32>(0.0f))));
+            _S199 = (any((direct_0 > vec3<f32>(0.0f))));
         }
         else
         {
-            _S185 = false;
+            _S199 = false;
         }
         var direct_1 : vec3<f32>;
-        if(_S185)
+        if(_S199)
         {
-            var _S186 : f32 = rect_visibility_0(light_5, position_9);
-            direct_1 = direct_0 * vec3<f32>(_S186);
+            var _S200 : f32 = rect_visibility_0(light_5, position_9);
+            direct_1 = direct_0 * vec3<f32>(_S200);
         }
         else
         {
@@ -1793,46 +1838,46 @@ fn evaluate_local_light_0( index_7 : u32,  position_9 : vec3<f32>,  n_5 : vec3<f
     var radius_0 : f32 = light_5.position_radius_0.w;
     if(!(radius_0 > 0.0f))
     {
-        _S185 = true;
+        _S199 = true;
     }
     else
     {
-        _S185 = !(squared_distance_0 < (radius_0 * radius_0));
+        _S199 = !(squared_distance_0 < (radius_0 * radius_0));
     }
-    if(_S185)
+    if(_S199)
     {
         return vec3<f32>(0.0f);
     }
     var l_1 : vec3<f32> = unit_or_0(delta_4, n_5);
-    var _S187 : f32 = max(dot(n_5, l_1), 0.0f);
-    if(!(_S187 > 0.0f))
+    var _S201 : f32 = max(dot(n_5, l_1), 0.0f);
+    if(!(_S201 > 0.0f))
     {
         return vec3<f32>(0.0f);
     }
     var h_1 : vec3<f32> = unit_or_0(v_2 + l_1, n_5);
     var radial_1 : f32 = squared_distance_0 / (radius_0 * radius_0);
-    var _S188 : f32 = max(1.0f - radial_1 * radial_1, 0.0f);
-    return evaluate_brdf_0(_S187, max(dot(n_5, v_2), 0.0f), max(dot(n_5, h_1), 0.0f), max(dot(v_2, h_1), 0.0f), f0_3, diffuse_color_3, roughness_5) * (max(light_5.color_intensity_0.xyz, vec3<f32>(0.0f)) * vec3<f32>(max(light_5.color_intensity_0.w, 0.0f))) * vec3<f32>(_S187) * vec3<f32>((_S188 * _S188 / max(squared_distance_0, 0.00999999977648258f)));
+    var _S202 : f32 = max(1.0f - radial_1 * radial_1, 0.0f);
+    return evaluate_brdf_0(_S201, max(dot(n_5, v_2), 0.0f), max(dot(n_5, h_1), 0.0f), max(dot(v_2, h_1), 0.0f), f0_3, diffuse_color_3, roughness_5) * (max(light_5.color_intensity_0.xyz, vec3<f32>(0.0f)) * vec3<f32>(max(light_5.color_intensity_0.w, 0.0f))) * vec3<f32>(_S201) * vec3<f32>((_S202 * _S202 / max(squared_distance_0, 0.00999999977648258f)));
 }
 
 fn local_light_radiance_0( pixel_center_0 : vec2<f32>,  position_10 : vec3<f32>,  n_6 : vec3<f32>,  v_3 : vec3<f32>,  f0_4 : vec3<f32>,  diffuse_color_4 : vec3<f32>,  roughness_6 : f32) -> vec3<f32>
 {
-    var _S189 : u32 = local_light_count_0();
-    var _S190 : vec3<f32> = vec3<f32>(0.0f);
-    var index_8 : u32 = u32(0);
-    var result_4 : vec3<f32> = _S190;
+    var _S203 : u32 = local_light_count_0();
+    var _S204 : vec3<f32> = vec3<f32>(0.0f);
+    var index_7 : u32 = u32(0);
+    var result_4 : vec3<f32> = _S204;
     for(;;)
     {
-        if(index_8 < _S189)
+        if(index_7 < _S203)
         {
         }
         else
         {
             break;
         }
-        var _S191 : vec3<f32> = evaluate_local_light_0(index_8, position_10, n_6, v_3, f0_4, diffuse_color_4, roughness_6);
-        var result_5 : vec3<f32> = result_4 + _S191;
-        index_8 = index_8 + u32(1);
+        var _S205 : vec3<f32> = evaluate_local_light_0(index_7, position_10, n_6, v_3, f0_4, diffuse_color_4, roughness_6);
+        var result_5 : vec3<f32> = result_4 + _S205;
+        index_7 = index_7 + u32(1);
         result_4 = result_5;
     }
     return result_4;
@@ -1854,33 +1899,33 @@ struct pixelInput_0
 };
 
 @fragment
-fn main( _S192 : pixelInput_0, @builtin(position) pixel_3 : vec4<f32>, @builtin(front_facing) front_facing_1 : bool) -> pixelOutput_0
+fn main( _S206 : pixelInput_0, @builtin(position) pixel_3 : vec4<f32>, @builtin(front_facing) front_facing_1 : bool) -> pixelOutput_0
 {
-    var sampled_0 : MaterialSample_0 = sample_material_0(_S192.world_normal_1, _S192.world_tangent_1, _S192.texcoord_1, front_facing_1);
+    var sampled_0 : MaterialSample_0 = sample_material_0(_S206.world_normal_1, _S206.world_tangent_1, _S206.texcoord_1, front_facing_1);
     var surface_3 : Surface_0 = sampled_0.surface_0;
-    apply_lightmap_0(&(surface_3), _S192.lightmap_slot_0, front_facing_1, _S192.lightmap_uv_0, _S192.world_position_0, pixel_3.xy);
-    var brdf_1 : BrdfInputs_0 = make_brdf_inputs_0(_S192.world_position_0, surface_3);
-    var color_0 : vec3<f32> = evaluate_lighting_0(_S192.world_position_0, surface_3, brdf_1);
+    apply_lightmap_0(&(surface_3), _S206.lightmap_slot_0, front_facing_1, _S206.lightmap_uv_0, _S206.world_position_0, pixel_3.xyz);
+    var brdf_1 : BrdfInputs_0 = make_brdf_inputs_0(_S206.world_position_0, surface_3);
+    var color_0 : vec3<f32> = evaluate_lighting_0(_S206.world_position_0, surface_3, brdf_1);
     var pixel_center_1 : vec2<f32> = vec2<f32>(0.0f);
-    var _S193 : bool;
+    var _S207 : bool;
     if((baked_debug_0()) == u32(0))
     {
-        _S193 = (abs(camera_0.environment_0.w)) < 4.0f;
+        _S207 = (abs(camera_0.environment_0.w)) < 4.0f;
     }
     else
     {
-        _S193 = false;
+        _S207 = false;
     }
     var color_1 : vec3<f32>;
-    if(_S193)
+    if(_S207)
     {
-        var _S194 : vec3<f32> = local_light_radiance_0(pixel_center_1, _S192.world_position_0, surface_3.normal_0, brdf_1.view_0, brdf_1.f0_0, brdf_1.diffuse_color_0, surface_3.roughness_0);
-        color_1 = color_0 + _S194;
+        var _S208 : vec3<f32> = local_light_radiance_0(pixel_center_1, _S206.world_position_0, surface_3.normal_0, brdf_1.view_0, brdf_1.f0_0, brdf_1.diffuse_color_0, surface_3.roughness_0);
+        color_1 = color_0 + _S208;
     }
     else
     {
         color_1 = color_0;
     }
-    var _S195 : pixelOutput_0 = pixelOutput_0( vec4<f32>(clamp(color_1, vec3<f32>(0.0f), vec3<f32>(65504.0f)), sampled_0.output_alpha_0) );
-    return _S195;
+    var _S209 : pixelOutput_0 = pixelOutput_0( vec4<f32>(clamp(color_1, vec3<f32>(0.0f), vec3<f32>(65504.0f)), sampled_0.output_alpha_0) );
+    return _S209;
 }

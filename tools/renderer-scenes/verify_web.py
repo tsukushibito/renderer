@@ -121,16 +121,16 @@ def harness(page, base):
     page.goto(base + "__verify__")
 
 
-def attach(page, url, width, height):
+def attach(page, url, width, height, technique=None, layout=None):
     page.set_viewport_size({"width": width, "height": height})
     page.evaluate(
-        """async ([url,w,h]) => {
+        """async ([url,w,h,technique,shadowLayout]) => {
         const canvas = document.querySelector('canvas');
         canvas.width=w; canvas.height=h;
         const {attachScene} = await import('./viewer.js');
-        globalThis.view = await attachScene(canvas, url, {autoResize:false});
+        globalThis.view = await attachScene(canvas, url, {autoResize:false,technique,shadowLayout});
     }""",
-        [url, width, height],
+        [url, width, height, technique, layout],
     )
 
 
@@ -316,7 +316,7 @@ def run_views(page, args, result):
 
 def verify_indirect_shadows(page, args, result):
     captures = []
-    for name in ("indirect-shadow-off", "indirect-shadow"):
+    for name in ("indirect-shadow-off", "indirect-shadow", "indirect-shadow-half"):
         attach(page, name, 320, 180)
         try:
             planes, details = capture(page, args.output / name, 320, 180)
@@ -333,14 +333,37 @@ def verify_indirect_shadows(page, args, result):
                 details["steady_memory"] = measure_shadow_memory(page)
         finally:
             page.evaluate("() => view.dispose()")
-    base, shadow = captures
-    loss = base["hdr"][:, :, :3].astype(float) - shadow["hdr"][:, :, :3]
-    if not np.array_equal(base["depth"], shadow["depth"]) or np.min(loss) < -0.001 or np.count_nonzero(loss > 0.01) < 100:
-        raise ValueError("Capsules must darken the static diffuse receivers while preserving depth")
+    base, full, half = captures
+    for shadow in (full, half):
+        loss = base["hdr"][:, :, :3].astype(float) - shadow["hdr"][:, :, :3]
+        if not np.array_equal(base["depth"], shadow["depth"]) or np.min(loss) < -0.001 or np.count_nonzero(loss > 0.01) < 100:
+            raise ValueError("Capsules must darken the static diffuse receivers while preserving depth")
+    error = np.abs(full["hdr"][:, :, :3].astype(float) - half["hdr"][:, :, :3])
+    quality = {"mean": float(error.mean()), "p99": float(np.percentile(error, 99))}
+    result["views"]["indirect-shadow-half"]["full_hdr_abs"] = quality
+    if not 0.0 < quality["mean"] <= 0.001 or quality["p99"] > 0.01:
+        raise ValueError(f"Half-resolution receiver reconstruction differs from Full: {quality}")
+    for technique in ("forward-plus", "deferred"):
+        attach(page, "indirect-shadow", 321, 181, technique, "single" if args.software else "dense")
+        try:
+            for mode in ("half", "off", "full"):
+                page.evaluate("mode => view.setIndirectShadows(mode)", mode)
+                label = f"{technique}-{mode}"
+                _, result["views"][label] = capture(page, args.output / label, 321, 181)
+        finally:
+            page.evaluate("() => view.dispose()")
     if args.shadow_memory:
-        off, on = (result["views"][key]["steady_memory"] for key in ("indirect-shadow-off", "indirect-shadow"))
-        if off["heap"] != on["heap"] or any(on["resources"].values()):
-            raise ValueError(f"Steady-state indirect shadow allocations: {off} -> {on}")
+        off = result["views"]["indirect-shadow-off"]["steady_memory"]
+        for key in ("indirect-shadow", "indirect-shadow-half"):
+            on = result["views"][key]["steady_memory"]
+            expected = off["heap"].copy()
+            if key == "indirect-shadow-half":
+                # wgpu 30.0.2 collects one color attachment Vec per additional
+                # render pass on the browser backend (renderer-v8bk).
+                expected[0] += on["frames"]
+                expected[3] += on["frames"]
+            if on["heap"] != expected or any(on["resources"].values()):
+                raise ValueError(f"Steady-state indirect shadow allocations ({key}): {off} -> {on}")
 
 
 def measure_shadow_memory(page):
@@ -435,7 +458,7 @@ def main():
     parser.add_argument("site", type=Path)
     parser.add_argument("--scenes", nargs="+", choices=["fixture", *VIEWS], default=["fixture"])
     parser.add_argument("--references", type=Path)
-    parser.add_argument("--shadow-reference", type=Path, help="Native 320x180 frame-zero captures of the two shadow demo modes")
+    parser.add_argument("--shadow-reference", type=Path, help="Native 320x180 frame-zero captures of the three shadow demo modes")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--channel", choices=["chrome", "msedge", "chromium"], default="chrome")
     parser.add_argument("--software", action="store_true", help="Use SwiftShader for the CI fixture")

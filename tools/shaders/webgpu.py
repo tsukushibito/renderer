@@ -28,7 +28,8 @@ def generate(module, directory, args, recipe):
     # DXC lowers isfinite(float3) in the lighting include to a vector OpLogicalOr,
     # which Naga 30 rejects. Slang compiles those stages directly from the same HLSL.
     if name.endswith(".frag") and module.parent == STANDARD and (
-        name.startswith(("pbr", "deferred_", "gbuffer", "toon"))
+        recipe[name]["source"] in ("pbr.frag.hlsl", "gbuffer.frag.hlsl",
+                                   "deferred_lighting.frag.hlsl", "toon.frag.hlsl")
     ):
         shader = recipe[name]
         # The CPU writes columns as consecutive HLSL rows. Set the default

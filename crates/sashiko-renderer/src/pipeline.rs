@@ -40,8 +40,8 @@ impl StandardJobPolicy {
 }
 mod scene;
 pub use scene::{
-    BakedLightingInput, EnvironmentMaps, MeshIndexRange, ProbeLighting, ReflectionProbeInput,
-    RenderObject, ResidentBakedLighting, SceneInput,
+    BakedLightingInput, EnvironmentMaps, IndirectShadowSource, MeshIndexRange, ProbeLighting,
+    ReflectionProbeInput, RenderObject, ResidentBakedLighting, SceneInput,
 };
 mod scene_pairs;
 pub use scene_pairs::{FrameScene, PipelineId};
@@ -163,6 +163,7 @@ pub struct StandardPipeline {
     transparent: Vec<pbr::Draw>,
     rect_casters: Vec<pbr::Draw>,
     casters: [Vec<pbr::Draw>; pbr::CASCADE_COUNT],
+    shadow_capsules: Vec<pbr::ShadowCapsule>,
     transforms: Vec<Transform>,
     transform_indices: HashMap<[[u32; 4]; 3], u32>,
     connected: Vec<Draw>,
@@ -299,6 +300,7 @@ impl StandardPipeline {
                 0
             }),
             casters: std::array::from_fn(|_| Vec::with_capacity(shadow_max)),
+            shadow_capsules: Vec::with_capacity(limits.max_indirect_shadow_capsules),
             transforms: Vec::with_capacity(limits.max_transforms),
             transform_indices: HashMap::with_capacity(limits.max_transforms),
             connected: Vec::with_capacity(max),

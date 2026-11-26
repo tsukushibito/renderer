@@ -30,7 +30,6 @@ pub struct SceneAssets<'a> {
     pub(crate) materials: &'a mut Materials,
     pub(crate) objects: Cow<'a, [RenderObject]>,
     pub(crate) draws: usize,
-    pub(crate) shadow_capsules: usize,
     pub(crate) extra_meshes: Cow<'a, [MeshHandle]>,
     pub(crate) extra_materials: Cow<'a, [MaterialHandle]>,
     pub(crate) lights: &'a [LocalLight],
@@ -46,16 +45,17 @@ impl<'a> SceneAssets<'a> {
             materials,
             objects: objects.into(),
             draws: objects.len(),
-            shadow_capsules: 0,
             extra_meshes: Cow::Borrowed(&[]),
             extra_materials: Cow::Borrowed(&[]),
             lights: &[],
         }
     }
-    /// Reserve per-view capacity at setup or reconfiguration. Zero is the default.
-    pub fn with_indirect_shadow_capacity(mut self, capsules: usize) -> Self {
-        self.shadow_capsules = capsules;
-        self
+    pub(crate) fn shadow_count(&self) -> Result<usize, GraphError> {
+        self.objects.iter().try_fold(0usize, |count, object| {
+            count
+                .checked_add(self.meshes.shadow_count(object)?)
+                .ok_or_else(|| GraphError::invalid_input("indirect shadow count overflow"))
+        })
     }
     /// Include every possible LOD, reserving draws for the largest single LOD.
     pub fn add_model(&mut self, model: &crate::model::ModelInstance) {
@@ -68,9 +68,9 @@ impl<'a> SceneAssets<'a> {
     }
     /// Pre-register an alternate pairing for an existing draw slot.
     pub fn preload_pair(&mut self, mesh: MeshHandle, material: MaterialHandle) {
-        self.objects
-            .to_mut()
-            .push(RenderObject::new(mesh, material));
+        let mut pair = RenderObject::new(mesh, material);
+        pair.indirect_shadow_source = IndirectShadowSource::Disabled;
+        self.objects.to_mut().push(pair);
     }
     pub fn preload_mesh(&mut self, mesh: MeshHandle) {
         self.extra_meshes.to_mut().push(mesh);
@@ -89,7 +89,6 @@ impl<'a> SceneAssets<'a> {
             materials: self.materials,
             objects: self.objects.as_ref().into(),
             draws: self.draws,
-            shadow_capsules: self.shadow_capsules,
             extra_meshes: Cow::Borrowed(&self.extra_meshes),
             extra_materials: Cow::Borrowed(&self.extra_materials),
             lights: self.lights,
@@ -275,7 +274,7 @@ impl RendererSetup {
                 .ok_or("scene capacity overflow")
         };
         let limits = SceneLimits {
-            max_indirect_shadow_capsules: assets.shadow_capsules,
+            max_indirect_shadow_capsules: assets.shadow_count()?,
             max_lightmapped_draws: if has_surface_mesh {
                 room(mapped.min(assets.draws))?
             } else {

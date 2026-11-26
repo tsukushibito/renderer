@@ -21,12 +21,6 @@ struct CameraData {
     float4 shadow_depth_scale;
     float4 camera_forward_blend;
     float4 shadow_bias; // receiver constant/slope/normal offset in world-texel units
-#ifdef INDIRECT_SHADOW
-    // Extend the shared camera binding only for shadowed lightmap draws.
-    float4 shadow_tile_scale;
-    uint4 shadow_masks[64];
-    float4 capsule_data[48];
-#endif
 };
 
 struct MaterialData {

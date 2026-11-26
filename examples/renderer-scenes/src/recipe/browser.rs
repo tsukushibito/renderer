@@ -99,27 +99,51 @@ pub async fn open_scene(
     canvas: HtmlCanvasElement,
     url: String,
     on_progress: Function,
+    technique: Option<String>,
+    shadow_layout: Option<String>,
 ) -> Result<SceneSession, JsValue> {
-    load(canvas, &url, &on_progress).await.map_err(js_error)
+    load(
+        canvas,
+        &url,
+        &on_progress,
+        technique.as_deref(),
+        shadow_layout.as_deref(),
+    )
+    .await
+    .map_err(js_error)
 }
 
 async fn load(
     canvas: HtmlCanvasElement,
     url: &str,
     on_progress: &Function,
+    technique: Option<&str>,
+    shadow_layout: Option<&str>,
 ) -> Result<SceneSession, Error> {
     let mut options = Options::defaults();
     options.api = "webgpu".into();
+    if let Some(technique) = technique {
+        options.pipeline = match technique {
+            "forward" => super::PipelineMode::Forward,
+            "forward-plus" => super::PipelineMode::ForwardPlus,
+            "deferred" => super::PipelineMode::Deferred,
+            _ => return Err("unknown WebGPU rendering technique".into()),
+        };
+    }
     options.width = canvas.width().max(1);
     options.height = canvas.height().max(1);
     options.shadow_demo = match url {
-        "indirect-shadow" => Some(true),
-        "indirect-shadow-off" => Some(false),
+        "indirect-shadow" => Some(sashiko_renderer::pbr::IndirectShadowMode::Full),
+        "indirect-shadow-half" => Some(sashiko_renderer::pbr::IndirectShadowMode::Half),
+        "indirect-shadow-off" => Some(sashiko_renderer::pbr::IndirectShadowMode::Off),
         _ => None,
     };
     options.fixture = url == "fixture" || options.shadow_demo.is_some();
     if options.shadow_demo.is_some() {
         options.shadows = false;
+        if let Some(layout) = shadow_layout {
+            options.shadow_layout = layout.parse()?;
+        }
     }
     options.inflight = 1;
     let (mut scene, mut environment, lightmaps) = if options.fixture {
@@ -235,6 +259,23 @@ impl Drop for AttachedCanvas {
 
 #[wasm_bindgen]
 impl SceneSession {
+    /// Change the next demo frame using its prepared pipelines and images.
+    pub fn set_indirect_shadows(&mut self, name: &str) -> Result<(), JsValue> {
+        use sashiko_renderer::pbr::IndirectShadowMode::*;
+        if self.options.shadow_demo.is_none() {
+            return Err(JsValue::from_str(
+                "this scene has no registered shadow demo",
+            ));
+        }
+        self.options.shadow_demo = Some(match name {
+            "off" => Off,
+            "full" => Full,
+            "half" => Half,
+            _ => return Err(JsValue::from_str("unknown indirect shadow mode")),
+        });
+        Ok(())
+    }
+
     /// Select a native reference camera, including its exact target and field of view.
     pub fn preset(&mut self, name: &str) -> Result<(), JsValue> {
         self.camera = if self.options.shadow_demo.is_some() && name == "fixture" {

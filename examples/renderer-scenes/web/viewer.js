@@ -22,17 +22,17 @@ function fitCanvas(canvas) {
 
 // The host can drive frame(timeMs) or use start(). sceneUrl is relative to the host page.
 export async function attachScene(canvas, sceneUrl, {
-    autoResize = true, onProgress = () => {}, onError = console.error,
+    autoResize = true, technique, shadowLayout, onProgress = () => {}, onError = console.error,
 } = {}) {
     if (!navigator.gpu) throw new Error("WebGPU is unavailable. Open this page using HTTPS or localhost in a WebGPU browser.");
     if (mounted.has(canvas)) throw new Error("Dispose the current scene before attaching another to this canvas.");
-    const url = ["fixture", "indirect-shadow", "indirect-shadow-off"].includes(sceneUrl) ? sceneUrl : new URL(sceneUrl, document.baseURI).href;
+    const url = ["fixture", "indirect-shadow", "indirect-shadow-off", "indirect-shadow-half"].includes(sceneUrl) ? sceneUrl : new URL(sceneUrl, document.baseURI).href;
     mounted.add(canvas);
     let session;
     try {
         await initialize();
         if (autoResize) fitCanvas(canvas);
-        session = await openScene(canvas, url, onProgress);
+        session = await openScene(canvas, url, onProgress, technique, shadowLayout);
     } catch (error) {
         mounted.delete(canvas);
         throw error;
@@ -145,6 +145,7 @@ export async function attachScene(canvas, sceneUrl, {
         },
         capture: () => invoke(scene => scene.capture()),
         setRectLights: mode => invoke(scene => scene.setRectLights(mode)),
+        setIndirectShadows: mode => invoke(scene => scene.set_indirect_shadows(mode)),
         dispose() {
             if (closing) return closing;
             disposed = true;

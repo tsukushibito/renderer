@@ -9,6 +9,7 @@ use sashiko_renderer_core::program::{
     ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor,
 };
 
+use super::indirect_shadow::{IndirectShadowMode, ShadowStage};
 use crate::passes::{
     output::{Exposure, OutputImages, PreparedOutput},
     pbr::{CAMERA_BYTES, TransformTechnique, transformed_programs},
@@ -64,10 +65,20 @@ impl ScenePrograms {
         if lightmaps {
             for packed in [false, true] {
                 for p in std::iter::once(&self.world).chain(self.model.iter().filter(|_| !packed)) {
-                    for shadow in [false, true]
-                        .into_iter()
-                        .take(1 + usize::from(indirect_shadows))
-                    {
+                    for shadow in [
+                        ShadowStage::Off,
+                        ShadowStage::Full,
+                        ShadowStage::Receiver,
+                        ShadowStage::Resolve,
+                    ] {
+                        if shadow != ShadowStage::Off && !indirect_shadows {
+                            continue;
+                        }
+                        if matches!(shadow, ShadowStage::Receiver | ShadowStage::Resolve)
+                            && samples != SampleCount::X1
+                        {
+                            continue;
+                        }
                         if let Some(program) =
                             crate::passes::pbr::lightmapped_program(&p.opaque, packed, shadow)
                         {
@@ -186,6 +197,7 @@ pub(crate) struct PreparedScene {
     local_lights: Option<LocalLights>,
     opaque_uses_lighting: bool,
     mode: DrawMode,
+    pub(crate) shadow_workspace: Option<super::indirect_shadow::Workspace>,
     instances: Option<PreparedInstances>,
     opaque: Batch,
     transparent: Batch,
@@ -231,18 +243,51 @@ impl PreparedScene {
         } else {
             None
         };
-        if limits.max_indirect_shadow_capsules > super::MAX_INDIRECT_SHADOW_CAPSULES {
-            return Err(GraphError::invalid_input(
-                "indirect shadow capsule limit exceeds the shader table",
-            ));
-        }
-        if limits.max_indirect_shadow_capsules > 0 {
-            preparation.reserve_buffer(super::indirect_shadow::DESC, 1)?;
+        let light_tail = local_lights
+            .as_ref()
+            .filter(|state| state.mask.is_some() && config.samples == SampleCount::X1)
+            .map(|state| state.layout.image_desc());
+        let shadow_workspace = (limits.max_indirect_shadow_capsules > 0)
+            .then(|| {
+                super::indirect_shadow::Workspace::new(
+                    limits.max_indirect_shadow_capsules,
+                    light_tail,
+                )
+            })
+            .transpose()?;
+        if let Some(workspace) = &shadow_workspace {
+            if light_tail.is_some() {
+                preparation.add_graph_requirements(GraphRequirements {
+                    passes: 1,
+                    accesses: 2,
+                    name_bytes: "pack Forward+ light table".len(),
+                    ..Default::default()
+                })?;
+            }
+            if config.samples == SampleCount::X1 {
+                let [w, h] = config.extent.map(|n| n.div_ceil(2));
+                preparation.reserve_image(ImageDesc::rgba16_float(w, h), 1)?;
+                preparation.reserve_image(ImageDesc::depth32(w, h), 1)?;
+                let draws = limits.max_lightmapped_draws;
+                let slots = sashiko_renderer_core::program::MAX_RASTER_BINDINGS;
+                preparation.add_graph_requirements(GraphRequirements {
+                    resources: 2,
+                    passes: 1,
+                    attachments: 2,
+                    draws,
+                    accesses: checked(draws.checked_mul(slots + 5).and_then(|v| v.checked_add(2)))?,
+                    bindings: checked(draws.checked_mul(slots + 1))?,
+                    raster_constant_words: checked(draws.checked_mul(2))?,
+                    name_bytes: 96,
+                    ..Default::default()
+                })?;
+            }
+            preparation.reserve_image(workspace.desc, 1)?;
             preparation.add_graph_requirements(GraphRequirements {
                 resources: 1,
                 passes: 1,
                 accesses: 1,
-                upload_bytes: super::indirect_shadow::BYTES,
+                upload_bytes: workspace.bytes.len(),
                 name_bytes: "indirect shadow viewindirect shadow upload".len(),
                 ..Default::default()
             })?;
@@ -314,6 +359,8 @@ impl PreparedScene {
             .max()
             .expect("the world-space Programs are always prepared")
             + 2
+            + usize::from(shadow_workspace.is_some())
+            + usize::from(shadow_workspace.is_some() && !msaa)
             + usize::from(mode == DrawMode::Indirect);
         let shadow_accesses = programs
             .model
@@ -426,6 +473,7 @@ impl PreparedScene {
             output,
             programs,
             opaque_uses_lighting,
+            shadow_workspace,
             local_lights,
             mode,
             instances,
@@ -477,6 +525,13 @@ impl PreparedScene {
         bounds: impl Into<Option<Bounds>>,
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
+        if view.indirect_shadows == IndirectShadowMode::Half
+            && self.config.samples != SampleCount::X1
+        {
+            return Err(GraphError::invalid_input(
+                "half-resolution indirect shadows require single-sample rendering",
+            ));
+        }
         let mut prepared = PreparedView::prepare(
             view,
             sun,
@@ -545,6 +600,7 @@ impl PreparedScene {
         let mut count = lighting.len();
         let mut programs = &self.programs;
         let mut point_lights = None;
+        let mut tiled_light_source = None;
         if !frame.lights.is_empty() {
             let state = self.local_lights.as_ref().expect("checked at entry");
             let view = state.layout.upload(graph, &state.bytes)?;
@@ -552,6 +608,7 @@ impl PreparedScene {
                 let target = graph.image("tile light masks", desc)?;
                 let tiles = graph.image_view(target, 0, 0)?;
                 crate::pbr_forward_plus::append_culling(graph, camera, view, tiles)?;
+                tiled_light_source = Some((view, state.layout.image_desc()));
                 Some(tiles)
             } else {
                 None
@@ -563,7 +620,14 @@ impl PreparedScene {
             programs = &state.programs;
             point_lights = Some((view, atlas.unwrap_or(view)));
         }
-        let opaque_bindings = Bindings::Scene {
+        let mut opaque_bindings = Bindings::Scene {
+            stage: if frame.view.shadow_view.is_some() {
+                ShadowStage::Full
+            } else {
+                ShadowStage::Off
+            },
+            half: None,
+            packed_light_slot: None,
             shadow_view: frame.view.shadow_view,
             camera,
             lighting: if self.opaque_uses_lighting {
@@ -573,12 +637,89 @@ impl PreparedScene {
             },
         };
         let transparent_bindings = Bindings::Scene {
+            stage: ShadowStage::Off,
+            half: None,
+            packed_light_slot: None,
             shadow_view: None,
             camera,
             lighting: &extended[..count],
         };
         let opaque_model = programs.model.as_ref().map(|model| &model.opaque);
         let blend_model = programs.model.as_ref().map(|model| &model.blend);
+        if frame.view.shadow_mode == IndirectShadowMode::Half
+            && let Some(shadow_table) = frame.view.shadow_view
+            && frame.opaque.iter().any(|d| {
+                matches!(
+                    d,
+                    Draw::Lightmapped { .. } | Draw::LightmappedIndirect { .. }
+                )
+            })
+        {
+            let [w, h] = self.config.extent.map(|n| n.div_ceil(2));
+            let image = graph.image("half indirect visibility", ImageDesc::rgba16_float(w, h))?;
+            let depth = graph.image("half receiver depth", ImageDesc::depth32(w, h))?;
+            let image = graph.image_view(image, 0, 0)?;
+            let depth = graph.image_view(depth, 0, 0)?;
+            if let Bindings::Scene { ref mut stage, .. } = opaque_bindings {
+                *stage = ShadowStage::Receiver;
+            }
+            self.opaque.reset_bindings(frame.materials.len());
+            self.opaque.record(
+                graph,
+                &programs.world.opaque,
+                opaque_bindings,
+                frame.materials,
+                frame.opaque,
+                opaque_model.zip(transforms),
+            )?;
+            use sashiko_renderer_core::graph::{Attachment, LoadOp, RasterAttachments, StoreOp};
+            graph.raster(
+                "half indirect shadow receivers",
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: image,
+                        load: LoadOp::Clear([0.; 4]),
+                        store: StoreOp::Store,
+                    }],
+                    color_resolves: &[],
+                    depth: Some(Attachment {
+                        view: depth,
+                        load: LoadOp::Clear(1.),
+                        store: StoreOp::Discard,
+                    }),
+                },
+                |pass| self.opaque.draw(pass, &programs.world.opaque, opaque_model),
+            )?;
+            if let Bindings::Scene {
+                ref mut stage,
+                ref mut half,
+                ref mut packed_light_slot,
+                ..
+            } = opaque_bindings
+            {
+                if let Some((lights, desc)) = tiled_light_source {
+                    if frame.view.shadow_light_tail != Some(desc) {
+                        return Err(GraphError::invalid_input(
+                            "incompatible Forward+ shadow table",
+                        ));
+                    }
+                    let table = shadow_table.image();
+                    let height = graph.image_desc(table)?.height;
+                    let region = sashiko_renderer_core::graph::ImageRegion::mip(desc, 0)?;
+                    graph.copy_image_region(
+                        "pack Forward+ light table",
+                        lights.image(),
+                        region,
+                        table,
+                        0,
+                        [0, height - desc.height],
+                    )?;
+                    *packed_light_slot = Some(lighting.len());
+                }
+                *stage = ShadowStage::Resolve;
+                *half = Some(image);
+            }
+        }
         self.opaque.reset_bindings(frame.materials.len());
         self.transparent.reset_bindings(frame.materials.len());
         self.opaque.record(
@@ -644,6 +785,8 @@ impl PreparedScene {
 
     fn check_frame(&self, graph: &Graph, frame: &PbrDrawInput<'_>) -> Result<usize, GraphError> {
         if !frame.view.matches(self.config.extent, self.config.shadows)
+            || (frame.view.shadow_mode == IndirectShadowMode::Half
+                && self.config.samples != SampleCount::X1)
             || (frame.view.shadow_view.is_some()
                 && frame.view.shadow_limit > self.limits.max_indirect_shadow_capsules)
         {

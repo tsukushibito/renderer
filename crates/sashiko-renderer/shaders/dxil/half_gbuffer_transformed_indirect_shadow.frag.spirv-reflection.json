@@ -1,0 +1,244 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_15" : {
+            "name" : "type.ConstantBuffer.MaterialData",
+            "members" : [
+                {
+                    "name" : "base_factor",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "emissive_normal_scale",
+                    "type" : "vec4",
+                    "offset" : 16
+                },
+                {
+                    "name" : "metallic_roughness_occlusion_cutoff",
+                    "type" : "vec4",
+                    "offset" : 32
+                },
+                {
+                    "name" : "flags",
+                    "type" : "uvec4",
+                    "offset" : 48
+                }
+            ]
+        },
+        "_27" : {
+            "name" : "type.ConstantBuffer.CameraData",
+            "members" : [
+                {
+                    "name" : "view_projection",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "eye",
+                    "type" : "vec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "light_direction",
+                    "type" : "vec4",
+                    "offset" : 80
+                },
+                {
+                    "name" : "light_color",
+                    "type" : "vec4",
+                    "offset" : 96
+                },
+                {
+                    "name" : "environment",
+                    "type" : "vec4",
+                    "offset" : 112
+                },
+                {
+                    "name" : "shadow_view_projection",
+                    "type" : "mat4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 128,
+                    "array_stride" : 64,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "shadow_splits",
+                    "type" : "vec4",
+                    "offset" : 384
+                },
+                {
+                    "name" : "shadow_texel_world",
+                    "type" : "vec4",
+                    "offset" : 400
+                },
+                {
+                    "name" : "shadow_depth_scale",
+                    "type" : "vec4",
+                    "offset" : 416
+                },
+                {
+                    "name" : "camera_forward_blend",
+                    "type" : "vec4",
+                    "offset" : 432
+                },
+                {
+                    "name" : "shadow_bias",
+                    "type" : "vec4",
+                    "offset" : 448
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec3",
+            "name" : "in.var.TEXCOORD0",
+            "location" : 0
+        },
+        {
+            "type" : "vec3",
+            "name" : "in.var.TEXCOORD1",
+            "location" : 1
+        },
+        {
+            "type" : "vec4",
+            "name" : "in.var.TEXCOORD2",
+            "location" : 2
+        },
+        {
+            "type" : "vec2",
+            "name" : "in.var.TEXCOORD3",
+            "location" : 3
+        },
+        {
+            "type" : "uint",
+            "name" : "in.var.TEXCOORD4",
+            "location" : 4
+        },
+        {
+            "type" : "vec2",
+            "name" : "in.var.TEXCOORD5",
+            "location" : 5
+        },
+        {
+            "type" : "uint",
+            "name" : "in.var.TEXCOORD6",
+            "location" : 6
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "out.var.SV_Target0",
+            "location" : 0
+        },
+        {
+            "type" : "vec4",
+            "name" : "out.var.SV_Target1",
+            "location" : 1
+        },
+        {
+            "type" : "vec4",
+            "name" : "out.var.SV_Target2",
+            "location" : 2
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "base_image",
+            "set" : 1,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "normal_image",
+            "set" : 1,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "orm_image",
+            "set" : 1,
+            "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "emissive_image",
+            "set" : 1,
+            "binding" : 3
+        },
+        {
+            "type" : "texture2D",
+            "name" : "irradiance_image",
+            "set" : 2,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "shadow_table",
+            "set" : 0,
+            "binding" : 5
+        },
+        {
+            "type" : "texture2D",
+            "name" : "half_shadow",
+            "set" : 0,
+            "binding" : 6
+        }
+    ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "material_sampler",
+            "set" : 1,
+            "binding" : 4
+        },
+        {
+            "type" : "sampler",
+            "name" : "normal_sampler",
+            "set" : 1,
+            "binding" : 5
+        },
+        {
+            "type" : "sampler",
+            "name" : "orm_sampler",
+            "set" : 1,
+            "binding" : 6
+        },
+        {
+            "type" : "sampler",
+            "name" : "emissive_sampler",
+            "set" : 1,
+            "binding" : 7
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_15",
+            "name" : "type.ConstantBuffer.MaterialData",
+            "block_size" : 64,
+            "set" : 0,
+            "binding" : 1
+        },
+        {
+            "type" : "_27",
+            "name" : "type.ConstantBuffer.CameraData",
+            "block_size" : 464,
+            "set" : 0,
+            "binding" : 0
+        }
+    ]
+}

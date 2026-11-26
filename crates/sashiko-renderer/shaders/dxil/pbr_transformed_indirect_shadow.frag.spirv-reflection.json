@@ -97,35 +97,6 @@
                     "name" : "shadow_bias",
                     "type" : "vec4",
                     "offset" : 448
-                },
-                {
-                    "name" : "shadow_tile_scale",
-                    "type" : "vec4",
-                    "offset" : 464
-                },
-                {
-                    "name" : "shadow_masks",
-                    "type" : "uvec4",
-                    "array" : [
-                        64
-                    ],
-                    "array_size_is_literal" : [
-                        true
-                    ],
-                    "offset" : 480,
-                    "array_stride" : 16
-                },
-                {
-                    "name" : "capsule_data",
-                    "type" : "vec4",
-                    "array" : [
-                        48
-                    ],
-                    "array_size_is_literal" : [
-                        true
-                    ],
-                    "offset" : 1504,
-                    "array_stride" : 16
                 }
             ]
         },
@@ -295,6 +266,12 @@
             "name" : "reflection_probes",
             "set" : 2,
             "binding" : 4
+        },
+        {
+            "type" : "texture2D",
+            "name" : "shadow_table",
+            "set" : 0,
+            "binding" : 5
         }
     ],
     "separate_samplers" : [
@@ -346,7 +323,7 @@
         {
             "type" : "_25",
             "name" : "type.ConstantBuffer.CameraData",
-            "block_size" : 2272,
+            "block_size" : 464,
             "set" : 0,
             "binding" : 0
         },

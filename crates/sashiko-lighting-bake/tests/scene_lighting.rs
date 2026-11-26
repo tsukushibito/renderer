@@ -96,11 +96,20 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
     let vertices = [[-0.8, -0.8, 0.5], [0.8, -0.8, 0.5], [0., 0.8, 0.5]].map(|p| {
         PbrVertex::new(p, [2. / 7., 3. / 7., -6. / 7.], [1., 0., 0., 1.], [0.; 2]).unwrap()
     });
-    let mesh = meshes.create(MeshData::pbr(&vertices, &[0, 2, 1])?.with_lightmap_uvs(&[
-        [0., 0.],
-        [1., 0.],
-        [0., 1.],
-    ])?)?;
+    use sashiko_renderer::pbr::{ShadowCapsule, ShadowProxy};
+    let caster = ShadowCapsule::new([0.04, 0.04, 0.32], [0.04, 0.04, 0.32], 0.18)?;
+    let far = ShadowCapsule::new([4.; 3], [4.; 3], 0.18)?;
+    let proxies = (0..256)
+        .map(|i| ShadowProxy {
+            capsule: if i < 223 { far } else { caster },
+            joint: None,
+        })
+        .collect();
+    let mesh = meshes.create(
+        MeshData::pbr(&vertices, &[0, 2, 1])?
+            .with_lightmap_uvs(&[[0., 0.], [1., 0.], [0., 1.]])?
+            .with_shadow_proxies(proxies)?,
+    )?;
     let mut materials = Materials::default();
     let mut metal = PbrParams::color([1.; 4]);
     metal.factors.double_sided = true;
@@ -125,7 +134,7 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
     let mut renderer = Renderer::headless(
         backend,
         view,
-        SceneAssets::new(&mut meshes, &mut materials, &objects).with_indirect_shadow_capacity(2),
+        SceneAssets::new(&mut meshes, &mut materials, &objects),
     )?;
     for (include_diffuse, include_reflections) in [(false, true), (true, false), (true, true)] {
         let lighting = renderer.load_probe_lighting(ProbeLighting {
@@ -273,28 +282,31 @@ fn draw(backend: RuntimeConfig) -> PipelineResult<()> {
     )?
     .load([0, 1], Some(&uniform), |hash| Ok(pages[hash].clone()))?;
     let ambient = renderer.load_surface_lighting(&ambient, None)?;
-    let caster =
-        sashiko_renderer::pbr::ShadowCapsule::new([0.04, 0.04, 0.32], [0.04, 0.04, 0.32], 0.18)?;
-    let far = sashiko_renderer::pbr::ShadowCapsule::new([4.; 3], [4.; 3], 0.18)?;
     for object in &objects[2..] {
+        let mut camera = view.camera;
         let scene = SceneInput::new(&meshes, &materials, std::slice::from_ref(object))
             .with_baked_lighting(&ambient, 0.);
-        let mut pixel = |capsules: &[sashiko_renderer::pbr::ShadowCapsule]| {
-            let mut input = scene;
-            input.indirect_shadow_capsules = capsules;
-            center_pixel(&mut renderer, input)
-        };
-        let base = pixel(&[])?;
-        let covered = pixel(&[caster])?;
+        camera.indirect_shadows = sashiko_renderer::pbr::IndirectShadowMode::Off;
+        renderer.set_camera(camera);
+        let base = center_pixel(&mut renderer, scene)?;
+        camera.indirect_shadows = sashiko_renderer::pbr::IndirectShadowMode::Full;
+        renderer.set_camera(camera);
+        let covered = center_pixel(&mut renderer, scene)?;
         assert!(
             covered.iter().zip(base).any(|(a, b)| *a < b)
                 && covered.iter().zip(base).all(|(a, b)| *a <= b),
             "{covered:?} vs {base:?}"
         );
-        assert_eq!(covered, pixel(&[caster, caster])?);
-        assert_eq!(base, pixel(&[far])?);
-        assert!(pixel(&[caster; 3]).is_err());
-        assert_eq!(base, pixel(&[])?);
+        camera.indirect_shadows = sashiko_renderer::pbr::IndirectShadowMode::Half;
+        renderer.set_camera(camera);
+        let half = center_pixel(&mut renderer, scene)?;
+        assert!(
+            half.iter().zip(covered).all(|(a, b)| a.abs_diff(b) <= 4),
+            "{half:?} vs {covered:?}"
+        );
+        camera.indirect_shadows = sashiko_renderer::pbr::IndirectShadowMode::Off;
+        renderer.set_camera(camera);
+        assert_eq!(base, center_pixel(&mut renderer, scene)?);
     }
     drop(ambient);
     let mut read_bytes = 0;

@@ -27,6 +27,24 @@ pub(super) struct Skin {
 }
 
 impl MeshData {
+    /// Attach reusable mesh-space shadow shapes. Joint indices refer to this mesh's
+    /// final skinning palette. A rigid proxy follows only the instance transform.
+    pub fn with_shadow_proxies(
+        mut self,
+        proxies: Vec<crate::pbr::ShadowProxy>,
+    ) -> Result<Self, GraphError> {
+        let joints = self.skin.as_ref().map_or(0, |skin| skin.joints);
+        if proxies
+            .iter()
+            .filter_map(|proxy| proxy.joint)
+            .any(|j| usize::from(j) >= joints)
+        {
+            return Err(GraphError::invalid_input("invalid shadow proxy joint"));
+        }
+        self.shadow_proxies = proxies.into_boxed_slice();
+        Ok(self)
+    }
+
     /// Bind positions and weights share vertex order. The host supplies its
     /// final joint matrices (including inverse bind transforms) at pose update.
     pub fn skinned_pbr(
@@ -82,6 +100,10 @@ pub(super) struct Pose {
     skin: Arc<Skin>,
     revision: u64,
     bounds: Bounds,
+    shadow_proxies: Arc<[crate::pbr::ShadowProxy]>,
+    shadow_envelope: Option<crate::pbr::ShadowCapsule>,
+    posed_capsules: Vec<crate::pbr::ShadowCapsule>,
+    shadow_scratch: Vec<crate::pbr::ShadowCapsule>,
     data: PoseData,
 }
 
@@ -138,6 +160,10 @@ impl Meshes {
             id,
             Pose {
                 mesh,
+                shadow_proxies: Arc::clone(&layout.shadow_proxies),
+                shadow_envelope: layout.shadow_envelope,
+                posed_capsules: Vec::with_capacity(layout.shadow_proxies.len()),
+                shadow_scratch: Vec::with_capacity(layout.shadow_proxies.len()),
                 skin: Arc::clone(skin),
                 revision: 1,
                 bounds,
@@ -166,6 +192,14 @@ impl Meshes {
             return Err(GraphError::invalid_input(
                 "joint palette size differs from the skin",
             ));
+        }
+        pose.shadow_scratch.clear();
+        for proxy in pose.shadow_proxies.iter() {
+            let capsule = match proxy.joint {
+                Some(joint) => proxy.capsule.transformed(palette[usize::from(joint)])?,
+                None => proxy.capsule,
+            };
+            pose.shadow_scratch.push(capsule);
         }
         match &mut pose.data {
             PoseData::Compute(stored) => {
@@ -198,6 +232,11 @@ impl Meshes {
                 std::mem::swap(scratch, bytes);
             }
         }
+        if !pose.shadow_scratch.is_empty() {
+            std::mem::swap(&mut pose.shadow_scratch, &mut pose.posed_capsules);
+            pose.shadow_envelope =
+                crate::pbr::ShadowCapsule::envelope(pose.posed_capsules.iter().copied());
+        }
         pose.revision = pose
             .revision
             .checked_add(1)
@@ -221,6 +260,71 @@ impl Meshes {
             ));
         }
         Ok(pose)
+    }
+
+    pub(crate) fn shadow_count(&self, object: &RenderObject) -> Result<usize, GraphError> {
+        let Some((mesh, _)) = object.shadow_source() else {
+            return Ok(0);
+        };
+        let asset = self
+            .assets
+            .get(&mesh)
+            .ok_or_else(|| GraphError::invalid_input("unknown shadow proxy mesh"))?;
+        Ok(asset
+            .layout
+            .shadow_proxies
+            .len()
+            .max(asset.drawable_layout().shadow_proxies.len()))
+    }
+
+    pub(crate) fn collect_shadows(
+        &self,
+        object: &RenderObject,
+        view: &crate::pbr::PreparedView,
+        out: &mut Vec<crate::pbr::ShadowCapsule>,
+    ) -> Result<(), GraphError> {
+        let Some((mesh, id)) = object.shadow_source() else {
+            return Ok(());
+        };
+        let layout = self
+            .assets
+            .get(&mesh)
+            .ok_or_else(|| GraphError::invalid_input("unknown shadow proxy mesh"))?
+            .drawable_layout();
+        if layout.shadow_proxies.is_empty() {
+            return Ok(());
+        }
+        let pose = id.map(|id| self.pose(id, mesh, layout)).transpose()?;
+        if let Some(pose) = pose
+            && !Arc::ptr_eq(&pose.shadow_proxies, &layout.shadow_proxies)
+        {
+            return Err(GraphError::invalid_input(
+                "pose belongs to a different shadow proxy revision",
+            ));
+        }
+        let envelope = pose.map_or(layout.shadow_envelope, |pose| pose.shadow_envelope);
+        if envelope.is_some_and(|bounds| !bounds.may_affect(view, object.transform)) {
+            return Ok(());
+        }
+        if layout.shadow_proxies.len() > out.capacity() - out.len() {
+            return Err(GraphError::capacity_error(
+                GraphCapacityKind::InputRecords("indirect shadow proxies"),
+                out.capacity(),
+                out.len().checked_add(layout.shadow_proxies.len()),
+            ));
+        }
+        if let Some(pose) = pose
+            && !pose.posed_capsules.is_empty()
+        {
+            for capsule in &pose.posed_capsules {
+                out.push(capsule.transformed(object.transform)?);
+            }
+        } else {
+            for proxy in layout.shadow_proxies.iter() {
+                out.push(proxy.capsule.transformed(object.transform)?);
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn pose_metadata(
@@ -454,7 +558,14 @@ mod tests {
         ] {
             assert!(MeshData::skinned_pbr(&vertices, &[0, 1, 2], 1, &[invalid; 3]).is_err());
         }
-        let data = MeshData::skinned_pbr(&vertices, &[0, 1, 2], 1, &[weight; 3]).unwrap();
+        let proxy = crate::pbr::ShadowProxy {
+            capsule: crate::pbr::ShadowCapsule::new([0.; 3], [0., 1., 0.], 0.1).unwrap(),
+            joint: Some(0),
+        };
+        let data = MeshData::skinned_pbr(&vertices, &[0, 1, 2], 1, &[weight; 3])
+            .unwrap()
+            .with_shadow_proxies(vec![proxy])
+            .unwrap();
         let mut meshes = Meshes::new(MeshCapacity {
             meshes: 1,
             retired_mesh_versions: 1,
@@ -483,6 +594,10 @@ mod tests {
         else {
             unreachable!()
         };
+        assert_eq!(
+            current.posed_capsules,
+            [proxy.capsule.transformed(translated).unwrap()]
+        );
         assert_eq!(current_bytes, &bytes);
         assert_eq!(current.bounds.min(), bounds.min());
         assert_eq!(current.bounds.max(), bounds.max());

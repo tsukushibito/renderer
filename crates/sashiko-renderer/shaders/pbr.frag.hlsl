@@ -28,15 +28,29 @@ struct PixelInput {
 };
 
 float4 main(PixelInput input) : SV_Target0 {
+#ifdef SHADOW_HALF_RESOLVE
+    float2 depth_slope = float2(ddx(input.pixel.z), ddy(input.pixel.z));
+#endif
 #ifdef BISTRO_TRANSFORMED_DIRECTIONS
     input.front_facing = input.front_facing != (input.mirrored != 0u);
 #endif
     MaterialSample sampled = sample_material(
-        input.world_normal, input.world_tangent, input.texcoord, input.front_facing);
+        input.world_normal, input.world_tangent, input.texcoord, input.front_facing
+#ifdef SHADOW_RECEIVER
+        , ceil(shadow_texel(0u, 1u).zw * 0.5) / shadow_texel(0u, 1u).zw
+#endif
+    );
     Surface surface = sampled.surface;
+#ifdef SHADOW_RECEIVER
+    if (input.lightmap_slot == 0u) discard;
+    return half_receiver(input.world_position, surface.geometric_normal, input.pixel.xyz);
+#else
     apply_lightmap(surface,input.lightmap_slot,input.front_facing,input.lightmap_uv
 #ifdef INDIRECT_SHADOW
-        , input.world_position, input.pixel.xy
+        , input.world_position, input.pixel.xyz
+#ifdef SHADOW_HALF_RESOLVE
+        , depth_slope
+#endif
 #endif
     );
     BrdfInputs brdf = make_brdf_inputs(input.world_position, surface);
@@ -53,4 +67,5 @@ float4 main(PixelInput input) : SV_Target0 {
     // The ideal low-roughness peak may exceed binary16's finite range. Preserve
     // finite linear target values; final SDR clamping remains a separate pass.
     return float4(clamp(color, 0.0, 65504.0), sampled.output_alpha);
+#endif
 }

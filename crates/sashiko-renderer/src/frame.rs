@@ -360,7 +360,7 @@ impl Renderer {
         // than the initial scene. Negotiate the change before publishing its assets.
         let limits = self.drawing.limits;
         if new_program
-            || assets.shadow_capsules > limits.max_indirect_shadow_capsules
+            || assets.shadow_count()? > limits.max_indirect_shadow_capsules
             || assets.draws > limits.max_draws
             || assets
                 .objects

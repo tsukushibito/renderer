@@ -263,17 +263,17 @@ cargo run --release -p renderer-scenes --features vulkan --bin renderer-scenes -
 
 ### 動く物体でベイク済みの間接光を遮る
 
-標準 PBR で、歩く人物と移動する小物の影を床や壁のライトマップに落とせます。次のデモは外部アセット不要です。同じカメラとポーズで比較するには `on` を `off` に変え、別の出力先を指定してください。
+標準 PBR で、歩く人物と移動する小物の影を床や壁のライトマップに落とせます。次のデモは外部アセット不要です。同じカメラとポーズで比較するには、次のコマンドで `full` を `half` または `off` に変えて出力先を分けます。
 
 ```powershell
-cargo run --release -p renderer-scenes --features vulkan --bin renderer-scenes -- --api vulkan --pipeline forward --indirect-shadow-demo on --width 960 --height 540 --frames 120 --output build/shadow-on
+cargo run --release -p renderer-scenes --features vulkan --bin renderer-scenes -- --api vulkan --pipeline forward --indirect-shadow-demo full --width 960 --height 540 --frames 120 --output build/shadow-full
 ```
 
-WebGPU ビューアでは `?scene=indirect-shadow` と `?scene=indirect-shadow-off` で同じシーンを開けます。Rust から使う場合は次の順序で設定します。
+WebGPU ビューアは `?scene=indirect-shadow`、`indirect-shadow-half`、`indirect-shadow-off` に対応します。実行中はシーン選択で切り替えられます。ネイティブの `--shadow-layout prop|single|offscreen|spread|dense` は同じアニメーションで画面内の候補数と重なりを変えます。
 
-1. Renderer の作成・再構成時に `SceneAssets::with_indirect_shadow_capacity(n)` で、同時に使うカプセル数を予約します。既定は 0、上限は 16 です。
-2. 静的配置のライトマップと対応する拡散プローブを `load_surface_lighting` でロードし、ビューに設定します。
-3. ポーズ更新後、脚や胴などの両端のワールド座標と半径から `pbr::ShadowCapsule::new(a, b, radius)?` を作り、再利用する配列を `SceneInput::indirect_shadow_capsules` に渡します。小物は両端を同じ座標にすると球になります。空スライスでそのフレームの遮蔽を解除できます。
+1. 資産の準備時に `MeshData::with_shadow_proxies` でカプセルを設定します。`pbr::ShadowProxy` にメッシュ空間の `ShadowCapsule` と、剛体なら `joint: None`、関節に追従する場合はジョイント番号を指定します。両端が同じなら球です。
+2. 通常どおり個体を `SceneAssets` に登録し、静的面に対応するライトマップと拡散プローブを `load_surface_lighting` でロードします。標準描画では各個体の変換とポーズから毎フレーム自動で収集します。`ModelInstance` は最細 LOD の先頭パーツにモデル全体の形状を持たせると、材質分割や LOD 切替でも一度だけ収集します。個別の `RenderObject` は `indirect_shadow_source` で無効化できます。
+3. カメラの `pbr::ViewInput::indirect_shadows` に `IndirectShadowMode::{Off, Full, Half}` のいずれかを指定します。Full が既定です。Half は単一サンプルで使えます。ビューごとの切替にレンダラーの再作成は不要です。
 
 遮蔽がかかるのはライトマップを持つ OPAQUE / MASK 面の拡散間接光です。プローブの照度に方向性がある場所では明るい側と反対に影が伸び、等方的な場所では接地部を中心に暗くなります。[実機比較と測定条件](../verification/current.md#directional-indirect-shadows)
 

@@ -20,6 +20,8 @@ use std::path::Path;
 use std::{collections::VecDeque, time::Instant};
 
 struct Sample {
+    #[cfg(feature = "memory-profiling")]
+    shadow_metrics: (u64, sashiko_renderer::pbr::ShadowTileStats),
     phases: [u64; 5],
     latency: u64,
     native: Option<SubmissionMetrics>,
@@ -27,6 +29,24 @@ struct Sample {
     yield_ns: u64,
     iteration_ns: u64,
 }
+fn shadow_metrics(samples: &[Sample], options: &Options) -> Value {
+    #[cfg(feature = "memory-profiling")]
+    if options.shadow_demo.is_some() && options.gpu_timing {
+        return json!(
+            samples
+                .iter()
+                .map(|s| {
+                    let (cpu_ns, stats) = s.shadow_metrics;
+                    json!({"cpu_ns":cpu_ns, "active":stats.active_capsules,
+                  "indices":stats.candidate_indices, "busiest_tile":stats.busiest_tile})
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+    let _ = (samples, options);
+    Value::Null
+}
+
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 struct Pending {
     frame: FrameId,
@@ -184,6 +204,8 @@ fn frames(
             frame,
             plan,
             sample: Sample {
+                #[cfg(feature = "memory-profiling")]
+                shadow_metrics: workspace.shadow_metrics,
                 phases: [build, compile, submit, 0, 0],
                 latency: 0,
                 native: None,
@@ -461,6 +483,7 @@ fn measurement(
         "gpu":{"enabled":options.gpu_timing,"samples":gpu_samples,"total_ns":gpu_total,
             "min_ns":if gpu_samples==0{None}else{Some(gpu_min)},"max_ns":if gpu_samples==0{None}else{Some(gpu_max)}},
         "frame_wall_ns":samples.iter().map(|sample|sample.latency).collect::<Vec<_>>(),
+        "indirect_shadow_collection":shadow_metrics(samples, options),
         "frame_samples":samples.iter().enumerate().map(|(frame,s)|json!({"frame":frame,
             "phase_ns":s.phases,"poll_calls_elapsed_ns":s.poll_cpu_ns,"yield_elapsed_ns":s.yield_ns,
             "active_host_elapsed_ns":s.phases[0]+s.phases[1]+s.phases[2]+s.poll_cpu_ns+s.phases[4],
@@ -974,6 +997,8 @@ mod tests {
     fn missing_requested_gpu_samples_are_not_reported_as_zero_time() {
         let mut options = fixture_options();
         let sample = Sample {
+            #[cfg(feature = "memory-profiling")]
+            shadow_metrics: Default::default(),
             phases: [1, 2, 3, 4, 5],
             latency: 30,
             native: None,

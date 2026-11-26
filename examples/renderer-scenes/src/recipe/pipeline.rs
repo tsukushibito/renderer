@@ -501,7 +501,7 @@ impl Budget {
             frame_readback_bytes
         };
         Ok(Self {
-            shadow_demo: options.shadow_demo == Some(true),
+            shadow_demo: options.shadow_demo.is_some(),
             graph,
             samplers: scene.render_samplers(!options.windowed || options.sdr_output().fxaa),
             prepared: Some(prepared),
@@ -1086,6 +1086,9 @@ impl InstancePlacements {
 }
 
 pub(super) struct Workspace {
+    #[cfg(all(feature = "memory-profiling", not(target_arch = "wasm32")))]
+    pub shadow_metrics: (u64, pbr::ShadowTileStats),
+    crowd: Option<super::indirect_shadow_demo::Crowd>,
     lightmap_uv: Vec<Option<BufferHandle>>,
     lightmap_pages: Vec<ImageView>,
     vertices: Vec<BufferHandle>,
@@ -1145,6 +1148,10 @@ impl Workspace {
             standard_forward::Inputs::new(scene, prepared.instance_draws, prepared.rect_shadows)
         });
         Self {
+            #[cfg(all(feature = "memory-profiling", not(target_arch = "wasm32")))]
+            shadow_metrics: Default::default(),
+            crowd: (scene.source["indirect_shadow_demo"] == true)
+                .then(super::indirect_shadow_demo::Crowd::new),
             lightmap_uv: Vec::with_capacity(primitives),
             lightmap_pages: Vec::with_capacity(primitives),
             vertices: Vec::with_capacity(primitives),

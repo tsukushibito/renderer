@@ -291,7 +291,7 @@ pub const fn instancing_program() -> ManagedRasterProgram {
 pub(crate) fn lightmapped_program(
     base: &ManagedRasterProgram,
     packed: bool,
-    shadowed: bool,
+    shadowed: crate::pbr::indirect_shadow::ShadowStage,
 ) -> Option<ManagedRasterProgram> {
     const fn attributes(packed: bool) -> [VertexAttribute; 5] {
         [
@@ -311,8 +311,28 @@ pub(crate) fn lightmapped_program(
             },
         ]
     }
+    use super::transform_programs::appended;
+    const fn table(binding: u32) -> BindingLayout {
+        BindingLayout {
+            group: 0,
+            binding,
+            kind: BindingType::SampledImage,
+            stages: ShaderStages::FRAGMENT,
+            min_size: 0,
+        }
+    }
+    const fn has_tile_masks(bindings: &[BindingLayout]) -> bool {
+        let mut i = 0;
+        while i < bindings.len() {
+            if bindings[i].group == 0 && bindings[i].binding == 3 {
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
     macro_rules! variants {
-        ($base:path, $vs:literal, $fs:literal, $shadow_vs:literal, $shadow_fs:literal, $size:literal) => {{
+        ($base:path, $vs:literal, $fs:literal, $shadow_vs:literal, $shadow_fs:literal, $receiver_fs:literal, $size:literal) => {{
             static UV: RasterProgramDescriptor = RasterProgramDescriptor {
                 secondary_vertex_stride: 8,
                 vertex_attributes: &attributes(false),
@@ -330,28 +350,10 @@ pub(crate) fn lightmapped_program(
                 ..UV
             };
             const N: usize = $base.bindings.len();
-            const SHADOW_BYTES: u64 = crate::pbr::indirect_shadow::BYTES as u64;
+
             static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
-                bindings: &{
-                    let mut slots = [CAMERA; N];
-                    let mut i = 0;
-                    while i < N {
-                        slots[i] = $base.bindings[i];
-                        i += 1;
-                    }
-                    slots[0].min_size = SHADOW_BYTES;
-                    slots
-                },
-                binding_bytes: &{
-                    let mut sizes = [0; N];
-                    let mut i = 0;
-                    while i < N {
-                        sizes[i] = $base.binding_bytes[i];
-                        i += 1;
-                    }
-                    sizes[0] = SHADOW_BYTES;
-                    sizes
-                },
+                bindings: &appended::<_, { N + 1 }>($base.bindings, table(5)),
+                binding_bytes: &appended::<_, { N + 1 }>($base.binding_bytes, 0),
                 shaders: packaged_shaders!(
                     raster: ($shadow_vs, $shadow_fs),
                     inline_constants: Some(sashiko_renderer_core::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
@@ -364,16 +366,53 @@ pub(crate) fn lightmapped_program(
                 secondary_vertex_stride: PACKED.secondary_vertex_stride,
                 ..SHADOW
             };
-            (&$base, [[&UV, &PACKED], [&SHADOW, &SHADOW_PACKED]])
+            static RECEIVER: RasterProgramDescriptor = RasterProgramDescriptor {
+                color_outputs: &[ImageFormat::Rgba16Float],
+                shaders: packaged_shaders!(
+                    raster: ($shadow_vs, $receiver_fs),
+                    inline_constants: Some(sashiko_renderer_core::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
+                    nonfiltering: $base.shaders.webgpu_nonfiltering_samplers(),
+                ),
+                ..SHADOW
+            };
+            static RECEIVER_PACKED: RasterProgramDescriptor = RasterProgramDescriptor {
+                secondary_vertex_stride: 12,
+                vertex_attributes: PACKED.vertex_attributes,
+                ..RECEIVER
+            };
+            static RESOLVE: RasterProgramDescriptor = RasterProgramDescriptor {
+                bindings: if has_tile_masks($base.bindings) {
+                    &appended::<_, { N + 1 }>($base.bindings, table(6))
+                } else { &appended::<_, { N + 2 }>(SHADOW.bindings, table(6)) },
+                binding_bytes: if has_tile_masks($base.bindings) {
+                    &appended::<_, { N + 1 }>($base.binding_bytes, 0)
+                } else { &appended::<_, { N + 2 }>(SHADOW.binding_bytes, 0) },
+                shaders: packaged_shaders!(
+                    raster: ($shadow_vs, concat!("half_", $shadow_fs)),
+                    inline_constants: Some(sashiko_renderer_core::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
+                    nonfiltering: $base.shaders.webgpu_nonfiltering_samplers(),
+                ),
+                ..SHADOW
+            };
+            static RESOLVE_PACKED: RasterProgramDescriptor = RasterProgramDescriptor {
+                secondary_vertex_stride: 12,
+                vertex_attributes: PACKED.vertex_attributes,
+                ..RESOLVE
+            };
+            (&$base, [
+                [&UV, &PACKED], [&SHADOW, &SHADOW_PACKED],
+                [&RECEIVER, &RECEIVER_PACKED], [&RESOLVE, &RESOLVE_PACKED],
+            ])
         }};
     }
-    static VARIANTS: &[(&RasterProgramDescriptor, [[&RasterProgramDescriptor; 2]; 2])] = &[
+    static VARIANTS: &[(&RasterProgramDescriptor, [[&RasterProgramDescriptor; 2]; 4])] = &[
         variants!(
             OPAQUE,
             "pbr_lightmap.vert",
             "pbr.frag",
             "pbr_lightmap.vert",
             "pbr_indirect_shadow.frag",
+            "receiver_pbr_indirect_shadow.frag",
             4
         ),
         variants!(
@@ -382,6 +421,7 @@ pub(crate) fn lightmapped_program(
             "gbuffer.frag",
             "pbr_lightmap.vert",
             "gbuffer_indirect_shadow.frag",
+            "receiver_pbr_indirect_shadow.frag",
             4
         ),
         variants!(
@@ -390,6 +430,7 @@ pub(crate) fn lightmapped_program(
             "pbr_all_lights.frag",
             "pbr_lightmap.vert",
             "pbr_all_lights_indirect_shadow.frag",
+            "receiver_pbr_indirect_shadow.frag",
             4
         ),
         variants!(
@@ -398,6 +439,7 @@ pub(crate) fn lightmapped_program(
             "pbr_forward_plus.frag",
             "pbr_lightmap.vert",
             "pbr_forward_plus_indirect_shadow.frag",
+            "receiver_pbr_indirect_shadow.frag",
             4
         ),
         variants!(
@@ -406,6 +448,7 @@ pub(crate) fn lightmapped_program(
             "pbr_transformed.frag",
             "pbr_lightmap_transformed_small.vert",
             "pbr_transformed_indirect_shadow.frag",
+            "receiver_pbr_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
@@ -414,6 +457,7 @@ pub(crate) fn lightmapped_program(
             "pbr_all_lights_transformed.frag",
             "pbr_lightmap_transformed_small.vert",
             "pbr_all_lights_transformed_indirect_shadow.frag",
+            "receiver_pbr_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
@@ -422,6 +466,7 @@ pub(crate) fn lightmapped_program(
             "pbr_forward_plus_transformed.frag",
             "pbr_lightmap_transformed_small.vert",
             "pbr_forward_plus_transformed_indirect_shadow.frag",
+            "receiver_pbr_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
@@ -430,6 +475,7 @@ pub(crate) fn lightmapped_program(
             "gbuffer_transformed.frag",
             "pbr_lightmap_transformed_small.vert",
             "gbuffer_transformed_indirect_shadow.frag",
+            "receiver_pbr_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
@@ -438,6 +484,7 @@ pub(crate) fn lightmapped_program(
             "pbr_transformed.frag",
             "pbr_lightmap_transformed.vert",
             "pbr_transformed_indirect_shadow.frag",
+            "receiver_pbr_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
@@ -446,6 +493,7 @@ pub(crate) fn lightmapped_program(
             "pbr_all_lights_transformed.frag",
             "pbr_lightmap_transformed.vert",
             "pbr_all_lights_transformed_indirect_shadow.frag",
+            "receiver_pbr_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
@@ -454,6 +502,7 @@ pub(crate) fn lightmapped_program(
             "pbr_forward_plus_transformed.frag",
             "pbr_lightmap_transformed.vert",
             "pbr_forward_plus_transformed_indirect_shadow.frag",
+            "receiver_pbr_transformed_indirect_shadow.frag",
             8
         ),
         variants!(
@@ -462,6 +511,7 @@ pub(crate) fn lightmapped_program(
             "gbuffer_transformed.frag",
             "pbr_lightmap_transformed.vert",
             "gbuffer_transformed_indirect_shadow.frag",
+            "receiver_pbr_transformed_indirect_shadow.frag",
             8
         ),
     ];
@@ -472,7 +522,7 @@ pub(crate) fn lightmapped_program(
             base.same(&ManagedRasterProgram::from_trusted_descriptor(plain))
                 .then(|| {
                     ManagedRasterProgram::from_trusted_descriptor(
-                        variants[usize::from(shadowed)][usize::from(packed)],
+                        variants[shadowed as usize][usize::from(packed)],
                     )
                 })
         }
@@ -482,6 +532,25 @@ pub(crate) fn lightmapped_program(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tiled_half_resolution_resolve_fits_portable_fragment_texture_limit() {
+        let base = forward_plus::raster_program(true, false);
+        let resolve = lightmapped_program(
+            &base,
+            false,
+            crate::pbr::indirect_shadow::ShadowStage::Resolve,
+        )
+        .unwrap();
+        let textures = resolve
+            .bindings()
+            .iter()
+            .filter(|b| {
+                b.kind == BindingType::SampledImage && b.stages.contains(ShaderStages::FRAGMENT)
+            })
+            .count();
+        assert!(textures <= 16);
+    }
 
     #[test]
     fn vertex_clip_arithmetic_keeps_one_noncontracted_operation_tree() {

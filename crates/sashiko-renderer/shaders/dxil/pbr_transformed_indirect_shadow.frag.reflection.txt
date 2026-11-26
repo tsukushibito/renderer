@@ -20,7 +20,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: df6f6fa23ea589bbdd0c7437713b4fb3
+; shader hash: aabb4e7c6e130a4a84414a9e6145bfb0
 ;
 ; Pipeline Runtime Information:
 ;
@@ -105,14 +105,11 @@
 ;           float4 shadow_depth_scale;                ; Offset:  416
 ;           float4 camera_forward_blend;              ; Offset:  432
 ;           float4 shadow_bias;                       ; Offset:  448
-;           float4 shadow_tile_scale;                 ; Offset:  464
-;           uint4 shadow_masks[64];                   ; Offset:  480
-;           float4 capsule_data[48];                  ; Offset: 1504
 ;
 ;       } camera;                                     ; Offset:    0
 ;
 ;
-;   } camera;                                         ; Offset:    0 Size:  2272
+;   } camera;                                         ; Offset:    0 Size:   464
 ;
 ; }
 ;
@@ -159,6 +156,7 @@
 ; shadow_image2                     texture     f32          2d      T9      t2,space3     1
 ; shadow_image3                     texture     f32          2d     T10      t3,space3     1
 ; reflection_probes                 texture     f32          2d     T11      t4,space2     1
+; shadow_table                      texture     f32          2d     T12             t5     1
 ;
 ;
 ; ViewId state:

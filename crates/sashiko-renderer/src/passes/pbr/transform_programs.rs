@@ -36,7 +36,7 @@ const fn transform_binding(tier: InstanceTier) -> BindingLayout {
     }
 }
 
-const fn appended<T: Copy, const N: usize>(source: &[T], last: T) -> [T; N] {
+pub(super) const fn appended<T: Copy, const N: usize>(source: &[T], last: T) -> [T; N] {
     assert!(source.len() + 1 == N);
     let mut slots = [last; N];
     let mut i = 0;

@@ -30,6 +30,9 @@ struct GBuffer {
 };
 
 GBuffer main(PixelInput input) {
+#ifdef SHADOW_HALF_RESOLVE
+    float2 depth_slope = float2(ddx(input.pixel.z), ddy(input.pixel.z));
+#endif
 #ifdef BISTRO_TRANSFORMED_DIRECTIONS
     input.front_facing = input.front_facing != (input.mirrored != 0u);
 #endif
@@ -37,7 +40,10 @@ GBuffer main(PixelInput input) {
         input.world_normal, input.world_tangent, input.texcoord, input.front_facing).surface;
     apply_lightmap(surface,input.lightmap_slot,input.front_facing,input.lightmap_uv
 #ifdef INDIRECT_SHADOW
-        , input.world_position, input.pixel.xy
+        , input.world_position, input.pixel.xyz
+#ifdef SHADOW_HALF_RESOLVE
+        , depth_slope
+#endif
 #endif
     );
     GBuffer result;

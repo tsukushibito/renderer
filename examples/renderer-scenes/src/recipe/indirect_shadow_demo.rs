@@ -101,13 +101,89 @@ pub(super) fn populate(scene: &mut Scene, env: &mut ibl::Environment) -> Result<
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Layout {
+    Prop,
+    Single,
+    Offscreen,
+    Spread,
+    Dense,
+}
+impl std::str::FromStr for Layout {
+    type Err = &'static str;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "prop" => Ok(Self::Prop),
+            "single" => Ok(Self::Single),
+            "offscreen" => Ok(Self::Offscreen),
+            "spread" => Ok(Self::Spread),
+            "dense" => Ok(Self::Dense),
+            _ => Err("expected shadow layout prop, single, offscreen, spread or dense"),
+        }
+    }
+}
+
+impl Layout {
+    pub fn capsules(self) -> usize {
+        match self {
+            Self::Prop => 1,
+            Self::Single => 16,
+            Self::Offscreen | Self::Spread | Self::Dense => 256,
+        }
+    }
+    fn offset(self, i: usize) -> [f32; 3] {
+        match self {
+            Self::Prop | Self::Single => [0.; 3],
+            Self::Offscreen => [i as f32 * 20., 0., 0.],
+            Self::Spread => [
+                ((i % 4) as f32 - 1.5) * 1.1,
+                0.,
+                ((i / 4) as f32 - 1.5) * 0.75,
+            ],
+            Self::Dense => [
+                ((i % 4) as f32 - 1.5) * 0.09,
+                0.,
+                ((i / 4) as f32 - 1.5) * 0.09,
+            ],
+        }
+    }
+}
+pub(super) struct Crowd {
+    pub capsules: Vec<ShadowCapsule>,
+    pub transforms: Vec<Transform>,
+}
+impl Crowd {
+    pub fn new() -> Self {
+        Self {
+            capsules: Vec::with_capacity(Layout::Dense.capsules()),
+            transforms: Vec::with_capacity(Layout::Dense.capsules()),
+        }
+    }
+    pub fn update(&mut self, frame: usize, layout: Layout) -> Result<(), Error> {
+        self.capsules.clear();
+        self.transforms.clear();
+        if matches!(layout, Layout::Prop) {
+            let pose = Pose::at(frame, [0.; 3])?;
+            self.capsules.push(pose.capsules[13]);
+            self.transforms.push(pose.transforms[13]);
+            return Ok(());
+        }
+        for i in 0..layout.capsules() / 16 {
+            let pose = Pose::at(frame + i * 7, layout.offset(i))?;
+            self.capsules.extend_from_slice(&pose.capsules);
+            self.transforms.extend_from_slice(&pose.transforms);
+        }
+        Ok(())
+    }
+}
 pub(super) struct Pose {
     pub capsules: [ShadowCapsule; 16],
     pub transforms: [Transform; 16],
 }
 
 impl Pose {
-    pub fn at(frame: usize) -> Result<Self, Error> {
+    fn at(frame: usize, offset: [f32; 3]) -> Result<Self, Error> {
         let phase = (frame % 240) as f32 * std::f32::consts::TAU / 240.;
         let x = 0.65 * phase.sin();
         let stride = (4. * phase).sin();
@@ -143,6 +219,8 @@ impl Pose {
         let mut capsules = [ShadowCapsule::new([0.; 3], [0.; 3], 1.)?; 16];
         let mut transforms = [Transform::IDENTITY; 16];
         for (i, (a, b, r)) in parts.into_iter().enumerate() {
+            let a = std::array::from_fn(|axis| a[axis] + offset[axis]);
+            let b = std::array::from_fn(|axis| b[axis] + offset[axis]);
             capsules[i] = ShadowCapsule::new(a, b, r)?;
             let v: [f32; 3] = std::array::from_fn(|j| b[j] - a[j]);
             let length = v[0].hypot(v[1]).hypot(v[2]);

@@ -119,7 +119,8 @@ struct Options {
     ibl_manifest: Option<PathBuf>,
     reflection_probes: Option<PathBuf>,
     reflection_debug: sashiko_renderer::pbr::ReflectionProbeView,
-    shadow_demo: Option<bool>,
+    shadow_demo: Option<sashiko_renderer::pbr::IndirectShadowMode>,
+    shadow_layout: indirect_shadow_demo::Layout,
     reflection_spheres: Option<[f32; 3]>,
     reflection_spheres_to: Option<[f32; 3]>,
     baked_lighting: Option<PathBuf>,
@@ -385,7 +386,8 @@ impl Options {
         look["baked_lighting_sha256"] = env.identity["baked_lighting_sha256"].clone();
         look["gi_view"] = serde_json::json!(format!("{:?}", self.gi_debug));
         if let Some(enabled) = self.shadow_demo {
-            look["indirect_shadow_demo"] = enabled.into();
+            look["indirect_shadow_demo"] = format!("{enabled:?}").into();
+            look["shadow_layout"] = format!("{:?}", self.shadow_layout).into();
         }
         look["reflection_spheres"] = serde_json::json!(self.reflection_spheres);
         look["reflection_spheres_to"] = serde_json::json!(self.reflection_spheres_to);
@@ -467,6 +469,7 @@ impl Options {
             reflection_probes: None,
             reflection_debug: Default::default(),
             shadow_demo: None,
+            shadow_layout: indirect_shadow_demo::Layout::Single,
             reflection_spheres: None,
             reflection_spheres_to: None,
             baked_lighting: None,
@@ -532,11 +535,16 @@ impl Options {
                         _ => return Err("expected off, unshadowed or shadowed".into()),
                     }
                 }
+                "--shadow-layout" => {
+                    result.shadow_layout = args.next().ok_or("missing shadow layout")?.parse()?;
+                }
                 "--indirect-shadow-demo" => {
+                    use sashiko_renderer::pbr::IndirectShadowMode::*;
                     result.shadow_demo = Some(match args.next().as_deref() {
-                        Some("on") => true,
-                        Some("off") => false,
-                        _ => return Err("expected --indirect-shadow-demo on or off".into()),
+                        Some("on" | "full") => Full,
+                        Some("off") => Off,
+                        Some("half") => Half,
+                        _ => return Err("expected indirect shadow mode off, full or half".into()),
                     });
                     result.fixture = true;
                     result.shadows = false;
@@ -909,7 +917,7 @@ Scenes and output
   --output DIR                   Default: .tools/bistro-runtime
   --baked-lighting FILE --scenario-blend 0..1     Baked day-to-dusk indirect and direct light
   --reflection-probes FILE [--reflection-debug weights|radiance] [--reflection-spheres X Y Z] [--reflection-spheres-to X Y Z]
-  --indirect-shadow-demo on|off
+  --indirect-shadow-demo off|full|half --shadow-layout prop|single|offscreen|spread|dense
   --lighting-pass beauty|base-color|direct|diffuse|diffuse-no-ao|specular|local-specular|emissive
   --time-sweep | --gi-debug irradiance|sources|weights | --white-sphere X Y Z
   --look reference|lumberyard-day|o3de-atrium

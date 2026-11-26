@@ -27,6 +27,7 @@ const INDEX_BUFFER: &str = "mesh indices";
 pub struct MeshData {
     geometry: GeometryData,
     bounds: Bounds,
+    shadow_proxies: Box<[crate::pbr::ShadowProxy]>,
     attributes: Vec<VertexAttribute>,
     skin: Option<Arc<skin::Skin>>,
 }
@@ -71,6 +72,7 @@ impl MeshData {
         Self {
             geometry,
             bounds,
+            shadow_proxies: Box::default(),
             attributes: attributes.to_vec(),
             skin: None,
         }
@@ -94,9 +96,11 @@ fn indexed_bounds(
     Bounds::new(min, max)
 }
 struct Layout {
+    shadow_envelope: Option<crate::pbr::ShadowCapsule>,
     position_at_start: bool,
     skin: Option<Arc<skin::Skin>>,
     bounds: Bounds,
+    shadow_proxies: Arc<[crate::pbr::ShadowProxy]>,
     attributes: Vec<VertexAttribute>,
     vertex_stride: u32,
     index_count: u32,
@@ -111,6 +115,10 @@ impl MeshData {
             }),
             skin: self.skin,
             bounds: self.bounds,
+            shadow_envelope: crate::pbr::ShadowCapsule::envelope(
+                self.shadow_proxies.iter().map(|p| p.capsule),
+            ),
+            shadow_proxies: self.shadow_proxies.into(),
             attributes: self.attributes,
             vertex_stride: self.geometry.vertex_stride(),
             index_count: self.geometry.index_count(),

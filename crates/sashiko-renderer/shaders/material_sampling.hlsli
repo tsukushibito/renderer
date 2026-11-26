@@ -50,11 +50,18 @@ struct MaterialSample {
 
 MaterialSample sample_material(
     float3 world_normal, float4 world_tangent, float2 texcoord, bool front_facing
+#ifdef SHADOW_RECEIVER
+    , float2 pixel_scale
+#endif
 ) {
     // Form derivatives while every fragment/helper invocation is active. Later
     // culling/alpha discards cannot make the four texture LODs divergent.
     float2 dx = ddx(texcoord);
     float2 dy = ddy(texcoord);
+#ifdef SHADOW_RECEIVER
+    dx *= pixel_scale.x;
+    dy *= pixel_scale.y;
+#endif
     if (!front_facing && material.flags.y == 0u) { discard; }
     float4 base = material.base_factor * base_image.SampleGrad(material_sampler, texcoord, dx, dy);
     float alpha = clamp(base.a, 0.0, 1.0);
@@ -62,6 +69,15 @@ MaterialSample sample_material(
     if ((alpha_mode == 1u && alpha < material.metallic_roughness_occlusion_cutoff.w)
         || (alpha_mode == 2u && alpha <= 0.0)) { discard; }
 
+#ifdef SHADOW_RECEIVER
+    MaterialSample result = (MaterialSample)0;
+#ifdef BISTRO_TRANSFORMED_DIRECTIONS
+    world_normal = scale_extreme_direction(world_normal);
+#endif
+    float3 geometric = unit_or(world_normal, float3(0.0, 0.0, 1.0));
+    result.surface.geometric_normal = front_facing ? geometric : -geometric;
+    return result;
+#else
     MaterialSample result;
     result.surface.base_color = base.rgb;
     result.output_alpha = alpha_mode == 2u ? alpha : 1.0;
@@ -93,6 +109,7 @@ MaterialSample sample_material(
     result.surface.emissive = material.emissive_normal_scale.rgb *
         emissive_image.SampleGrad(emissive_sampler, texcoord, dx, dy).rgb;
     return result;
+#endif
 }
 
 #endif

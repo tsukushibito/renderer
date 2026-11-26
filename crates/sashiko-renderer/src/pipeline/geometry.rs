@@ -97,6 +97,49 @@ impl GeometryPipeline {
         self.common().prepare_view(view, sun, bounds, environment)
     }
 
+    /// Collect contributing world-space proxies into this view's tile lists.
+    pub fn set_indirect_shadows(
+        &mut self,
+        graph: &mut Graph,
+        view: &mut PreparedView,
+        volume: &crate::pbr::BakedLighting,
+        blend: f32,
+        capsules: &[crate::pbr::ShadowCapsule],
+    ) -> Result<(), GraphError> {
+        if !(0.0..=1.0).contains(&blend) {
+            return Err(GraphError::invalid_input("invalid indirect shadow blend"));
+        }
+        let recipe = match self {
+            GeometryPipeline::Forward(recipe) | GeometryPipeline::ForwardPlus(recipe) => {
+                &mut recipe.common
+            }
+            GeometryPipeline::Deferred(recipe) => &mut recipe.common,
+        };
+        if capsules.is_empty() || view.shadow_mode == crate::pbr::IndirectShadowMode::Off {
+            view.shadow_view = None;
+            #[cfg(feature = "memory-profiling")]
+            if let Some(workspace) = &mut recipe.shadow_workspace {
+                workspace.stats = Default::default();
+            }
+        } else {
+            let workspace = recipe
+                .shadow_workspace
+                .as_mut()
+                .ok_or_else(|| GraphError::invalid_input("indirect shadows were not prepared"))?;
+            view.shadow_view = workspace.upload(graph, view, volume, blend, capsules)?;
+            view.shadow_limit = recipe.limits.max_indirect_shadow_capsules;
+            view.shadow_light_tail = workspace.light_tail;
+        }
+        Ok(())
+    }
+    #[cfg(feature = "memory-profiling")]
+    pub fn indirect_shadow_stats(&self) -> crate::pbr::ShadowTileStats {
+        self.common()
+            .shadow_workspace
+            .as_ref()
+            .map(|workspace| workspace.stats)
+            .unwrap_or_default()
+    }
     /// Declare the scene and return linear HDR for further processing.
     pub fn draw_hdr(
         &mut self,

@@ -182,19 +182,21 @@ pub(super) fn build(
             resident.standard_primitive_bounds[i]
         }
     };
+    let mut view_input = pbr::ViewInput::new(
+        camera_input.matrix,
+        camera.position,
+        std::array::from_fn(|axis| {
+            f64::from(camera.target[axis]) - f64::from(camera.position[axis])
+        }),
+        [camera_input.near, camera_input.far],
+        pbr::Projection::SymmetricPerspective {
+            vertical_fov_degrees: camera.fov,
+            aspect: options.width as f32 / options.height as f32,
+        },
+    )?;
+    view_input.indirect_shadows = options.shadow_demo.unwrap_or_default();
     let view = recipe.prepare_view(
-        pbr::ViewInput::new(
-            camera_input.matrix,
-            camera.position,
-            std::array::from_fn(|axis| {
-                f64::from(camera.target[axis]) - f64::from(camera.position[axis])
-            }),
-            [camera_input.near, camera_input.far],
-            pbr::Projection::SymmetricPerspective {
-                vertical_fov_degrees: camera.fov,
-                aspect: options.width as f32 / options.height as f32,
-            },
-        )?,
+        view_input,
         pbr::Sun::from_normalized_rgb_lux(
             camera_input.direction_to_light,
             camera_input.irradiance,
@@ -224,17 +226,32 @@ pub(super) fn build(
     } else {
         view
     };
-    let demo_pose = options
-        .shadow_demo
-        .map(|_| crate::recipe::indirect_shadow_demo::Pose::at(frame_index))
-        .transpose()?;
-    if let (Some(true), Some(pose)) = (options.shadow_demo, &demo_pose) {
-        let volume = resident
-            .shadow_volume
-            .as_ref()
-            .ok_or("missing demo shadow probes")?;
-        view.set_indirect_shadows(&mut graph, volume, 0., &pose.capsules)?;
-    }
+    let demo_pose = workspace.crowd.as_mut();
+    let demo_pose = if let Some(pose) = demo_pose {
+        pose.update(frame_index, options.shadow_layout)?;
+        if options
+            .shadow_demo
+            .is_some_and(|m| m != pbr::IndirectShadowMode::Off)
+        {
+            let volume = resident
+                .shadow_volume
+                .as_ref()
+                .ok_or("missing demo shadow probes")?;
+            #[cfg(all(feature = "memory-profiling", not(target_arch = "wasm32")))]
+            let timer = options.gpu_timing.then(std::time::Instant::now);
+            recipe.set_indirect_shadows(&mut graph, &mut view, volume, 0., &pose.capsules)?;
+            #[cfg(all(feature = "memory-profiling", not(target_arch = "wasm32")))]
+            if let Some(start) = timer {
+                workspace.shadow_metrics = (
+                    start.elapsed().as_nanos() as u64,
+                    recipe.indirect_shadow_stats(),
+                );
+            }
+        }
+        Some(&*pose)
+    } else {
+        None
+    };
     // GPU culling reads the current camera before the recipe adds its passes.
     if options.submission == SubmissionMode::Indirect {
         graph.upload_buffer(
@@ -287,7 +304,7 @@ pub(super) fn build(
             Draw::Instanced {
                 geometry: geometry(index),
                 first_transform: 0,
-                instance_count: 16,
+                instance_count: options.shadow_layout.capsules() as u32,
             }
         } else if motion.is_some() && index >= sphere_start {
             Draw::Instanced {

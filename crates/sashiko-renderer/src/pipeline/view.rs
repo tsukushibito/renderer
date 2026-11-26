@@ -39,6 +39,8 @@ impl StandardViewState {
 /// Host wall time for the StandardPipeline portions of one scene view.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StandardViewTimings {
+    /// View-local indirect shadow collection, lighting and tile table upload recording.
+    pub indirect_shadows: Duration,
     /// Per-object mesh, pose metadata, index range and lightmap connections.
     pub connect_meshes: Duration,
     /// World bounds, camera and shadow candidates, and transparent depth keys, including job join.
@@ -228,13 +230,6 @@ impl StandardPipeline {
                 Some(input.objects.len()),
             ));
         }
-        if input.indirect_shadow_capsules.len() > self.limits.max_indirect_shadow_capsules {
-            return Err(GraphError::capacity_error(
-                GraphCapacityKind::InputRecords("indirect shadow capsules"),
-                self.limits.max_indirect_shadow_capsules,
-                Some(input.indirect_shadow_capsules.len()),
-            ));
-        }
         let defaults = self
             .resources
             .as_ref()
@@ -276,11 +271,27 @@ impl StandardPipeline {
         }
         let mut prepared =
             self.prepare_view(camera.camera, input.sun, input.bounds, environment)?;
-        if !input.indirect_shadow_capsules.is_empty()
+        let shadow_started = self.timings.map(|_| Instant::now());
+        if camera.camera.indirect_shadows != pbr::IndirectShadowMode::Off
             && let Some((lighting, blend)) = input.surfaces
             && let Some(volume) = &lighting.shadow_probes
         {
-            prepared.set_indirect_shadows(graph, volume, blend, input.indirect_shadow_capsules)?;
+            self.shadow_capsules.clear();
+            for object in input.objects {
+                input
+                    .meshes
+                    .collect_shadows(object, &prepared, &mut self.shadow_capsules)?;
+            }
+            self.recipe.set_indirect_shadows(
+                graph,
+                &mut prepared,
+                volume,
+                blend,
+                &self.shadow_capsules,
+            )?;
+        }
+        if let (Some(timings), Some(started)) = (&mut self.timings, shadow_started) {
+            timings.indirect_shadows = started.elapsed();
         }
         // Adjacent phases share a boundary. Disabled profiling reads no clocks.
         let mut clock = self.timings.map(|_| Instant::now());

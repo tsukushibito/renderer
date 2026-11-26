@@ -1,3 +1,5 @@
+#ifndef SASHIKO_OCTAHEDRAL_HLSLI
+#define SASHIKO_OCTAHEDRAL_HLSLI
 #include "pbr_math.hlsli"
 
 float2 oct_wrap(float2 components) {
@@ -33,3 +35,5 @@ float3 unpack_geometric_normal(float encoded) {
     float2 oct = float2(packed & 0x7fu, packed >> 7u) * (2.0 / 127.0) - 1.0;
     return oct_decode(oct);
 }
+
+#endif

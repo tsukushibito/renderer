@@ -37,7 +37,7 @@ async function load(preset) {
     try {
         await current?.dispose();
         current = undefined;
-        const source = ["fixture", "indirect-shadow", "indirect-shadow-off"].includes(scene) ? scene : new URL(`./scenes/${scene}/scene.json`, document.baseURI);
+        const source = ["fixture", "indirect-shadow", "indirect-shadow-off", "indirect-shadow-half"].includes(scene) ? scene : new URL(`./scenes/${scene}/scene.json`, document.baseURI);
         let manifest = { defaultView: "", views: [], credits: "" };
         if (source instanceof URL) {
             const response = await fetch(source);
@@ -83,7 +83,18 @@ async function restorePreset() {
         canvas.focus({ preventScroll: true });
     } catch (error) { showFailure(error); }
 }
-sceneSelect.addEventListener("change", () => load());
+sceneSelect.addEventListener("change", async () => {
+    const modes = { "indirect-shadow": "full", "indirect-shadow-half": "half", "indirect-shadow-off": "off" };
+    const selected = sceneSelect.value;
+    if (current && modes[locationUrl.searchParams.get("scene")] && modes[selected]) {
+        try {
+            await current.setIndirectShadows(modes[selected]);
+            setAddress(selected, presetSelect.value);
+        } catch (error) { showFailure(error); }
+    } else {
+        await load();
+    }
+});
 presetSelect.addEventListener("change", restorePreset);
 reset.addEventListener("click", restorePreset);
 retry.addEventListener("click", () => load(locationUrl.searchParams.get("view")));

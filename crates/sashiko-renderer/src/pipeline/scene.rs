@@ -40,6 +40,17 @@ pub struct StaticPlacement {
     mesh: MeshHandle,
     transform: Transform,
 }
+/// Select the mesh-space proxy asset once per instance, independently of the visible LOD.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum IndirectShadowSource {
+    #[default]
+    Mesh,
+    Disabled,
+    Model {
+        mesh: MeshHandle,
+        pose: Option<crate::mesh::SkinPoseId>,
+    },
+}
 /// Geometry and material selection, independent of any frame Graph or camera.
 #[derive(Clone, Copy, Debug)]
 pub struct RenderObject {
@@ -56,6 +67,8 @@ pub struct RenderObject {
     /// Set false for a shadow-only mesh LOD in standard camera passes.
     pub camera_visible: bool,
     pub casts_shadow: bool,
+    /// Defaults to this mesh's proxies, independently of direct-light shadow casting.
+    pub indirect_shadow_source: IndirectShadowSource,
 }
 impl RenderObject {
     pub fn new(mesh: MeshHandle, material: MaterialHandle) -> Self {
@@ -69,7 +82,15 @@ impl RenderObject {
             sort_center: None,
             camera_visible: true,
             casts_shadow: true,
+            indirect_shadow_source: IndirectShadowSource::Mesh,
             tint: [1.; 4],
+        }
+    }
+    pub(crate) fn shadow_source(&self) -> Option<(MeshHandle, Option<crate::mesh::SkinPoseId>)> {
+        match self.indirect_shadow_source {
+            IndirectShadowSource::Mesh => Some((self.mesh, self.pose)),
+            IndirectShadowSource::Disabled => None,
+            IndirectShadowSource::Model { mesh, pose } => Some((mesh, pose)),
         }
     }
     /// Associate this mesh at its current transform with a stable baked placement.
@@ -236,8 +257,6 @@ pub struct SceneInput<'a> {
     pub meshes: &'a Meshes,
     pub materials: &'a Materials,
     pub objects: &'a [RenderObject],
-    /// World-space proxies for the current pose, shared by the lightmapped receivers in this view.
-    pub indirect_shadow_capsules: &'a [crate::pbr::ShadowCapsule],
     pub lights: &'a [LocalLight],
     /// Directional light for standard shading. Defaults to zero radiance.
     pub sun: Sun,
@@ -258,7 +277,6 @@ impl<'a> SceneInput<'a> {
             meshes,
             materials,
             objects,
-            indirect_shadow_capsules: &[],
             lights: &[],
             sun: Sun::OFF,
             bounds: None,

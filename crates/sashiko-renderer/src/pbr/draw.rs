@@ -1,3 +1,4 @@
+use super::indirect_shadow::ShadowStage;
 use sashiko_renderer_core::graph::{
     Binding, BindingResource, BufferHandle, Graph, GraphCapacityKind, GraphError, ImageView,
     IndexedIndirectArgs, RasterBindings, RasterConstants, RasterDraw, RasterPass,
@@ -194,13 +195,13 @@ enum Command {
     Surface {
         draw: RasterDraw,
         packed: bool,
-        shadowed: bool,
+        shadowed: ShadowStage,
     },
     SurfaceIndirect {
         args: IndexedIndirectArgs,
         bindings: RasterBindings,
         packed: bool,
-        shadowed: bool,
+        shadowed: ShadowStage,
         slot: u32,
     },
     Indexed(RasterDraw),
@@ -295,6 +296,14 @@ impl Batch {
         let parameters = stage.parameters(None)?;
         for draw in draws {
             // Frame preflight checked material indices and instance ranges.
+            if stage.stage() == ShadowStage::Receiver
+                && !matches!(
+                    draw,
+                    Draw::Lightmapped { .. } | Draw::LightmappedIndirect { .. }
+                )
+            {
+                continue;
+            }
             let command = match *draw {
                 Draw::Lightmapped { geometry, surface } => {
                     let model = surface.transform.map(|index| {
@@ -334,7 +343,7 @@ impl Batch {
                         let variant = crate::passes::pbr::lightmapped_program(
                             selected,
                             surface.packed,
-                            stage.shadow_view().is_some(),
+                            stage.stage(),
                         )
                         .ok_or_else(|| GraphError::invalid_input("unsupported lightmap program"))?;
                         let key = (
@@ -365,7 +374,7 @@ impl Batch {
                         Command::Surface {
                             draw,
                             packed: surface.packed,
-                            shadowed: stage.shadow_view().is_some(),
+                            shadowed: stage.stage(),
                         }
                     }
                 }
@@ -392,7 +401,7 @@ impl Batch {
                         let variant = crate::passes::pbr::lightmapped_program(
                             program,
                             surface.packed,
-                            stage.shadow_view().is_some(),
+                            stage.stage(),
                         )
                         .ok_or_else(|| GraphError::invalid_input("unsupported lightmap program"))?;
                         let key = (material, surface.image, surface.packed, None);
@@ -412,7 +421,7 @@ impl Batch {
                             args: args.with_secondary_vertices(surface.vertices),
                             bindings,
                             packed: surface.packed,
-                            shadowed: stage.shadow_view().is_some(),
+                            shadowed: stage.stage(),
                             slot: surface.slot,
                         }
                     }
@@ -673,7 +682,10 @@ fn indexed(
 #[derive(Clone, Copy)]
 pub(crate) enum Bindings<'a> {
     Scene {
-        shadow_view: Option<BufferHandle>,
+        shadow_view: Option<ImageView>,
+        stage: ShadowStage,
+        half: Option<ImageView>,
+        packed_light_slot: Option<usize>,
         camera: BufferHandle,
         lighting: &'a [Binding],
     },
@@ -684,7 +696,13 @@ pub(crate) enum Bindings<'a> {
 }
 
 impl Bindings<'_> {
-    fn shadow_view(self) -> Option<BufferHandle> {
+    fn stage(self) -> ShadowStage {
+        match self {
+            Self::Scene { stage, .. } => stage,
+            Self::Shadow { .. } => ShadowStage::Off,
+        }
+    }
+    fn shadow_view(self) -> Option<ImageView> {
         match self {
             Self::Scene { shadow_view, .. } => shadow_view,
             Self::Shadow { .. } => None,
@@ -721,10 +739,7 @@ impl Bindings<'_> {
         let camera = match self {
             Self::Scene { camera, .. } | Self::Shadow { camera, .. } => camera,
         };
-        let camera = match surface.and(self.shadow_view()) {
-            Some(buffer) => buffer_binding(0, buffer, 0, super::indirect_shadow::BYTES as u64),
-            None => buffer_binding(0, camera, 0, CAMERA_BYTES as u64),
-        };
+        let camera = buffer_binding(0, camera, 0, CAMERA_BYTES as u64);
         material.factors.check_graph(graph)?;
         let factors = material.factors.binding();
         let textures = material.textures;
@@ -764,6 +779,28 @@ impl Bindings<'_> {
                 table.page_offset(page),
                 table.page_bytes,
             );
+            count += 1;
+        }
+        if let Some(view) = surface.and(self.shadow_view()) {
+            if let Self::Scene {
+                packed_light_slot: Some(slot),
+                ..
+            } = self
+            {
+                // Local lights follow the ten camera/material slots and the
+                // shared scene lighting. The resolve reads both tables at t2.
+                bindings[10 + slot] = image_binding(0, 2, view);
+            } else {
+                bindings[count] = image_binding(0, 5, view);
+                count += 1;
+            }
+        }
+        if surface.is_some()
+            && let Self::Scene {
+                half: Some(half), ..
+            } = self
+        {
+            bindings[count] = image_binding(0, 6, half);
             count += 1;
         }
         graph.raster_bindings(program, &bindings[..count])

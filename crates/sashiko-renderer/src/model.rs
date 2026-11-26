@@ -133,10 +133,19 @@ impl ModelInstance {
             .unwrap_or(0)
     }
 
-    fn object(&self, part: ModelPart) -> RenderObject {
+    fn object(&self, part: ModelPart, owns_shadow: bool) -> RenderObject {
         let slot = part.material_slot;
         let material = self.overrides[slot].unwrap_or(self.model.materials[slot]);
         let mut object = RenderObject::new(part.mesh, material).with_transform(self.transform);
+        let source = self.model.lods[0].parts[0].mesh;
+        object.indirect_shadow_source = if owns_shadow {
+            crate::pipeline::IndirectShadowSource::Model {
+                mesh: source,
+                pose: self.poses.get(&source).copied(),
+            }
+        } else {
+            crate::pipeline::IndirectShadowSource::Disabled
+        };
         object.index_range = part.indices;
         object.pose = self.poses.get(&part.mesh).copied();
         object
@@ -148,7 +157,8 @@ impl ModelInstance {
             .lods
             .iter()
             .flat_map(|lod| &lod.parts)
-            .map(|part| self.object(*part))
+            .enumerate()
+            .map(|(i, part)| self.object(*part, i == 0))
     }
 
     /// Borrow the selected parts for this camera. Independent cameras can extract
@@ -169,7 +179,11 @@ impl ModelInstance {
             let size = projected_size(self.model.bounds, self.transform, camera);
             &levels[levels.partition_point(|lod| f64::from(lod.min_pixels) > size)]
         };
-        level.parts.iter().map(|&part| (part, self.object(part)))
+        level
+            .parts
+            .iter()
+            .enumerate()
+            .map(move |(index, &part)| (part, self.object(part, index == 0)))
     }
 }
 
@@ -205,4 +219,84 @@ fn projected_size(bounds: Bounds, transform: Transform, camera: &CameraView) -> 
     }
     let pixels = [0, 1].map(|axis| (high[axis] - low[axis]) * 0.5 * f64::from(camera.extent[axis]));
     pixels[0].max(pixels[1])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        material::{Materials, PbrParams},
+        mesh::{MeshCapacity, MeshData, Meshes},
+        pbr::{PbrVertex, Projection, ShadowCapsule, ShadowProxy, ViewInput},
+        pipeline::{SceneAssets, ViewId},
+        unlit_forward::IDENTITY,
+    };
+
+    #[test]
+    fn material_parts_and_coarse_lods_share_one_proxy_asset_per_instance() {
+        let mut meshes = Meshes::new(MeshCapacity {
+            meshes: 2,
+            retired_mesh_versions: 1,
+        })
+        .unwrap();
+        let vertices = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]
+            .map(|p| PbrVertex::new(p, [0., 0., 1.], [1., 0., 0., 1.], [0.; 2]).unwrap());
+        let geometry = || MeshData::pbr(&vertices, &[0, 1, 2]).unwrap();
+        let proxy = ShadowProxy {
+            capsule: ShadowCapsule::new([0.; 3], [0.; 3], 0.2).unwrap(),
+            joint: None,
+        };
+        let fine = meshes
+            .create(geometry().with_shadow_proxies(vec![proxy; 17]).unwrap())
+            .unwrap();
+        let coarse = meshes.create(geometry()).unwrap();
+        let mut materials = Materials::default();
+        let material = materials.create_pbr(PbrParams::color([1.; 4])).unwrap();
+        let part = |mesh| ModelPart {
+            mesh,
+            indices: None,
+            material_slot: 0,
+        };
+        let model = Model::new(
+            Bounds::new([0.; 3], [1.; 3]).unwrap(),
+            vec![material],
+            vec![
+                ModelLod {
+                    min_pixels: 40.,
+                    parts: vec![part(fine), part(fine)],
+                },
+                ModelLod {
+                    min_pixels: 0.,
+                    parts: vec![part(coarse)],
+                },
+            ],
+        )
+        .unwrap();
+        let actor = model.instantiate();
+        let mut assets = SceneAssets::new(&mut meshes, &mut materials, &[]);
+        assets.add_model(&actor);
+        assets.add_model(&model.instantiate());
+        assert_eq!(assets.shadow_count().unwrap(), 34);
+        let camera = ViewInput::new(
+            IDENTITY,
+            [0., 0., -1.],
+            [0., 0., 1.],
+            [1., 2.],
+            Projection::Orthographic,
+        )
+        .unwrap();
+        for (pixels, expected_mesh, n) in [(200, fine, 2), (32, coarse, 1)] {
+            let view = CameraView {
+                camera,
+                extent: [pixels; 2],
+                id: ViewId(0),
+            };
+            let mut draws = actor.draws(&view);
+            assert_eq!(draws.len(), n);
+            let first = draws.next().unwrap();
+            assert_eq!(first.mesh, expected_mesh);
+            assert_eq!(first.shadow_source(), Some((fine, None)));
+            assert!(draws.all(|draw| draw.shadow_source().is_none()));
+        }
+    }
 }
