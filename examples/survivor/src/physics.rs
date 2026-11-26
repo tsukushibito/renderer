@@ -57,8 +57,12 @@ impl Hall {
         }
     }
     pub fn cargo(&self) -> Option<Vec3> {
-        self.cargo
-            .map(|(body, _)| self.world.pose(body).translation)
+        self.cargo.map(|(body, _)| {
+            self.world
+                .pose(body)
+                .expect("cargo belongs to this hall")
+                .translation
+        })
     }
     pub fn open(&self, p: Vec2, r: f32) -> bool {
         (0..2).all(|i| p[i].abs() + r <= self.extent[i])
@@ -105,7 +109,9 @@ impl Hall {
                     && let Some((body, id)) = self.cargo
                     && hit.collider == id
                 {
-                    self.world.impulse(body, xyz(delta * 4., 0.));
+                    self.world
+                        .impulse(body, xyz(delta * 4., 0.))
+                        .expect("cargo belongs to this hall");
                 }
                 let skin = 0.0001 / delta[axis].abs();
                 p += delta * (hit.fraction - skin).max(0.);
