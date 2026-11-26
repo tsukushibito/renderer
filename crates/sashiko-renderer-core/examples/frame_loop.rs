@@ -666,7 +666,6 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         // operands before the caller adds its post stage and selects output.
         drop(inputs);
         let output = scene::custom_pass(&mut prepared.graph, scene_color.color, options.custom)?;
-        let mut prepared = prepared.select_output(output, true)?;
         let old_history = history.take();
         let (history_output, history_readback) = if options.history {
             let source = if let Some(previous) = old_history.as_ref() {
@@ -696,6 +695,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         } else {
             (None, None)
         };
+        let prepared = prepared.select_output(output, true)?;
         let build_ns = build_start.elapsed().as_nanos();
         let compile_start = Instant::now();
         let plan = prepared.compile()?;
@@ -704,7 +704,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         let submitted = Instant::now();
         let active_cpu_ns = submitted.duration_since(build_start).as_nanos();
         if let Some(output) = history_output {
-            history = Some(rendered.submission.export_image(output)?);
+            history = Some(rendered.submission().export_image(output)?);
         }
         if let Some(previous) = old_history {
             engine.runtime_mut().delete(previous.key())?;
@@ -727,7 +727,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
             }
         }
         collector.pending.insert(
-            rendered.submission.id(),
+            rendered.submission().id(),
             PendingSample {
                 frame,
                 asset_update_ns,
@@ -739,7 +739,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
                 active_cpu_ns,
                 submitted,
                 color_readback: rendered
-                    .readback
+                    .readback()
                     .ok_or("requested color readback is missing")?,
                 history_readback,
                 expected_center,

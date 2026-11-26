@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use super::{FrameCapacity, ResourceClass, RuntimeConfig, VulkanRuntime};
 use crate::backends::vulkan::engine::{
     EngineFrameCapacity,
-    test_input::{Assets, build_snapshot, graph, render_snapshot},
+    test_input::{Assets, build_snapshot, render_snapshot},
 };
 use crate::{
     geometry::GeometryData,
@@ -194,8 +194,8 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
         engine.release_output(&mut first).unwrap();
         let mut expected = vec![(
-            first.submission.id(),
-            first.readback.unwrap(),
+            first.submission().id(),
+            first.readback().unwrap(),
             16 * 32 + 16,
             [255, 0, 0, 255],
         )];
@@ -205,8 +205,8 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
         engine.release_output(&mut shifted).unwrap();
         expected.push((
-            shifted.submission.id(),
-            shifted.readback.unwrap(),
+            shifted.submission().id(),
+            shifted.readback().unwrap(),
             16 * 32 + 4,
             [0, 255, 0, 255],
         ));
@@ -216,8 +216,8 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
         engine.release_output(&mut camera).unwrap();
         expected.push((
-            camera.submission.id(),
-            camera.readback.unwrap(),
+            camera.submission().id(),
+            camera.readback().unwrap(),
             16 * 32 + 16,
             [0, 0, 255, 255],
         ));
@@ -231,8 +231,8 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
         engine.release_output(&mut replaced).unwrap();
         expected.push((
-            replaced.submission.id(),
-            replaced.readback.unwrap(),
+            replaced.submission().id(),
+            replaced.readback().unwrap(),
             16 * 32 + 16,
             [255, 0, 255, 255],
         ));
@@ -317,14 +317,14 @@ fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
             engine,
             &[
                 (
-                    first.submission.id(),
-                    first.readback.unwrap(),
+                    first.submission().id(),
+                    first.readback().unwrap(),
                     16 * 32 + 16,
                     [0, 0, 255, 255],
                 ),
                 (
-                    second.submission.id(),
-                    second.readback.unwrap(),
+                    second.submission().id(),
+                    second.readback().unwrap(),
                     16 * 32 + 16,
                     [0, 255, 0, 255],
                 ),
@@ -363,7 +363,7 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
             .expect("engine GPU completion timed out");
         let bytes = complete
             .result
-            .test_readback(frame.readback.unwrap())
+            .test_readback(frame.readback().unwrap())
             .unwrap();
         assert_eq!(bytes, [255, 255, 0, 255].repeat(64));
         let before = engine.runtime().stats().registered_resources;
@@ -371,14 +371,9 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
             Err(GraphError::custom("extension rejected"))
         });
         assert!(matches!(rejected, Err(EngineRenderError::Graph(_))));
-        let mut prepared =
+        let prepared =
             build_frame(engine, assets, &view, &[], false, |_, color| Ok(color)).unwrap();
-        prepared.graph = graph();
-        let foreign = prepared.compile().unwrap();
-        assert!(matches!(
-            engine.submit_frame(foreign),
-            Err(EngineRenderError::Input(_))
-        ));
+        drop(prepared.compile().unwrap());
         assert_eq!(engine.runtime().pending_frames(), 0);
         assert_eq!(engine.runtime().stats().registered_resources, before);
 
@@ -421,17 +416,27 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         collect(
             engine,
             &[
-                (a.submission.id(), a.readback.unwrap(), 4 * 8 + 4, [255; 4]),
-                (b.submission.id(), b.readback.unwrap(), 4 * 8 + 4, [255; 4]),
                 (
-                    c.submission.id(),
-                    c.readback.unwrap(),
+                    a.submission().id(),
+                    a.readback().unwrap(),
+                    4 * 8 + 4,
+                    [255; 4],
+                ),
+                (
+                    b.submission().id(),
+                    b.readback().unwrap(),
+                    4 * 8 + 4,
+                    [255; 4],
+                ),
+                (
+                    c.submission().id(),
+                    c.readback().unwrap(),
                     4 * 8 + 4,
                     [0, 0, 255, 255],
                 ),
                 (
-                    d.submission.id(),
-                    d.readback.unwrap(),
+                    d.submission().id(),
+                    d.readback().unwrap(),
                     4 * 8 + 4,
                     [0, 0, 255, 255],
                 ),
@@ -441,7 +446,7 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         let cached = cached.compile().unwrap();
         assert!(
             !cached
-                .graph
+                .graph()
                 .ordered_pass_names()
                 .any(|name| name == "mesh vertex upload")
         );
@@ -454,8 +459,8 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         collect(
             engine,
             &[(
-                pending.submission.id(),
-                pending.readback.unwrap(),
+                pending.submission().id(),
+                pending.readback().unwrap(),
                 4 * 8 + 4,
                 [0, 0, 255, 255],
             )],
@@ -467,8 +472,8 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         collect(
             engine,
             &[(
-                old.submission.id(),
-                old.readback.unwrap(),
+                old.submission().id(),
+                old.readback().unwrap(),
                 4 * 8 + 4,
                 [255; 4],
             )],
@@ -573,8 +578,8 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
     collect(
         &mut engine,
         &[(
-            frame.submission.id(),
-            frame.readback.unwrap(),
+            frame.submission().id(),
+            frame.readback().unwrap(),
             16 * 32 + 16,
             [255, 0, 0, 255],
         )],

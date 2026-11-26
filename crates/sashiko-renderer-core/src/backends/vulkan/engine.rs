@@ -188,15 +188,25 @@ pub struct MeshCacheStats {
     pub evictions: usize,
     pub retired_sources: usize,
 }
-/// Output ownership authority is independent of replaceable public metadata.
+/// A submitted frame's selected output and associated readback.
+/// The engine releases a frame-created registration on explicit request.
 pub struct RenderedFrame {
-    pub submission: FrameSubmission,
-    pub output: ImportImage,
-    pub readback: Option<PassHandle>,
+    submission: FrameSubmission,
+    output: ImportImage,
+    readback: Option<PassHandle>,
     output_ownership: FrameOutputOwnership,
     owned_output_key: Option<ResourceKey>,
 }
 impl RenderedFrame {
+    pub fn submission(&self) -> &FrameSubmission {
+        &self.submission
+    }
+    pub fn output(&self) -> &ImportImage {
+        &self.output
+    }
+    pub fn readback(&self) -> Option<PassHandle> {
+        self.readback
+    }
     pub fn output_ownership(&self) -> FrameOutputOwnership {
         self.output_ownership
     }
@@ -230,15 +240,9 @@ impl PreparedEngineGraph {
             output,
             readback.then_some("frame output readback"),
         )?;
-        let (graph, output, readback, output_ownership) = frame.into_parts();
         Ok(PreparedEngineFrame {
-            source_graph: self.source_graph,
-            source_output: output,
-            graph,
-            output,
-            readback,
+            frame,
             owner: self.owner,
-            output_ownership,
             scratch: self.scratch,
         })
     }
@@ -274,50 +278,73 @@ impl CompiledEngineGraph {
     }
 }
 
-/// Pins registered immutable mesh versions until submission or drop.
+/// Holds the finalized output selection and pins its mesh versions through compilation.
+///
+/// ```compile_fail
+/// use sashiko_renderer_core::vulkan::PreparedEngineFrame;
+/// fn clear_readback(frame: &mut PreparedEngineFrame) {
+///     frame.readback = None;
+/// }
+/// ```
 pub struct PreparedEngineFrame {
-    pub graph: Graph,
-    pub output: ImageHandle,
-    pub readback: Option<PassHandle>,
+    frame: FrameGraph,
     owner: Arc<()>,
-    source_graph: u64,
-    source_output: ImageHandle,
-    output_ownership: FrameOutputOwnership,
     scratch: FrameScratchLease,
 }
+
 impl PreparedEngineFrame {
+    pub fn graph(&self) -> &Graph {
+        self.frame.graph()
+    }
+    pub fn output(&self) -> ImageHandle {
+        self.frame.output()
+    }
+    pub fn readback(&self) -> Option<PassHandle> {
+        self.frame.readback()
+    }
     pub fn output_ownership(&self) -> FrameOutputOwnership {
-        self.output_ownership
+        self.frame.output_ownership()
     }
 
-    /// Consume this mutable graph while retaining the original output authority
-    /// and resident mesh pins until submission or cancellation.
     pub fn compile(self) -> Result<CompiledEngineFrame, GraphError> {
         Ok(CompiledEngineFrame {
-            graph: self.graph.compile()?,
-            output: self.output,
-            readback: self.readback,
+            output: self.frame.output(),
+            readback: self.frame.readback(),
+            output_ownership: self.frame.output_ownership(),
+            graph: self.frame.compile()?,
             owner: self.owner,
-            source_graph: self.source_graph,
-            source_output: self.source_output,
-            output_ownership: self.output_ownership,
             scratch: self.scratch,
         })
     }
 }
 
+/// A compiled frame carries its original graph, mesh pins and output selection together.
+///
+/// ```compile_fail
+/// use sashiko_renderer_core::{graph::PassHandle, vulkan::CompiledEngineFrame};
+/// fn redirect_readback(frame: &mut CompiledEngineFrame, unrelated: PassHandle) {
+///     frame.readback = Some(unrelated);
+/// }
+/// ```
 pub struct CompiledEngineFrame {
-    pub graph: CompiledGraph,
-    pub output: ImageHandle,
-    pub readback: Option<PassHandle>,
+    graph: CompiledGraph,
+    output: ImageHandle,
+    readback: Option<PassHandle>,
     owner: Arc<()>,
-    source_graph: u64,
-    source_output: ImageHandle,
     output_ownership: FrameOutputOwnership,
     scratch: FrameScratchLease,
 }
 
 impl CompiledEngineFrame {
+    pub fn graph(&self) -> &CompiledGraph {
+        &self.graph
+    }
+    pub fn output(&self) -> ImageHandle {
+        self.output
+    }
+    pub fn readback(&self) -> Option<PassHandle> {
+        self.readback
+    }
     pub fn output_ownership(&self) -> FrameOutputOwnership {
         self.output_ownership
     }
@@ -505,15 +532,10 @@ impl VulkanEngine {
         &mut self,
         prepared: CompiledEngineFrame,
     ) -> Result<RenderedFrame, EngineRenderError> {
-        if !Arc::ptr_eq(&prepared.owner, &self.owner)
-            || prepared.source_graph != prepared.graph.id
-            || prepared.output != prepared.source_output
-            || !prepared.graph.has_export(prepared.output.index)
-        {
-            return Err(MeshError::invalid_input(
-                "prepared frame or compiled plan belongs to another owner/Graph",
-            )
-            .into());
+        if !Arc::ptr_eq(&prepared.owner, &self.owner) {
+            return Err(
+                MeshError::invalid_input("compiled frame belongs to another engine").into(),
+            );
         }
         let submission = self.runtime.submit_frame(&prepared.graph)?;
         let output = submission.export_image(prepared.output)?;

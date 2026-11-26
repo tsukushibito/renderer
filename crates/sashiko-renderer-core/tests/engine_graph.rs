@@ -364,12 +364,17 @@ fn output_authority(engine: &mut VulkanEngine) {
     assert!(engine.runtime().refresh_image(caller.key()).is_ok());
     check_readbacks(
         engine,
-        rendered.submission.id(),
-        &[(rendered.readback.unwrap(), caller_bytes)],
+        rendered.submission().id(),
+        &[(rendered.readback().unwrap(), caller_bytes.clone())],
     );
     drop(rendered);
 
     let mut frame = engine.begin_graph().unwrap();
+    let other = frame.graph.import_image("caller history", &caller).unwrap();
+    let history = frame
+        .graph
+        .readback_image("history readback", other)
+        .unwrap();
     let output = frame.graph.image("owned selected HDR", hdr(3, 2)).unwrap();
     let owned_bytes = half_pixels([0x4000, 0x4400, 0, 0x3c00], 6);
     frame
@@ -379,16 +384,18 @@ fn output_authority(engine: &mut VulkanEngine) {
     let selected = frame.select_output(output, true).unwrap();
     assert_eq!(selected.output_ownership(), FrameOutputOwnership::Frame);
     let mut rendered = engine.submit_frame(selected.compile().unwrap()).unwrap();
-    let original = rendered.output.key();
-    rendered.output = engine.runtime().refresh_image(caller.key()).unwrap();
+    let original = rendered.output().key();
     engine.release_output(&mut rendered).unwrap();
     engine.release_output(&mut rendered).unwrap();
     assert!(engine.runtime().refresh_image(original).is_err());
     assert!(engine.runtime().refresh_image(caller.key()).is_ok());
     check_readbacks(
         engine,
-        rendered.submission.id(),
-        &[(rendered.readback.unwrap(), owned_bytes)],
+        rendered.submission().id(),
+        &[
+            (rendered.readback().unwrap(), owned_bytes),
+            (history, caller_bytes),
+        ],
     );
     drop(rendered);
     engine.runtime_mut().delete(caller.key()).unwrap();
