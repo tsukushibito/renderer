@@ -474,7 +474,6 @@ fn lookup_mut<T>(slots: &mut [Slot<T>], index: u32, generation: u32) -> Result<&
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::unlit_test_input::{Draw, FrameSnapshot, IDENTITY, Vertex, View, mesh_data};
 
     fn capacity(meshes: usize) -> MeshCapacity {
         MeshCapacity {
@@ -483,28 +482,21 @@ mod tests {
         }
     }
 
-    fn mesh(red: f32) -> GeometryData {
-        mesh_data(
-            &[Vertex {
-                position: [0.0; 3],
-                color: [red, 0.0, 0.0, 1.0],
-            }],
-            &[0, 0, 0],
-        )
-        .unwrap()
+    fn mesh(value: f32) -> GeometryData {
+        GeometryData::new(4, &value.to_le_bytes(), &[0; 3]).unwrap()
     }
-    fn view() -> View {
-        View {
-            width: 8,
-            height: 8,
-            clip_from_world: IDENTITY,
-            clear_color: [0.0; 4],
-        }
+
+    fn capture(
+        assets: &MeshRegistry,
+        pool: &SnapshotPool,
+        meshes: &[MeshHandle],
+        parameters: RasterConstants,
+    ) -> Result<MeshSnapshot, MeshError> {
+        assets.capture(pool, meshes, |mesh| *mesh, |_, _| Ok(parameters))
     }
 
     #[test]
     fn handles_validate_owner_generation_and_capacity() {
-        assert_eq!(mesh(1.0).byte_len(), 28 + 3 * 4);
         let mut first = MeshRegistry::new(capacity(1)).unwrap();
         let second = MeshRegistry::new(capacity(1)).unwrap();
         let old = first.create_mesh(mesh(1.0)).unwrap();
@@ -589,145 +581,25 @@ mod tests {
     }
 
     #[test]
-    fn snapshots_keep_old_mesh_and_material_and_compose_transforms() {
+    fn snapshots_keep_their_mesh_version_and_draw_constants() {
         let pool = SnapshotPool::new(1, 2).unwrap();
-        let mut engine = MeshRegistry::new(capacity(1)).unwrap();
-        let mesh_handle = engine.create_mesh(mesh(1.0)).unwrap();
-        let tint = [1.0; 4];
-        let mut camera = view();
-        camera.clip_from_world[0][0] = 2.0;
-        let mut model = IDENTITY;
-        model[3][0] = 0.25;
-        let old = FrameSnapshot::capture(
-            &engine,
-            &pool,
-            &camera,
-            &[Draw {
-                mesh: mesh_handle,
-                tint,
-                world_from_model: model,
-            }],
-        )
-        .unwrap();
-        assert_eq!(f32::from_bits(old.draws[0].parameters.words()[12]), 0.5);
-        engine.update_mesh(mesh_handle, mesh(0.0)).unwrap();
-        let tint = [0.5; 4];
-        let new = FrameSnapshot::capture(
-            &engine,
-            &pool,
-            &view(),
-            &[Draw {
-                mesh: mesh_handle,
-                tint,
-                world_from_model: IDENTITY,
-            }],
-        )
-        .unwrap();
-        assert_eq!(old.view(), &camera);
+        let mut assets = MeshRegistry::new(capacity(1)).unwrap();
+        let mesh_handle = assets.create_mesh(mesh(1.0)).unwrap();
+        let first = RasterConstants::new(&[11, 12]).unwrap();
+        let second = RasterConstants::new(&[21]).unwrap();
+        let old = capture(&assets, &pool, &[mesh_handle], first).unwrap();
+        assets.update_mesh(mesh_handle, mesh(0.0)).unwrap();
+        let new = capture(&assets, &pool, &[mesh_handle], second).unwrap();
+        assets.delete_mesh(mesh_handle).unwrap();
+
         assert_eq!(old.draws[0].revision, 1);
         assert_eq!(new.draws[0].revision, 2);
-        assert_eq!(
-            old.draws[0].parameters.words().get(16..).unwrap(),
-            &[1.0f32.to_bits(); 4]
-        );
-        assert_eq!(
-            new.draws[0].parameters.words().get(16..).unwrap(),
-            &[0.5f32.to_bits(); 4]
-        );
-        assert_ne!(old.draws[0].data.vertices, new.draws[0].data.vertices);
-        engine.delete_mesh(mesh_handle).unwrap();
-
+        assert_eq!(old.draws[0].parameters, first);
+        assert_eq!(new.draws[0].parameters, second);
+        assert_eq!(&*old.draws[0].data.vertices, &1.0f32.to_le_bytes());
+        assert_eq!(&*new.draws[0].data.vertices, &0.0f32.to_le_bytes());
         assert_eq!(old.draws[0].data.index_count, 3);
         assert_eq!(old.draws[0].data.indices.len(), 12);
-    }
-
-    #[test]
-    fn invalid_input_does_not_replace_live_data() {
-        let pool = SnapshotPool::new(1, 1).unwrap();
-        assert!(mesh_data(&[], &[]).is_err());
-        let vertex = Vertex {
-            position: [0.0; 3],
-            color: [1.0; 4],
-        };
-        assert!(mesh_data(&[vertex], &[0, 0, 1]).is_err());
-        assert!(mesh_data(&[vertex], &[0, 0]).is_err());
-        assert!(
-            mesh_data(
-                &[Vertex {
-                    position: [f32::NAN; 3],
-                    ..vertex
-                }],
-                &[0, 0, 0]
-            )
-            .is_err()
-        );
-        let mut engine = MeshRegistry::new(capacity(1)).unwrap();
-        let tint = [1.0; 4];
-        let handle = engine.create_mesh(mesh(1.0)).unwrap();
-        let draw = Draw {
-            mesh: handle,
-            tint,
-            world_from_model: IDENTITY,
-        };
-        assert_eq!(
-            FrameSnapshot::capture(&engine, &pool, &view(), &[draw])
-                .unwrap()
-                .draws[0]
-                .parameters
-                .words()
-                .get(16..)
-                .unwrap(),
-            &[1.0f32.to_bits(); 4]
-        );
-        let invalid_tint = Draw {
-            tint: [f32::NAN; 4],
-            ..draw
-        };
-        assert!(FrameSnapshot::capture(&engine, &pool, &view(), &[invalid_tint]).is_err());
-        let mut bad = view();
-        bad.clip_from_world[0][0] = f32::INFINITY;
-        assert!(FrameSnapshot::capture(&engine, &pool, &bad, &[draw]).is_err());
-        bad.clip_from_world = IDENTITY;
-        bad.clip_from_world[0][0] = f32::MAX;
-        let mut overflowing = draw;
-        overflowing.world_from_model[0][0] = f32::MAX;
-        assert!(FrameSnapshot::capture(&engine, &pool, &bad, &[overflowing]).is_err());
-        assert_eq!(
-            FrameSnapshot::capture(&engine, &pool, &view(), &[])
-                .unwrap()
-                .draw_count(),
-            0
-        );
-    }
-
-    #[test]
-    fn unlit_capture_uses_the_current_mesh_layout() {
-        let mut registry = MeshRegistry::new(capacity(1)).unwrap();
-        let pool = SnapshotPool::new(1, 1).unwrap();
-        let handle = registry.create_mesh(mesh(1.0)).unwrap();
-        let draw = Draw {
-            mesh: handle,
-            tint: [1.0; 4],
-            world_from_model: IDENTITY,
-        };
-        registry
-            .update_mesh(handle, GeometryData::new(4, &[0; 4], &[0; 3]).unwrap())
-            .unwrap();
-        assert_eq!(
-            FrameSnapshot::capture(&registry, &pool, &view(), &[draw])
-                .unwrap_err()
-                .kind(),
-            MeshErrorKind::InvalidInput
-        );
-        let generic = registry
-            .capture(
-                &pool,
-                &[handle],
-                |mesh| *mesh,
-                |_, _| Ok(RasterConstants::default()),
-            )
-            .unwrap();
-        assert_eq!(generic.draw_count(), 1);
     }
 
     #[test]
@@ -735,42 +607,26 @@ mod tests {
         let pool = SnapshotPool::new(2, 1).unwrap();
         let mut engine = MeshRegistry::new(capacity(1)).unwrap();
         let mesh = engine.create_mesh(mesh(1.0)).unwrap();
-        let tint = [1.0; 4];
-        let draw = Draw {
-            mesh,
-            tint,
-            world_from_model: IDENTITY,
-        };
-        let frame = FrameSnapshot::capture(&engine, &pool, &view(), &[draw, draw]).unwrap();
+        let snapshot =
+            |meshes: &[MeshHandle]| capture(&engine, &pool, meshes, RasterConstants::default());
+        let frame = snapshot(&[mesh; 2]).unwrap();
         let storage = frame.draws.as_ptr();
         assert_eq!(
-            FrameSnapshot::capture(&engine, &pool, &view(), &[])
-                .unwrap_err()
-                .kind(),
+            snapshot(&[]).unwrap_err().kind(),
             MeshErrorKind::CapacityExhausted,
         );
         drop(frame);
-        let foreign = Draw {
-            mesh: MeshHandle { owner: 0, ..mesh },
-            ..draw
-        };
-        assert!(FrameSnapshot::capture(&engine, &pool, &view(), &[draw, foreign]).is_err());
-        let frame = FrameSnapshot::capture(&engine, &pool, &view(), &[draw]).unwrap();
+        let foreign = MeshHandle { owner: 0, ..mesh };
+        assert!(snapshot(&[mesh, foreign]).is_err());
+        let frame = snapshot(&[mesh]).unwrap();
         assert_eq!(frame.draws.as_ptr(), storage);
         assert_eq!(frame.draw_count(), 1);
         drop(frame);
         assert_eq!(
-            FrameSnapshot::capture(&engine, &pool, &view(), &[draw; 3])
-                .unwrap_err()
-                .kind(),
+            snapshot(&[mesh; 3]).unwrap_err().kind(),
             MeshErrorKind::CapacityExhausted,
         );
-        assert_eq!(
-            FrameSnapshot::capture(&engine, &pool, &view(), &[])
-                .unwrap()
-                .draw_count(),
-            0
-        );
+        assert_eq!(snapshot(&[]).unwrap().draw_count(), 0);
     }
 
     #[test]
@@ -782,18 +638,7 @@ mod tests {
         })
         .unwrap();
         let handle = engine.create_mesh(mesh(1.0)).unwrap();
-        let tint = [1.0; 4];
-        let frame = FrameSnapshot::capture(
-            &engine,
-            &pool,
-            &view(),
-            &[Draw {
-                mesh: handle,
-                tint,
-                world_from_model: IDENTITY,
-            }],
-        )
-        .unwrap();
+        let frame = capture(&engine, &pool, &[handle], RasterConstants::default()).unwrap();
         let vertices = Arc::clone(&frame.draws[0].data.vertices);
         let indices = Arc::clone(&frame.draws[0].data.indices);
         engine.update_mesh(handle, mesh(0.5)).unwrap();

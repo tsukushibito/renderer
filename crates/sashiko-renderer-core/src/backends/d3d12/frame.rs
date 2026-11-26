@@ -1424,7 +1424,7 @@ impl Drop for FrameResult {
 
 #[cfg(test)]
 mod tests {
-    use crate::unlit_test_input::{Vertex, mesh_data};
+    use crate::geometry::test_mesh::{Vertex, mesh_data};
 
     use std::{
         cell::Cell,
