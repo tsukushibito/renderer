@@ -55,20 +55,20 @@ const fn descriptor<const RESPONSE_BYTES: u64>(
 }
 const L1_PROGRAM: ComputeProgramDescriptor = descriptor::<{ response_bytes(Some(ProbeShOrder::L1)) }>(
     sashiko_renderer::core::program::embedded_shader_binaries!(
-        include_bytes!("../../sashiko-renderer/shaders/bake_transport.comp.spv"),
-        include_bytes!("../../sashiko-renderer/shaders/dxil/bake_transport.comp.dxil")
+        include_bytes!("../shaders/bake_transport.comp.spv"),
+        include_bytes!("../shaders/dxil/bake_transport.comp.dxil")
     ),
 );
 const L2_PROGRAM: ComputeProgramDescriptor = descriptor::<{ response_bytes(Some(ProbeShOrder::L2)) }>(
     sashiko_renderer::core::program::embedded_shader_binaries!(
-        include_bytes!("../../sashiko-renderer/shaders/bake_transport_l2.comp.spv"),
-        include_bytes!("../../sashiko-renderer/shaders/dxil/bake_transport_l2.comp.dxil")
+        include_bytes!("../shaders/bake_transport_l2.comp.spv"),
+        include_bytes!("../shaders/dxil/bake_transport_l2.comp.dxil")
     ),
 );
 const SURFACE_PROGRAM: ComputeProgramDescriptor =
     descriptor::<32>(sashiko_renderer::core::program::embedded_shader_binaries!(
-        include_bytes!("../../sashiko-renderer/shaders/bake_surface.comp.spv"),
-        include_bytes!("../../sashiko-renderer/shaders/dxil/bake_surface.comp.dxil")
+        include_bytes!("../shaders/bake_surface.comp.spv"),
+        include_bytes!("../shaders/dxil/bake_surface.comp.dxil")
     ));
 #[allow(unsafe_code)]
 fn program(order: Option<ProbeShOrder>) -> ManagedProgram {
@@ -525,12 +525,12 @@ fn compute_execution(
     #[cfg(feature = "vulkan")]
     if let Some(vulkan) = runtime.as_vulkan() {
         let shader: &[u8] = match order {
-            None => include_bytes!("../../sashiko-renderer/shaders/bake_surface.comp.spv"),
+            None => include_bytes!("../shaders/bake_surface.comp.spv"),
             Some(ProbeShOrder::L1) => {
-                include_bytes!("../../sashiko-renderer/shaders/bake_transport.comp.spv")
+                include_bytes!("../shaders/bake_transport.comp.spv")
             }
             Some(ProbeShOrder::L2) => {
-                include_bytes!("../../sashiko-renderer/shaders/bake_transport_l2.comp.spv")
+                include_bytes!("../shaders/bake_transport_l2.comp.spv")
             }
         };
         return Ok(crate::BakeExecution::vulkan(
@@ -543,12 +543,12 @@ fn compute_execution(
     if let Some(dx) = runtime.as_d3d12() {
         let info = dx.device_info();
         let shader: &[u8] = match order {
-            None => include_bytes!("../../sashiko-renderer/shaders/dxil/bake_surface.comp.dxil"),
+            None => include_bytes!("../shaders/dxil/bake_surface.comp.dxil"),
             Some(ProbeShOrder::L1) => {
-                include_bytes!("../../sashiko-renderer/shaders/dxil/bake_transport.comp.dxil")
+                include_bytes!("../shaders/dxil/bake_transport.comp.dxil")
             }
             Some(ProbeShOrder::L2) => {
-                include_bytes!("../../sashiko-renderer/shaders/dxil/bake_transport_l2.comp.dxil")
+                include_bytes!("../shaders/dxil/bake_transport_l2.comp.dxil")
             }
         };
         return Ok(crate::BakeExecution {

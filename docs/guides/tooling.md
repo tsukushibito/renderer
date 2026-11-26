@@ -735,11 +735,22 @@ PBRなどPipeline側のHLSLのみを変更した場合は、Pipelineの生成と
 & ./crates/sashiko-renderer/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
 ```
 
+<a id="bake-shaders"></a>
+
+オフライン照明ベイクの HLSL、4 種のバリアント定義と生成物は `crates/sashiko-lighting-bake/shaders/` に置く。
+ベイクを変更したときは次のコマンドで再生成して照合する。描画用とベイク用の生成スクリプトは固定版 DXC と SPIR-V 検証器を共有する。
+
+```powershell
+& ./crates/sashiko-lighting-bake/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
+& ./crates/sashiko-lighting-bake/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+```
+
 `-Verify`は一時directoryで再生成し、checkoutを書き換えずbinary・reflection・manifestを照合する。
 CIでは`python -B tools/shaders/verify_pipeline_manifest.py`を実行し、SDKなしでHLSL、出力GLSL・ライセンス、include、バイナリ、
-反射情報、ツールチェーン定義とRenderer側manifestのhashを照合する。Pipeline資産の欠落と未登録ファイルも検出する。
+反射情報、ツールチェーン定義とRenderer側manifestのhashを照合する。描画とベイクの各クレートで資産の欠落と未登録ファイルも検出する。
 UTF-8/BOMなし・LFへ揃えたHLSLとincludeを両ターゲットで使い、同じbyte列をhashへ使う。
-両形式のentry pointは`main`、shader modelは6.0、HLSLは2021、最適化は`-O3`。
+両形式のentry pointは`main`、標準のshader modelは6.0、HLSLは2021、最適化は`-O3`。
+表面ベイクの Vulkan ray query 版は shader model 6.5、Vulkan 1.2 ターゲットと `SPV_KHR_ray_query` を指定して SPIR-V 1.5 を生成する。
 `BISTRO_LOCAL_LIGHTS`と`BISTRO_INSTANCING`でバリアントを選ぶ。SPIR-V 1.3の出力に
 `-spirv -fspv-target-env=vulkan1.1`を指定し、`spirv-val --target-env vulkan1.3`で実行環境の契約を確認する。
 SPIRV-CrossはSPIR-Vのreflectionに使い、DXILはDXCの内部validatorと`-dumpbin`を使う。

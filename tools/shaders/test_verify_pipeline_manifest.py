@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from verify_pipeline_manifest import RENDERER_SHADERS, SHADERS, verify
+from verify_pipeline_manifest import BAKE_SHADERS, CORE_SHADERS, RENDERER_SHADERS, verify
 
 
 class PipelineShaderManifestTest(unittest.TestCase):
@@ -12,7 +12,7 @@ class PipelineShaderManifestTest(unittest.TestCase):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
-        self.shaders = self.root / SHADERS
+        self.shaders = self.root / RENDERER_SHADERS
         self.paths = {
             "source_utf8_lf": "surface.frag.hlsl",
             "spv": "surface.frag.spv",
@@ -24,12 +24,12 @@ class PipelineShaderManifestTest(unittest.TestCase):
         for key, name in self.paths.items():
             artifact[key] = self.write(self.shaders / name, name.encode() + b"\n")
         self.include = self.shaders / "math.hlsli"
-        self.toolchain = self.root / RENDERER_SHADERS / "dxil-toolchain.json"
-        self.renderer_manifest = self.root / RENDERER_SHADERS / "dxil/manifest.json"
+        self.toolchain = self.root / CORE_SHADERS / "dxil-toolchain.json"
+        self.core_manifest = self.root / CORE_SHADERS / "dxil/manifest.json"
         self.manifest = {
             "schema": 2,
             "toolchain_sha256": self.write(self.toolchain, b"{}\n"),
-            "renderer_shaders_sha256": self.write(self.renderer_manifest, b'{"artifacts": {}, "licenses": {}}\n'),
+            "renderer_shaders_sha256": self.write(self.core_manifest, b'{"artifacts": {}, "licenses": {}}\n'),
             "artifacts": {"surface.frag": artifact},
             "includes": {self.include.name: self.write(self.include, b"// math\n")},
         }
@@ -48,28 +48,40 @@ class PipelineShaderManifestTest(unittest.TestCase):
         for name in (self.paths["source_utf8_lf"], self.paths["reflection.txt"], self.include.name):
             path = self.shaders / name
             path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
-        self.assertEqual(verify(self.root), (1, 1))
+        self.assertEqual(verify(self.root, RENDERER_SHADERS), (1, 1))
         binary = self.shaders / self.paths["dxil"]
         binary.write_bytes(binary.read_bytes().replace(b"\n", b"\r\n"))
         with self.assertRaisesRegex(ValueError, r"SHA-256.*surface\.frag\.dxil"):
-            verify(self.root)
+            verify(self.root, RENDERER_SHADERS)
 
     def test_rejects_changes_to_sources_includes_artifacts_reflection_and_pins(self):
         paths = [self.shaders / name for name in self.paths.values()]
-        for path in [*paths, self.include, self.toolchain, self.renderer_manifest]:
+        for path in [*paths, self.include, self.toolchain, self.core_manifest]:
             with self.subTest(path=path.name):
                 original = path.read_bytes()
                 path.write_bytes(original + b"changed")
                 with self.assertRaisesRegex(ValueError, "SHA-256 differs"):
-                    verify(self.root)
+                    verify(self.root, RENDERER_SHADERS)
                 path.write_bytes(original)
+
+    def test_bake_package_has_its_own_inventory_and_only_requires_the_toolchain_pin(self):
+        self.manifest.pop("renderer_shaders_sha256")
+        self.write_manifest()
+        self.core_manifest.unlink()
+        bake = self.root / BAKE_SHADERS
+        bake.parent.mkdir(parents=True)
+        self.shaders.rename(bake)
+        self.assertEqual(verify(self.root, BAKE_SHADERS), (1, 1))
+        (bake / self.paths["spv"]).unlink()
+        with self.assertRaisesRegex(ValueError, r"lighting-bake.*missing=.*surface\.frag\.spv"):
+            verify(self.root, BAKE_SHADERS)
 
     def test_reports_missing_and_unlisted_files(self):
         (self.shaders / self.paths["spv"]).unlink()
         extra = self.shaders / "other.frag.hlsl"
         self.write(extra, b"// unlisted\n")
         with self.assertRaisesRegex(ValueError, r"missing=.*surface\.frag\.spv.*unlisted=.*other\.frag\.hlsl"):
-            verify(self.root)
+            verify(self.root, RENDERER_SHADERS)
 
     def test_verifies_standard_output_assets_from_the_shared_glsl_manifest(self):
         source = self.shaders / "output/sdr.frag"
@@ -88,23 +100,23 @@ class PipelineShaderManifestTest(unittest.TestCase):
             "licenses": {license_path.name: self.write(license_path, b"notice\n")},
         }
         self.manifest["renderer_shaders_sha256"] = self.write(
-            self.renderer_manifest, json.dumps(glsl).encode()
+            self.core_manifest, json.dumps(glsl).encode()
         )
         self.write_manifest()
         with self.assertRaisesRegex(ValueError, r"missing=.*sdr_linear\.frag\.wgsl"):
-            verify(self.root)
+            verify(self.root, RENDERER_SHADERS)
         self.write(self.shaders / "output/sdr_linear.frag.wgsl", b"wgsl")
-        self.assertEqual(verify(self.root), (2, 1))
+        self.assertEqual(verify(self.root, RENDERER_SHADERS), (2, 1))
         source.write_bytes(b"changed")
         with self.assertRaisesRegex(ValueError, "SHA-256 differs.*sdr.frag"):
-            verify(self.root)
+            verify(self.root, RENDERER_SHADERS)
 
     def test_rejects_inconsistent_hashes_for_a_shared_variant_source(self):
         first = self.manifest["artifacts"]["surface.frag"]
         self.manifest["artifacts"]["surface_variant.frag"] = dict(first, source_utf8_lf="0" * 64)
         self.write_manifest()
         with self.assertRaisesRegex(ValueError, r"Variants disagree.*surface\.frag\.hlsl"):
-            verify(self.root)
+            verify(self.root, RENDERER_SHADERS)
 
 
 if __name__ == "__main__":
