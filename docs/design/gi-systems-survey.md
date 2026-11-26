@@ -584,6 +584,8 @@ Local Color Bleedingを標準機能にする判断は、Visibilityと計算予�
 
 ```mermaid
 flowchart TD
+    accTitle: ベイク済み照明と動的補正の合成
+    accDescr: ベイク済みのライトマップやプローブを間接照明の基準にする。動的補正を使う場合は、形状とベイク結果から実行時の光輸送と可視性を評価し、補正結果を基準に合成する。
     G[Geometry representation: Mesh / BVH / Voxel / SDF / Proxy]
     B[Offline baking]
     T[Realtime transport / visibility]
