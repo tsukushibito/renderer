@@ -4,6 +4,8 @@ pub mod capture;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod input;
+#[cfg(feature = "live-inspector")]
+pub use sashiko_inspect as inspect;
 pub mod math;
 #[cfg(all(
     windows,

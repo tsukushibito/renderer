@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/sashiko",
+    "crates/sashiko-inspect",
+    "examples/inspector-door",
     "crates/sashiko-animation",
     "crates/sashiko-animation-character",
     "crates/sashiko-jobs",
