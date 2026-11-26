@@ -1,4 +1,8 @@
 ;
+; Note: shader requires additional functionality:
+;       Double-precision floating point
+;
+;
 ; Input signature:
 ;
 ; Name                 Index   Mask Register SysValue  Format   Used
@@ -12,7 +16,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: e769a442d02cd9cedbd934d1cc2c71e9
+; shader hash: 63a64005e6ea06b13dbe2758e51f6328
 ;
 ; Pipeline Runtime Information:
 ;
@@ -53,8 +57,8 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _78                               sampler      NA          NA      S0             s1     1
-; _74                               texture     f32          2d      T0             t0     1
+; source_sampler                    sampler      NA          NA      S0             s1     1
+; linear_image                      texture     f32          2d      T0             t0     1
 ;
 ;
 ; ViewId state:

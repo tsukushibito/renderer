@@ -1,54 +1,54 @@
-struct type_11 {
-    member: f32,
+struct type_u002e_ConstantBuffer_u002e_ToneParameters {
+    exposure: f32,
 }
 
-var<private> global: vec4<f32>;
 @group(0) @binding(0)
-var global_1: texture_2d<f32>;
+var linear_image: texture_2d<f32>;
 @group(0) @binding(1)
-var global_2: sampler;
-var<private> global_3: vec4<f32>;
-@group(0) @binding(255) var<uniform> global_4: type_11;
+var source_sampler: sampler;
+@group(0) @binding(255) var<uniform> tone: type_u002e_ConstantBuffer_u002e_ToneParameters;
+var<private> global: vec4<f32>;
+var<private> out_u002e_var_u002e_SV_Target0_: vec4<f32>;
 
-fn function_() {
-    var phi_249_: f32;
-    var phi_251_: vec3<f32>;
+fn main_1() {
+    var phi_76_: f32;
+    var phi_101_: vec3<f32>;
 
     let _e19 = global;
-    let _e21 = textureDimensions(global_1, 0i);
-    let _e25 = textureSampleLevel(global_1, global_2, (_e19.xy / vec2<f32>(vec2<i32>(_e21))), 0f);
-    let _e29 = global_4.member;
-    let _e30 = (max(_e25.xyz, vec3<f32>(0f, 0f, 0f)) * _e29);
+    let _e21 = textureDimensions(linear_image, 0i);
+    let _e28 = textureSampleLevel(linear_image, source_sampler, (_e19.xy / vec2<f32>(f32(_e21.x), f32(_e21.y))), 0f);
+    let _e32 = tone.exposure;
+    let _e33 = (max(_e28.xyz, vec3<f32>(0f, 0f, 0f)) * _e32);
     switch bitcast<i32>(0u) {
         default: {
-            let _e36 = min(_e30.x, min(_e30.y, _e30.z));
-            if (_e36 < 0.08f) {
-                phi_249_ = (_e36 - ((6.25f * _e36) * _e36));
+            let _e39 = min(_e33.x, min(_e33.y, _e33.z));
+            if (_e39 < 0.08f) {
+                phi_76_ = (_e39 - ((6.25f * _e39) * _e39));
             } else {
-                phi_249_ = 0.04f;
+                phi_76_ = 0.04f;
             }
-            let _e42 = phi_249_;
-            let _e44 = (_e30 - vec3(_e42));
-            let _e49 = max(_e44.x, max(_e44.y, _e44.z));
-            if (_e49 < 0.76f) {
-                phi_251_ = _e44;
+            let _e45 = phi_76_;
+            let _e47 = (_e33 - vec3(_e45));
+            let _e52 = max(_e47.x, max(_e47.y, _e47.z));
+            if (_e52 < 0.76f) {
+                phi_101_ = _e47;
                 break;
             }
-            let _e53 = (1f - (0.0576f / (_e49 + -0.52f)));
-            phi_251_ = mix((_e44 * (_e53 / max(_e49, 0.00000000000000000001f))), vec3(_e53), vec3((1f - (1f / ((0.15f * (_e49 - _e53)) + 1f)))));
+            let _e56 = (1f - (0.057600003f / (_e52 + -0.52f)));
+            phi_101_ = mix((_e47 * (_e56 / max(_e52, 0.00000000000000000001f))), vec3(_e56), vec3((1f - (1f / ((0.15f * (_e52 - _e56)) + 1f)))));
             break;
         }
     }
-    let _e66 = phi_251_;
-    let _e67 = clamp(_e66, vec3<f32>(0f, 0f, 0f), vec3<f32>(1f, 1f, 1f));
-    global_3 = vec4<f32>(_e67.x, _e67.y, _e67.z, 1f);
+    let _e69 = phi_101_;
+    let _e70 = clamp(_e69, vec3<f32>(0f, 0f, 0f), vec3<f32>(1f, 1f, 1f));
+    out_u002e_var_u002e_SV_Target0_ = vec4<f32>(_e70.x, _e70.y, _e70.z, 1f);
     return;
 }
 
 @fragment
 fn main(@builtin(position) param: vec4<f32>) -> @location(0) vec4<f32> {
     global = param;
-    function_();
-    let _e3 = global_3;
+    main_1();
+    let _e3 = out_u002e_var_u002e_SV_Target0_;
     return _e3;
 }

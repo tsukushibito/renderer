@@ -6,11 +6,11 @@
         }
     ],
     "types" : {
-        "_140" : {
-            "name" : "_140",
+        "_9" : {
+            "name" : "type.ConstantBuffer.ToneParameters",
             "members" : [
                 {
-                    "name" : "_m0",
+                    "name" : "exposure",
                     "type" : "float",
                     "offset" : 0
                 }
@@ -20,14 +20,14 @@
     "outputs" : [
         {
             "type" : "vec4",
-            "name" : "_138",
+            "name" : "out.var.SV_Target0",
             "location" : 0
         }
     ],
     "separate_images" : [
         {
             "type" : "texture2D",
-            "name" : "_112",
+            "name" : "linear_image",
             "set" : 0,
             "binding" : 0
         }
@@ -35,15 +35,15 @@
     "separate_samplers" : [
         {
             "type" : "sampler",
-            "name" : "_116",
+            "name" : "source_sampler",
             "set" : 0,
             "binding" : 1
         }
     ],
     "push_constants" : [
         {
-            "type" : "_140",
-            "name" : "_142",
+            "type" : "_9",
+            "name" : "tone",
             "push_constant" : true
         }
     ]

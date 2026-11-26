@@ -278,7 +278,7 @@ VMAの配置は実測のbufferImageGranularityを満たしており、原因をa
 
 ## GraphのShaderと描画
 
-管理下のGLSLと生成済みSPIR-Vを保持し、通常のRustビルドへshaderコンパイラーを要求しない。
+標準表示パスは HLSL から固定版 DXC で SPIR-V を生成する。Core の GLSL とともに生成済み SPIR-V を保持し、通常のRustビルドへshaderコンパイラーを要求しない。
 固定SDKでVulkan 1.3をtargetにし、SPIR-V 1.3を明示する。
 Deviceで有効にしていない`maintenance4`の`LocalSizeId`へ暗黙に依存しない。
 再生成とbinary一致確認は[開発手順](../guides/development.md)に従う。

@@ -8,14 +8,14 @@
     "outputs" : [
         {
             "type" : "vec4",
-            "name" : "_67",
+            "name" : "out.var.SV_Target0",
             "location" : 0
         }
     ],
     "separate_images" : [
         {
             "type" : "texture2D",
-            "name" : "_17",
+            "name" : "linear_image",
             "set" : 0,
             "binding" : 0
         }
@@ -23,7 +23,7 @@
     "separate_samplers" : [
         {
             "type" : "sampler",
-            "name" : "_21",
+            "name" : "source_sampler",
             "set" : 0,
             "binding" : 1
         }

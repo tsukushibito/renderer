@@ -43,7 +43,7 @@ def read_buffer(directory, meta, key, fmt, dtype, channels):
 
 
 def neutral(x):
-    # Same toe, shoulder and desaturation as output/tone_neutral.frag.
+    # Same toe, shoulder and desaturation as output/tone_neutral.frag.hlsl.
     v = x.min(axis=2, keepdims=True)
     c = x - np.where(v < 0.08, v - 6.25 * v * v, 0.04)
     peak = c.max(axis=2, keepdims=True)

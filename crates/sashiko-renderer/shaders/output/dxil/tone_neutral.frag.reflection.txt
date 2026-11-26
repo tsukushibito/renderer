@@ -12,7 +12,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: d3f4ba2171685949898af32bbc39e372
+; shader hash: fe7d5c85539fe179bbefaa4cbb75ac64
 ;
 ; Pipeline Runtime Information:
 ;
@@ -48,15 +48,21 @@
 ;
 ; Buffer Definitions:
 ;
-; cbuffer _140_142
+; cbuffer tone
 ; {
 ;
-;   struct _140_142
+;   struct tone
 ;   {
 ;
-;       float _142_m0;                                ; Offset:    0
+;       struct struct.ToneParameters
+;       {
 ;
-;   } _140_142;                                       ; Offset:    0 Size:     4
+;           float exposure;                           ; Offset:    0
+;
+;       } tone;                                       ; Offset:    0
+;
+;
+;   } tone;                                           ; Offset:    0 Size:     4
 ;
 ; }
 ;
@@ -65,9 +71,9 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _140_142                          cbuffer      NA          NA     CB0            cb0     1
-; _116                              sampler      NA          NA      S0             s1     1
-; _112                              texture     f32          2d      T0             t0     1
+; tone                              cbuffer      NA          NA     CB0            cb0     1
+; source_sampler                    sampler      NA          NA      S0             s1     1
+; linear_image                      texture     f32          2d      T0             t0     1
 ;
 ;
 ; ViewId state:

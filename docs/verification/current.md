@@ -1648,6 +1648,13 @@ CPU試験で形式・ステージ・境界が不正なバイナリの拒否と�
 
 ## BistroのHLSL正本
 
+標準表示パス（`renderer-y1ik`）は Neutral・SDR・FXAA の HLSL 3本から5種の
+SPIR-V／DXIL を直接生成し、固定 SDK で再生成一致と既存の標準出力 ABI を確認した。
+WGSL は Naga で全67モジュールの再生成とインターフェース照合を確認した。
+Windows では、最適化済みの Vulkan／D3D12 で B3 の描画試験が開発検証あり・なしで各4件成功した。
+対象には Neutral・露出・sRGB の画素照合と、均一画像・斜め輪郭の FXAA 試験を含む。
+この検証ではブラウザでの表示結果と、移行前後の全画素の一致は測定していない。
+
 `renderer-w6d`。移行前の比較元は`44451a4`。固定SDKのDXCで17バリアントをSPIR-V 1.3／DXILへ
 直接生成し、`-Verify`で全バイナリ・reflection・manifestの再生成一致を確認した。
 Vulkan 1.3の`spirv-val`、既存のbuffer範囲・定数配置・shader入出力の照合、PBR／GBuffer頂点の

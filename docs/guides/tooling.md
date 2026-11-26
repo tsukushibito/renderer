@@ -722,13 +722,14 @@ ClangやMikk shared libraryをRendererのruntime依存へ追加しない。
 [生成スクリプト](../../crates/sashiko-renderer/shaders/regenerate.ps1)から
 固定版DXCを呼び、同じ正本をSPIR-VとDXILに直接コンパイルする。
 標準のNeutral・FXAA・SDR出力shaderとライセンスは`crates/sashiko-renderer/shaders/output/`に置く。
-表示プリセットのGLSLを変更した場合は次の順で標準fragmentのSPIR-V、DXIL、両者を含むPipelineのmanifestを更新する。
-通常buildは同梱のバイナリを読み込む。
+表示プリセットは3本の HLSL を正本とし、固定版 DXC で5種の SPIR-V と DXIL を直接生成する。変更時は次の順で生成物と manifest を更新する。
+WebGPU 用の WGSL も最後に更新する。通常の Rust ビルドは生成済みの各形式を読み込む。
 
 ```powershell
 & ./crates/sashiko-renderer-core/shaders/regenerate.ps1
 & ./crates/sashiko-renderer-core/shaders/regenerate-dxil.ps1
 & ./crates/sashiko-renderer/shaders/regenerate.ps1
+python tools/shaders/webgpu.py
 ```
 
 PBRなどPipeline側のHLSLのみを変更した場合は、Pipelineの生成と照合を実行する。
@@ -749,7 +750,7 @@ PBRなどPipeline側のHLSLのみを変更した場合は、Pipelineの生成と
 ```
 
 `-Verify`は一時directoryで再生成し、checkoutを書き換えずbinary・reflection・manifestを照合する。
-CIでは`python -B tools/shaders/verify_pipeline_manifest.py`を実行し、SDKなしでHLSL、出力GLSL・ライセンス、include、バイナリ、
+CIでは`python -B tools/shaders/verify_pipeline_manifest.py`を実行し、SDKなしでHLSL、出力用HLSL・ライセンス、include、バイナリ、
 反射情報、ツールチェーン定義とRenderer側manifestのhashを照合する。描画とベイクの各クレートで資産の欠落と未登録ファイルも検出する。
 UTF-8/BOMなし・LFへ揃えたHLSLとincludeを両ターゲットで使い、同じbyte列をhashへ使う。
 両形式のentry pointは`main`、標準のshader modelは6.0、HLSLは2021、最適化は`-O3`。

@@ -17,7 +17,7 @@ ASSET_SUFFIXES = (".hlsl", ".hlsli", *(f".{suffix}" for suffix in ARTIFACT_SUFFI
 
 
 def output_hashes(core_manifest: dict) -> dict[str, str]:
-    """The shared GLSL generator records these fragments alongside the fullscreen vertex stage."""
+    """The shared shader generator records these fragments alongside the fullscreen vertex stage."""
     expected = {}
     prefix = "../../sashiko-renderer/shaders/output/"
     for key, record in core_manifest["artifacts"].items():
@@ -27,12 +27,11 @@ def output_hashes(core_manifest: dict) -> dict[str, str]:
         if not re.fullmatch(r"(?:tone_neutral|sdr(?:_fxaa)?(?:_linear)?)\.frag", variant):
             raise ValueError(f"Unknown standard output variant: {variant}")
         source = variant.replace("_linear.frag", ".frag")
-        name = f"output/{source}"
+        name = f"output/{source}.hlsl"
         if expected.setdefault(name, record["source_utf8_lf"]) != record["source_utf8_lf"]:
             raise ValueError(f"Variants disagree on the SHA-256 of {name}")
         expected[f"output/{variant}.spv"] = record["spirv"]
         for suffix, field in [
-            ("hlsl", "hlsl"),
             ("dxil", "dxil"),
             ("reflection.txt", "reflection"),
             ("spirv-reflection.json", "spirv_reflection"),

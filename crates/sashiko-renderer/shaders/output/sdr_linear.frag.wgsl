@@ -1,23 +1,23 @@
-var<private> global: vec4<f32>;
 @group(0) @binding(0)
-var global_1: texture_2d<f32>;
+var linear_image: texture_2d<f32>;
 @group(0) @binding(1)
-var global_2: sampler;
-var<private> global_3: vec4<f32>;
+var source_sampler: sampler;
+var<private> global: vec4<f32>;
+var<private> out_u002e_var_u002e_SV_Target0_: vec4<f32>;
 
-fn function_() {
+fn main_1() {
     let _e9 = global;
-    let _e11 = textureDimensions(global_1, 0i);
-    let _e15 = textureSampleLevel(global_1, global_2, (_e9.xy / vec2<f32>(vec2<i32>(_e11))), 0f);
-    let _e17 = clamp(_e15.xyz, vec3<f32>(0f, 0f, 0f), vec3<f32>(1f, 1f, 1f));
-    global_3 = vec4<f32>(_e17.x, _e17.y, _e17.z, 1f);
+    let _e11 = textureDimensions(linear_image, 0i);
+    let _e18 = textureSampleLevel(linear_image, source_sampler, (_e9.xy / vec2<f32>(f32(_e11.x), f32(_e11.y))), 0f);
+    let _e20 = clamp(_e18.xyz, vec3<f32>(0f, 0f, 0f), vec3<f32>(1f, 1f, 1f));
+    out_u002e_var_u002e_SV_Target0_ = vec4<f32>(_e20.x, _e20.y, _e20.z, 1f);
     return;
 }
 
 @fragment
 fn main(@builtin(position) param: vec4<f32>) -> @location(0) vec4<f32> {
     global = param;
-    function_();
-    let _e3 = global_3;
+    main_1();
+    let _e3 = out_u002e_var_u002e_SV_Target0_;
     return _e3;
 }

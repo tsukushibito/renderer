@@ -1,32 +1,36 @@
-#version 450 core
 // Adapted from Godot 4.7.2-stable FXAA 3.11 compact (Simon Rodriguez/NVIDIA).
 // Source: servers/rendering/renderer_rd/shaders/effects/tonemap.glsl
 // Changes: single-view standalone pass after Neutral; no exposure multiplier;
 // positive division/sqrt guards; separate sampler; one final sRGB encode.
 // Full Godot/MIT and original FXAA notices are retained in licenses/.
-layout(set = 0, binding = 0) uniform texture2D linear_image;
-layout(set = 0, binding = 1) uniform sampler source_sampler;
-layout(location = 0) out vec4 output_color;
+Texture2D<float4> linear_image : register(t0, space0);
+SamplerState source_sampler : register(s1, space0);
+
+float2 source_size() {
+    uint width, height;
+    linear_image.GetDimensions(width, height);
+    return float2(width, height);
+}
 float QUALITY(float q) {
 	return (q < 5 ? 1.0 : (q > 5 ? (q < 10 ? 2.0 : (q < 11 ? 4.0 : 8.0)) : 1.5));
 }
 
-float rgb2luma(vec3 rgb) {
-	return sqrt(max(dot(rgb, vec3(0.299, 0.587, 0.114)), 0.0));
+float rgb2luma(float3 rgb) {
+	return sqrt(max(dot(rgb, float3(0.299, 0.587, 0.114)), 0.0));
 }
 
-vec3 do_fxaa(vec3 color, vec2 uv_interp) {
-	vec2 pixel_size = 1.0 / vec2(textureSize(sampler2D(linear_image, source_sampler), 0));
+float3 do_fxaa(float3 color, float2 uv_interp) {
+	float2 pixel_size = 1.0 / source_size();
 	const float EDGE_THRESHOLD_MIN = 0.0312;
 	const float EDGE_THRESHOLD_MAX = 0.125;
 	const int ITERATIONS = 12;
 	const float SUBPIXEL_QUALITY = 0.75;
 
 
-	float lumaUp = rgb2luma(textureLodOffset(sampler2D(linear_image, source_sampler), uv_interp, 0.0, ivec2(0, 1)).xyz);
-	float lumaDown = rgb2luma(textureLodOffset(sampler2D(linear_image, source_sampler), uv_interp, 0.0, ivec2(0, -1)).xyz);
-	float lumaLeft = rgb2luma(textureLodOffset(sampler2D(linear_image, source_sampler), uv_interp, 0.0, ivec2(-1, 0)).xyz);
-	float lumaRight = rgb2luma(textureLodOffset(sampler2D(linear_image, source_sampler), uv_interp, 0.0, ivec2(1, 0)).xyz);
+	float lumaUp = rgb2luma(linear_image.SampleLevel(source_sampler, uv_interp, 0.0, int2(0, 1)).xyz);
+	float lumaDown = rgb2luma(linear_image.SampleLevel(source_sampler, uv_interp, 0.0, int2(0, -1)).xyz);
+	float lumaLeft = rgb2luma(linear_image.SampleLevel(source_sampler, uv_interp, 0.0, int2(-1, 0)).xyz);
+	float lumaRight = rgb2luma(linear_image.SampleLevel(source_sampler, uv_interp, 0.0, int2(1, 0)).xyz);
 
 	float lumaCenter = rgb2luma(color);
 
@@ -39,10 +43,10 @@ vec3 do_fxaa(vec3 color, vec2 uv_interp) {
 		return color;
 	}
 
-	float lumaDownLeft = rgb2luma(textureLodOffset(sampler2D(linear_image, source_sampler), uv_interp, 0.0, ivec2(-1, -1)).xyz);
-	float lumaUpRight = rgb2luma(textureLodOffset(sampler2D(linear_image, source_sampler), uv_interp, 0.0, ivec2(1, 1)).xyz);
-	float lumaUpLeft = rgb2luma(textureLodOffset(sampler2D(linear_image, source_sampler), uv_interp, 0.0, ivec2(-1, 1)).xyz);
-	float lumaDownRight = rgb2luma(textureLodOffset(sampler2D(linear_image, source_sampler), uv_interp, 0.0, ivec2(1, -1)).xyz);
+	float lumaDownLeft = rgb2luma(linear_image.SampleLevel(source_sampler, uv_interp, 0.0, int2(-1, -1)).xyz);
+	float lumaUpRight = rgb2luma(linear_image.SampleLevel(source_sampler, uv_interp, 0.0, int2(1, 1)).xyz);
+	float lumaUpLeft = rgb2luma(linear_image.SampleLevel(source_sampler, uv_interp, 0.0, int2(-1, 1)).xyz);
+	float lumaDownRight = rgb2luma(linear_image.SampleLevel(source_sampler, uv_interp, 0.0, int2(1, -1)).xyz);
 
 	float lumaDownUp = lumaDown + lumaUp;
 	float lumaLeftRight = lumaLeft + lumaRight;
@@ -76,19 +80,19 @@ vec3 do_fxaa(vec3 color, vec2 uv_interp) {
 		lumaLocalAverage = 0.5 * (luma2 + lumaCenter);
 	}
 
-	vec2 currentUv = uv_interp;
+	float2 currentUv = uv_interp;
 	if (isHorizontal) {
 		currentUv.y += stepLength * 0.5;
 	} else {
 		currentUv.x += stepLength * 0.5;
 	}
 
-	vec2 offset = isHorizontal ? vec2(pixel_size.x, 0.0) : vec2(0.0, pixel_size.y);
-	vec2 uv1 = currentUv - offset * QUALITY(0);
-	vec2 uv2 = currentUv + offset * QUALITY(0);
+	float2 offset = isHorizontal ? float2(pixel_size.x, 0.0) : float2(0.0, pixel_size.y);
+	float2 uv1 = currentUv - offset * QUALITY(0);
+	float2 uv2 = currentUv + offset * QUALITY(0);
 
-	float lumaEnd1 = rgb2luma(textureLod(sampler2D(linear_image, source_sampler), uv1, 0.0).xyz);
-	float lumaEnd2 = rgb2luma(textureLod(sampler2D(linear_image, source_sampler), uv2, 0.0).xyz);
+	float lumaEnd1 = rgb2luma(linear_image.SampleLevel(source_sampler, uv1, 0.0).xyz);
+	float lumaEnd2 = rgb2luma(linear_image.SampleLevel(source_sampler, uv2, 0.0).xyz);
 	lumaEnd1 -= lumaLocalAverage;
 	lumaEnd2 -= lumaLocalAverage;
 
@@ -106,11 +110,11 @@ vec3 do_fxaa(vec3 color, vec2 uv_interp) {
 	if (!reachedBoth) {
 		for (int i = 2; i < ITERATIONS; i++) {
 			if (!reached1) {
-				lumaEnd1 = rgb2luma(textureLod(sampler2D(linear_image, source_sampler), uv1, 0.0).xyz);
+				lumaEnd1 = rgb2luma(linear_image.SampleLevel(source_sampler, uv1, 0.0).xyz);
 				lumaEnd1 = lumaEnd1 - lumaLocalAverage;
 			}
 			if (!reached2) {
-				lumaEnd2 = rgb2luma(textureLod(sampler2D(linear_image, source_sampler), uv2, 0.0).xyz);
+				lumaEnd2 = rgb2luma(linear_image.SampleLevel(source_sampler, uv2, 0.0).xyz);
 				lumaEnd2 = lumaEnd2 - lumaLocalAverage;
 			}
 			reached1 = abs(lumaEnd1) >= gradientScaled;
@@ -156,29 +160,28 @@ vec3 do_fxaa(vec3 color, vec2 uv_interp) {
 
 	finalOffset = max(finalOffset, subPixelOffsetFinal);
 
-	vec2 finalUv = uv_interp;
+	float2 finalUv = uv_interp;
 	if (isHorizontal) {
 		finalUv.y += finalOffset * stepLength;
 	} else {
 		finalUv.x += finalOffset * stepLength;
 	}
 
-	vec3 finalColor = textureLod(sampler2D(linear_image, source_sampler), finalUv, 0.0).xyz;
+	float3 finalColor = linear_image.SampleLevel(source_sampler, finalUv, 0.0).xyz;
 	return finalColor;
 
 
 }
 
-void main() {
-    vec2 uv = gl_FragCoord.xy / vec2(textureSize(sampler2D(linear_image, source_sampler), 0));
-    vec3 center = clamp(textureLod(sampler2D(linear_image, source_sampler), uv, 0.0).rgb, 0.0, 1.0);
-    vec3 linear_color = clamp(do_fxaa(center, uv), 0.0, 1.0);
+float4 main(float4 position : SV_Position) : SV_Target0 {
+    float2 uv = position.xy / source_size();
+    float3 center = clamp(linear_image.SampleLevel(source_sampler, uv, 0.0).rgb, 0.0, 1.0);
+    float3 linear_color = clamp(do_fxaa(center, uv), 0.0, 1.0);
 #ifdef RENDERER_LINEAR_OUTPUT
-    output_color = vec4(linear_color, 1.0);
+    return float4(linear_color, 1.0);
 #else
-    vec3 encoded = mix(12.92 * linear_color,
-        1.055 * pow(linear_color, vec3(1.0 / 2.4)) - 0.055,
-        greaterThan(linear_color, vec3(0.0031308)));
-    output_color = vec4(encoded, 1.0);
+    float3 encoded = select(linear_color > 0.0031308,
+        1.055 * pow(linear_color, 1.0 / 2.4) - 0.055, 12.92 * linear_color);
+    return float4(encoded, 1.0);
 #endif
 }

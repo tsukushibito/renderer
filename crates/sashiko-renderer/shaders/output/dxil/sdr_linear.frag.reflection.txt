@@ -12,7 +12,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: 61c20c557c705c1ed6f60ad7bbdacbed
+; shader hash: b306340244b7607e5971178a21ed9e1e
 ;
 ; Pipeline Runtime Information:
 ;
@@ -53,8 +53,8 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _21                               sampler      NA          NA      S0             s1     1
-; _17                               texture     f32          2d      T0             t0     1
+; source_sampler                    sampler      NA          NA      S0             s1     1
+; linear_image                      texture     f32          2d      T0             t0     1
 ;
 ;
 ; ViewId state:

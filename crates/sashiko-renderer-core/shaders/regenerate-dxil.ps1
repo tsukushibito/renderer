@@ -110,21 +110,22 @@ try {
         $spirv = Join-Path $PSScriptRoot ($source + '.spv')
         $hlsl = Join-Path $temporaryRoot ($assetName + '.hlsl')
         $dxil = Join-Path $temporaryRoot ($assetName + '.dxil')
-        $crossArgs = @($spirv) + @($lock.spirv_cross_arguments) + @('--stage', $shader.stage) +
-            @($shader.spirv_cross_arguments) + @('--output', $hlsl)
-        $null = Invoke-ShaderTool $cross $crossArgs
-        # Canonical UTF-8/LF HLSL makes the checked-in text independent of
-        # checkout line-ending settings; there are no includes or macros.
-        $text = [IO.File]::ReadAllText($hlsl).Replace("`r`n", "`n")
-        if ($assetName -ceq 'tone_neutral.frag') {
-            $unbound = '(?m)^cbuffer ([A-Za-z_][A-Za-z_0-9]*)$'
-            if ([regex]::Matches($text, $unbound).Count -ne 1) {
-                throw 'tone_neutral.frag must declare one inline constant block.'
+        $outputProgram = $source.StartsWith('../../sashiko-renderer/shaders/output/')
+        $sourceFile = $source
+        $variant = @()
+        if ($outputProgram) {
+            $sourceFile = ($source -creplace '_linear\.frag$', '.frag') + '.hlsl'
+            if ($assetName.EndsWith('_linear.frag')) {
+                $variant += '-DRENDERER_LINEAR_OUTPUT=1'
             }
-            $text = [regex]::Replace($text, $unbound, 'cbuffer $1 : register(b0, space0)')
+            $hlsl = Join-Path $PSScriptRoot $sourceFile
+        } else {
+            $crossArgs = @($spirv) + @($lock.spirv_cross_arguments) + @('--stage', $shader.stage) +
+                @($shader.spirv_cross_arguments) + @('--output', $hlsl)
+            $null = Invoke-ShaderTool $cross $crossArgs
+            Write-Utf8 $hlsl ([IO.File]::ReadAllText($hlsl).Replace("`r`n", "`n"))
         }
-        Write-Utf8 $hlsl $text
-        $dxcArgs = @($lock.dxc_arguments) + @('-T', $shader.profile, $hlsl, '-Fo', $dxil)
+        $dxcArgs = @($lock.dxc_arguments) + $variant + @('-T', $shader.profile, $hlsl, '-Fo', $dxil)
         $null = Invoke-ShaderTool $dxc $dxcArgs
         $dump = Invoke-ShaderTool $dxc @('-dumpbin', $dxil)
         $reflectionEnd = $dump.IndexOf('target datalayout = ', [StringComparison]::Ordinal)
@@ -133,7 +134,6 @@ try {
         }
         $reflection = [regex]::Replace($dump.Substring(0, $reflectionEnd), '(?m)[ \t]+$', '')
         Write-Utf8 (Join-Path $temporaryRoot ($assetName + '.reflection.txt')) $reflection
-        $outputProgram = $assetName -cmatch '^(?:tone_neutral|sdr(?:_fxaa)?(?:_linear)?)\.frag$'
         $reflected = $outputProgram -or $assetName -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp', 'indexed_indirect.comp', 'textured.vert', 'textured.frag', 'compute_hdr_sampled.comp', 'compute_hdr_storage.comp')
         if ($reflected) {
             $spirvReflection = Invoke-ShaderTool $cross @($spirv, '--reflect')
@@ -156,18 +156,18 @@ try {
             }
             Write-Utf8 (Join-Path $temporaryRoot ($assetName + '.spirv-reflection.json')) $spirvReflection
         }
-        $sourceFile = $source -creplace '(sdr(?:_fxaa)?)_linear\.frag$', '$1.frag'
         $hashes = [ordered]@{
             source_utf8_lf = Get-SourceSha256 (Join-Path $PSScriptRoot $sourceFile)
             spirv = Get-Sha256 $spirv
-            hlsl = Get-Sha256 $hlsl
-            dxil = Get-Sha256 $dxil
-            reflection = Get-Sha256 (Join-Path $temporaryRoot ($assetName + '.reflection.txt'))
         }
+        if (-not $outputProgram) { $hashes.hlsl = Get-Sha256 $hlsl }
+        $hashes.dxil = Get-Sha256 $dxil
+        $hashes.reflection = Get-Sha256 (Join-Path $temporaryRoot ($assetName + '.reflection.txt'))
         if ($reflected) {
             $hashes.spirv_reflection = Get-Sha256 (Join-Path $temporaryRoot ($assetName + '.spirv-reflection.json'))
         }
-        $extensions = @('.hlsl', '.dxil', '.reflection.txt')
+        $extensions = @('.dxil', '.reflection.txt')
+        if (-not $outputProgram) { $extensions += '.hlsl' }
         if ($reflected) { $extensions += '.spirv-reflection.json' }
         foreach ($extension in $extensions) {
             $temporary = Join-Path $temporaryRoot ($assetName + $extension)

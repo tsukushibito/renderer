@@ -32,10 +32,17 @@ if ($LASTEXITCODE -ne 0 -or
 
 # Explicit SPIR-V 1.3 avoids LocalSizeId/maintenance4 requirements. The runtime
 # enables synchronization2/dynamicRendering, but does not enable maintenance4.
-# Use entry point main, GLSL 450 core and optimized code without debug info.
-# Compile every GLSL variant in the shared toolchain manifest, including
+# Core GLSL uses glslc and the renderer output HLSL uses DXC.
+# Compile every variant in the shared toolchain manifest, including
 # external test fixtures and renderer's standard output programs.
 $toolchain = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil-toolchain.json') -Raw | ConvertFrom-Json
+$dxc = Join-Path $SdkRoot 'Bin/dxc.exe'
+foreach ($file in @('dxc.exe', 'dxcompiler.dll')) {
+    if ((Get-FileHash (Join-Path $SdkRoot "Bin/$file")).Hash.ToLowerInvariant() -cne $toolchain.files.$file) {
+        throw "Unexpected pinned tool: $file"
+    }
+}
+$dxcArguments = @($toolchain.dxc_arguments) + @('-T', 'ps_6_0', '-spirv', '-fspv-target-env=vulkan1.1')
 $sources = $toolchain.shaders.source
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ('renderer-spirv-' + [Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $temporaryRoot
@@ -49,12 +56,14 @@ try {
         }
         $sourcePath = Join-Path $PSScriptRoot $sourceFile
         $outputPath = Join-Path $PSScriptRoot ($source + '.spv')
-        # External caller-owned sources have relative path components. Only the
-        # basename is used inside the task-owned temporary directory.
         $temporaryPath = Join-Path $temporaryRoot ([IO.Path]::GetFileName($source) + '.spv')
-        & $compiler --target-env=vulkan1.3 --target-spv=spv1.3 -std=450core `
-            -fentry-point=main -O -Werror @variant $sourcePath -o $temporaryPath
-        if ($LASTEXITCODE -ne 0) { throw "glslc failed for $source" }
+        if ($source.StartsWith('../../sashiko-renderer/shaders/output/')) {
+            & $dxc @dxcArguments @variant ($sourcePath + '.hlsl') -Fo $temporaryPath
+        } else {
+            & $compiler --target-env=vulkan1.3 --target-spv=spv1.3 -std=450core `
+                -fentry-point=main -O -Werror $sourcePath -o $temporaryPath
+        }
+        if ($LASTEXITCODE -ne 0) { throw "Shader compilation failed for $source" }
         & $validator --target-env vulkan1.3 $temporaryPath
         if ($LASTEXITCODE -ne 0) { throw "spirv-val failed for $source" }
         $generatedHash = (Get-FileHash -LiteralPath $temporaryPath -Algorithm SHA256).Hash

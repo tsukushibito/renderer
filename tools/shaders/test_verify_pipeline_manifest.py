@@ -83,24 +83,23 @@ class PipelineShaderManifestTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"missing=.*surface\.frag\.spv.*unlisted=.*other\.frag\.hlsl"):
             verify(self.root, RENDERER_SHADERS)
 
-    def test_verifies_standard_output_assets_from_the_shared_glsl_manifest(self):
-        source = self.shaders / "output/sdr.frag"
+    def test_verifies_standard_output_assets_from_the_shared_shader_manifest(self):
+        source = self.shaders / "output/sdr.frag.hlsl"
         artifact = {"source_utf8_lf": self.write(source, b"shader\n")}
         for field, target in [
             ("spirv", "sdr_linear.frag.spv"),
-            ("hlsl", "dxil/sdr_linear.frag.hlsl"),
             ("dxil", "dxil/sdr_linear.frag.dxil"),
             ("reflection", "dxil/sdr_linear.frag.reflection.txt"),
             ("spirv_reflection", "dxil/sdr_linear.frag.spirv-reflection.json"),
         ]:
             artifact[field] = self.write(self.shaders / "output" / target, b"compiled shader")
         license_path = self.shaders / "output/licenses/FXAA-notices.txt"
-        glsl = {
+        shared_manifest = {
             "artifacts": {"../../sashiko-renderer/shaders/output/sdr_linear.frag": artifact},
             "licenses": {license_path.name: self.write(license_path, b"notice\n")},
         }
         self.manifest["renderer_shaders_sha256"] = self.write(
-            self.core_manifest, json.dumps(glsl).encode()
+            self.core_manifest, json.dumps(shared_manifest).encode()
         )
         self.write_manifest()
         with self.assertRaisesRegex(ValueError, r"missing=.*sdr_linear\.frag\.wgsl"):
