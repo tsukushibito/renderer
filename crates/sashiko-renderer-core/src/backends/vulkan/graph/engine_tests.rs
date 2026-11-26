@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use super::{FrameCapacity, ResourceClass, RuntimeConfig, VulkanRuntime};
 use crate::backends::vulkan::engine::{
     EngineFrameCapacity,
-    test_input::{Assets, Draw, FrameSnapshot, View, build_snapshot, graph, render_snapshot},
+    test_input::{Assets, Draw, FrameSnapshot, View, build_snapshot, render_snapshot},
 };
 use crate::{
     geometry::GeometryData,
