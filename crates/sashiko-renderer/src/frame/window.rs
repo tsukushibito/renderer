@@ -83,6 +83,7 @@ impl WindowRenderer {
             presenter,
             renderer: Renderer {
                 drawing,
+                captures: Default::default(),
                 camera,
                 scene_extent: None,
                 working_set,

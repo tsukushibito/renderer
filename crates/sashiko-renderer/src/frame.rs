@@ -13,7 +13,14 @@ use sashiko_renderer_core::{
     graph::{Graph, GraphError, ImageDesc, ImageHandle, LoadOp, PassHandle, SampleCount},
     runtime::{FrameId, FrameSubmission, ManagedImage, Runtime, RuntimeConfig},
 };
-use std::{num::NonZeroUsize, time::Duration};
+use std::{
+    num::NonZeroUsize,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 #[cfg(all(
     windows,
@@ -63,6 +70,7 @@ impl FrameDestination {
 /// Standard drawing context for a camera. A frame borrows it until submission or cancellation.
 pub struct Renderer {
     drawing: SceneRenderer,
+    captures: Box<[CaptureSlot]>,
     camera: CameraView,
     scene_extent: Option<[u32; 2]>,
     working_set: Preparation,
@@ -171,6 +179,9 @@ impl Renderer {
         let drawing = plan.build(backend)?;
         Ok(Self {
             drawing,
+            captures: (0..frames_in_flight.get())
+                .map(|_| CaptureSlot::default())
+                .collect(),
             camera,
             scene_extent: None,
             working_set,
@@ -443,9 +454,11 @@ impl Renderer {
     }
 
     pub fn begin_frame(&mut self) -> PipelineResult<Frame<'_>> {
+        self.poll_abandoned_captures()?;
         let recording = self.drawing.begin_frame()?;
         Ok(Frame {
             recording,
+            captures: &mut self.captures,
             camera: CameraView {
                 extent: self.scene_extent.unwrap_or(self.camera.extent),
                 ..self.camera
@@ -459,12 +472,43 @@ impl Renderer {
         self.drawing.into_runtime()
     }
 
+    /// Retire completed captures whose tickets were dropped. Live tickets and
+    /// other submissions remain available to their owners. Never waits for the GPU.
+    /// Returns the number of abandoned captures still pending on the GPU.
+    pub fn poll_abandoned_captures(&mut self) -> PipelineResult<usize> {
+        let mut pending = 0;
+        for slot in &mut self.captures {
+            if let Some(id) = slot.frame
+                && slot.abandoned.load(Ordering::Acquire)
+            {
+                if self
+                    .drawing
+                    .runtime()
+                    .wait_for_frame(id, Duration::ZERO)?
+                    .is_some()
+                {
+                    slot.frame = None;
+                    slot.abandoned.store(false, Ordering::Relaxed);
+                } else {
+                    pending += 1;
+                }
+            }
+        }
+        Ok(pending)
+    }
+
     pub fn read_capture(
         &mut self,
         capture: &Capture,
         bytes: &mut [u8],
         timeout: Duration,
     ) -> PipelineResult<bool> {
+        let Some(slot) = self.captures.get_mut(capture.slot) else {
+            return Err("unknown capture ticket".into());
+        };
+        if slot.frame != Some(capture.frame) || !Arc::ptr_eq(&slot.abandoned, &capture.abandoned) {
+            return Err("capture belongs to another renderer or has already been read".into());
+        }
         let [w, h] = capture.extent;
         if usize::try_from(u64::from(w) * u64::from(h))
             .ok()
@@ -480,24 +524,47 @@ impl Renderer {
         else {
             return Ok(false);
         };
+        // The runtime has transferred this completion, even if reading it fails.
+        capture.consumed.store(true, Ordering::Relaxed);
+        slot.frame = None;
         result.readback_into(capture.pixels, bytes)?;
         Ok(true)
     }
 }
 
+#[derive(Default)]
+struct CaptureSlot {
+    frame: Option<FrameId>,
+    // Allocated once per slot. A ticket can signal abandonment from any thread.
+    abandoned: Arc<AtomicBool>,
+}
+
+/// Dropping an unread ticket schedules its result for nonblocking collection.
+#[must_use]
 pub struct Capture {
     frame: FrameId,
     pixels: PassHandle,
     extent: [u32; 2],
+    abandoned: Arc<AtomicBool>,
+    consumed: AtomicBool,
+    slot: usize,
 }
 impl Capture {
     pub fn extent(&self) -> [u32; 2] {
         self.extent
     }
 }
+impl Drop for Capture {
+    fn drop(&mut self) {
+        if !self.consumed.load(Ordering::Relaxed) {
+            self.abandoned.store(true, Ordering::Release);
+        }
+    }
+}
 
 pub struct Frame<'a> {
     recording: SceneFrame<'a>,
+    captures: &'a mut [CaptureSlot],
     camera: CameraView,
     output_extent: [u32; 2],
     linear: Option<ImageHandle>,
@@ -572,10 +639,19 @@ impl Frame<'_> {
 
     /// Submit this frame and obtain its sRGB readback ticket without waiting.
     pub fn capture(mut self) -> PipelineResult<Capture> {
+        let slot = self
+            .captures
+            .iter()
+            .position(|slot| slot.frame.is_none())
+            .ok_or("outstanding captures exhaust the prepared frame count")?;
         let output = self.output(SdrOutput::capture(false))?;
         let pixels = self.graph().readback_image(READBACK, output.raw_image())?;
         let accepted: FrameSubmission = self.recording.submit()?;
+        self.captures[slot].frame = Some(accepted.id());
         Ok(Capture {
+            abandoned: Arc::clone(&self.captures[slot].abandoned),
+            consumed: AtomicBool::new(false),
+            slot,
             frame: accepted.id(),
             pixels,
             extent: self.output_extent,

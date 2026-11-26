@@ -241,6 +241,9 @@ let ready = renderer.read_capture(&capture, &mut rgba, timeout)?;
 ```
 
 読み戻すバッファは幅 × 高さ × 4 バイトとし、`ready` が false の場合は同じ取得票で再試行できる。
+不要になった取得票は破棄できる。次の `begin_frame` は放棄された読み戻しを待ち時間ゼロで確認し、
+GPU が完了したものから枠を返す。全枠が使用中なら、イベントループで再試行する。
+描画を休止中でも `poll_abandoned_captures()` で回収できる。保持中の別の取得票はそのまま読める。
 Windows では `WindowRenderer::draw` のクロージャに同じ Frame を受け取り、シーンと HUD を記録する。
 表示待ちの再試行では、すでに受理した画像を提示する。UI だけを描くフレームでは `draw_overlay` から開始できる。
 

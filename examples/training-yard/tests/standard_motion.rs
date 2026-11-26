@@ -21,6 +21,71 @@ mod shader {
     include!("../../../crates/sashiko-renderer/examples/support/toon.rs");
 }
 
+// Both GPU entry points exercise one-slot recovery and preservation of a live
+// result while a second slot is abandoned and reused.
+fn recover_captures(backend: RuntimeConfig, slots: usize) -> PipelineResult<()> {
+    let mut meshes = Meshes::new(MeshCapacity {
+        meshes: 1,
+        retired_mesh_versions: 0,
+    })?;
+    let mut materials = Materials::default();
+    let camera = CameraView {
+        id: ViewId(0),
+        extent: [2, 2],
+        camera: ViewInput::new(
+            IDENTITY,
+            [0., 0., -1.],
+            [0., 0., 1.],
+            [1., 2.],
+            Projection::Orthographic,
+        )?,
+    };
+    let mut renderer = Renderer::headless_with(
+        backend,
+        camera,
+        SceneAssets::new(&mut meshes, &mut materials, &[]),
+        slots.try_into()?,
+        |_| Ok(()),
+    )?;
+    let capture = |renderer: &mut Renderer, color| -> PipelineResult<_> {
+        let mut frame = renderer.begin_frame()?;
+        frame.draw_overlay(&[sashiko_renderer::canvas::Layer {
+            paint: sashiko_renderer::canvas::Paint::Color(color),
+            rect: sashiko_renderer_core::graph::RasterRect::new(0, 0, 2, 2),
+            clip: None,
+        }])?;
+        frame.capture()
+    };
+    let live = if slots > 1 {
+        Some(capture(&mut renderer, [1., 0., 0., 1.])?)
+    } else {
+        None
+    };
+    let mut pixels = [0; 16];
+    let unread = capture(&mut renderer, [0., 1., 0., 1.])?;
+    if renderer.read_capture(&unread, &mut pixels, Duration::ZERO)? {
+        // A fast device can finish before this poll. Force an unread submission too.
+        let abandoned = capture(&mut renderer, [0., 1., 0., 1.])?;
+        drop(unread);
+        drop(abandoned);
+    } else {
+        drop(unread);
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while renderer.poll_abandoned_captures()? != 0 {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    let fresh = capture(&mut renderer, [0., 0., 1., 1.])?;
+    assert!(renderer.read_capture(&fresh, &mut pixels, Duration::from_secs(15))?);
+    assert_eq!(&pixels[..4], &[0, 0, 255, 255]);
+    if let Some(live) = live {
+        assert!(renderer.read_capture(&live, &mut pixels, Duration::from_secs(15))?);
+        assert_eq!(&pixels[..4], &[255, 0, 0, 255]);
+    }
+    validation::check_validation(renderer.into_runtime()?)
+}
+
 fn exercise(backend: RuntimeConfig, load_after_start: bool) -> PipelineResult<()> {
     let camera = CameraView {
         id: ViewId(1),
@@ -223,6 +288,26 @@ fn vulkan_standard_motion() -> PipelineResult<()> {
 fn d3d12_standard_motion() -> PipelineResult<()> {
     for empty in [true, false] {
         exercise(RuntimeConfig::D3D12(Default::default()), empty)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "vulkan")]
+#[test]
+#[ignore = "requires a Vulkan device"]
+fn vulkan_abandoned_capture() -> PipelineResult<()> {
+    for slots in [1, 2] {
+        recover_captures(RuntimeConfig::Vulkan(Default::default()), slots)?;
+    }
+    Ok(())
+}
+
+#[cfg(all(windows, feature = "d3d12"))]
+#[test]
+#[ignore = "requires a D3D12 device"]
+fn d3d12_abandoned_capture() -> PipelineResult<()> {
+    for slots in [1, 2] {
+        recover_captures(RuntimeConfig::D3D12(Default::default()), slots)?;
     }
     Ok(())
 }

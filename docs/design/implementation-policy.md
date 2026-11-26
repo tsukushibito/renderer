@@ -893,6 +893,9 @@ B2のPBR、B3の影・HDR・tone mappingは標準パスと標準グラフへ段�
 | GPU 処理・高度な統合 → `sashiko-renderer-core`（Rust 名 `sashiko_renderer_core`） | GPU 非依存の Graph、画像・バッファ、Program と binding、Raster・Compute・copy、資源入出力、compile。Runtime が準備・投入・完了・読み戻しを扱う。表示とネイティブデバイス・外部画像との同期は各機能の入口で提供する。 | `sashiko-renderer-core` 単独で CPU 上の Graph 構築とヘッドレス Compute が成立する。GPU 基盤からシーン・材質・Canvas への逆依存がなく、同一デバイスのホスト資源を契約どおりに返却できる。 |
 
 製品の依存方向は `renderer → sashiko-renderer-core`。通常利用で core の型を組み立てる手順は作らず、独自パス・ホスト記録には同一の Graph・画像・Program 型を渡す。
+画面外の読み戻しでは、Renderer が同時フレーム数に合わせて取得票の枠を事前に用意する。
+取得票の破棄は放棄を通知し、当該フレームの GPU 完了を観測した時点で Renderer が結果を回収する。
+読み取り済みの古い取得票を破棄しても、同じ枠の新しい取得票には影響しない。
 旧 `renderer-pipeline` が持っていた PBR、Unlit、標準パス、レシピは上位の公開部品として継承する。投影・描画技法・Canvas の区分はまずモジュールとする。
 独自パイプラインだけを使うホストと外部プラグインがこの形でビルド・実行できるかが、独立パイプラインクレートを廃する判断の検証になる。
 別配布が必要になる具体的な依存や機能が判明したら、利用コードと依存グラフを記録して配置を再評価する。
