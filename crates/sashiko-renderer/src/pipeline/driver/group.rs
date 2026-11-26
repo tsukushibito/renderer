@@ -48,7 +48,7 @@ struct ViewSlot<P: ViewPipeline> {
 impl PreparedGroup<StandardPipeline> {
     pub(super) fn set_scene_jobs(
         &mut self,
-        jobs: sashiko_renderer_core::jobs::RendererJobs,
+        jobs: sashiko_renderer_core::jobs::SharedJobs,
         policy: StandardJobPolicy,
     ) {
         self.pipeline.set_scene_jobs(

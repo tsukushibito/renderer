@@ -483,7 +483,7 @@ impl GraphPool {
     /// this draw count in future checkouts. This preparation can allocate.
     pub fn set_raster_jobs(
         &mut self,
-        jobs: crate::jobs::RendererJobs,
+        jobs: crate::jobs::SharedJobs,
         min_draws: std::num::NonZeroUsize,
     ) {
         self.raster_jobs = Some(Arc::new(super::raster::CaptureJobs::new(jobs, min_draws)));

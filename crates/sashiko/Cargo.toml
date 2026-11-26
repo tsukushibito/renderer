@@ -24,6 +24,7 @@ cpal = { version = "0.16", optional = true }
 winit = { version = "0.30", default-features = false, features = ["rwh_06"], optional = true }
 
 [dependencies]
+sashiko-jobs = { version = "0.1.0", path = "../sashiko-jobs" }
 sashiko-math = { version = "0.1.0", path = "../sashiko-math" }
 sashiko-physics = { version = "0.1.0", path = "../sashiko-physics", optional = true }
 sashiko-inspect = { version = "0.1.0", path = "../sashiko-inspect", optional = true }

@@ -705,7 +705,7 @@ CPU で描画コマンドを作れる時点は、その入力が揃った時点�
 
 件数が既知の indexed draw 列には `RasterPass::draw_generated` を使える。生成関数は、呼ばれた順序に依存せず、指定された番号の描画を返す。Graph は描画数と定数ワード数の上限を先に確認する。`GraphPool::set_raster_jobs` で指定した規模に達した列では、各ジョブが最終格納位置にオペランドと定数を書き、バッファの参照範囲を集約する。異なる binding や離れたインデックス範囲を持つ区間は、保存したオペランドから正確な参照を回収する。ホストが宣言順に依存を登録するため、不透明・透明の順序、範囲の穴、容量エラー時のパス取り消しを保持できる。
 
-`RendererJobs` はホストが用意した一つの `JobSystem` を共有する。標準パイプラインはワールド AABB、カメラ可視性、各カスケードの候補、透明物のソートキーをオブジェクトごとの領域に記録する。影履歴の判定と描画宣言はこの結果を共有する。カメラ外の物体も影を落とす可能性があるため、影候補はカメラと独立に判定する。資源インポート、影履歴の更新、最終的な描画順はホストが管理する。並行する別の Graph が同じチームを使っていれば、その呼出元で処理を進める。
+`SharedJobs` はホストが用意した一つの `JobSystem` を共有する。標準パイプラインはワールド AABB、カメラ可視性、各カスケードの候補、透明物のソートキーをオブジェクトごとの領域に記録する。影履歴の判定と描画宣言はこの結果を共有する。カメラ外の物体も影を落とす可能性があるため、影候補はカメラと独立に判定する。資源インポート、影履歴の更新、最終的な描画順はホストが管理する。並行する別の Graph が同じチームを使っていれば、その呼出元で処理を進める。
 
 Unreal Engineも、パスごとの描画準備と、可視描画数・コア数に応じたパス内の記録を別のジョブにしている。Khronosのサンプルは、独立した記録先をワーカーに渡し、バッチが小さくなると呼び出し費用が増えることを示す。標準Rendererでもシーン分類、Graph登録、ネイティブ記録を個別に切り替え、完了FPSとフレーム間隔のp95で判断する。[Unreal Engine Mesh Drawing Parallelism](https://dev.epicgames.com/documentation/en-us/unreal-engine/mesh-drawing-pipeline-in-unreal-engine)・[Khronos Command Buffer Usage](https://docs.vulkan.org/samples/latest/samples/performance/command_buffer_usage/README.html)
 

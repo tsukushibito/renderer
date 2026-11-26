@@ -1,5 +1,5 @@
+use sashiko_heap::{CountingAllocator, HeapSnapshot};
 use sashiko_jobs::{JobScope, JobSystem};
-use sashiko_renderer_core::measurement::{CountingAllocator, Snapshot};
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::thread::{self, ThreadId};
@@ -52,14 +52,14 @@ impl Example {
         for _ in 0..128 {
             frame();
         }
-        let before = Snapshot::now();
+        let before = HeapSnapshot::now();
         for _ in 0..256 {
             frame();
         }
-        let delta = Snapshot::now().since(before);
+        let delta = HeapSnapshot::now().since(before);
         std::hint::black_box(values);
         delta
-            .rust
+            .events
             .map(|event| u32::try_from(event.calls).unwrap())
             .to_vec()
     }

@@ -18,7 +18,7 @@ presentation = ["sashiko-renderer-core/presentation", "dep:raw-window-handle"]
 tracy = ["sashiko-renderer-core/tracy", "dep:tracy-client"]
 graph-diagnostics = ["sashiko-renderer-core/graph-diagnostics"]
 memory-profiling = ["sashiko-renderer-core/memory-profiling"]
-scheduler-metrics = ["sashiko-jobs/scheduler-metrics"]
+scheduler-metrics = ["sashiko-renderer-core/scheduler-metrics"]
 
 [dependencies]
 sha2 = "0.10.9"

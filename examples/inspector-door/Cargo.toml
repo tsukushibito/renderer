@@ -8,12 +8,12 @@ publish = false
 
 [features]
 live-inspector = ["sashiko/live-inspector", "dep:serde"]
-memory-profiling = ["sashiko-renderer-core/memory-profiling", "dep:sashiko-renderer-core"]
+memory-profiling = ["dep:sashiko-heap"]
 
 [dependencies]
 sashiko = { version = "0.1.0", path = "../../crates/sashiko" }
 serde = { version = "1", features = ["derive"], optional = true }
-sashiko-renderer-core = { version = "0.1.0", path = "../../crates/sashiko-renderer-core", optional = true, default-features = false }
+sashiko-heap = { workspace = true, optional = true }
 
 [lints]
 workspace = true

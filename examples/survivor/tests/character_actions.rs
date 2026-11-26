@@ -4,7 +4,8 @@ use sashiko::animation::{
     AnimatedModel, AnimationError, CharacterCatalog, JointMask, LocalBuffer, PaletteRequest,
     PoseWorkspace, character::*,
 };
-use sashiko_renderer::{core::jobs::JobSystem, pipeline::PipelineResult};
+use sashiko::jobs::JobSystem;
+use sashiko_renderer::pipeline::PipelineResult;
 use std::{num::NonZeroU32, path::Path, sync::Arc};
 
 const RELOAD: u32 = 10;

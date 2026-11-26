@@ -286,7 +286,7 @@ impl Runtime {
         capacity: GraphCapacity,
         program: ManagedRasterProgram,
         buffers: &[BufferDesc],
-        native_jobs: Option<sashiko_renderer_core::jobs::RendererJobs>,
+        native_jobs: Option<sashiko_renderer_core::jobs::SharedJobs>,
     ) -> Result<Self, Failure> {
         let colors = options.passes * options.color_count();
         let resources = buffers.len() + colors * IN_FLIGHT;
@@ -1054,7 +1054,7 @@ pub fn run() -> Result<(), Failure> {
     let make_jobs = |count| {
         NonZeroUsize::new(count)
             .map(|n| {
-                sashiko_jobs::JobSystem::new(n).map(sashiko_renderer_core::jobs::RendererJobs::new)
+                sashiko_jobs::JobSystem::new(n).map(sashiko_renderer_core::jobs::SharedJobs::new)
             })
             .transpose()
     };

@@ -377,7 +377,7 @@ impl Runtime {
     #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub fn prepare_raster_recording(
         &mut self,
-        jobs: impl Into<crate::jobs::RendererJobs>,
+        jobs: impl Into<crate::jobs::SharedJobs>,
         max_batches: std::num::NonZeroUsize,
     ) -> Result<(), ExecutionError> {
         match &mut self.inner {
@@ -402,7 +402,7 @@ impl Runtime {
     /// continues to use its normal encoder.
     pub fn prepare_automatic_raster_recording(
         &mut self,
-        jobs: crate::jobs::RendererJobs,
+        jobs: crate::jobs::SharedJobs,
     ) -> Result<(), ExecutionError> {
         #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
         let (team, budget) = {

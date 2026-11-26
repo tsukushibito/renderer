@@ -680,7 +680,7 @@ mod tests {
     #[test]
     fn generated_runs_preserve_order_holes_and_constants_after_rollback() {
         use crate::graph::RasterConstants;
-        use crate::jobs::{JobSystem, RendererJobs};
+        use crate::jobs::{JobSystem, SharedJobs};
         use std::num::NonZeroUsize;
         for participants in [0, 1, 4] {
             let mut pool = GraphPool::new(
@@ -694,7 +694,7 @@ mod tests {
             .unwrap();
             if let Some(count) = NonZeroUsize::new(participants) {
                 pool.set_raster_jobs(
-                    RendererJobs::new(JobSystem::new(count).unwrap()),
+                    SharedJobs::new(JobSystem::new(count).unwrap()),
                     NonZeroUsize::MIN,
                 );
             }

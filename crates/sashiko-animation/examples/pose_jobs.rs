@@ -3,8 +3,8 @@
 fn main() {
     use glam::{Quat, Vec3};
     use sashiko_animation::{Clip, LocalPose, Playback, PoseBatch, PoseWorkspace, Skeleton};
+    use sashiko_heap::{CountingAllocator, HeapSnapshot};
     use sashiko_jobs::JobSystem;
-    use sashiko_renderer_core::measurement::{CountingAllocator, Snapshot};
     use std::hint::black_box;
     use std::time::{Duration, Instant};
     #[global_allocator]
@@ -60,7 +60,7 @@ fn main() {
                 for _ in 0..32 {
                     frame();
                 }
-                let before = Snapshot::now();
+                let before = HeapSnapshot::now();
                 let mut times = [Duration::ZERO; 64];
                 for t in &mut times {
                     if idle {
@@ -70,7 +70,7 @@ fn main() {
                     frame();
                     *t = start.elapsed();
                 }
-                let delta = Snapshot::now().since(before);
+                let delta = HeapSnapshot::now().since(before);
                 assert!(delta.is_allocation_free(), "{delta:?}");
                 times.sort_unstable();
                 println!(

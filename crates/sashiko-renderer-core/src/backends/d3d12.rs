@@ -205,7 +205,7 @@ impl D3D12Runtime {
     /// Indirect draws and batches using image/sampler tables stay on the direct list.
     pub fn prepare_raster_recording(
         &mut self,
-        jobs: impl Into<crate::jobs::RendererJobs>,
+        jobs: impl Into<crate::jobs::SharedJobs>,
         max_batches: std::num::NonZeroUsize,
     ) -> Result<(), D3D12RuntimeError> {
         self.prepare_recording_team(

@@ -11,6 +11,8 @@
 
 ネイティブのスコープ契約と定常時ヒープ、軽い加算の起床コスト、PoseBatch の連続実行・16 ms 休止後の p50 / p95 を確認する。PoseBatch は 16 / 64 関節、8 / 256 姿勢で最大並列度 1・2・4・8 を比較する。先頭 1/4 のみブレンドする条件も測る。カウンタ計測は別に実行する。
 
+CPU と Web のサンプルは `sashiko-heap` の `CountingAllocator` をグローバルアロケータに設定し、ジョブが合流した境界で `HeapSnapshot` の差分を取る。GPU の作成・破棄と VMA のホスト割り当ても測る描画ホストは `memory-profiling` と `sashiko_renderer::core::measurement::Snapshot` を使う。外部の描画ホストでスケジューラを計測するには、依存する `sashiko-renderer` の `scheduler-metrics` feature を有効にすると `JobSystem::scheduler_counts` が使える。
+
 ```sh
 cargo test --locked --release -p sashiko-jobs -p sashiko-animation
 cargo run --locked --release -p sashiko-jobs --example frame_jobs

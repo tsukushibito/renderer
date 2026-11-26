@@ -17,4 +17,4 @@ glam = "0.30"
 workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-sashiko-renderer-core = { version = "0.1.0", path = "../sashiko-renderer-core", features = ["memory-profiling"] }
+sashiko-heap.workspace = true

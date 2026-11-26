@@ -27,6 +27,8 @@ Survivor は 60 Hz のプレイ更新でプレイヤーの移動と押す力を�
 
 ホストが所有する `JobSystem` に、参加スレッドの総数を指定する。1 ならホストだけで実行する。`scope` から戻ると、投入したすべての仕事とその子孫が完了し、結果の領域を再び借用できる。
 
+アニメーションのパレット評価と描画で同じワーカーを使う場合は、ホストが `sashiko_jobs::SharedJobs::new(system)` でチームを一度だけ包み、各処理にハンドルを渡す。ハンドルをクローンしてもワーカーは増えない。`with` の呼び出しが別の処理や入れ子の呼び出しと重なると、後から入った処理は呼び出し元のスレッドで完了する。ゲームからは `sashiko::jobs`、描画ホストからは `sashiko_renderer::core::jobs` を通じて同じ型を利用できる。
+
 ```rust,ignore
 system.scope(|s| {
     s.spawn(|| visibility.update(&scene, &mut visible));

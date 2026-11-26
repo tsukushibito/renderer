@@ -81,7 +81,7 @@ impl Renderer {
     /// Prepare shared scene, Graph and command-recording jobs on the host team.
     pub fn prepare_jobs(
         &mut self,
-        jobs: impl Into<sashiko_renderer_core::jobs::RendererJobs>,
+        jobs: impl Into<sashiko_renderer_core::jobs::SharedJobs>,
     ) -> PipelineResult<()> {
         self.drawing.prepare_jobs(jobs)
     }

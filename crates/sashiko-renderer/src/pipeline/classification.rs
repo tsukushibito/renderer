@@ -1,6 +1,6 @@
 //! Pure per-object camera and shadow decisions, shared by history and drawing.
 use super::*;
-use sashiko_renderer_core::jobs::RendererJobs;
+use sashiko_renderer_core::jobs::SharedJobs;
 use std::{num::NonZeroUsize, sync::Mutex};
 
 #[derive(Clone, Copy, Default)]
@@ -59,7 +59,7 @@ impl Classify<'_> {
 
 pub(super) struct Classification {
     pub results: Box<[Visibility]>,
-    jobs: Option<(RendererJobs, NonZeroUsize)>,
+    jobs: Option<(SharedJobs, NonZeroUsize)>,
 }
 
 impl Classification {
@@ -142,7 +142,7 @@ impl Classification {
 impl StandardPipeline {
     /// Classify views with a shared CPU team when the input reaches `min_objects`.
     /// Disjoint chunks write prepared slots; graph imports and draw order belong to the host.
-    pub fn set_scene_jobs(&mut self, jobs: RendererJobs, min_objects: NonZeroUsize) {
+    pub fn set_scene_jobs(&mut self, jobs: SharedJobs, min_objects: NonZeroUsize) {
         self.auto_jobs = None;
         self.classification.jobs = Some((jobs, min_objects));
     }
@@ -225,7 +225,7 @@ mod tests {
         let mut reference = Classification::new(draws.len());
         let mut candidate = Classification::new(draws.len());
         candidate.jobs = Some((
-            RendererJobs::new(JobSystem::new(4.try_into().unwrap()).unwrap()),
+            SharedJobs::new(JobSystem::new(4.try_into().unwrap()).unwrap()),
             NonZeroUsize::MIN,
         ));
         reference.run(&draws, &materials, &view, true, &[], true)?;

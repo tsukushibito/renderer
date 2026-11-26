@@ -15,7 +15,7 @@ web-threads = ["sashiko-jobs/web-threads"]
 sashiko-jobs = { path = "../../crates/sashiko-jobs", version = "0.1.0" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-sashiko-renderer-core = { version = "0.1.0", path = "../../crates/sashiko-renderer-core", features = ["memory-profiling"] }
+sashiko-heap.workspace = true
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 

@@ -18,7 +18,7 @@ use sashiko_renderer::{
 };
 use sashiko_renderer_core::{
     graph::{ImageDesc, PassHandle, RasterBuildMetrics},
-    jobs::{JobSystem, RendererJobs},
+    jobs::{JobSystem, SharedJobs},
     profiling::GpuTiming,
     runtime::{FrameId, FrameSubmission, Runtime, RuntimeConfig},
 };
@@ -524,7 +524,7 @@ pub fn run() -> PipelineResult<()> {
     let o = Options::parse()?;
     let mut scene = Scene::new(&o)?;
     let shared = if o.auto || o.scene || o.graph || o.native {
-        Some(RendererJobs::new(JobSystem::new(o.team)?))
+        Some(SharedJobs::new(JobSystem::new(o.team)?))
     } else {
         None
     };

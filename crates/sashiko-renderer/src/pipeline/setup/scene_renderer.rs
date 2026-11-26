@@ -22,7 +22,7 @@ impl std::error::Error for RetiredViewError {
 
 /// Prepared views, reusable graph storage and the runtime used for their submissions.
 pub struct SceneRenderer<R: BorrowMut<Runtime> = Runtime> {
-    pub(super) jobs: Option<sashiko_renderer_core::jobs::RendererJobs>,
+    pub(super) jobs: Option<sashiko_renderer_core::jobs::SharedJobs>,
     pub(crate) limits: SceneLimits,
     pub(crate) definitions: Vec<MaterialDefinition>,
     pub(super) driver: ViewRenderer,
@@ -39,7 +39,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     /// The host, standard scene, graph and native recorder share the same team.
     pub fn prepare_jobs(
         &mut self,
-        jobs: impl Into<sashiko_renderer_core::jobs::RendererJobs>,
+        jobs: impl Into<sashiko_renderer_core::jobs::SharedJobs>,
     ) -> PipelineResult<()> {
         self.driver.check_idle()?;
         let jobs = jobs.into();
@@ -50,7 +50,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         Ok(())
     }
 
-    fn configure_cpu_jobs(&mut self, jobs: &sashiko_renderer_core::jobs::RendererJobs) {
+    fn configure_cpu_jobs(&mut self, jobs: &sashiko_renderer_core::jobs::SharedJobs) {
         // Candidate classification and generated visible draws have different costs.
         // Thresholds are in objects per view and draws per contiguous program run.
         #[cfg(feature = "vulkan")]
