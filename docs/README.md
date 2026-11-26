@@ -17,6 +17,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | 骨格アニメーションを再生・合成し、キャラクター制御や描画に組み込みたい | [アニメーションのクレート構成、固定 tick、GPU スキニングと受け入れ条件](design/animation.md) |
 | 大量オブジェクトの可視判定、Graph構築、コマンド記録を並列化したい | [標準RendererとGraphの仕組み](design/rendergraph.md#raster-recording)、[専用ベンチの実行手順](guides/development.md#standard-renderer-jobs)、[Vulkan・D3D12の実測](verification/current.md#standard-renderer-jobs) |
 | 最初のゲームの完成像と直近の実装順を知りたい | [3D 見下ろし型ローグライトサバイバーの制作計画](design/survivor-game.md) |
+| オープンワールドの探索・近接戦闘・区画ロードの実装先を決めたい | [3Dアクションのゲームとエンジンの責務、実装順と受け入れ例](design/open-world-action.md) |
 | ゲーム用の素材を取り込み、配布・差し替えたい | [Rust での装備の取込と配布](guides/tooling.md#equipment-cook)、[既存エンジンの比較、オフラインと実行時の責務、規模別の受け入れ条件](design/asset-pipeline.md) |
 | Git worktree で大型の素材を扱いたい | [原本の選択取得、変換済みデータの共有、worktree 別の世代管理と受け入れ条件](design/asset-pipeline.md#worktree-storage) |
 | ゲームエンジンに組み込みたい | [シーンの所有、カメラごとの描画方式、1 フレームの組み立て](guides/tooling.md#scene-materials)、[Windows の複数表示](design/rendergraph.md#windows-presentation)、[組み込み機能の検証](verification/current.md#engine-integration) |
