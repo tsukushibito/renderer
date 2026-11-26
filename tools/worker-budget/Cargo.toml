@@ -21,10 +21,10 @@ web-threads = ["sashiko-jobs/web-threads"]
 [dependencies]
 rapier3d = { version = "0.36.1", features = ["parallel"] }
 rayon = "1"
-sashiko-animation = { path = "../../crates/sashiko-animation" }
+sashiko-animation = { path = "../../crates/sashiko-animation", version = "0.1.0" }
 sashiko-heap.workspace = true
-sashiko-jobs = { path = "../../crates/sashiko-jobs" }
-survivor = { path = "../../examples/survivor", default-features = false }
+sashiko-jobs = { path = "../../crates/sashiko-jobs", version = "0.1.0" }
+survivor = { path = "../../examples/survivor", version = "0.1.0", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
