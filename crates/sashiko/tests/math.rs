@@ -1,5 +1,4 @@
-use sashiko::math::{LocalTransform, Rotation3, Vec2, Vec3};
-use sashiko::view::render_transform;
+use sashiko::math::{Rotation3, Vec2, Vec3};
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
 
 fn close(actual: Vec3, expected: Vec3) {
@@ -51,8 +50,10 @@ fn rotations_compose_and_interpolate_across_the_shortest_arc() {
     close(quarter.compose(pitch).rotate_vector(Vec3::Z), -Vec3::Y);
 }
 
+#[cfg(feature = "rendering")]
 #[test]
 fn local_and_render_transforms_agree_on_mirrored_scaled_points() {
+    use sashiko::{math::LocalTransform, view::render_transform};
     let local = LocalTransform::new(
         Vec3::new(4., 5., 6.),
         Rotation3::from_axis_angle(Vec3::Y, FRAC_PI_2).unwrap(),

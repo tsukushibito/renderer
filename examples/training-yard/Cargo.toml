@@ -16,7 +16,7 @@ development-validation = ["sashiko-renderer-core/development-validation", "sashi
 memory-profiling = ["sashiko-renderer-core/memory-profiling", "sashiko-renderer?/memory-profiling", "sashiko-asset?/metrics"]
 
 [dependencies]
-sashiko = { version = "0.1.0", path = "../../crates/sashiko", optional = true }
+sashiko = { version = "0.1.0", path = "../../crates/sashiko", default-features = false, optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 sashiko-asset = { version = "0.1.0", path = "../../crates/sashiko-asset", optional = true }

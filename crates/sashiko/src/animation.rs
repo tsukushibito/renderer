@@ -2,8 +2,14 @@
 pub use sashiko_animation_character as character;
 use sashiko_asset::{AssetId, Digest};
 use serde::{Deserialize, Serialize};
+
+type CatalogResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+#[cfg(feature = "rendering")]
 mod rig;
+#[cfg(feature = "rendering")]
 use rig::Rig;
+#[cfg(feature = "rendering")]
 pub use rig::{PaletteBatch, PaletteRequest, PaletteWorkspace, PhaseAnimation, PreparedAnimation};
 pub use sashiko_animation::{
     AnimationError, Clip as PoseClip, ClipTimeline, JointMask, LocalBuffer, PhaseMap, Playback,
@@ -13,7 +19,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs,
     num::NonZeroU32,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 #[derive(Deserialize, Serialize)]
@@ -71,7 +77,7 @@ pub struct TimelineAsset {
     tracks: Tracks,
 }
 impl TimelineAsset {
-    pub fn prepare(&self) -> PipelineResult<ClipTimeline> {
+    pub fn prepare(&self) -> CatalogResult<ClipTimeline> {
         Ok(ClipTimeline::new(
             self.frames,
             self.hz,
@@ -104,7 +110,7 @@ impl TimelineAsset {
     }
 }
 impl ModelEntry {
-    fn timeline(&self, name: &str) -> PipelineResult<TimelineAsset> {
+    fn timeline(&self, name: &str) -> CatalogResult<TimelineAsset> {
         let clip = self
             .clips
             .get(name)
@@ -120,12 +126,13 @@ impl ModelEntry {
 
 pub struct CharacterCatalog {
     definition: Digest,
+    #[cfg(feature = "rendering")]
     directory: PathBuf,
     models: BTreeMap<String, ModelEntry>,
 }
 
 impl CharacterCatalog {
-    pub fn open(path: &Path) -> PipelineResult<Self> {
+    pub fn open(path: &Path) -> CatalogResult<Self> {
         let path = path
             .canonicalize()
             .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -133,7 +140,7 @@ impl CharacterCatalog {
     }
 
     /// Parse an on-disk or embedded catalog. Relative asset paths resolve beside this file.
-    pub fn parse(path: &Path, bytes: &[u8]) -> PipelineResult<Self> {
+    pub fn parse(path: &Path, bytes: &[u8]) -> CatalogResult<Self> {
         let file: CatalogFile =
             serde_json::from_slice(bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         if file.version != 1 {
@@ -163,6 +170,7 @@ impl CharacterCatalog {
         }
         Ok(Self {
             definition: Digest::of(&serde_json::to_vec(&file)?),
+            #[cfg(feature = "rendering")]
             directory: path.parent().ok_or("missing catalog directory")?.into(),
             models: file.models,
         })
@@ -186,13 +194,14 @@ impl CharacterCatalog {
     }
 
     /// Read simulation timing and markers without loading mesh or texture bytes.
-    pub fn timeline(&self, model: &str, clip: &str) -> PipelineResult<TimelineAsset> {
+    pub fn timeline(&self, model: &str, clip: &str) -> CatalogResult<TimelineAsset> {
         self.models
             .get(model)
             .ok_or_else(|| format!("unknown character {model}"))?
             .timeline(clip)
     }
 
+    #[cfg(feature = "rendering")]
     pub fn load(&self, id: AssetId) -> PipelineResult<AnimatedModel> {
         let entry = self
             .models
@@ -202,7 +211,7 @@ impl CharacterCatalog {
         let read = |relative: &Path| -> PipelineResult<Vec<u8>> {
             if relative
                 .components()
-                .any(|component| !matches!(component, Component::Normal(_)))
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
             {
                 return Err(format!("invalid asset path {}", relative.display()).into());
             }
@@ -262,6 +271,7 @@ impl CharacterCatalog {
     }
 }
 
+#[cfg(feature = "rendering")]
 pub struct AnimatedModel {
     content: [Digest; 2],
     model: SkinnedModel,
@@ -271,6 +281,7 @@ pub struct AnimatedModel {
     timelines: BTreeMap<String, ClipTimeline>,
 }
 
+#[cfg(feature = "rendering")]
 impl AnimatedModel {
     pub fn has_skeleton(&self) -> bool {
         self.model.skeleton.is_some()
@@ -305,12 +316,14 @@ impl AnimatedModel {
     }
 }
 
+#[cfg(feature = "rendering")]
 #[derive(Clone, Copy)]
 pub struct AnimationClip<'a> {
     clip: Clip,
     joints: usize,
     poses: &'a [Transform],
 }
+#[cfg(feature = "rendering")]
 impl<'a> AnimationClip<'a> {
     pub fn frames(&self) -> usize {
         self.clip.frames
@@ -334,12 +347,14 @@ impl<'a> AnimationClip<'a> {
     }
 }
 
+#[cfg(feature = "rendering")]
 use sashiko_renderer::{
     mesh::{JointWeights, MeshData},
     pbr::{PbrVertex, Transform},
     pipeline::PipelineResult,
 };
 
+#[cfg(feature = "rendering")]
 pub struct SkinnedModel {
     vertices: Vec<PbrVertex>,
     weights: Vec<JointWeights>,
@@ -350,6 +365,7 @@ pub struct SkinnedModel {
     skeleton: Option<Rig>,
 }
 
+#[cfg(feature = "rendering")]
 fn record_bytes<'a>(input: &mut &'a [u8], count: usize, stride: usize) -> PipelineResult<&'a [u8]> {
     let size = count.checked_mul(stride).ok_or("character size overflow")?;
     let (records, next) = input.split_at_checked(size).ok_or("short character data")?;
@@ -357,6 +373,7 @@ fn record_bytes<'a>(input: &mut &'a [u8], count: usize, stride: usize) -> Pipeli
     Ok(records)
 }
 
+#[cfg(feature = "rendering")]
 fn floats<const N: usize>(record: &[u8], offset: usize) -> [f32; N] {
     std::array::from_fn(|i| {
         let start = offset + i * 4;
@@ -364,6 +381,7 @@ fn floats<const N: usize>(record: &[u8], offset: usize) -> [f32; N] {
     })
 }
 
+#[cfg(feature = "rendering")]
 impl SkinnedModel {
     /// Decode the cooked mesh and joint matrix stream at asset preparation time.
     pub fn decode(input: &[u8]) -> PipelineResult<Self> {
@@ -462,7 +480,7 @@ impl SkinnedModel {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "rendering"))]
 mod tests {
     use super::*;
     #[test]

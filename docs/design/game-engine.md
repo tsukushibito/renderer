@@ -62,6 +62,22 @@ Web は専用ホスト Worker と同じ共有メモリで動作する子 Worker 
 
 ## アプリへの組み込み
 
+`sashiko` の固定更新、入力、シーン、保存を使うヘッドレスホストは、Cargo の依存宣言で `default-features = false` を指定できる。たとえば次の構成は、描画、音声、アニメーションのクレートをビルドせずに実行中の状態を検査できる。
+
+```toml
+[dependencies]
+sashiko = { path = "../sashiko/crates/sashiko", default-features = false, features = ["live-inspector"] }
+```
+
+| 機能 | 利用できる API |
+|---|---|
+| `asset` | アセット ID、カタログ、配布オブジェクトの読み込み。 |
+| `animation` | `asset` に加え、クリップのタイムライン、ポーズ、キャラクター制御。 |
+| `rendering` | Renderer と接続するビュー、UI、キャプチャ。`animation` と併用するとスキン付きモデルのロードと描画用パレットの準備も使える。 |
+| `audio` | WAV の読み込みとミキシング。対応するデスクトップ環境で実際に再生するには `audio-output` を選ぶ。 |
+
+既定では `animation`、`audio`、`rendering` が有効になる。物理と Inspector はそれぞれ `physics`、`live-inspector` で追加する。ウィンドウの提示には `presentation`、GPU バックエンドには `vulkan`、`d3d12`、`webgpu` を選ぶ。
+
 ホストは描画先、イベントループ、ゲーム操作を受け付けるビューを所有する。Sashiko の標準ホストを使うとゲームを単体で起動できる。組み込み時はホストが経過時間で進める更新、単一 tick の更新、現在の状態の描画を個別に呼ぶ。停止中の編集や提示の再試行でも tick は進まない。
 
 ゲームはデジタル操作と連続値の割り当てを宣言する。Sashiko の `DeviceInput` はボタンの変化を次の固定更新まで保持し、スティックの半径方向のデッドゾーンを適用する。ホストから同じ入力を注入できる。Windows は XInput、ブラウザは標準マッピングの Gamepad API を用い、サンプルはスロット 0 を使う。フォーカスを外すと保留中の操作と軸値を消去する。リプレイにはゲームに渡した操作を保存し、再生中はデバイスを参照しない。[Survivor の割り当て](../../examples/survivor/src/controls.rs)
