@@ -1,5 +1,5 @@
 //! Research hall, animated subjects and gameplay feedback shared by capture and presentation.
-use sashiko::jobs::{JobSystem, SharedJobs};
+use sashiko::jobs::SharedJobs;
 use sashiko::math::{LocalTransform, Rotation3, Vec2, Vec3};
 use sashiko::view::{DrawList, on_screen, render_transform};
 mod geometry;
@@ -140,6 +140,7 @@ impl Visual {
         catalog: &std::path::Path,
         character: &str,
         characters: CharacterRendering,
+        jobs: SharedJobs,
     ) -> PipelineResult<Self> {
         let mut meshes = Meshes::new(MeshCapacity {
             meshes: 20usize
@@ -219,11 +220,8 @@ impl Visual {
         )];
         let view = game.arena.prepare_view()?;
         lights.extend(view.point_lights.iter().copied().map(LocalLight::Point));
-        let participants = std::thread::available_parallelism()
-            .unwrap_or(std::num::NonZeroUsize::MIN)
-            .min(4.try_into().unwrap());
         Ok(Self {
-            jobs: JobSystem::new(participants)?.into(),
+            jobs,
             meshes,
             materials,
             palette,

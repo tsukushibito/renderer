@@ -33,6 +33,7 @@ use survivor::visual::Visual;
 use survivor::{Game, Input, Phase, benchmark_input};
 pub struct Options {
     pub config: RuntimeConfig,
+    pub engine: sashiko::EngineConfig,
     pub extent: [u32; 2],
     pub warmup: usize,
     pub volume: f32,
@@ -60,11 +61,12 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 fn capture(
     game: &Game,
     o: &Options,
+    jobs: sashiko::jobs::SharedJobs,
     extent: [u32; 2],
     path: &Path,
     content: &crate::RecordedVisual,
 ) -> PipelineResult<()> {
-    let mut visual = Visual::new(game, &o.catalog, &o.character, o.characters)?;
+    let mut visual = Visual::new(game, &o.catalog, &o.character, o.characters, jobs)?;
     if &visual.content(&o.character) != content {
         return Err("assets changed before final capture".into());
     }
@@ -270,7 +272,8 @@ pub fn run(
         )
         .into());
     }
-    let mut visual = Visual::new(&game, &o.catalog, &o.character, o.characters)?;
+    let jobs = sashiko::jobs::SharedJobs::from(o.engine.create_jobs()?);
+    let mut visual = Visual::new(&game, &o.catalog, &o.character, o.characters, jobs.clone())?;
     let content = (initial.visual.is_some() || o.record.is_some() || o.capture.is_some())
         .then(|| visual.content(&o.character));
     if initial.visual.is_some() && initial.visual != content {
@@ -352,6 +355,7 @@ pub fn run(
         capture(
             &app.game,
             &o,
+            jobs,
             last_extent,
             path,
             content.as_ref().expect("capture content recorded"),

@@ -51,6 +51,18 @@ const STARTING_ENEMIES: usize = 8;
 const PLAYER_RADIUS: f32 = 0.32;
 const ENEMY_RADIUS: f32 = 0.23;
 
+/// Use a launcher-specified file or an optional sibling of the host executable.
+pub fn engine_config(explicit: Option<&std::path::Path>) -> std::io::Result<sashiko::EngineConfig> {
+    if let Some(path) = explicit {
+        return sashiko::EngineConfig::load(path);
+    }
+    let path = std::env::current_exe()?.with_file_name("sashiko.json");
+    match sashiko::EngineConfig::load(&path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        result => result,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scenario {

@@ -23,7 +23,8 @@ impl View {
         if size.contains(&0) {
             return Err("attach requires a non-empty client area".into());
         }
-        let mut visual = Visual::new(game, catalog, "primary", Default::default())?;
+        let jobs = crate::engine_config(None)?.create_jobs()?.into();
+        let mut visual = Visual::new(game, catalog, "primary", Default::default(), jobs)?;
         let camera = visual.camera(game, size)?;
         #[cfg(feature = "d3d12")]
         let backend = RuntimeConfig::D3D12(Default::default());

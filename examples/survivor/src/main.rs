@@ -75,6 +75,7 @@ fn arguments() -> Command {
                 .help("Include moving characters in shadow maps"),
         )
         .arg(path("arena").help("Load edited arena JSON"))
+        .arg(path("config").help("Engine settings JSON (default: optional sashiko.json beside the executable)"))
         .arg(flag("alternate-model").conflicts_with_all(["headless", "character"]))
         .arg(
             Arg::new("character")
@@ -107,6 +108,7 @@ fn packaged_arena() -> std::io::Result<serde_json::Value> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = arguments().get_matches();
+    let engine = survivor::engine_config(args.get_one::<PathBuf>("config").map(PathBuf::as_path))?;
     let mut profile = profile::Player::load(&args)?;
     if args.get_flag("profile-status") {
         println!("{}", serde_json::to_string(&profile.prefs)?);
@@ -234,8 +236,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             replay,
             &args,
             &mut profile,
-            character,
-            catalog_path,
+            engine,
+            (character, catalog_path),
         )?
     };
     println!("{}", serde_json::to_string(&game.snapshot())?);
@@ -253,8 +255,8 @@ fn play(
     replay: Option<Vec<Input>>,
     args: &clap::ArgMatches,
     profile: &mut profile::Player,
-    character: String,
-    catalog_path: PathBuf,
+    engine: sashiko::EngineConfig,
+    (character, catalog_path): (String, PathBuf),
 ) -> Result<Game, Box<dyn Error>> {
     use sashiko_renderer::core::runtime::RuntimeConfig;
     let default_api = if cfg!(feature = "vulkan") {
@@ -286,6 +288,7 @@ fn play(
         initial,
         window::Options {
             config,
+            engine,
             replay,
             extent: [profile.prefs.width, profile.prefs.height],
             volume: profile.prefs.volume,
@@ -320,8 +323,8 @@ fn play(
     _: Option<Vec<Input>>,
     _: &clap::ArgMatches,
     _: &mut profile::Player,
-    _: String,
-    _: PathBuf,
+    _: sashiko::EngineConfig,
+    _: (String, PathBuf),
 ) -> Result<Game, Box<dyn Error>> {
     Err("use --headless or enable presentation and a graphics backend on Windows".into())
 }

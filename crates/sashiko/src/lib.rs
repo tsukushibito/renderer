@@ -4,6 +4,8 @@ pub mod app;
 pub mod capture;
 #[cfg(feature = "cli")]
 pub mod cli;
+mod config;
+pub use config::EngineConfig;
 pub mod input;
 #[cfg(feature = "live-inspector")]
 pub use sashiko_inspect as inspect;

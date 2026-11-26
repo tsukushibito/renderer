@@ -9,6 +9,14 @@
 
 ## CPU ジョブを検証する
 
+Survivor のネイティブ版は、起動時に検出した並列度でゲームジョブを実行する。人数を固定するには実行ファイルと同じディレクトリに `sashiko.json` を置くか、`survivor --config PATH` でファイルを指定する。引数を指定したときはそのファイルだけを読む。並列度はホストを含むため、次の例では補助ワーカーを 7 人起動する。
+
+```json
+{ "jobs": { "parallelism": 8 } }
+```
+
+既定のファイルや設定項目を省略するか `"auto"` を指定すると、利用可能な並列度を使う。検出できなければ 1、明示的に 1 を指定したときも呼び出し元だけで実行する。変更は次回起動時に反映される。明示ファイルの欠落や設定値の誤りは起動エラーになる。Windows 埋め込み版の既定位置はホスト実行ファイルの隣にある。物理ステップの並列度は Rapier 側が管理する。
+
 ネイティブのスコープ契約と定常時ヒープ、軽い加算の起床コスト、PoseBatch の連続実行・16 ms 休止後の p50 / p95 を確認する。PoseBatch は 16 / 64 関節、8 / 256 姿勢で最大並列度 1・2・4・8 を比較する。先頭 1/4 のみブレンドする条件も測る。カウンタ計測は別に実行する。
 
 CPU と Web のサンプルは `sashiko-heap` の `CountingAllocator` をグローバルアロケータに設定し、ジョブが合流した境界で `HeapSnapshot` の差分を取る。GPU の作成・破棄と VMA のホスト割り当ても測る描画ホストは `memory-profiling` と `sashiko_renderer::core::measurement::Snapshot` を使う。外部の描画ホストでスケジューラを計測するには、依存する `sashiko-renderer` の `scheduler-metrics` feature を有効にすると `JobSystem::scheduler_counts` が使える。
