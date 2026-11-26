@@ -69,6 +69,8 @@ system.scope(|s| {
 
 物理ワールドは Rapier の `parallel` feature を有効にしている。`step()` は同期呼び出しで、内部の並列処理には Rayon を使う。`sashiko-jobs` のワーカー数はこのプールには適用されず、ゲームのジョブと物理ステップを同時に走らせると CPU 時間を取り合う場合がある。
 
+ホスト所有の Rayon プールを Rapier 0.36.1 の `set_thread_pool` に渡す方式を Windows と Web Worker で評価した。ゲームの固定更新とワールドのステップをホストが順序付け、独立な姿勢評価と可視判定はその予算の中で並行できた。製品では現行のジョブ実装を使う。採否を決めたのは、物理を除いた定常フレームでも共有プールへの投入で Rust ヒープの確保と解放が発生した点である。試作の `Jobs::run` と具体的な Rayon 型は計測ツール内に置く。[計測結果と適用範囲](../verification/current.md#shared-worker-budget)
+
 Web は専用ホスト Worker と同じ共有メモリで動作する子 Worker を使用する。初期化失敗時は部分起動したチームを回収する。通常の破棄では子がループから戻り、Wasm のスタックと TLS を解放して終了する。実行中の Wasm trap はホストとそのメモリ単位で回復する。サンプルはホストに一意の名前を付け、ページが `BroadcastChannel("sashiko-jobs:" + hostName)` で子の trap を受け取る。応答の途絶はページ側の期限で検出する。
 
 借用ジョブは投入先の `scope` 内で完了する。将来、所有ジョブや依存グラフを追加する際は、依存が解決した仕事を同じワーカーに渡せる。[検証手順](../guides/development.md#cpu-jobs)

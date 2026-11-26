@@ -23,6 +23,13 @@ cargo run --locked --release -p sashiko-animation --features scheduler-metrics -
 
 型消去した借用クロージャの受け渡しと panic 時の合流は `cargo +nightly-2026-11-15 miri test --locked --target x86_64-unknown-linux-gnu -p sashiko-jobs` で検証できる（同 nightly の miri と rust-src が必要）。
 
+Rapier とゲームの CPU ジョブで Rayon プールを共有する試作は、下の二つのコマンドを一つずつ実行して比較する。ブラウザ側には Google Chrome、Playwright、下記の Wasm ツールチェーンを使う。`--wasm-bindgen` で CLI のパスを指定できる。各行の先頭は実行方式、並列度、負荷名。時間の単位は µs。計測窓と結果の読み方は[共有プールの評価](../verification/current.md#shared-worker-budget)を参照する。
+
+```sh
+python -B tools/worker-budget/compare.py native
+python -B tools/worker-budget/compare.py browser
+```
+
 ブラウザのサンプルは同じ Rust 処理を二通りの Wasm にビルドする。共有メモリ版だけに固定 nightly と atomics 用の標準ライブラリを使う。リポジトリのルートで次を実行する。`wasm-bindgen-cli` は Cargo.lock の版に合わせる。
 
 ```sh

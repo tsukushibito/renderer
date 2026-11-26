@@ -2263,6 +2263,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sashiko-worker-budget"
+version = "0.1.0"
+dependencies = [
+ "rapier3d",
+ "rayon",
+ "sashiko-animation",
+ "sashiko-heap",
+ "sashiko-jobs",
+ "survivor",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

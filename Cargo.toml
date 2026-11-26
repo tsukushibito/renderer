@@ -14,6 +14,7 @@ members = [
     "crates/sashiko-renderer-core",
     "crates/sashiko-lighting-bake",
     "tools/sashiko-asset-cook",
+    "tools/worker-budget",
     "examples/renderer-scenes",
     "examples/support",
     "crates/sashiko-renderer",
