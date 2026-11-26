@@ -22,10 +22,6 @@ pub mod geometry;
 pub mod graph;
 mod image;
 pub mod jobs;
-// Native unit tests exercise the public Unlit inputs against this test build of renderer.
-#[cfg(test)]
-#[path = "../../sashiko-renderer/src/unlit_forward/input.rs"]
-mod unlit_test_input;
 pub use image::ImageFormat;
 pub mod profiling;
 pub use profiling::{GpuTiming, PresentationMetrics, SubmissionMetrics};

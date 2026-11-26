@@ -1,7 +1,9 @@
 use sashiko_renderer::unlit_forward::FrameSnapshot;
 use sashiko_renderer::unlit_forward::snapshot::build_graph;
 use sashiko_renderer::unlit_forward::{Draw, IDENTITY, Vertex, View, mesh_data};
-use sashiko_renderer_core::geometry::{GeometryData, MeshCapacity, MeshRegistry, SnapshotPool};
+use sashiko_renderer_core::geometry::{
+    GeometryData, MeshCapacity, MeshErrorKind, MeshRegistry, SnapshotPool,
+};
 use sashiko_renderer_core::graph::FrameOutputOwnership;
 use sashiko_renderer_core::graph::{
     GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, ImageHandle, ResourceHandle,
@@ -37,6 +39,75 @@ fn view() -> View {
         clip_from_world: IDENTITY,
         clear_color: [0.0, 0.0, 0.0, 1.0],
     }
+}
+
+#[test]
+fn capture_composes_view_and_model_and_keeps_draw_constants() {
+    let mut assets = MeshRegistry::new(MeshCapacity {
+        meshes: 1,
+        retired_mesh_versions: 1,
+    })
+    .unwrap();
+    let pool = SnapshotPool::new(1, 1).unwrap();
+    let mut view = view();
+    view.clip_from_world[0][0] = 2.0;
+    let mut draw = Draw {
+        mesh: assets.create_mesh(triangle()).unwrap(),
+        tint: [0.5; 4],
+        world_from_model: IDENTITY,
+    };
+    draw.world_from_model[3][0] = 0.25;
+    let snapshot = FrameSnapshot::capture(&assets, &pool, &view, &[draw]).unwrap();
+    assert_eq!(snapshot.view(), &view);
+    let mut graph = graph_pool().begin().unwrap();
+    let inputs = snapshot.connect_graph(&mut graph).unwrap();
+    let parameters = inputs.draws().next().unwrap().parameters;
+    assert_eq!(f32::from_bits(parameters.words()[12]), 0.5);
+    assert_eq!(&parameters.words()[16..], &draw.tint.map(f32::to_bits));
+}
+
+#[test]
+fn unlit_rejects_non_finite_inputs_and_incompatible_replacement_meshes() {
+    let vertex = Vertex {
+        position: [f32::NAN; 3],
+        color: [1.0; 4],
+    };
+    assert!(mesh_data(&[vertex], &[0; 3]).is_err());
+    let mut assets = MeshRegistry::new(MeshCapacity {
+        meshes: 1,
+        retired_mesh_versions: 1,
+    })
+    .unwrap();
+    let pool = SnapshotPool::new(1, 1).unwrap();
+    let mesh = assets.create_mesh(triangle()).unwrap();
+    let draw = Draw {
+        mesh,
+        tint: [1.0; 4],
+        world_from_model: IDENTITY,
+    };
+    let bad_tint = Draw {
+        tint: [f32::NAN; 4],
+        ..draw
+    };
+    assert!(FrameSnapshot::capture(&assets, &pool, &view(), &[bad_tint]).is_err());
+
+    let mut camera = view();
+    camera.clip_from_world[0][0] = f32::INFINITY;
+    assert!(FrameSnapshot::capture(&assets, &pool, &camera, &[draw]).is_err());
+    camera.clip_from_world[0][0] = f32::MAX;
+    let mut large_model = draw;
+    large_model.world_from_model[0][0] = f32::MAX;
+    assert!(FrameSnapshot::capture(&assets, &pool, &camera, &[large_model]).is_err());
+
+    assets
+        .update_mesh(mesh, GeometryData::new(4, &[0; 4], &[0; 3]).unwrap())
+        .unwrap();
+    assert_eq!(
+        FrameSnapshot::capture(&assets, &pool, &view(), &[draw])
+            .unwrap_err()
+            .kind(),
+        MeshErrorKind::InvalidInput
+    );
 }
 
 #[test]

@@ -1,18 +1,78 @@
 //! Shared bounded input setup for native MeshRegistry acceptance scenarios.
 
-use crate::unlit_test_input::{Draw, FrameSnapshot, View};
 use std::ops::{Deref, DerefMut};
 
 use crate::{
-    geometry::{MeshCapacity, MeshError, MeshRegistry, SnapshotPool},
+    geometry::{MeshCapacity, MeshError, MeshHandle, MeshRegistry, MeshSnapshot, SnapshotPool},
     graph::{
         Attachment, Graph, GraphCapacity, GraphError, GraphPool, ImageDesc, ImageHandle, LoadOp,
-        RasterAttachments, StoreOp,
+        RasterAttachments, RasterParameters, StoreOp,
     },
     program::ManagedRasterProgram,
 };
 
 use super::{EngineRenderError, PreparedEngineFrame, RenderedFrame, VulkanEngine};
+
+#[derive(Clone, Copy)]
+pub(crate) struct View {
+    pub width: u32,
+    pub height: u32,
+    pub clear_color: [f32; 4],
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Draw {
+    pub mesh: MeshHandle,
+    pub tint: [f32; 4],
+    pub transform: [[f32; 4]; 4],
+}
+
+impl Draw {
+    pub(crate) fn new(mesh: MeshHandle, tint: [f32; 4]) -> Self {
+        Self {
+            mesh,
+            tint,
+            transform: *RasterParameters::default().transform(),
+        }
+    }
+}
+
+pub(crate) struct FrameSnapshot {
+    view: View,
+    meshes: MeshSnapshot,
+}
+
+impl FrameSnapshot {
+    pub(crate) fn capture(
+        assets: &MeshRegistry,
+        pool: &SnapshotPool,
+        view: &View,
+        draws: &[Draw],
+    ) -> Result<Self, MeshError> {
+        let meshes = assets.capture(
+            pool,
+            draws,
+            |draw| draw.mesh,
+            |draw, _| {
+                Ok(RasterParameters::new(draw.transform, draw.tint)
+                    .expect("valid test parameters")
+                    .into())
+            },
+        )?;
+        Ok(Self {
+            view: *view,
+            meshes,
+        })
+    }
+}
+
+impl Deref for FrameSnapshot {
+    type Target = MeshSnapshot;
+
+    fn deref(&self) -> &Self::Target {
+        &self.meshes
+    }
+}
 
 pub(crate) struct Assets {
     engine: MeshRegistry,
@@ -66,7 +126,7 @@ pub(crate) fn build_snapshot(
 ) -> Result<PreparedEngineFrame, EngineRenderError> {
     let mut frame = engine.begin_graph()?;
     let inputs = engine.connect_snapshot(&mut frame, snapshot)?;
-    let view = snapshot.view();
+    let view = &snapshot.view;
     let graph = &mut frame.graph;
     let color = graph.image("forward color", ImageDesc::rgba8(view.width, view.height))?;
     let depth = graph.image("forward depth", ImageDesc::depth32(view.width, view.height))?;

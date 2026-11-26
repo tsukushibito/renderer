@@ -1,10 +1,12 @@
 //! Internal resident-buffer verification complements the public workload example.
 //! It observes actual engine-uploaded bytes without exposing a testing-only API.
 
-use crate::unlit_test_input::{Draw, IDENTITY, Vertex, View, mesh_data};
+use crate::geometry::test_mesh::{Vertex, mesh_data};
 use std::time::{Duration, Instant};
 
-use super::test_input::{Assets, build_snapshot, graph, render_snapshot};
+use super::test_input::{
+    Assets, Draw, FrameSnapshot, View, build_snapshot, graph, render_snapshot,
+};
 use super::{EngineFrameCapacity, MeshCacheConfig, MeshUploadState, MeshVersionKey, VulkanEngine};
 use crate::{
     backends::vulkan::graph::{FrameCapacity, ResourceClass},
@@ -76,14 +78,9 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
             &View {
                 width: 8,
                 height: 8,
-                clip_from_world: IDENTITY,
                 clear_color: [0.0, 0.0, 0.0, 1.0],
             },
-            &[Draw {
-                mesh,
-                tint,
-                world_from_model: IDENTITY,
-            }],
+            &[Draw::new(mesh, tint)],
         )
         .unwrap();
     let partial = renderer.prepare_snapshot(&snapshot, 2).unwrap();
@@ -229,14 +226,9 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
             &View {
                 width: 32,
                 height: 32,
-                clip_from_world: IDENTITY,
                 clear_color: [0.0, 0.0, 0.0, 1.0],
             },
-            &[Draw {
-                mesh,
-                tint,
-                world_from_model: IDENTITY,
-            }],
+            &[Draw::new(mesh, tint)],
         )
         .unwrap();
     let began = Instant::now();
@@ -349,14 +341,9 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
             &View {
                 width: 32,
                 height: 32,
-                clip_from_world: IDENTITY,
                 clear_color: [0.0, 0.0, 0.0, 1.0],
             },
-            &[Draw {
-                mesh,
-                tint,
-                world_from_model: IDENTITY,
-            }],
+            &[Draw::new(mesh, tint)],
         )
         .unwrap();
     let began = Instant::now();
@@ -469,7 +456,6 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
             &View {
                 width: 8,
                 height: 8,
-                clip_from_world: IDENTITY,
                 clear_color: [0.0, 0.0, 0.0, 1.0],
             },
             &[],
@@ -600,7 +586,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
             [-0.75, 0.75, 0.25],
             [0.75, 0.75, 0.25],
         ]
-        .map(|position| crate::unlit_test_input::Vertex {
+        .map(|position| Vertex {
             position,
             color: vertex_color,
         });
@@ -614,19 +600,14 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
                     &View {
                         width: 32,
                         height: 32,
-                        clip_from_world: IDENTITY,
                         clear_color: [0.0, 0.0, 0.0, 1.0],
                     },
-                    &[Draw {
-                        mesh,
-                        tint,
-                        world_from_model: IDENTITY,
-                    }],
+                    &[Draw::new(mesh, tint)],
                 )
                 .unwrap(),
         );
     }
-    let ready = |renderer: &mut VulkanEngine, snapshot: &crate::unlit_test_input::FrameSnapshot| {
+    let ready = |renderer: &mut VulkanEngine, snapshot: &FrameSnapshot| {
         let began = Instant::now();
         let mut progress = renderer.prepare_snapshot(snapshot, 2).unwrap();
         while progress.state != MeshUploadState::Ready || progress.pending_submissions != 0 {

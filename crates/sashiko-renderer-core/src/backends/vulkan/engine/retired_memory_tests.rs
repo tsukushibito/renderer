@@ -1,8 +1,8 @@
 //! A prior explicit unload must not cause delayed destruction in normal frames.
 
-use super::test_input::{build_snapshot, render_snapshot};
+use super::test_input::{Draw, FrameSnapshot, View, build_snapshot, render_snapshot};
 use super::*;
-use crate::unlit_test_input::{Draw, FrameSnapshot, IDENTITY, Vertex, View, mesh_data};
+use crate::geometry::test_mesh::{Vertex, mesh_data};
 use crate::{
     geometry::{MeshCapacity, MeshRegistry, SnapshotPool},
     graph::ImageDesc,
@@ -40,14 +40,9 @@ fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
     let view = View {
         width: 8,
         height: 8,
-        clip_from_world: IDENTITY,
         clear_color: [0.0, 0.0, 0.0, 1.0],
     };
-    let draw = |mesh| Draw {
-        mesh,
-        tint,
-        world_from_model: IDENTITY,
-    };
+    let draw = |mesh| Draw::new(mesh, tint);
     let old_snapshot = FrameSnapshot::capture(&assets, &snapshots, &view, &[draw(old)]).unwrap();
     let current_snapshot =
         FrameSnapshot::capture(&assets, &snapshots, &view, &[draw(current)]).unwrap();
