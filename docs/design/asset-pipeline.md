@@ -137,7 +137,7 @@ Bistro のビルド記録では、シーンと照明の入力識別子、時刻�
 
 [Bistro の cook](../../tools/bistro/cook.py) は配置を焼いた頂点・インデックスと、用途別の画像・サンプラーを生成する。静的照明は表面とプローブの実行条件を別々に記録し、世代索引から必要な照明ページを選んで読み込める。[訓練場の装備要求](../../examples/training-yard/src/yard/equipment.rs) は要求世代と装着先を追跡する。
 
-標準 Renderer では、起動時の `prepare_assets` とプレイ中の [AssetCandidate](../../crates/sashiko-renderer/src/pipeline/setup/candidate.rs) が同じ転送・公開処理を使う。プレイ中は変更対象だけを候補に含め、`poll_candidate` に各回の転送バイト数・投入回数の上限を渡す。完了後に `commit_candidate` で全ビューへ反映し、最後の利用者が手放した資源を同時に退役させる。要求が古くなった場合は `cancel_candidate` を呼ぶ。ホストが Runtime を直接扱う間は自分のフレーム ID を指定して `wait_for_frame(id, Duration::ZERO)` を使い、アセット転送の完了は `poll_candidate` または `collect_assets` に回収させる。画像の常駐 mip 範囲を広げる手順は [SceneRenderer](../../crates/sashiko-renderer/src/pipeline/setup/scene_renderer.rs)、検証範囲は[検証記録](../verification/current.md#asset-preparation)に示す。
+標準 Renderer では、起動時の `prepare_assets` とプレイ中の [AssetCandidate](../../crates/sashiko-renderer/src/pipeline/setup/candidate.rs) が同じ転送・公開処理を使う。プレイ中は変更対象だけを候補に含め、`poll_candidate` に各回の転送バイト数・投入回数の上限を渡す。完了後に `commit_candidate` で全ビューへ反映し、最後の利用者が手放した資源を同時に退役させる。要求が古くなった場合は `cancel_candidate` を呼ぶ。ホストが Runtime を直接扱う間は自分のフレーム ID を指定して `wait_for_frame(id, Duration::ZERO)` を使い、アセット転送の完了は `poll_candidate` または `collect_assets` に回収させる。画像の常駐 mip 範囲を広げる手順は [AssetPreparation](../../crates/sashiko-renderer/src/pipeline/setup/candidate.rs)、検証範囲は[検証記録](../verification/current.md#asset-preparation)に示す。
 
 **初版の装備経路。** Rust の制作ツールが静的 glTF をモデルローカル座標で変換し、メッシュ・標準 PBR 材質・用途別画像を個別の不変オブジェクトとして保存する。カタログの装備 ID は複数の部位を参照でき、部位ごとにメッシュ、材質、画像の版を結び付ける。画像の画素だけが変わった場合、同じ材質設定とメッシュを再利用して新しいカタログを公開する。[取込・配布の手順](../guides/tooling.md#equipment-cook)
 

@@ -47,6 +47,8 @@ mod scene_pairs;
 pub use scene_pairs::{FrameScene, PipelineId};
 mod contract;
 pub use contract::*;
+mod scene_renderer;
+pub use scene_renderer::{CompiledSceneFrame, RetiredViewError, SceneFrame, SceneRenderer};
 mod setup;
 pub use setup::*;
 

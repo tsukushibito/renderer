@@ -8,13 +8,12 @@ use crate::{
 use sashiko_renderer_core::{
     capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},
     graph::{GraphError, GraphPool, ImageDesc},
-    runtime::{FrameId, FrameSubmission, ManagedImage, Runtime, RuntimeConfig, RuntimeLimits},
+    runtime::{FrameId, Runtime, RuntimeConfig, RuntimeLimits},
 };
 use std::{
     borrow::{BorrowMut, Cow},
     collections::BTreeSet,
     num::NonZeroUsize,
-    ops::{Deref, DerefMut},
     time::Duration,
 };
 
@@ -22,6 +21,7 @@ mod build;
 pub use build::RendererBuild;
 mod candidate;
 pub(crate) use candidate::AssetTarget;
+pub(super) use candidate::Transfers;
 pub use candidate::{AssetCandidate, AssetPreparation, RetireAssets, UploadBudget};
 
 /// Registries remain engine-owned and are borrowed exclusively only during setup.
@@ -441,9 +441,17 @@ impl<'a> PreparedSetup<'a> {
     /// Install this complete working set and grow recording storage on an existing
     /// device. Include the host's live passes in the plan before calling this.
     pub fn prepare_runtime(&self, runtime: &mut Runtime) -> PipelineResult<()> {
+        self.prepare_fitted(runtime, &self.preparation, 0)
+    }
+    pub(super) fn prepare_fitted(
+        &self,
+        runtime: &mut Runtime,
+        working_set: &Preparation,
+        additional_transfer: u64,
+    ) -> PipelineResult<()> {
         Ok(runtime.prepare_fitted_working_set(
-            &self.preparation,
-            self.upload_capacity()?,
+            working_set,
+            self.upload_capacity()?.max(additional_transfer),
             self.readback,
         )?)
     }
@@ -482,7 +490,7 @@ impl<'a> PreparedSetup<'a> {
     ) -> PipelineResult<RendererBuild<'a, R>> {
         RendererBuild::new(self, runtime)
     }
-    fn check_runtime(&self, runtime: &Runtime) -> PipelineResult<()> {
+    pub(super) fn check_runtime(&self, runtime: &Runtime) -> PipelineResult<()> {
         use sashiko_renderer_core::capacity::{
             CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind,
         };
@@ -569,7 +577,7 @@ pub(crate) fn reserve_texture_upload(
     Ok(footprint)
 }
 
-fn transfer_footprint(desc: ImageDesc) -> PipelineResult<u64> {
+pub(super) fn transfer_footprint(desc: ImageDesc) -> PipelineResult<u64> {
     if desc.sample_count != sashiko_renderer_core::graph::SampleCount::X1
         || desc.byte_len().is_none()
     {
@@ -592,6 +600,3 @@ fn transfer_footprint(desc: ImageDesc) -> PipelineResult<u64> {
     }
     Ok(total)
 }
-
-mod scene_renderer;
-pub use self::scene_renderer::{CompiledSceneFrame, RetiredViewError, SceneFrame, SceneRenderer};

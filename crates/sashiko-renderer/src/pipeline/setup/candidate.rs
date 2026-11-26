@@ -106,7 +106,7 @@ impl AssetCandidate {
         Self::from_selection(meshes, materials, changed, &[], &[], &[], false)
     }
 
-    pub(super) fn from_scene(assets: &SceneAssets<'_>) -> PipelineResult<Self> {
+    fn from_scene(assets: &SceneAssets<'_>) -> PipelineResult<Self> {
         Self::from_selection(
             assets.meshes,
             assets.materials,
@@ -233,7 +233,7 @@ impl AssetCandidate {
 
 /// Accepted submissions belong to the renderer, including after a candidate is
 /// cancelled or abandoned. Completion collection never consumes an engine frame.
-pub(super) struct Transfers {
+pub(in crate::pipeline) struct Transfers {
     id: Arc<()>,
     pending: Vec<FrameId>,
 }
@@ -257,7 +257,7 @@ impl Transfers {
         Ok(())
     }
 
-    pub(super) fn drain(&mut self, runtime: &mut Runtime) -> PipelineResult<()> {
+    pub(in crate::pipeline) fn drain(&mut self, runtime: &mut Runtime) -> PipelineResult<()> {
         while !self.pending.is_empty() {
             self.collect(runtime, Duration::from_secs(1))?;
         }
@@ -371,7 +371,45 @@ pub trait AssetPreparation: AssetTarget {
 impl<T: AssetTarget> AssetPreparation for T {}
 
 impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
-    pub(super) fn advance_candidate(
+    /// Publish changed asset revisions within the prepared limits. Invoke after
+    /// submitting or discarding graphs that refer to previous revisions. Accepted
+    /// uploads survive errors so this maintenance operation can be retried.
+    pub fn prepare_assets(
+        &mut self,
+        assets: SceneAssets<'_>,
+    ) -> Result<(), crate::AssetPrepareError> {
+        assets.meshes.collect_gpu(self.runtime())?;
+        assets.materials.collect_gpu(self.runtime())?;
+        self.prepare_assets_inner(assets).map_err(Into::into)
+    }
+    pub(crate) fn prepare_assets_inner(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
+        let mut candidate = AssetCandidate::from_scene(&assets)?;
+        let budget = UploadBudget {
+            bytes: self
+                .mesh_budget
+                .max(crate::passes::pbr::MATERIAL_BYTES as u64),
+            submissions: 1,
+        };
+        while self
+            .advance_candidate(
+                &mut candidate,
+                assets.meshes,
+                assets.materials,
+                budget,
+                Duration::from_secs(1),
+            )?
+            .is_pending()
+        {}
+        self.end_candidate(
+            &mut candidate,
+            assets.meshes,
+            assets.materials,
+            RetireAssets::default(),
+            true,
+        )
+    }
+
+    fn advance_candidate(
         &mut self,
         c: &mut AssetCandidate,
         meshes: &mut Meshes,
@@ -457,7 +495,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         }
     }
 
-    pub(super) fn end_candidate(
+    fn end_candidate(
         &mut self,
         c: &mut AssetCandidate,
         meshes: &mut Meshes,

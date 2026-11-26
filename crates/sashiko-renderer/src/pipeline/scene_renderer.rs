@@ -1,5 +1,16 @@
 //! Recording and explicit configuration changes for an initialized scene renderer.
 use super::*;
+use sashiko_renderer_core::{
+    capacity::ResourceClass,
+    graph::{GraphPool, ImageDesc},
+    runtime::{FrameId, FrameSubmission, ManagedImage, Runtime},
+};
+use std::{
+    borrow::BorrowMut,
+    num::NonZeroUsize,
+    ops::{Deref, DerefMut},
+    time::Duration,
+};
 
 /// The replacement views are active. Retry release of their predecessors
 /// with `SceneRenderer::collect_retired_views`.
@@ -32,7 +43,7 @@ pub struct SceneRenderer<R: BorrowMut<Runtime> = Runtime> {
     pub(super) configured: Preparation,
     pub(super) streaming: Option<(Preparation, u64)>,
     pub(super) retired: Option<ViewRenderer>,
-    pub(super) transfers: super::candidate::Transfers,
+    pub(super) transfers: setup::Transfers,
 }
 impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     /// Opt into workload-dependent parallel execution at a preparation boundary.
@@ -84,11 +95,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         plan: PreparedSetup<'_>,
     ) -> PipelineResult<()> {
         self.replace_plan(plan, |plan, runtime, overlap, streaming_transfer| {
-            Ok(runtime.prepare_fitted_working_set(
-                overlap,
-                plan.upload_capacity()?.max(streaming_transfer),
-                plan.readback,
-            )?)
+            plan.prepare_fitted(runtime, overlap, streaming_transfer)
         })
     }
 
@@ -224,43 +231,6 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         Ok(())
     }
 
-    /// Publish changed asset revisions within the prepared limits. Invoke after
-    /// submitting or discarding graphs that refer to previous revisions. Accepted
-    /// uploads survive errors so this maintenance operation can be retried.
-    pub fn prepare_assets(
-        &mut self,
-        assets: SceneAssets<'_>,
-    ) -> Result<(), crate::AssetPrepareError> {
-        assets.meshes.collect_gpu(self.runtime())?;
-        assets.materials.collect_gpu(self.runtime())?;
-        self.prepare_assets_inner(assets).map_err(Into::into)
-    }
-    pub(crate) fn prepare_assets_inner(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
-        let mut candidate = AssetCandidate::from_scene(&assets)?;
-        let budget = UploadBudget {
-            bytes: self
-                .mesh_budget
-                .max(crate::passes::pbr::MATERIAL_BYTES as u64),
-            submissions: 1,
-        };
-        while self
-            .advance_candidate(
-                &mut candidate,
-                assets.meshes,
-                assets.materials,
-                budget,
-                Duration::from_secs(1),
-            )?
-            .is_pending()
-        {}
-        self.end_candidate(
-            &mut candidate,
-            assets.meshes,
-            assets.materials,
-            RetireAssets::default(),
-            true,
-        )
-    }
     pub fn begin_frame(&mut self) -> PipelineResult<SceneFrame<'_>> {
         Ok(SceneFrame {
             frame: self.driver.begin_frame(&mut self.pool)?,
@@ -348,7 +318,7 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
                 ..Default::default()
             })?;
             bytes = bytes.max(data.len());
-            footprint = footprint.max(super::transfer_footprint(desc)?);
+            footprint = footprint.max(setup::transfer_footprint(desc)?);
         }
         let has_metadata = usize::from(reflections.is_some());
         if has_metadata != 0 {
