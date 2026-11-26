@@ -374,14 +374,14 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
     // Do not wait/poll the final upload. A queue-accepted content version is
     // usable by the next Graph; native synchronization supplies visibility.
     let mut frame = render_snapshot(&mut renderer, &snapshot, true, |_, image| Ok(image)).unwrap();
-    let pass = frame.readback.unwrap();
+    let pass = frame.readback().unwrap();
     renderer.release_output(&mut frame).unwrap();
     let mut completion = renderer
         .runtime_mut()
         .wait_frame(TIMEOUT)
         .unwrap()
         .expect("ready mesh draw timed out");
-    assert_eq!(completion.id(), frame.submission.id());
+    assert_eq!(completion.id(), frame.submission().id());
     assert_eq!(
         completion.result.test_readback(pass).unwrap(),
         engine_geometry::rectangle(32, 32, [4, 4, 28, 28], [0, 255, 255, 255], [0, 0, 0, 255],)
@@ -483,7 +483,7 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
         borrowed.output_ownership(),
         crate::graph::FrameOutputOwnership::Caller
     );
-    let borrowed_pass = borrowed.readback.unwrap();
+    let borrowed_pass = borrowed.readback().unwrap();
     renderer.release_output(&mut borrowed).unwrap();
     renderer.release_output(&mut borrowed).unwrap();
     assert!(renderer.runtime().refresh_image(caller.key()).is_ok());
@@ -502,11 +502,8 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
         owned.output_ownership(),
         crate::graph::FrameOutputOwnership::Frame
     );
-    let original_key = owned.output.key();
-    let owned_pass = owned.readback.unwrap();
-    // Public result metadata is mutable. Cleanup authority must remain tied to
-    // the immutable original frame registration, never to this replaced field.
-    owned.output = renderer.runtime().refresh_image(caller.key()).unwrap();
+    let original_key = owned.output().key();
+    let owned_pass = owned.readback().unwrap();
     renderer.release_output(&mut owned).unwrap();
     renderer.release_output(&mut owned).unwrap();
     assert!(renderer.runtime().refresh_image(original_key).is_err());
@@ -645,7 +642,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
         ready(&mut renderer, snapshot);
         let mut frame =
             render_snapshot(&mut renderer, snapshot, true, |_, image| Ok(image)).unwrap();
-        let pass = frame.readback.unwrap();
+        let pass = frame.readback().unwrap();
         renderer.release_output(&mut frame).unwrap();
         let mut completed = renderer
             .runtime_mut()

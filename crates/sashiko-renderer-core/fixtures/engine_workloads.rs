@@ -277,7 +277,9 @@ impl Driver {
         bytes: &[u8],
         sample: Option<Sample>,
     ) -> Result<()> {
-        let pass = frame.readback.ok_or("workload frame is missing readback")?;
+        let pass = frame
+            .readback()
+            .ok_or("workload frame is missing readback")?;
         if bytes.len() > MAX_IMAGE_BYTES {
             return Err("workload image exceeds prepared CPU pixel capacity".into());
         }
@@ -289,7 +291,7 @@ impl Driver {
         expected.bytes.clear();
         expected.bytes.extend_from_slice(bytes);
         expected.pending = Some(PendingExpected {
-            id: frame.submission.id(),
+            id: frame.submission().id(),
             pass,
             sample,
             submitted: Instant::now(),

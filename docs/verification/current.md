@@ -3298,6 +3298,7 @@ Windows x64、Rust1.99.0、NVIDIA RTX3060／driver610.88。GPU作業は全て逐
 | workspace・静的検査 | CPU160件、release全feature325件、release二API製品301件（各Rustdoc1件を含む）が成功。frame_loopのexample CPU9件、全feature／targetのcheck・Clippy、fmt、diffとwarnings拒否の全feature Rustdoc生成も成功 |
 | 二API実GPU | strict／shippingの別processが成功。旧RGBA8／HDRの17出力を保持し、4case×4出力を追加。各API各3回、33 readback・4096 byte／回を独立期待値とAPI間で照合 |
 | 所有・失敗・Engine回帰 | `engine_graph`のstrict／shipping各1試験、既存Engineのstrict8試験が成功。旧新mesh・複数View・短命入力・出力権限・pending保持・cancel・容量拒否を維持 |
+| Vulkanの出力選択 | `engine_graph`のrelease strict／shippingの両方で、同じframeの選択画像（RGBA16F、3×2）と履歴画像（RGBA8、5×3）のreadbackを各画像の期待値と照合。frame所有出力を二度解放した後も、呼び出し側所有の画像は登録済みで、両方の画素を回収できた。strictではnative破棄後までCore＋SyncValのwarning／errorが0件 |
 | 代表consumer | `frame_loop`はstrict／shipping各48測定frameと12 warm-upで描画・履歴・入力churnを確認。`engine_workloads`はstrict45画像、shipping519画像を全RGBA照合し、大mesh・2View・streaming・pending更新と退役を確認 |
 | 混合構成の通常frameメモリ | 両APIで24 warm-up＋24変動frame、4出力・672 byte／frame、3 pending＋3保持結果を確認。構築／compileからnative実行・完了・readback・全slot返却までRust alloc／alloc_zeroed／realloc／dealloc、VMA host alloc／realloc／free、native作成／破棄が全て0 |
 | 既存メモリ回帰 | CPU24frame・Vulkan Engine画像48frameと、両API Compute-only各24frameもゼロを維持。Engine画像ではdraw／pass変更、material・行列変更、prepared容量満杯とcancel、結果返却を再確認 |

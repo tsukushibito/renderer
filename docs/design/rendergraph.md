@@ -1296,7 +1296,10 @@ CPU経路では`FrameGraph::compile()`、持続的な実行経路では`Prepared
 構築物を消費して凍結する。後者はmeshのpinと出力の所有権を`CompiledEngineFrame`へ引き継ぎ、
 `VulkanEngine::submit_frame(compiled)`が同じ所有付き入力を受け取る。
 build、compile、submitを分けられる。利用側の履歴処理や測定を標準描画と同じGraphへ接続できる。
-準備済みframeとplanのGraph identity、元の出力と必要exportを投入前に照合する。
+履歴の export と readback も `select_output` の前に構築する。選択時に Graph の出所を照合し、
+選択した画像・readback・登録の所有権をその Graph と一緒に非公開で保持する。
+準備後、コンパイル後、提出後の各 API は選択結果を読み取り専用で公開する。
+投入時には提出先の Engine が準備元と一致することを確認する。
 buildはGPU実行枠の予約ではない。内容が変わる別submitや外部keyの削除ではimportが失効するが、
 共有meshの読み取りだけを行う別Viewのsubmitでは失効しない。
 `RenderedFrame`のframe所有出力は明示解放まで登録されるため、表示や履歴等のconsumerを投入後に

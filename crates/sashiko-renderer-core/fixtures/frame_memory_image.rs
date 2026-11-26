@@ -168,14 +168,16 @@ fn complete_one(
         .position(|entry| {
             entry
                 .as_ref()
-                .is_some_and(|entry| entry.frame.submission.id() == completion.id())
+                .is_some_and(|entry| entry.frame.submission().id() == completion.id())
         })
         .expect("completion belongs to one of the fixed pending frames");
     let Pending {
         mut frame,
         expected,
     } = pending[index].take().unwrap();
-    let pass = frame.readback.expect("image acceptance requests readback");
+    let pass = frame
+        .readback()
+        .expect("image acceptance requests readback");
     renderer.release_output(&mut frame).unwrap();
     drop(frame);
     let target = held.iter_mut().find(|entry| entry.is_none()).unwrap();
@@ -302,7 +304,7 @@ fn frames(
         });
         let compiled = phase(&mut phases[2], || prepared.compile().unwrap());
         assert_eq!(
-            compiled.graph.pass_count(),
+            compiled.graph().pass_count(),
             3 + invert_passes + usize::from(invert_passes == 1)
         );
         let rendered = phase(&mut phases[3], || renderer.submit_frame(compiled).unwrap());

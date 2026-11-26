@@ -105,11 +105,11 @@ fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
     }
     let consume = |renderer: &mut VulkanEngine, mut frame: RenderedFrame| {
         let mut completion = renderer.runtime_mut().wait_frame(WAIT).unwrap().unwrap();
-        assert_eq!(completion.id(), frame.submission.id());
+        assert_eq!(completion.id(), frame.submission().id());
         let mut pixels = [0; 8 * 8 * 4];
         completion
             .result
-            .readback_into(frame.readback.unwrap(), &mut pixels)
+            .readback_into(frame.readback().unwrap(), &mut pixels)
             .unwrap();
         assert_eq!(&pixels[..4], &[0, 0, 0, 255]);
         renderer.release_output(&mut frame).unwrap();

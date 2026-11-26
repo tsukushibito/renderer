@@ -103,17 +103,4 @@ impl FrameGraph {
     pub fn compile(self) -> Result<CompiledGraph, GraphError> {
         self.graph.compile()
     }
-
-    /// The native adapter transfers the complete finalized selection together.
-    #[cfg(feature = "vulkan")]
-    pub(crate) fn into_parts(
-        self,
-    ) -> (Graph, ImageHandle, Option<PassHandle>, FrameOutputOwnership) {
-        (
-            self.graph,
-            self.output,
-            self.readback,
-            self.output_ownership,
-        )
-    }
 }
