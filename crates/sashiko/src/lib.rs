@@ -7,6 +7,8 @@ pub mod input;
 pub use sashiko_math as math;
 #[cfg(feature = "physics")]
 pub use sashiko_physics as physics;
+#[cfg(feature = "live-inspector")]
+pub use sashiko_inspect as inspect;
 #[cfg(all(
     windows,
     feature = "presentation",

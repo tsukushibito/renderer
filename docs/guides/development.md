@@ -1970,6 +1970,63 @@ native資源の毎回作成と再利用の比較に加え、複数submitと単�
 これらを複数フレームのthroughputや描画FPSの結果とは扱いません。
 正しさ試験の検証有効結果と性能結果は別に記録します。
 
+<a id="live-inspector"></a>
+
+## 実行中のゲームを NDJSON で調べる
+
+ヘッドレスの「扉と鍵」を次のコマンドで起動する。初期状態は tick 0、一時停止中である。端末からは JSON を一行ずつ入力する。LLM やテストは同じ子プロセスの標準入力と標準出力を開いたまま使う。ログと Cargo の出力は標準エラーへ出る。標準入力の EOF でセッションを終了する。
+
+```sh
+cargo run --quiet --release --locked -p inspector-door --features live-inspector -- --inspect-stdio
+```
+
+最初に以下の三行を送る。各応答には要求と同じ文字列の `id` があり、成功時は `ok:true` と `result`、失敗時は `ok:false` と `error.code` が返る。この接続の版・セッション・ワールド・対応操作は `hello` に含まれる。検索結果の ID は、その起動でのみ有効な不透明な文字列として扱う。
+
+```jsonl
+{"id":"h","op":"hello"}
+{"id":"types","op":"schema","kind":"Door"}
+{"id":"doors","op":"find","kind":"Door","limit":1}
+```
+
+次の二行で解錠拒否を待ち、更新を再開する。待機は `registered` を返した時点で有効になる。待機中も同じ接続で質問できる。`w` の終了通知には、イベントの `self`（扉）、`actor`（プレイヤー）、判定に使った `facts`、その tick 終了時のスナップショットが入る。小例では最初の拒否で止まる。
+
+```jsonl
+{"id":"w","op":"wait","event":"unlock_denied","pause":true,"capture":{"self":["state"],"actor":["held_key"]},"timeout_ms":30000}
+{"id":"play","op":"resume"}
+```
+
+拒否時に提示した鍵は `result.event.facts.presented_key`。tick 終了時に持っていた鍵は、次の要求例の `SNAPSHOT` と `PLAYER` を通知の `result.snapshot.id` と `result.event.actor` に置き換えて読む。その後の `step` はちょうど 1 tick 進める。描画や OS のデバッガを必要としない。[外部クライアントの実装例](../../tools/inspect/verify.py)
+
+```jsonl
+{"id":"key","op":"read","snapshot":"SNAPSHOT","object":"PLAYER","fields":["held_key"]}
+{"id":"next","op":"step"}
+```
+
+| 操作 | v1 の要求と寿命 |
+|---|---|
+| `schema` / `find` | `kind` を省略すると全型が対象。`find` は 1〜128 件（既定 32 件）。次ページには前の `revision` と `next_offset` を `offset` として渡す。版が変われば `STALE_PAGE` を返す。 |
+| `read` / `snapshot` | 一括採取は `{"id":"s","op":"snapshot","objects":{"OBJECT":["field"]},"ttl_ms":60000}`。投影は合計 64 項目まで、同時保持は 16 件、寿命は採取から 1〜60,000 ms。未収録は `NOT_CAPTURED`、期限切れは `SNAPSHOT_EXPIRED`、消滅した個体への現在値要求は `OBJECT_GONE`。 |
+| `wait` | `event` はスキーマのイベント ID。`object` は任意の発生元フィルタ。`capture` の役割は `self` と任意の `actor`。`pause` は既定 false。期限は 1〜86,400,000 ms（既定 60,000）。`TIMEOUT` は実時間で判定する。 |
+| `watch` / `cancel` | `watch` は指定した種類のイベントを継続購読する。過去分は `since` に最後に読んだ sequence の文字列を渡す。過去 64 イベントを越えたら `gap` と欠落区間、その後に保持中の記録を返す。待機と購読は合計 16 件。`cancel` に `subscription` を渡すと取消応答と元の購読 ID の終了通知が返る。 |
+| `pause` / `step` / `resume` | 停止中も要求処理は続く。`step` は停止中のみ使用できる。v1 は単一ワールドの読み取り専用で、確定版は完了した tick に一致する。 |
+
+要求 ID はセッション中の未完了操作間で一意にする。tick・revision・sequence は十進文字列。1 行は改行を除き 16 KiB まで、入出力のキューは各 32 件とする。遅い読者がいる間はゲームを進め、カーソルの欠落を通知する。スナップショット枠の不足は `CAPACITY` を返し、期限内の既存の投影は保持する。イベント発生後に当事者が消滅しても判定時の事実を保存し、終了時に取得できなかった当事者を `missing` に示す。
+
+### ビルドと受け入れ
+
+`live-inspector` は最適化や Renderer の開発用検証とは独立した Cargo feature である。通常版は同じコミット・アセットでこの feature を外す。検査版でも `--inspect-stdio` を省略した実行はセッションを開かない。ゲームを組み込むときは `sashiko::inspect::World` に検索・スキーマ・読取・単一 tick の更新を実装する。個体 ID はゲームがセッション内で再割当を防ぎ、判断理由はルールが実際にそれを決めた箇所で記録する。[ゲームとの接続例](../../examples/inspector-door/src/inspection.rs)・[観測 API](../../crates/sashiko-inspect/src/lib.rs)
+
+```sh
+cargo test --locked -p sashiko-inspect
+cargo build --release --locked -p inspector-door --features live-inspector
+python -B tools/inspect/verify.py target/release/inspector-door
+cargo run --quiet --release --locked -p inspector-door --features memory-profiling -- --measure 100000
+cargo run --quiet --release --locked -p inspector-door --features live-inspector,memory-profiling -- --measure 100000
+cargo run --quiet --release --locked -p inspector-door --features live-inspector,memory-profiling -- --measure-observed 100000
+```
+
+Windows の検証スクリプトには `target/release/inspector-door.exe` を渡す。独立にビルドした通常版があれば `--shipping` にそのパスを渡すと、通常版の機能除外と同一 tick の結果も照合する。[計測結果と測定範囲](../verification/current.md#live-inspector)
+
 ## 診断ログと生成物
 
 ライブラリは`tracing`へログを発行し、global subscriberや出力先を設定しません。

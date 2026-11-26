@@ -8,6 +8,8 @@
 
 小さな入力・更新ループは `cargo run --locked -p sashiko --example fixed_game` で実行できます。[サンプル](../../crates/sashiko/examples/fixed_game.rs)は右移動を 3 更新続け、その間のジャンプ押下を 1 回消費します。ゲームはキーとアクションの対応を `ActionMap` に渡し、固定更新ごとに `sample` で押下・解放・軸値を読み取ります。Windows ホストでは `WindowInput` が同じマップに物理キーの変化を渡します。
 
+「扉と鍵」のゲームは `cargo run --locked -p inspector-door --features live-inspector -- --inspect-stdio` で起動します。起動直後は tick 0 で停止し、標準入力から JSON を一行ずつ受け取ります。[プレイ中の個体を調べる例](development.md#live-inspector)
+
 <a id="survivor"></a>
 
 ## 研究施設のサバイバーを遊ぶ

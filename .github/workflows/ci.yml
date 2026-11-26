@@ -305,6 +305,19 @@ jobs:
       - name: Run workspace tests on Linux CPU
         if: runner.os == 'Linux' && matrix.backend == 'cpu'
         run: cargo test --locked --workspace --tests --no-default-features
+      - name: Exercise persistent game inspection through stdio
+        if: matrix.backend == 'cpu'
+        shell: pwsh
+        run: |
+          $suffix = if ($IsWindows) { '.exe' } else { '' }
+          $binary = "target/debug/inspector-door$suffix"
+          cargo build --locked -p inspector-door
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $shipping = Join-Path $env:RUNNER_TEMP "inspector-door-shipping$suffix"
+          Copy-Item $binary $shipping
+          cargo build --locked -p inspector-door --features live-inspector
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B tools/inspect/verify.py $binary --shipping $shipping
       - name: Verify packaged game and saved profile from a clean working directory
         if: runner.os == 'Linux' && matrix.backend == 'cpu'
         run: |
