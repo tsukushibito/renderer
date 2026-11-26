@@ -21,7 +21,17 @@ fn catalog() -> PipelineResult<CharacterCatalog> {
 }
 fn character(c: &CharacterCatalog, model: Option<&AnimatedModel>) -> PipelineResult<Character> {
     let timing = |name| c.timeline("figure", name)?.prepare();
-    let gaits = Gaits::new(timing("walk")?, Some(timing("jog")?), 2., 4., rate())?;
+    let gaits = if let Some(model) = model {
+        Gaits::from_clips(
+            Arc::new(model.prepare_pose_clip("walk")?),
+            Some(Arc::new(model.prepare_pose_clip("jog")?)),
+            2.,
+            4.,
+            rate(),
+        )?
+    } else {
+        Gaits::from_timelines(timing("walk")?, Some(timing("jog")?), 2., 4., rate())?
+    };
     let mut actions = vec![];
     for (id, name, slot, priority, weights) in [
         (RELOAD, "reload", Slot::Upper, 1, [0., 0., 1.]),
@@ -64,17 +74,19 @@ fn interrupted_reload_matches_headless_retry_and_repeated_display() -> PipelineR
     let mut replay = character(&c, None)?;
     let model = c.load(c.id("figure").unwrap())?;
     let mut shown = character(&c, Some(&model))?;
-    let walk = model.prepare_pose_clip("walk")?;
+    let skeleton = shown.locomotion().skeleton().unwrap();
     let jog = model.prepare_pose_clip("jog")?;
-    let mut local = LocalBuffer::new(walk.skeleton());
-    let mut full = PoseWorkspace::all(walk.skeleton());
-    let mut hand = PoseWorkspace::subset(walk.skeleton(), &[2])?;
+    let mut local = LocalBuffer::new(skeleton);
+    let mut full = PoseWorkspace::all(skeleton);
+    let mut hand = PoseWorkspace::subset(skeleton, &[2])?;
     let mut gait_pose = full.clone();
     let mut batch = model.prepare_palette_batch(&[], 1, 1)?;
     let jobs = JobSystem::inline().into();
     let mut translation = 0.;
     let mut reload = None;
     let mut loaded = vec![];
+    assert!(replay.locomotion().skeleton().is_none());
+    assert!(replay.compose(&mut local).is_err());
     for tick in 1u64..=16 {
         let mut a = [EMPTY; 8];
         let mut b = a;
@@ -137,12 +149,12 @@ fn interrupted_reload_matches_headless_retry_and_repeated_display() -> PipelineR
             }
         }
         assert_eq!(
-            actual.translation.x,
+            actual.translation[0],
             if (3..=6).contains(&tick) { 0.25 } else { 0. }
         );
-        translation += actual.translation.x;
+        translation += actual.translation[0];
         for _ in 0..2 {
-            shown.compose(&walk, Some(&jog), &mut local)?;
+            shown.compose(&mut local)?;
             local.sample().evaluate(&mut full)?;
             local.sample().evaluate(&mut hand)?;
             assert_eq!(hand.joint(2), full.joint(2));
@@ -165,10 +177,7 @@ fn interrupted_reload_matches_headless_retry_and_repeated_display() -> PipelineR
                 .next()
                 .unwrap();
             for (joint, matrix) in palette.iter().enumerate() {
-                assert_eq!(
-                    matrix.columns(),
-                    full.joint(joint).unwrap().to_cols_array_2d()
-                );
+                assert_eq!(matrix.columns(), full.joint(joint).unwrap());
             }
         }
         assert!(shown.advance(tick, 4., &[], &mut b).is_err());
@@ -194,7 +203,7 @@ fn stable_character_order_across_worker_counts() -> PipelineResult<()> {
                     let phase = tick.saturating_sub((*id % 3) as u64);
                     let r = actor.advance(tick, 4., requests(phase), out).unwrap();
                     *len = r.notifications;
-                    *delta = r.translation.to_array();
+                    *delta = r.translation;
                 })
             });
             trace.extend(
@@ -226,16 +235,15 @@ fn warmed_action_ticks_are_allocation_free() -> PipelineResult<()> {
     let c = catalog()?;
     let model = c.load(c.id("figure").unwrap())?;
     let mut actor = character(&c, Some(&model))?;
-    let walk = model.prepare_pose_clip("walk")?;
-    let jog = model.prepare_pose_clip("jog")?;
-    let mut local = LocalBuffer::new(walk.skeleton());
+    let skeleton = actor.locomotion().skeleton().unwrap();
+    let mut local = LocalBuffer::new(skeleton);
     let mut batch = model.prepare_palette_batch(&[], 1, 1)?;
     let jobs = JobSystem::inline().into();
     let mut cycle = || -> PipelineResult<()> {
         for step in 1..=16 {
             let tick = actor.tick() + 1;
             std::hint::black_box(actor.advance(tick, 4., requests(step), &mut [EMPTY; 8])?);
-            actor.compose(&walk, Some(&jog), &mut local)?;
+            actor.compose(&mut local)?;
             let palette = batch
                 .evaluate(
                     &[PaletteRequest::Sample(0)],

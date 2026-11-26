@@ -96,7 +96,9 @@ fn compare_every_joint_origin_palette_and_representative_vertex_to_f64() -> Pipe
                 for pose in [&out.workspace, packed] {
                     write_palette(pose, &out.inverse_bind, &mut out.palette)?;
                     for (i, &world) in expected.iter().enumerate() {
-                        let origin = pose.joint(i).unwrap().w_axis.truncate().as_dvec3();
+                        let origin = glam::Vec4::from_array(pose.joint(i).unwrap()[3])
+                            .truncate()
+                            .as_dvec3();
                         max_origin = max_origin.max(origin.distance(world.w_axis.truncate()));
                         let skin = world * rig.bind[i].inverse();
                         let diff = matrix(out.palette[i]) - skin;

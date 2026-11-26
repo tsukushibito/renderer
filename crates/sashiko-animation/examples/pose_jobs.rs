@@ -1,7 +1,7 @@
 //! PoseBatch latency and allocator checks. Pass --idle to sleep between samples.
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    use glam::{Quat, Vec3};
+    use glam::Quat;
     use sashiko_animation::{Clip, LocalPose, Playback, PoseBatch, PoseWorkspace, Skeleton};
     use sashiko_jobs::JobSystem;
     use sashiko_renderer_core::measurement::{CountingAllocator, Snapshot};
@@ -17,11 +17,7 @@ fn main() {
             Clip::new(
                 rig.clone(),
                 vec![
-                    LocalPose {
-                        scale: Vec3::ONE,
-                        translation: Vec3::ONE,
-                        rotation: Quat::from_rotation_z(angle)
-                    };
+                    LocalPose::new([1.; 3], Quat::from_rotation_z(angle).to_array(), [1.; 3]);
                     joints
                 ],
                 rate,

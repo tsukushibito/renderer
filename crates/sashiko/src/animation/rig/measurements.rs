@@ -273,18 +273,11 @@ fn measure_composed_and_sparse_poses() -> PipelineResult<()> {
         rate,
         false,
         vec![],
-        vec![glam::DVec3::ZERO, glam::DVec3::X, glam::DVec3::X * 2.],
+        vec![[0.; 3], [1., 0., 0.], [2., 0., 0.]],
     )?;
     let clip = PoseClip::from_timeline(
         rig,
-        vec![
-            LocalPose {
-                translation: glam::Vec3::ONE,
-                rotation: glam::Quat::IDENTITY,
-                scale: glam::Vec3::ONE
-            };
-            256
-        ],
+        vec![LocalPose::new([1.; 3], [0., 0., 0., 1.], [1.; 3]); 256],
         timeline,
     )?;
     measure("root_only_128x256", |tick| {

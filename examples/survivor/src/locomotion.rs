@@ -65,7 +65,13 @@ impl LocomotionClips {
         let walk = self.walk.prepare()?;
         let jog = self.jog.as_ref().map(TimelineAsset::prepare).transpose()?;
         Ok(Locomotion(character::Locomotion::new(
-            character::Gaits::new(walk, jog, 2., 4., crate::TICK_HZ.try_into().unwrap())?,
+            character::Gaits::from_timelines(
+                walk,
+                jog,
+                2.,
+                4.,
+                crate::TICK_HZ.try_into().unwrap(),
+            )?,
         )))
     }
 }

@@ -1,4 +1,4 @@
-use glam::{DVec3, Quat};
+use glam::DVec3;
 use sashiko_animation::{
     AnimationError, Clip, LocalPose, Marker, Playback, PoseWorkspace, Skeleton,
 };
@@ -11,11 +11,7 @@ fn rate() -> NonZeroU32 {
     NonZeroU32::new(1).unwrap()
 }
 fn local(translation: DVec3) -> LocalPose {
-    LocalPose {
-        translation: translation.as_vec3(),
-        scale: glam::Vec3::ONE,
-        rotation: Quat::IDENTITY,
-    }
+    LocalPose::new(translation.as_vec3().to_array(), [0., 0., 0., 1.], [1.; 3])
 }
 
 fn walking(rig: Arc<Skeleton>, looping: bool) -> Clip {
@@ -29,7 +25,7 @@ fn walking(rig: Arc<Skeleton>, looping: bool) -> Clip {
             Marker { frame: 0, id: 10 },
             Marker { frame: 1, id: 12 },
         ],
-        vec![DVec3::ZERO, DVec3::X, DVec3::X * 2.],
+        vec![[0.; 3], [1., 0., 0.], [2., 0., 0.]],
     )
     .unwrap()
 }
@@ -47,15 +43,12 @@ fn retry_across_loops_preserves_time_and_marker_order() {
     assert_eq!(short, [99; 5]);
     let mut events = [0; 6];
     let result = player.advance_to(4, &mut events).unwrap();
-    assert_eq!(result.translation, DVec3::X * 4.);
+    assert_eq!(result.translation, [4., 0., 0.]);
     assert_eq!(events, [11, 12, 10, 11, 12, 10]);
     let mut workspace = PoseWorkspace::all(&rig);
     for _ in 0..2 {
         player.evaluate_pose(&mut workspace).unwrap();
-        assert_eq!(
-            workspace.joint(0).unwrap().w_axis.truncate().as_dvec3(),
-            DVec3::ZERO
-        );
+        assert_eq!(workspace.joint(0).unwrap()[3], [0., 0., 0., 1.]);
     }
     assert_eq!(player.advance_to(4, &mut []).unwrap().event_count, 0);
     assert!(player.advance_to(3, &mut []).is_err());
@@ -67,14 +60,14 @@ fn single_shot_holds_with_fractional_clock_and_no_repeated_events() {
     let clip = walking(rig.clone(), false);
     let mut player = Playback::new(&clip, NonZeroU32::new(2).unwrap());
     let first = player.advance_to(1, &mut []).unwrap();
-    assert_eq!(first.translation, DVec3::X * 0.5);
+    assert_eq!(first.translation, [0.5, 0., 0.]);
     let mut events = [0; 2];
     let last = player.advance_to(u64::MAX, &mut events).unwrap();
-    assert_eq!(last.translation, DVec3::X * 1.5);
+    assert_eq!(last.translation, [1.5, 0., 0.]);
     assert_eq!(events, [11, 12]);
     let mut out = PoseWorkspace::all(&rig);
     player.evaluate_pose(&mut out).unwrap();
-    assert_eq!(out.joint(0).unwrap().w_axis.truncate().as_dvec3(), DVec3::X);
+    assert_eq!(out.joint(0).unwrap()[3], [1., 0., 0., 1.]);
 }
 
 #[test]
@@ -82,7 +75,7 @@ fn turning_parent_and_partial_pose_agree_through_transition() {
     let rig = Skeleton::new(vec![Some(2), Some(2), None]).unwrap();
     let start = [local(DVec3::X), local(DVec3::Y), local(DVec3::ZERO)];
     let mut end = start;
-    end[2].rotation = Quat::from_xyzw(0., 0., 1., 0.);
+    end[2] = LocalPose::new([0.; 3], [0., 0., 1., 0.], [1.; 3]);
     let make = |poses: [LocalPose; 3], id| {
         Clip::new(
             rig.clone(),
@@ -90,7 +83,7 @@ fn turning_parent_and_partial_pose_agree_through_transition() {
             rate(),
             true,
             vec![Marker { frame: 0, id }],
-            vec![DVec3::ZERO, DVec3::X * id as f64],
+            vec![[0.; 3], [id as f64, 0., 0.]],
         )
         .unwrap()
     };
@@ -115,14 +108,11 @@ fn turning_parent_and_partial_pose_agree_through_transition() {
         if tick > 1 {
             assert_eq!(events, [2]);
         }
-        displacement += result.translation;
+        displacement += DVec3::from_array(result.translation);
         player.evaluate_pose(&mut partial).unwrap();
         player.evaluate_pose(&mut full).unwrap();
         assert!(
-            partial
-                .joint(0)
-                .unwrap()
-                .w_axis
+            glam::Vec4::from_array(partial.joint(0).unwrap()[3])
                 .truncate()
                 .as_dvec3()
                 .abs_diff_eq(expected, 1e-6)
@@ -138,7 +128,7 @@ fn turning_parent_and_partial_pose_agree_through_transition() {
         .unwrap();
     assert_eq!(
         grouped.advance_to(4, &mut [0; 3]).unwrap().translation,
-        displacement
+        displacement.to_array()
     );
     let wrong = Skeleton::new(vec![None, None, None]).unwrap();
     assert!(
@@ -154,11 +144,11 @@ fn synchronized_root_intervals_cross_the_seam_from_a_negative_phase() {
     let looping = walking(rig.clone(), true);
     assert_eq!(
         looping.timeline().phase_displacement(-0.25, 1.25).unwrap(),
-        DVec3::X * 3.
+        [3., 0., 0.]
     );
     let once = walking(rig, false);
     assert_eq!(
         once.timeline().phase_displacement(-0.25, 1.25).unwrap(),
-        DVec3::X * 2.
+        [2., 0., 0.]
     );
 }
