@@ -9,12 +9,12 @@ publish = false
 [features]
 default = ["animation", "audio", "rendering"]
 asset = ["dep:sashiko-asset"]
-animation = ["asset", "dep:sashiko-animation", "dep:sashiko-animation-character"]
+animation = ["asset", "dep:sashiko-animation", "dep:sashiko-animation-character", "dep:sashiko-jobs"]
 audio = ["dep:hound"]
 rendering = ["dep:sashiko-renderer"]
 physics = ["dep:sashiko-physics"]
 live-inspector = ["dep:sashiko-inspect"]
-memory-profiling = ["rendering", "sashiko-renderer/memory-profiling"]
+memory-profiling = ["sashiko-renderer?/memory-profiling"]
 cli = ["dep:clap"]
 audio-output = ["audio", "dep:cpal"]
 presentation = ["rendering", "dep:winit", "dep:raw-window-handle", "sashiko-renderer/presentation", "dep:windows-sys"]
@@ -29,7 +29,7 @@ cpal = { version = "0.16", optional = true }
 winit = { version = "0.30", default-features = false, features = ["rwh_06"], optional = true }
 
 [dependencies]
-sashiko-jobs = { version = "0.1.0", path = "../sashiko-jobs" }
+sashiko-jobs = { version = "0.1.0", path = "../sashiko-jobs", optional = true }
 sashiko-math = { version = "0.1.0", path = "../sashiko-math" }
 sashiko-physics = { version = "0.1.0", path = "../sashiko-physics", optional = true }
 sashiko-inspect = { version = "0.1.0", path = "../sashiko-inspect", optional = true }
