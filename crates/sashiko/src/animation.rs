@@ -12,8 +12,8 @@ use rig::Rig;
 #[cfg(feature = "rendering")]
 pub use rig::{PaletteBatch, PaletteRequest, PaletteWorkspace, PhaseAnimation, PreparedAnimation};
 pub use sashiko_animation::{
-    AnimationError, Clip as PoseClip, ClipTimeline, JointMask, LocalBuffer, PhaseMap, Playback,
-    PoseSample, PoseWorkspace,
+    Advance, AnimationError, Clip as PoseClip, ClipTimeline, JointMask, LocalBuffer, LocalPose,
+    Marker, PhaseMap, Playback, PoseSample, PoseWorkspace, Skeleton,
 };
 use std::{
     collections::{BTreeMap, HashSet},
@@ -90,12 +90,7 @@ impl TimelineAsset {
                     id: e.id,
                 })
                 .collect(),
-            self.tracks
-                .root_translation
-                .iter()
-                .copied()
-                .map(glam::DVec3::from_array)
-                .collect(),
+            self.tracks.root_translation.clone(),
         )?
         .with_sync_markers(
             self.tracks
@@ -500,7 +495,7 @@ mod tests {
         let mut playback = Playback::new(clip, rate);
         let mut events = [0; 2];
         let advanced = playback.advance_to(3, &mut events)?;
-        assert_eq!(advanced.translation.to_array(), [1.5, 0., 0.]);
+        assert_eq!(advanced.translation, [1.5, 0., 0.]);
         assert_eq!(&events[..advanced.event_count], &[7, 7]);
         assert_eq!(
             (1..=3)

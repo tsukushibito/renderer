@@ -1,5 +1,4 @@
 use crate::Locomotion;
-use glam::DVec3;
 use sashiko_animation::{AnimationError, Clip, ClipTimeline, JointMask, LocalBuffer};
 use std::{num::NonZeroU32, sync::Arc};
 
@@ -76,7 +75,7 @@ pub enum Notification {
 }
 #[derive(Debug, PartialEq)]
 pub struct TickResult {
-    pub translation: DVec3,
+    pub translation: [f64; 3],
     pub notifications: usize,
 }
 
@@ -291,12 +290,11 @@ impl Character {
 
     /// Compose the settled tick into reusable storage. The sample can be submitted to
     /// a palette batch or evaluated into a full or partial pose workspace.
-    pub fn compose(
-        &self,
-        walk: &Clip,
-        jog: Option<&Clip>,
-        out: &mut LocalBuffer,
-    ) -> Result<(), AnimationError> {
+    pub fn compose(&self, out: &mut LocalBuffer) -> Result<(), AnimationError> {
+        let (walk, jog) = self
+            .locomotion
+            .clips()
+            .ok_or(AnimationError::Invalid("gaits have no display clips"))?;
         let (w, j, weight) = self.locomotion.sample();
         out.mix(&[
             (walk.sample_phase(w)?, 1. - weight),
@@ -336,7 +334,6 @@ impl Character {
 mod tests {
     use super::*;
     use crate::Gaits;
-    use glam::{Quat, Vec3};
     use sashiko_animation::{LocalPose, PoseWorkspace, Skeleton};
     #[test]
     fn one_tick_action_without_a_fade_displays_its_terminal_sample_once() {
@@ -344,11 +341,7 @@ mod tests {
         let clip = |x, looping| {
             Clip::new(
                 rig.clone(),
-                vec![LocalPose {
-                    translation: Vec3::X * x,
-                    scale: Vec3::ONE,
-                    rotation: Quat::IDENTITY,
-                }],
+                vec![LocalPose::new([x, 0., 0.], [0., 0., 0., 1.], [1.; 3])],
                 NonZeroU32::MIN,
                 looping,
                 vec![],
@@ -368,7 +361,7 @@ mod tests {
                 mask: JointMask::new(&rig, vec![1.]).unwrap(),
             },
         };
-        let gaits = Gaits::new(walk.timeline().clone(), None, 1., 2., NonZeroU32::MIN).unwrap();
+        let gaits = Gaits::from_clips(Arc::new(walk), None, 1., 2., NonZeroU32::MIN).unwrap();
         let mut actor = Character::new(
             Locomotion::new(gaits),
             ActionSet::new(vec![action]).unwrap(),
@@ -384,9 +377,9 @@ mod tests {
                 );
                 assert_eq!(result.notifications, 2);
             }
-            actor.compose(&walk, None, &mut local).unwrap();
+            actor.compose(&mut local).unwrap();
             local.sample().evaluate(&mut pose).unwrap();
-            assert_eq!(pose.joint(0).unwrap().w_axis.x, expected);
+            assert_eq!(pose.joint(0).unwrap()[3][0], expected);
         }
     }
 }

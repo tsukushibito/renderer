@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 /// Displacement in the clip's root coordinate system and initialized event slots.
 #[derive(Debug)]
 pub struct Advance {
-    pub translation: DVec3,
+    pub translation: [f64; 3],
     pub event_count: usize,
 }
 
@@ -108,7 +108,7 @@ impl ClipTimeline {
     ) -> Result<Advance, AnimationError> {
         let event_count = self.write_events(from, to, rate, events)?;
         Ok(Advance {
-            translation: self.displacement(from, to, rate),
+            translation: self.displacement(from, to, rate).to_array(),
             event_count,
         })
     }
@@ -139,12 +139,12 @@ impl ClipTimeline {
     }
 
     /// Root displacement over unwrapped normalized cycles, including mapped negative phases.
-    pub fn phase_displacement(&self, from: f64, to: f64) -> Result<DVec3, AnimationError> {
+    pub fn phase_displacement(&self, from: f64, to: f64) -> Result<[f64; 3], AnimationError> {
         if !from.is_finite() || !to.is_finite() || to < from {
             return Err(Invalid("invalid phase interval"));
         }
         if self.root.is_empty() {
-            return Ok(DVec3::ZERO);
+            return Ok([0.; 3]);
         }
         let endpoint = self.root[self.frames];
         let cursor = |phase: f64| {
@@ -164,15 +164,16 @@ impl ClipTimeline {
         };
         let (a, p) = cursor(from);
         let (b, q) = cursor(to);
-        Ok(endpoint * (b - a) + (q - p))
+        Ok((endpoint * (b - a) + (q - p)).to_array())
     }
 
     pub fn finished_at(&self, tick: u64, rate: NonZeroU32) -> bool {
         !self.looping && self.frame(tick, rate) >= self.frames as u128
     }
 
-    pub fn translation_at_tick(&self, tick: u64, rate: NonZeroU32) -> DVec3 {
+    pub fn translation_at_tick(&self, tick: u64, rate: NonZeroU32) -> [f64; 3] {
         self.displacement(tick.saturating_sub(1), tick, rate)
+            .to_array()
     }
 
     fn displacement(&self, from: u64, to: u64, rate: NonZeroU32) -> DVec3 {
@@ -292,7 +293,7 @@ impl<'a> Playback<'a> {
         }
         self.tick = tick;
         Ok(Advance {
-            translation: delta,
+            translation: delta.to_array(),
             event_count,
         })
     }

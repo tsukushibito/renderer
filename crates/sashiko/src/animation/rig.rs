@@ -71,11 +71,11 @@ impl Rig {
                     );
                 }
                 let (scale, rotation, translation) = relative.to_scale_rotation_translation();
-                local.push(LocalPose {
-                    scale: scale.as_vec3(),
-                    rotation: rotation.normalize().as_quat(),
-                    translation: translation.as_vec3(),
-                });
+                local.push(LocalPose::new(
+                    translation.as_vec3().to_array(),
+                    rotation.normalize().as_quat().to_array(),
+                    scale.as_vec3().to_array(),
+                ));
             }
         }
         Ok(PoseClip::from_timeline(
@@ -193,7 +193,7 @@ fn write_palette(
     palette: &mut [Transform],
 ) -> Result<(), sashiko_renderer::core::graph::GraphError> {
     for (i, (dest, &inverse_bind)) in palette.iter_mut().zip(inverse).enumerate() {
-        let model = workspace.joint(i).expect("full skeleton workspace");
+        let model = Mat4::from_cols_array_2d(&workspace.joint(i).expect("full skeleton workspace"));
         let cols = (model * inverse_bind).to_cols_array_2d();
         *dest = Transform::new(std::array::from_fn(|row| cols.map(|c| c[row])))?;
     }

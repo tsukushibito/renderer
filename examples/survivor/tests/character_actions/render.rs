@@ -140,9 +140,6 @@ impl ViewPipeline for CrowdView {
 fn frames(api: RuntimeConfig, compute: bool) -> PipelineResult<Vec<Vec<u8>>> {
     let catalog = catalog()?;
     let model = catalog.load(catalog.id("figure").unwrap())?;
-    let walk = model.prepare_pose_clip("walk")?;
-    let jog = model.prepare_pose_clip("jog")?;
-    let mut local = LocalBuffer::new(walk.skeleton());
     let mut palettes = model.prepare_palette_batch(&[], 1, 1)?;
     let jobs = JobSystem::inline().into();
     let mut meshes = Meshes::new(MeshCapacity {
@@ -171,11 +168,11 @@ fn frames(api: RuntimeConfig, compute: bool) -> PipelineResult<Vec<Vec<u8>>> {
         for tick in 1..=offset {
             root_x += actor
                 .advance(tick, 4., requests(tick), &mut [EMPTY; 8])?
-                .translation
-                .x;
+                .translation[0];
         }
         actors.push((actor, meshes.create_pose(mesh)?, root_x));
     }
+    let mut local = LocalBuffer::new(actors[0].0.locomotion().skeleton().unwrap());
     let mut objects = [RenderObject::new(mesh, mat); COUNT];
     for (i, object) in objects.iter_mut().enumerate() {
         object.pose = Some(actors[i / 4].1);
@@ -240,9 +237,8 @@ fn frames(api: RuntimeConfig, compute: bool) -> PipelineResult<Vec<Vec<u8>>> {
             let tick = actor.tick() + 1;
             *root_x += actor
                 .advance(tick, 4., requests(tick), &mut [EMPTY; 8])?
-                .translation
-                .x;
-            actor.compose(&walk, Some(&jog), &mut local)?;
+                .translation[0];
+            actor.compose(&mut local)?;
             let palette = palettes
                 .evaluate(
                     &[PaletteRequest::Sample(0)],

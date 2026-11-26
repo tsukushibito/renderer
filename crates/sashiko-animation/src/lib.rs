@@ -74,11 +74,20 @@ impl Skeleton {
 /// Frame-major local translation, rotation and positive scale.
 #[derive(Clone, Copy, Debug)]
 pub struct LocalPose {
-    pub translation: Vec3,
-    pub rotation: Quat,
-    pub scale: Vec3,
+    translation: Vec3,
+    rotation: Quat,
+    scale: Vec3,
 }
 impl LocalPose {
+    /// A local transform with an XYZW quaternion. Clip preparation validates its components.
+    pub fn new(translation: [f32; 3], rotation: [f32; 4], scale: [f32; 3]) -> Self {
+        Self {
+            translation: Vec3::from_array(translation),
+            rotation: Quat::from_array(rotation),
+            scale: Vec3::from_array(scale),
+        }
+    }
+
     fn matrix(self) -> Mat4 {
         Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
     }
@@ -122,7 +131,7 @@ impl Clip {
         hz: NonZeroU32,
         looping: bool,
         markers: Vec<Marker>,
-        root: Vec<DVec3>,
+        root: Vec<[f64; 3]>,
     ) -> Result<Self, AnimationError> {
         let frames = local.len() / skeleton.joint_count();
         let timeline = ClipTimeline::new(frames, hz, looping, markers, root)?;
@@ -243,7 +252,7 @@ impl ClipTimeline {
         hz: NonZeroU32,
         looping: bool,
         mut markers: Vec<Marker>,
-        root: Vec<DVec3>,
+        root: Vec<[f64; 3]>,
     ) -> Result<Self, AnimationError> {
         if frames == 0 {
             return Err(Invalid("empty clip timeline"));
@@ -251,6 +260,7 @@ impl ClipTimeline {
         if markers.iter().any(|e| e.frame >= frames) {
             return Err(Invalid("marker outside clip"));
         }
+        let root: Vec<_> = root.into_iter().map(DVec3::from_array).collect();
         markers.sort_by_key(|e| e.frame);
         if !root.is_empty()
             && (frames.checked_add(1) != Some(root.len())
@@ -330,11 +340,12 @@ impl PoseWorkspace {
             skeleton.order.iter().copied().filter(|&j| selected[j]),
         ))
     }
-    pub fn joint(&self, joint: usize) -> Option<Mat4> {
+    /// Model-space joint transform, in column-major order, when included in this workspace.
+    pub fn joint(&self, joint: usize) -> Option<[[f32; 4]; 4]> {
         self.layout
             .by_joint
             .get(joint)?
-            .map(|slot| self.matrices[slot])
+            .map(|slot| self.matrices[slot].to_cols_array_2d())
     }
     fn evaluate(
         &mut self,

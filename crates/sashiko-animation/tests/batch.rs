@@ -1,4 +1,4 @@
-use glam::{Quat, Vec3};
+use glam::{Mat4, Quat};
 use sashiko_animation::{Clip, LocalPose, Playback, PoseBatch, PoseWorkspace, Skeleton};
 
 #[test]
@@ -7,10 +7,12 @@ fn mixed_phases_and_fades_preserve_partial_hierarchies_and_order() {
     let rate = 60.try_into().unwrap();
     let make = |angle: f32| {
         let frames = (0..6)
-            .map(|i| LocalPose {
-                scale: Vec3::new(1.2, 0.6, 1.7),
-                translation: Vec3::new(i as f32, 0.4, 1.),
-                rotation: Quat::from_rotation_z(angle + i as f32 * 0.25),
+            .map(|i| {
+                LocalPose::new(
+                    [i as f32, 0.4, 1.],
+                    Quat::from_rotation_z(angle + i as f32 * 0.25).to_array(),
+                    [1.2, 0.6, 1.7],
+                )
             })
             .collect();
         Clip::new(rig.clone(), frames, rate, true, vec![], vec![]).unwrap()
@@ -37,9 +39,8 @@ fn mixed_phases_and_fades_preserve_partial_hierarchies_and_order() {
                 sample.evaluate(&mut subset).unwrap();
                 for i in [0, 2] {
                     assert!(
-                        out.joint(i)
-                            .unwrap()
-                            .abs_diff_eq(subset.joint(i).unwrap(), 2e-5)
+                        Mat4::from_cols_array_2d(&out.joint(i).unwrap())
+                            .abs_diff_eq(Mat4::from_cols_array_2d(&subset.joint(i).unwrap()), 2e-5)
                     );
                 }
                 assert!(out.joint(1).is_none());
@@ -63,10 +64,12 @@ fn scoped_packed_worlds_match_serial_with_fades_and_scalar_tail() {
         Clip::new(
             rig.clone(),
             (0..joints)
-                .map(|i| LocalPose {
-                    scale: Vec3::new(1.2, 0.9, 0.6),
-                    translation: Vec3::new(i as f32, 0.5, 1.0),
-                    rotation: Quat::from_rotation_x(angle + i as f32 * 0.01),
+                .map(|i| {
+                    LocalPose::new(
+                        [i as f32, 0.5, 1.0],
+                        Quat::from_rotation_x(angle + i as f32 * 0.01).to_array(),
+                        [1.2, 0.9, 0.6],
+                    )
                 })
                 .collect(),
             rate,
