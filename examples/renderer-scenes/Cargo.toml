@@ -5,9 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 default-run = "renderer-scenes"
-description = "Reference scene applications for Bistro and Sponza"
+description = "Reference scene applications for Bistro, Sponza and Landscape"
 
 [features]
+landscape = ["vulkan", "dep:gltf", "dep:png"]
 default = []
 bake-tool = ["dep:sashiko-lighting-bake", "dep:serde", "dep:half"]
 webgpu = ["sashiko-renderer/webgpu", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys", "dep:js-sys"]
@@ -20,6 +21,11 @@ graph-diagnostics = ["sashiko-renderer/graph-diagnostics"]
 memory-profiling = ["sashiko-renderer/memory-profiling"]
 presentation = ["sashiko-renderer/presentation", "dep:winit"]
 tracy = ["sashiko-renderer/tracy", "dep:tracy-client"]
+
+[[bin]]
+name = "landscape"
+path = "src/bin/landscape.rs"
+required-features = ["landscape"]
 
 [[bin]]
 name = "renderer-scenes-bake"
@@ -36,6 +42,8 @@ wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", optional = true, features = ["Window", "Response", "Url", "Location", "HtmlCanvasElement"] }
 
 [dependencies]
+gltf = { version = "1.4.1", default-features = false, features = ["utils"], optional = true }
+png = { version = "0.18", optional = true }
 half = { version = "2.7.1", optional = true }
 sashiko-lighting-bake = { version = "0.1.0", path = "../../crates/sashiko-lighting-bake", optional = true }
 sashiko-renderer-core = { version = "0.1.0", path = "../../crates/sashiko-renderer-core", default-features = false }

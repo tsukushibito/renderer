@@ -4,6 +4,32 @@
 [必要なツール](development.md#必要なツール)、GPUの検証設定は
 [製品・開発用の検証設定](development.md#validation-settings)を参照してください。
 
+<a id="landscape"></a>
+
+## Landscape の草原を描画する
+
+Vulkan 対応 GPU で、川沿いの草原を固定カメラから描画します。全景版の glTF を Git LFS に同梱しています。Windows では次のコマンドで展開し、960×540 の PNG と、120 フレームの FPS・メモリ統計を取得できます。
+
+```powershell
+git lfs pull --include="assets/landscape/overview.zip"
+Expand-Archive assets/landscape/overview.zip build/landscape-overview
+cargo run --locked --release -p renderer-scenes --features landscape --bin landscape -- build/landscape-overview build/landscape.png 120 panorama
+```
+
+`panorama` は川を見渡す視点、`cover` は配布元の `view-0` に基づく視点です。展開した `landscape.gltf` は一般の glTF ビューアでも開けます。照明とカメラは Sashiko 側で設定しています。[全景の描画結果](../verification/landscape-overview.jpg)・[計測条件と結果](../verification/current.md#landscape)
+
+草花の原形を近くから見るには、上流の PLY とテクスチャから範囲を指定して生成します。Python 3.11 で確認しています。変換先には新しいディレクトリを指定してください。取得した素材は `build/landscape-cache` で次回も利用します。
+
+```powershell
+python -m pip install numpy==1.26.4 Pillow==11.1.0
+python tools/landscape/prepare.py build/landscape-meadow --radius 2.5
+cargo run --locked --release -p renderer-scenes --features landscape --bin landscape -- build/landscape-meadow build/meadow.png 120 meadow
+```
+
+変換の既定は同梱版と同じ全景です。植物原型ごとに直交する2方向から色と抜きマスクを焼き、元の位置に交差板を置きます。同じ植物は水平24 m区画ごとに1メッシュにまとめ、地形などの静的形状も簡略化します。`--radius` は元の草地をメートル単位で切り出し、植生の元メッシュを配置間で共有します。`--full` は全配置と元の三角形を保つ glTF を生成します。配置後は約43億三角形です。各モードは起動時に読み込みます。距離に応じた LOD 切替・動的ロードは未実装です。[近景の描画結果](../verification/landscape-meadow.jpg)
+
+原作は Laubwerk の Jan-Walter Schliep、Burak Kahraman、Timm Dapper による **Landscape**（CC BY 4.0）。変換版では座標の再配置、テクスチャ縮小、反射色とカットアウトへの材質変換を行い、太陽光・一定の環境光・カスケードシャドウで描画しています。水の屈折、葉の透過散乱、原作の HDR 照明は省略しています。[固定版の配布元](https://github.com/mmp/pbrt-v4-scenes/tree/30cf4a0346ae5a80a2d7a530a3ef7d0fa4f70572/landscape)・[ライセンス](https://creativecommons.org/licenses/by/4.0/)
+
 ## ゲーム更新を Rust で書く
 
 小さな入力・更新ループは `cargo run --locked -p sashiko --example fixed_game` で実行できます。[サンプル](../../crates/sashiko/examples/fixed_game.rs)は右移動を 3 更新続け、その間のジャンプ押下を 1 回消費します。ゲームはキーとアクションの対応を `ActionMap` に渡し、固定更新ごとに `sample` で押下・解放・軸値を読み取ります。Windows ホストでは `WindowInput` が同じマップに物理キーの変化を渡します。

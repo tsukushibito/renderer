@@ -5,6 +5,21 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="landscape"></a>
+
+## Landscape の固定視点
+
+Windows、GeForce RTX 3060 12 GB、Vulkan、release、960×540。Forward、FXAA、1024² の4段の太陽影を使用。初期読み込み・5フレームのウォームアップ後、各フレームの GPU 完了まで待つオフスクリーン描画を120回計測し、別の1フレームを PNG に読み戻しました。[実行方法・素材の出典](../guides/examples.md#landscape)
+
+| 入力・カメラ | 配置後の三角形 | mesh.bin | FPS | ピーク・ワーキングセット | GPU ローカル使用量の推定 |
+|---|---:|---:|---:|---:|---:|
+| 全景簡略版・panorama | 1,687,885 | 67.3 MiB | 209.9 | 549 MiB | 284 MiB |
+| 半径2.5 mの元形状・meadow | 24,239,676 | 93.4 MiB | 78.7 | 1,353 MiB | 425 MiB |
+
+ワーキングセットは立ち上げを含む Windows プロセスのピーク値。GPU ローカル使用量は読み戻し直後の `VK_EXT_memory_budget` によるプロセス推定値で、同時点のデバイスローカルヒープ上の VMA アロケーション合計は全景153 MiB、近景174 MiB。2行はカメラと描画範囲が異なり、LOD 単独の効果は分離していません。全景は最適化した開発用 validation でも描画・終了し、コアと同期 validation が有効、警告・エラーとも0件でした。[全景](landscape-overview.jpg)・[近景](landscape-meadow.jpg)
+
+全詳細版も glTF への変換を確認しました。参照される358メッシュに26,050,093三角形、配置後4,330,850,339三角形、共有形状の `mesh.bin` は1,044,490,140バイトです。全詳細版のGPU描画・FPS・メモリピークと、移動中のストリーミングは未検証です。
+
 <a id="directional-indirect-shadows"></a>
 
 ## 動的オブジェクトによる間接影
