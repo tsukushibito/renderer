@@ -7,6 +7,7 @@ use std::{error::Error, io};
 
 /// Evaluate a cooked clip through the same timeline as the runtime for the
 /// offline inspector's geometry preview.
+#[cfg(all(feature = "animation", feature = "rendering"))]
 pub fn clip_pose(
     path: &std::path::Path,
     model_name: &str,

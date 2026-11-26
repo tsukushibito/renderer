@@ -7,15 +7,20 @@ rust-version.workspace = true
 publish = false
 
 [features]
+default = ["animation", "audio", "rendering"]
+asset = ["dep:sashiko-asset"]
+animation = ["asset", "dep:sashiko-animation", "dep:sashiko-animation-character"]
+audio = ["dep:hound"]
+rendering = ["dep:sashiko-renderer"]
 physics = ["dep:sashiko-physics"]
 live-inspector = ["dep:sashiko-inspect"]
-memory-profiling = ["sashiko-renderer/memory-profiling"]
+memory-profiling = ["rendering", "sashiko-renderer/memory-profiling"]
 cli = ["dep:clap"]
-audio-output = ["dep:cpal"]
-presentation = ["dep:winit", "dep:raw-window-handle", "sashiko-renderer/presentation", "dep:windows-sys"]
-vulkan = ["sashiko-renderer/vulkan"]
-d3d12 = ["sashiko-renderer/d3d12"]
-webgpu = ["sashiko-renderer/webgpu"]
+audio-output = ["audio", "dep:cpal"]
+presentation = ["rendering", "dep:winit", "dep:raw-window-handle", "sashiko-renderer/presentation", "dep:windows-sys"]
+vulkan = ["rendering", "sashiko-renderer/vulkan"]
+d3d12 = ["rendering", "sashiko-renderer/d3d12"]
+webgpu = ["rendering", "sashiko-renderer/webgpu"]
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = { version = "0.6", optional = true }
@@ -27,15 +32,15 @@ winit = { version = "0.30", default-features = false, features = ["rwh_06"], opt
 sashiko-math = { version = "0.1.0", path = "../sashiko-math" }
 sashiko-physics = { version = "0.1.0", path = "../sashiko-physics", optional = true }
 sashiko-inspect = { version = "0.1.0", path = "../sashiko-inspect", optional = true }
-sashiko-animation-character = { version = "0.1.0", path = "../sashiko-animation-character" }
-sashiko-animation = { version = "0.1.0", path = "../sashiko-animation" }
+sashiko-animation-character = { version = "0.1.0", path = "../sashiko-animation-character", optional = true, default-features = false }
+sashiko-animation = { version = "0.1.0", path = "../sashiko-animation", optional = true, default-features = false }
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"], optional = true }
-sashiko-renderer = { version = "0.1.0", path = "../sashiko-renderer", default-features = false }
-hound = "3.5"
+sashiko-renderer = { version = "0.1.0", path = "../sashiko-renderer", optional = true, default-features = false }
+hound = { version = "3.5", optional = true }
 glam = "0.30"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sashiko-asset = { version = "0.1.0", path = "../sashiko-asset" }
+sashiko-asset = { version = "0.1.0", path = "../sashiko-asset", optional = true, default-features = false }
 
 [lints]
 workspace = true
