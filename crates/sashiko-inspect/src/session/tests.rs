@@ -161,6 +161,33 @@ fn same_handles_and_projections_for_rows_and_components() {
 }
 
 #[test]
+fn cancelling_and_reusing_a_watch_preserves_the_world_and_journal() {
+    let mut session = Session::new(Arena(Rows::new()));
+    for _ in 0..=SUBSCRIPTIONS {
+        session.watch("observer", "removed").unwrap();
+        session.step();
+        session.cancel("observer").unwrap();
+        let ended = session.poll().unwrap().into_json();
+        assert_eq!(ended["id"], "observer");
+        assert_eq!(
+            ended["result"],
+            json!({"state":"ended","reason":"cancelled"})
+        );
+        assert_eq!(session.cancel("observer"), Err("UNKNOWN_SUBSCRIPTION"));
+    }
+    assert_eq!(session.tick(), SUBSCRIPTIONS as u64 + 1);
+    assert_eq!(session.world().object_type(3), Some("Enemy"));
+    let replay =
+        serde_json::from_value(json!({"op":"watch","id":"replay","event":"removed","since":"0"}))
+            .unwrap();
+    session.request(replay, Instant::now()).unwrap();
+    assert_eq!(
+        session.poll().unwrap().into_json()["result"]["event"]["tick"],
+        "1"
+    );
+}
+
+#[test]
 fn live_snapshots_are_not_evicted_to_make_room() {
     let mut session = Session::new(Arena(Rows::new()));
     let now = Instant::now();

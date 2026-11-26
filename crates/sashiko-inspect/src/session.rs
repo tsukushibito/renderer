@@ -146,6 +146,21 @@ impl<W: World> Session<W> {
         .map(drop)
     }
 
+    /// End a subscription. Poll until its terminal notification to release the
+    /// slot and reuse the ID. Pending events remain in the session journal.
+    pub fn cancel(&mut self, id: &str) -> std::result::Result<(), &'static str> {
+        let sub = self
+            .subscriptions
+            .iter_mut()
+            .find(|s| s.id.as_ref() == id)
+            .ok_or("UNKNOWN_SUBSCRIPTION")?;
+        sub.ready = Some(answer(
+            json!(id),
+            Ok(json!({"state":"ended","reason":"cancelled"})),
+        ));
+        Ok(())
+    }
+
     /// Fetch an owned notification. Call the returned encoder on the consumer thread.
     pub fn poll(&mut self) -> Option<Notification<W::Facts>> {
         self.notification(Instant::now()).map(Notification)
@@ -445,15 +460,7 @@ impl<W: World> Session<W> {
                 self.subscribe(id, filter, self.journal.sequence, Some(wait))
             }
             Operation::Cancel { subscription } => {
-                let i = self
-                    .subscriptions
-                    .iter()
-                    .position(|s| *s.id == subscription)
-                    .ok_or("UNKNOWN_SUBSCRIPTION")?;
-                self.subscriptions[i].ready = Some(answer(
-                    json!(subscription),
-                    Ok(json!({"state":"ended","reason":"cancelled"})),
-                ));
+                self.cancel(&subscription)?;
                 Ok(json!({"subscription":subscription,"state":"cancelled"}))
             }
             Operation::Pause => {
