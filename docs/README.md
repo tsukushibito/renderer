@@ -14,6 +14,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 |---|---|
 | ブラウザで Bistro と Sponza を開く、Canvas に組み込む | [WebGPU ビューアーの起動と操作](guides/examples.md#webgpu-scenes) |
 | ゲームとエンジンの実装をどこで分けるか | [ゲーム制作 API と編集データの責務](design/game-engine.md) |
+| プレイ中の個体を人と LLM が同じ時点で調べるには | [ライブインスペクタの設計](design/live-inspector.md) |
 | 骨格アニメーションを再生・合成し、キャラクター制御や描画に組み込みたい | [アニメーションのクレート構成、固定 tick、GPU スキニングと受け入れ条件](design/animation.md) |
 | 大量オブジェクトの可視判定、Graph構築、コマンド記録を並列化したい | [標準RendererとGraphの仕組み](design/rendergraph.md#raster-recording)、[専用ベンチの実行手順](guides/development.md#standard-renderer-jobs)、[Vulkan・D3D12の実測](verification/current.md#standard-renderer-jobs) |
 | 最初のゲームの完成像と直近の実装順を知りたい | [3D 見下ろし型ローグライトサバイバーの制作計画](design/survivor-game.md) |
@@ -56,6 +57,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | 利用手順 | [開発手順](guides/development.md) | 環境構築、Bistro素材と再現条件の準備、ビルド、試験、性能測定 |
 | 利用手順 | [開発ツール](guides/tooling.md) | 依存監査、D3D12 bindings生成、SPIR-V／DXIL検証、[外部シェーダー取込](guides/tooling.md#runtime-shader-import)、[Rustのパイプライン構築](guides/tooling.md#rust-pipeline)、[Bistro cook・shader・比較](guides/tooling.md#bistro-tools)、[Tracy zone](guides/tooling.md#tracy-profiling)・[WPR CPUプロファイル](guides/tooling.md#cpu-profiling)、RenderDoc |
 | 利用手順 | [HTML文書](guides/html-docs.md) | フレームワーク比較とmdBook選定、ビルド、閲覧、配布・更新 |
+| 設計 | [ライブインスペクタ](design/live-inspector.md) | ECS に依存しない個体の識別、CLI と JSON、観測時点・履歴・編集の契約 |
 | 実装規約 | [製品版と開発用の検証方針](guides/validation-policy.md) | 保証を置く境界、製品から外す検証、実行状態・失敗処理、ビルド構成と受入 |
 | 実装指針 | [Vulkanベストプラクティス](guides/vulkan-best-practices.md) | 一次資料に基づく能力照会、同期・寿命、メモリ、描画・Compute、WSI、検証・性能 |
 | 実装指針 | [RenderGraphベストプラクティス](guides/rendergraph-best-practices.md) | 公開設計の比較、依存・内容・寿命、コンパイル、同期、資源配置、並列化、検証 |
