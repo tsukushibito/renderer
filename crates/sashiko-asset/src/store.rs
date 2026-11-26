@@ -127,7 +127,7 @@ impl Decoded {
         match self {
             Self::Mesh(m) => (m.vertices.capacity() * 48 + m.indices.capacity() * 4) as u64,
             #[cfg(feature = "renderer")]
-            Self::Material(m) => m.uniform.capacity() as u64,
+            Self::Material(_) => 0, // All decoded material fields are inline.
             Self::Image(i) => i.pixels.capacity() as u64,
         }
     }

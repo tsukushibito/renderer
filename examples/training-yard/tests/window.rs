@@ -191,8 +191,8 @@ fn replay_streams_a_new_image_class_during_window_presentation() -> PipelineResu
     let fixture = distribution::Distribution::cook()?;
     let root = fixture.root.as_path();
     let old = fs::read_to_string(root.join("current"))?;
-    let mut catalog: Catalog =
-        serde_json::from_slice(&fs::read(root.join("catalogs").join(old.trim()))?)?;
+    let id: Digest = old.trim().parse()?;
+    let mut catalog = Catalog::decode(&fs::read(root.join("catalogs").join(id.to_string()))?, id)?;
     let wide = catalog.assets.get_mut(&AssetId::from_u128(2)).unwrap();
     let image = wide.primitives[0]
         .images

@@ -1,6 +1,6 @@
 //! Size the stream at a change boundary from the requested and still-live objects.
 use super::{IMAGE_BUDGET_BYTES, ITEMS, LoadedPart, MAX_PARTS};
-use sashiko_asset::Digest;
+use sashiko_asset::{Digest, MaterialSlot};
 use sashiko_renderer::core::{
     graph::{BufferDesc, ImageDesc},
     program::SamplerDescriptor,
@@ -50,14 +50,9 @@ impl Requirements {
                     ],
                 ),
             );
-            let samplers = &part.params.samplers;
-            for (map, sampler) in part.maps.iter().zip([
-                samplers.base_color,
-                samplers.normal,
-                samplers.orm,
-                samplers.emissive,
-            ]) {
-                if let Some(map) = map {
+            for slot in MaterialSlot::ALL {
+                if let Some(map) = &part.maps[slot.index()] {
+                    let sampler = *slot.texture(&part.params.samplers);
                     if map
                         .desc
                         .byte_len()

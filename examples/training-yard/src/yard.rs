@@ -570,9 +570,10 @@ mod tests {
         let root = fixture.root.as_path();
         let old = Generation::open(root)?;
         let mut yard = Yard::with_asset_catalog(root, 2)?;
-        let mut catalog: Catalog = serde_json::from_slice(&std::fs::read(
-            root.join("catalogs").join(old.id().to_string()),
-        )?)?;
+        let mut catalog = Catalog::decode(
+            &std::fs::read(root.join("catalogs").join(old.id().to_string()))?,
+            *old.id(),
+        )?;
         let id = EquipmentAsset::Wide.id();
         let second = catalog.assets[&EquipmentAsset::Narrow.id()].primitives[0].clone();
         catalog.assets.get_mut(&id).unwrap().primitives.push(second);

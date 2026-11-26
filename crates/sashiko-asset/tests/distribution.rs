@@ -91,6 +91,23 @@ fn rejected_contents_are_retried_for_the_same_digest() -> io::Result<()> {
 }
 
 #[test]
+fn rmesh001_keeps_its_little_endian_attribute_order() -> io::Result<()> {
+    let mut bytes = b"RMESH001".to_vec();
+    bytes.extend(1_u32.to_le_bytes());
+    bytes.extend(3_u32.to_le_bytes());
+    bytes.extend((1..=12).flat_map(|n| (n as f32).to_le_bytes()));
+    bytes.extend([0; 12]);
+    let mesh = MeshBlob::decode(&bytes)?;
+    let vertex = mesh.vertices[0];
+    assert_eq!(vertex.position, [1., 2., 3.]);
+    assert_eq!(vertex.normal, [4., 5., 6.]);
+    assert_eq!(vertex.tangent, [7., 8., 9., 10.]);
+    assert_eq!(vertex.uv, [11., 12.]);
+    assert_eq!(mesh.encode()?, bytes);
+    Ok(())
+}
+
+#[test]
 fn rejects_truncated_overflowing_and_invalid_payloads() -> io::Result<()> {
     let mut bytes = image(9).encode()?;
     bytes.pop();

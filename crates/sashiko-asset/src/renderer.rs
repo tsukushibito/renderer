@@ -12,6 +12,18 @@ use std::io;
 
 const MATERIAL: &[u8] = b"RMATL001";
 
+impl MaterialSlot {
+    /// Select the renderer texture or sampler for this distribution channel.
+    pub fn texture<T>(self, material: &MaterialTextures<T>) -> &T {
+        match self {
+            Self::BaseColor => &material.base_color,
+            Self::Normal => &material.normal,
+            Self::Orm => &material.orm,
+            Self::Emissive => &material.emissive,
+        }
+    }
+}
+
 impl MeshBlob {
     pub fn mesh_data(&self) -> PipelineResult<MeshData> {
         let vertices = self
@@ -59,45 +71,56 @@ impl Sampler {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+// RMATL001 stores the renderer uniform bytes and glTF sampler enums as JSON.
+#[derive(Serialize, Deserialize)]
+struct MaterialRecord {
+    uniform: Vec<u8>,
+    samplers: [Option<Sampler>; 4],
+}
+
+#[derive(Clone, Debug)]
 pub struct MaterialBlob {
-    pub uniform: Vec<u8>,
+    pub factors: MaterialFactors,
     pub samplers: [Option<Sampler>; 4],
 }
 
 impl MaterialBlob {
-    pub fn factors(&self) -> io::Result<MaterialFactors> {
-        let uniform = self
-            .uniform
-            .as_slice()
-            .try_into()
-            .map_err(|_| invalid("invalid PBR uniform length"))?;
-        MaterialFactors::decode(uniform).map_err(invalid)
-    }
-    fn check(&self) -> io::Result<()> {
-        self.factors()?;
+    fn check_samplers(&self) -> io::Result<()> {
         for sampler in self.samplers.iter().flatten() {
             sampler.descriptor()?;
         }
         Ok(())
     }
+
     pub fn encode(&self) -> io::Result<Vec<u8>> {
-        self.check()?;
+        self.check_samplers()?;
+        let record = MaterialRecord {
+            uniform: self.factors.encode().map_err(invalid)?.to_vec(),
+            samplers: self.samplers,
+        };
         let mut out = MATERIAL.to_vec();
-        serde_json::to_writer(&mut out, self).map_err(invalid)?;
+        serde_json::to_writer(&mut out, &record).map_err(invalid)?;
         Ok(out)
     }
+
     pub fn decode(bytes: &[u8]) -> io::Result<Self> {
         let data = bytes
             .strip_prefix(MATERIAL)
             .ok_or_else(|| invalid("unknown material format"))?;
-        let mat: Self = serde_json::from_slice(data).map_err(invalid)?;
-        mat.check()?;
+        let record: MaterialRecord = serde_json::from_slice(data).map_err(invalid)?;
+        let uniform = record
+            .uniform
+            .as_slice()
+            .try_into()
+            .map_err(|_| invalid("invalid PBR uniform length"))?;
+        let mat = Self {
+            factors: MaterialFactors::decode(uniform).map_err(invalid)?,
+            samplers: record.samplers,
+        };
+        mat.check_samplers()?;
         Ok(mat)
     }
-}
 
-impl MaterialBlob {
     pub fn parameters(&self) -> io::Result<PbrParams> {
         let sampler = |slot: MaterialSlot| {
             self.samplers[slot.index()]
@@ -106,7 +129,7 @@ impl MaterialBlob {
                 .map(|s| s.unwrap_or(SamplerDescriptor::LinearRepeat))
         };
         Ok(PbrParams {
-            factors: self.factors()?,
+            factors: self.factors,
             samplers: MaterialTextures {
                 base_color: sampler(MaterialSlot::BaseColor)?,
                 normal: sampler(MaterialSlot::Normal)?,

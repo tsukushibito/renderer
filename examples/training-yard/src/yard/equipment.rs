@@ -4,7 +4,7 @@ mod resources;
 use super::project::AssetGeneration;
 use cooked::LoadedPart;
 use resources::{Requirements, Reservations};
-use sashiko_asset::{AssetId, Digest, ObjectBytes, ObjectStore, Primitive};
+use sashiko_asset::{AssetId, Digest, MaterialSlot, ObjectBytes, ObjectStore, Primitive};
 use sashiko_renderer::{
     AssetPrepareError,
     core::{
@@ -654,14 +654,16 @@ impl Equipment {
                 a.recipe.material == primitive.material && a.recipe.images == primitive.images
             })
             .map(|a| a.object.material);
-        let [base_color, normal, orm, emissive] = maps
-            .each_ref()
-            .map(|m| m.as_ref().map(|m| m.snapshot().clone().into()));
+        let texture = |slot: MaterialSlot| {
+            maps[slot.index()]
+                .as_ref()
+                .map(|m| m.snapshot().clone().into())
+        };
         params.textures = MaterialTextures {
-            base_color,
-            normal,
-            orm,
-            emissive,
+            base_color: texture(MaterialSlot::BaseColor),
+            normal: texture(MaterialSlot::Normal),
+            orm: texture(MaterialSlot::Orm),
+            emissive: texture(MaterialSlot::Emissive),
         };
         let material = match reused_material {
             Some(handle) => handle,

@@ -112,7 +112,7 @@ impl SourceMaterial {
 
     pub(super) fn cook(&self) -> Result<Vec<u8>> {
         Ok(MaterialBlob {
-            uniform: self.factors.encode()?.to_vec(),
+            factors: self.factors,
             samplers: self.samplers,
         }
         .encode()?)

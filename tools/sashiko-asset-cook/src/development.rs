@@ -219,6 +219,9 @@ pub(super) fn serve(source: &Path) -> Result<(), Error> {
             let Some(generation) = guard.selected(&project.git_dir)? else {
                 return Err(error);
             };
+            sashiko_asset::Generation::open_id(&project.root, generation).map_err(|invalid| {
+                format!("{error}; previous generation {generation} is unavailable: {invalid}")
+            })?;
             eprintln!("keeping previous generation {generation}: {error}");
             let lease = guard.lease(generation)?;
             (
@@ -293,4 +296,44 @@ pub(super) fn gc(source: &Path) -> Result<(), Error> {
     let bytes = project.guard()?.gc()?;
     println!("{}", serde_json::json!({ "reclaimed_bytes": bytes }));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sashiko_asset::Generation;
+
+    #[test]
+    fn malformed_generation_misses_preview_cache_and_blocks_gc_before_sweep() -> Result<(), Error> {
+        let scratch = Scratch::new(&std::env::temp_dir())?;
+        let root = scratch.0.join("store");
+        let guard = StoreGuard::lock(&root, Digest::of(b"equipment"))?;
+        let unused = root.join("objects").join(Digest::of(b"spare").to_string());
+        store::publish(&unused, b"spare")?;
+        let snapshot = root
+            .join("snapshots")
+            .join(Digest::of(b"request").to_string());
+        let future = br#"{"version":2,"assets":{}}"#.as_slice();
+        let empty =
+            br#"{"version":1,"assets":{"00000000000000000000000000000001":{"primitives":[]}}}"#
+                .as_slice();
+        let valid = br#"{"version":1,"assets":{}}"#.as_slice();
+        for (bytes, id) in [
+            (future, Digest::of(future)),
+            (empty, Digest::of(empty)),
+            (valid, Digest::of(b"different content")),
+        ] {
+            store::publish(&root.join("catalogs").join(id.to_string()), bytes)?;
+            store::publish(&snapshot, id.to_string().as_bytes())?;
+            assert!(Generation::open_id(&root, id).is_err());
+            assert!(cached_generation(&root, &snapshot)?.is_none());
+            // A catalog may become damaged after a reader has leased it or be
+            // in a newer version than the currently running cleanup command.
+            let lease = guard.lease(id)?;
+            assert!(guard.gc().is_err());
+            assert_eq!(fs::read(&unused)?, b"spare");
+            drop(lease);
+        }
+        Ok(())
+    }
 }
