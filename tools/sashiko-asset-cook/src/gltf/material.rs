@@ -1,5 +1,5 @@
 use super::{ImageRole, Result};
-use sashiko_asset::{MaterialBlob, Sampler};
+use sashiko_asset::{MaterialBlob, MaterialSlot, Sampler};
 use sashiko_renderer::{material::AlphaMode, pbr::MaterialFactors};
 
 pub(super) struct SourceMaterial {
@@ -47,18 +47,23 @@ impl SourceMaterial {
         {
             return Err(format!("material {:?}: invalid emissive factor", source.index()).into());
         }
-        let slots = [
-            pbr.base_color_texture()
-                .map(|t| (t.texture(), t.tex_coord(), ImageRole::Color)),
-            normal.map(|t| (t.texture(), t.tex_coord(), ImageRole::Normal)),
-            orm.map(|t| (t.texture(), t.tex_coord(), ImageRole::Orm)),
-            source
-                .emissive_texture()
-                .map(|t| (t.texture(), t.tex_coord(), ImageRole::Color)),
-        ];
         let mut images = [None; 4];
-        let mut samplers = std::array::from_fn(|_| None);
-        for (slot, info) in slots.into_iter().enumerate() {
+        let mut samplers = [None; 4];
+        for slot in MaterialSlot::ALL {
+            let info = match slot {
+                MaterialSlot::BaseColor => pbr
+                    .base_color_texture()
+                    .map(|t| (t.texture(), t.tex_coord(), ImageRole::Color)),
+                MaterialSlot::Normal => normal
+                    .as_ref()
+                    .map(|t| (t.texture(), t.tex_coord(), ImageRole::Normal)),
+                MaterialSlot::Orm => orm
+                    .as_ref()
+                    .map(|t| (t.texture(), t.tex_coord(), ImageRole::Orm)),
+                MaterialSlot::Emissive => source
+                    .emissive_texture()
+                    .map(|t| (t.texture(), t.tex_coord(), ImageRole::Color)),
+            };
             if let Some((texture, uv, role)) = info {
                 if uv != 0 {
                     return Err(format!(
@@ -68,13 +73,13 @@ impl SourceMaterial {
                     .into());
                 }
                 let sampler = texture.sampler();
-                samplers[slot] = Some(Sampler {
+                samplers[slot.index()] = Some(Sampler {
                     wrap_s: sampler.wrap_s().as_gl_enum(),
                     wrap_t: sampler.wrap_t().as_gl_enum(),
                     min_filter: sampler.min_filter().map(|f| f.as_gl_enum()),
                     mag_filter: sampler.mag_filter().map(|f| f.as_gl_enum()),
                 });
-                images[slot] = Some((texture.source().index(), role));
+                images[slot.index()] = Some((texture.source().index(), role));
             }
         }
         Ok(Self {

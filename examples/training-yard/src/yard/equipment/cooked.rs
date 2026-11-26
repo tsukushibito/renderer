@@ -1,12 +1,9 @@
 //! Convert verified cooked stream objects on the equipment reader thread.
-use sashiko_asset::{AssetId, Digest, Generation, ObjectBytes, ObjectStore, Primitive};
-use sashiko_renderer::{
-    core::{graph::ImageDesc, program::SamplerDescriptor},
-    material::{MaterialTextures, PbrParams},
-    mesh::MeshData,
-    pbr::PbrVertex,
+use sashiko_asset::{
+    AssetId, Digest, Generation, MaterialSlot, ObjectBytes, ObjectStore, Primitive,
 };
-use std::{io, sync::Arc};
+use sashiko_renderer::{core::graph::ImageDesc, material::PbrParams, mesh::MeshData};
+use std::sync::Arc;
 
 pub(super) struct Map {
     pub hash: Digest,
@@ -56,46 +53,16 @@ fn read_part(
     primitive: &Primitive,
 ) -> Result<LoadedPart, Box<dyn std::error::Error>> {
     let mesh_obj = store.load(&primitive.mesh)?;
-    let mesh = mesh_obj.mesh()?;
-    let vertices = mesh
-        .vertices
-        .iter()
-        .map(|v| {
-            PbrVertex::new(
-                [v[0], v[1], v[2]],
-                [v[3], v[4], v[5]],
-                [v[6], v[7], v[8], v[9]],
-                [v[10], v[11]],
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mesh = MeshData::pbr(&vertices, &mesh.indices)?;
+    let mesh = mesh_obj.mesh()?.mesh_data()?;
     let mat_obj = store.load(&primitive.material)?;
     let material = mat_obj.material()?;
-    let factors = material.factors()?;
-    let mut samplers = [SamplerDescriptor::LinearRepeat; 4];
+    let params = material.parameters()?;
     let mut maps = [None, None, None, None];
-    for (i, image_ref) in primitive.images.iter().enumerate() {
-        if let Some(s) = &material.samplers[i] {
-            samplers[i] = s.descriptor()?;
-        }
-        if let Some(reference) = image_ref {
+    for slot in MaterialSlot::ALL {
+        let i = slot.index();
+        if let Some(reference) = &primitive.images[i] {
             let object = store.load(reference)?;
-            let image = object.image()?;
-            let expects_srgb = i == 0 || i == 3;
-            if expects_srgb != image.srgb {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "image color space does not match material slot",
-                )
-                .into());
-            }
-            let mut desc = if image.srgb {
-                ImageDesc::rgba8_srgb(image.width, image.height)
-            } else {
-                ImageDesc::rgba8(image.width, image.height)
-            };
-            desc.mip_levels = image.mip_levels;
+            let desc = object.image()?.texture_desc(slot)?;
             maps[i] = Some(Map {
                 hash: reference.hash,
                 object,
@@ -103,19 +70,9 @@ fn read_part(
             });
         }
     }
-    let [base_color, normal, orm, emissive] = samplers;
     Ok(LoadedPart {
         mesh,
-        params: PbrParams {
-            factors,
-            samplers: MaterialTextures {
-                base_color,
-                normal,
-                orm,
-                emissive,
-            },
-            ..Default::default()
-        },
+        params,
         primitive: primitive.clone(),
         maps,
         sources: [mesh_obj, mat_obj],

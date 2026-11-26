@@ -1,10 +1,16 @@
 //! Versioned, local-file distribution contract shared by the equipment cooker and game.
 mod blob;
 mod catalog;
+#[cfg(feature = "renderer")]
+mod renderer;
 mod store;
+#[cfg(feature = "renderer")]
+pub use renderer::{MaterialBlob, Sampler};
 
-pub use blob::{ImageBlob, MaterialBlob, MeshBlob, Sampler};
-pub use catalog::{AssetId, BlobRef, Catalog, Digest, Equipment, Generation, Primitive};
+pub use blob::{ImageBlob, MeshBlob, MeshVertex};
+pub use catalog::{
+    AssetId, BlobRef, Catalog, Digest, Equipment, Generation, MaterialSlot, Primitive,
+};
 #[cfg(feature = "metrics")]
 pub use store::StoreStats;
 pub use store::{ObjectBytes, ObjectStore};

@@ -103,28 +103,17 @@ fn cached_generation(root: &Path, snapshot: &Path) -> Result<Option<(Digest, Cat
     let Some(bytes) = store::read_if_present(&root.join("catalogs").join(id.to_string()))? else {
         return Ok(None);
     };
-    if Digest::of(&bytes) != id {
+    let Ok(catalog) = Catalog::decode(&bytes, id) else {
         return Ok(None);
-    }
-    let catalog: Catalog = serde_json::from_slice(&bytes)?;
+    };
     let mut visited = BTreeSet::new();
-    for primitive in catalog
-        .assets
-        .values()
-        .flat_map(|equipment| &equipment.primitives)
-    {
-        for object in [Some(primitive.mesh), Some(primitive.material)]
-            .into_iter()
-            .chain(primitive.images)
-            .flatten()
-        {
-            if visited.insert(object.hash) {
-                match fs::metadata(root.join("objects").join(object.hash.to_string())) {
-                    Ok(metadata) if metadata.is_file() && metadata.len() == object.size => {}
-                    Ok(_) => return Ok(None),
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-                    Err(e) => return Err(e.into()),
-                }
+    for object in catalog.objects() {
+        if visited.insert(object.hash) {
+            match fs::metadata(root.join("objects").join(object.hash.to_string())) {
+                Ok(metadata) if metadata.is_file() && metadata.len() == object.size => {}
+                Ok(_) => return Ok(None),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(e.into()),
             }
         }
     }
