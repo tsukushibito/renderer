@@ -23,6 +23,10 @@
 - [Vulkan のベストプラクティス](guides/vulkan-best-practices.md)
 - [製品版と開発用の検証](guides/validation-policy.md)
 
+# 技術調査
+
+- [ゲームエンジンとレンダラーの GI システム調査](design/gi-systems-survey.md)
+
 # 実行と検証
 
 - [現在の検証状況](verification/current.md)

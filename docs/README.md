@@ -53,6 +53,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 
 | 分類 | 文書 | 内容 |
 |---|---|---|
+| 技術調査 | [ゲームエンジンとレンダラーの GI システム調査](design/gi-systems-survey.md) | 各実装の間接照明方式、ライトマップと動的照明の組み合わせ、比較評価の方法と出典をまとめた設計参考資料。 |
 | 研究提案・未採用 | [ライトマップを用いた差分 GI（PDF）](design/differential-gi.pdf) | 動的物体による間接光の遮蔽と色移りを扱う。単一物体での比較方法と、複数物体の GPU 試作へ進む条件を示す。 |
 | 利用手順 | [Examples](guides/examples.md) | 各ターゲットの前提、入門コマンド、比較・計測の導線 |
 | 利用手順 | [開発手順](guides/development.md) | 環境構築、Bistro素材と再現条件の準備、ビルド、試験、性能測定 |
