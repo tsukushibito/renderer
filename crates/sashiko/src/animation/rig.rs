@@ -1,6 +1,6 @@
 //! Convert cooked skin matrices into skeleton poses at the asset boundary.
 mod palette_batch;
-use super::{AnimatedModel, AnimationClip, Clip, Transform, floats};
+use super::{AnimatedModel, AnimationClip, Clip, Transform};
 use glam::{DMat4, Mat4};
 pub use palette_batch::{PaletteBatch, PaletteRequest};
 use sashiko_animation::{
@@ -17,14 +17,14 @@ pub(super) struct Rig {
 }
 
 impl Rig {
-    pub(super) fn decode(bytes: &[u8]) -> PipelineResult<Self> {
-        let mut parents = Vec::new();
-        let mut bind = Vec::new();
-        for record in bytes.as_chunks::<52>().0 {
-            let p = u32::from_le_bytes(record[..4].try_into()?);
-            parents.push((p != u32::MAX).then_some(p as usize));
-            let rows = std::array::from_fn(|i| floats(record, 4 + i * 16));
-            bind.push(matrix(Transform::new(rows)?));
+    pub(super) fn from_bind_joints(
+        joints: Vec<sashiko_asset::skin::BindJoint>,
+    ) -> PipelineResult<Self> {
+        let mut parents = Vec::with_capacity(joints.len());
+        let mut bind = Vec::with_capacity(joints.len());
+        for joint in joints {
+            parents.push(joint.parent);
+            bind.push(matrix(Transform::new(joint.transform)?));
         }
         let skeleton = Skeleton::new(parents.clone())?;
         let inverse_bind = bind
