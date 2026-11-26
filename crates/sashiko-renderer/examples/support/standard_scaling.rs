@@ -11,8 +11,9 @@ use sashiko_renderer::{
     mesh::{MeshCapacity, MeshData, Meshes},
     pbr::{Bounds, PbrVertex, Projection, ShadowSettings, Sun, Technique, Transform, ViewInput},
     pipeline::{
-        CameraGroup, CameraView, PipelineResult, RenderObject, RendererSetup, SceneAssets,
-        SceneInput, SceneRenderer, StandardConfig, StandardPipeline, StandardViewTimings, ViewId,
+        AssetPreparation, CameraGroup, CameraView, PipelineResult, RenderObject, RendererSetup,
+        SceneAssets, SceneInput, SceneRenderer, StandardConfig, StandardPipeline,
+        StandardViewTimings, ViewId,
     },
     unlit_forward::{IDENTITY, Vertex},
 };

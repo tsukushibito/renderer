@@ -428,17 +428,6 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         })
     }
 
-    /// Check this device's sampled/transfer support (and linear filtering when required).
-    pub fn check_texture_support(
-        &mut self,
-        desc: ImageDesc,
-        linear_filtering: bool,
-    ) -> PipelineResult<()> {
-        Ok(self
-            .runtime()
-            .check_texture_support(desc, linear_filtering)?)
-    }
-
     /// Reserve additional physical images and upload space at a capacity-change boundary.
     /// Include old and candidate versions that may overlap. Call once per added capacity.
     pub fn prepare_texture(
@@ -457,56 +446,6 @@ impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
         self.replace_resource_reservations(next, bytes)
     }
 
-    /// Upload selected mips into a fresh immutable version. Other levels are undefined.
-    pub fn upload_texture_mips(
-        &mut self,
-        name: &str,
-        desc: ImageDesc,
-        levels: std::ops::Range<u32>,
-        bytes: &[u8],
-    ) -> PipelineResult<(FrameId, ManagedImage)> {
-        let (_, pool, runtime) = self.parts_mut();
-        Ok(runtime.upload_texture_mips(pool, name, desc, None, levels, bytes)?)
-    }
-
-    /// Publish a new version, copying other initialized levels on the GPU. The old
-    /// registration and its previously recorded and future reads remain valid.
-    pub fn promote_texture(
-        &mut self,
-        name: &str,
-        previous: &ManagedImage,
-        levels: std::ops::Range<u32>,
-        bytes: &[u8],
-    ) -> PipelineResult<(FrameId, ManagedImage)> {
-        let (_, pool, runtime) = self.parts_mut();
-        Ok(runtime.upload_texture_mips(
-            pool,
-            name,
-            previous.snapshot().desc(),
-            Some(previous),
-            levels,
-            bytes,
-        )?)
-    }
-
-    /// Consume this upload completion when available. Poll it only until true.
-    pub fn poll_texture_upload(&mut self, id: FrameId) -> PipelineResult<bool> {
-        Ok(self.runtime().wait_for_frame(id, Duration::ZERO)?.is_some())
-    }
-
-    pub fn upload_texture(
-        &mut self,
-        name: &str,
-        desc: ImageDesc,
-        bytes: &[u8],
-    ) -> PipelineResult<(FrameId, ManagedImage)> {
-        Ok(self
-            .runtime
-            .as_mut()
-            .expect("live renderer")
-            .borrow_mut()
-            .upload_texture(&mut self.pool, name, desc, bytes)?)
-    }
     /// Access the underlying components together at an explicit engine change boundary.
     pub fn parts_mut(&mut self) -> (&mut ViewRenderer, &mut GraphPool, &mut Runtime) {
         (

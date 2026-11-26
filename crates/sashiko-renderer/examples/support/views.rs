@@ -9,8 +9,8 @@ use sashiko_renderer::{
     passes::bloom::Bloom,
     pbr::{Bounds, PbrVertex, Projection, SceneLimits, Sun, Technique, Transform, ViewInput},
     pipeline::{
-        CameraGroup, CameraView, PreparedSetup, RenderObject, RendererSetup, SceneAssets,
-        SceneInput, StandardConfig, StandardPipeline, ViewId, ViewPipeline,
+        AssetPreparation, CameraGroup, CameraView, PreparedSetup, RenderObject, RendererSetup,
+        SceneAssets, SceneInput, StandardConfig, StandardPipeline, ViewId, ViewPipeline,
     },
     unlit_forward::{IDENTITY, Vertex},
 };

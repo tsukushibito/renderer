@@ -74,8 +74,8 @@ struct Memory {
     reserved: Option<u64>,
 }
 impl Memory {
-    fn sample(&mut self, renderer: &mut impl AssetPreparation) -> Result<()> {
-        let rt = renderer.asset_renderer().runtime();
+    fn sample(&mut self, renderer: &mut Renderer) -> Result<()> {
+        let rt = renderer.runtime_info();
         #[cfg(feature = "vulkan")]
         if let Some(vk) = rt.as_vulkan() {
             let m = vk.memory_stats()?;

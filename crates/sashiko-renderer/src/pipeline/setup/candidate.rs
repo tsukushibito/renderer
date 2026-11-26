@@ -4,6 +4,7 @@ use crate::AssetPrepareError;
 use sashiko_renderer_core::capacity::{
     CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind,
 };
+use sashiko_renderer_core::runtime::ManagedImage;
 use std::{sync::Arc, task::Poll};
 
 /// Upper bounds per maintenance tick. A material uniform requires 64 bytes in one upload.
@@ -265,7 +266,7 @@ impl Transfers {
     }
 }
 
-pub trait AssetTarget {
+pub(crate) trait AssetTarget {
     type Device: BorrowMut<Runtime>;
     fn asset_renderer(&mut self) -> &mut SceneRenderer<Self::Device>;
     fn poll_presentation_for_asset_change(&mut self) -> PipelineResult<bool> {
@@ -283,7 +284,51 @@ impl<R: BorrowMut<Runtime>> AssetTarget for SceneRenderer<R> {
 /// Change-boundary operations on standard, window and host renderers.
 /// Prepare mesh, uniform, texture, draw and transfer capacities up front.
 /// The engine must submit or cancel recorded graphs before retiring their assets.
-pub trait AssetPreparation: AssetTarget {
+///
+/// ```compile_fail
+/// use sashiko_renderer::pipeline::AssetPreparation;
+/// fn access_scene_renderer(assets: &mut impl AssetPreparation) {
+///     let _ = assets.asset_renderer();
+/// }
+/// ```
+pub trait AssetPreparation {
+    /// Check this device's sampled/transfer support (and linear filtering when required).
+    fn check_texture_support(
+        &mut self,
+        desc: ImageDesc,
+        linear_filtering: bool,
+    ) -> Result<(), AssetPrepareError>;
+
+    /// Upload selected mips into a fresh immutable version. Other levels are undefined.
+    fn upload_texture_mips(
+        &mut self,
+        name: &str,
+        desc: ImageDesc,
+        levels: std::ops::Range<u32>,
+        bytes: &[u8],
+    ) -> Result<(FrameId, ManagedImage), AssetPrepareError>;
+
+    /// Publish a new version, copying other initialized levels on the GPU. The old
+    /// registration and its previously recorded and future reads remain valid.
+    fn promote_texture(
+        &mut self,
+        name: &str,
+        previous: &ManagedImage,
+        levels: std::ops::Range<u32>,
+        bytes: &[u8],
+    ) -> Result<(FrameId, ManagedImage), AssetPrepareError>;
+
+    /// Consume this upload completion when available. Poll it only until true.
+    fn poll_texture_upload(&mut self, id: FrameId) -> Result<bool, AssetPrepareError>;
+
+    /// Upload one complete texture. Keep its owner until the last use is submitted.
+    fn upload_texture(
+        &mut self,
+        name: &str,
+        desc: ImageDesc,
+        bytes: &[u8],
+    ) -> Result<(FrameId, ManagedImage), AssetPrepareError>;
+
     /// Install one reservation per simultaneously needed buffer or image without
     /// recreating cameras. Texture transfers are serialized. At a change boundary,
     /// return external result/export owners before calling. A window may yield a
@@ -294,7 +339,113 @@ pub trait AssetPreparation: AssetTarget {
         buffers: &[sashiko_renderer_core::graph::BufferDesc],
         images: &[ImageDesc],
         samplers: &[sashiko_renderer_core::program::SamplerDescriptor],
-    ) -> PipelineResult<Poll<()>> {
+    ) -> Result<Poll<()>, AssetPrepareError>;
+
+    /// Progress a candidate without waiting. Already accepted work survives
+    /// backpressure; retry the same candidate after recovering the reported capacity.
+    fn poll_candidate(
+        &mut self,
+        candidate: &mut AssetCandidate,
+        meshes: &mut Meshes,
+        materials: &mut Materials,
+        budget: UploadBudget,
+    ) -> Result<Poll<()>, AssetPrepareError>;
+
+    /// Publish across all current view pipelines, then invalidate the last-use
+    /// handles in `retire`. A failed call preserves the old registrations.
+    fn commit_candidate(
+        &mut self,
+        candidate: &mut AssetCandidate,
+        meshes: &mut Meshes,
+        materials: &mut Materials,
+        retire: RetireAssets<'_>,
+    ) -> Result<(), AssetPrepareError>;
+
+    /// Discard the candidate. Supply only candidate-owned resources for retirement.
+    /// Accepted transfer completions remain with the renderer for explicit collection.
+    fn cancel_candidate(
+        &mut self,
+        candidate: &mut AssetCandidate,
+        meshes: &mut Meshes,
+        materials: &mut Materials,
+        retire: RetireAssets<'_>,
+    ) -> Result<(), AssetPrepareError>;
+
+    /// Release completed transfer results and obsolete GPU registrations at a
+    /// maintenance boundary. Returns the number of still-pending asset submissions.
+    fn collect_assets(
+        &mut self,
+        meshes: &mut Meshes,
+        materials: &mut Materials,
+    ) -> Result<usize, AssetPrepareError>;
+}
+
+impl<T: AssetTarget> AssetPreparation for T {
+    fn check_texture_support(
+        &mut self,
+        desc: ImageDesc,
+        linear_filtering: bool,
+    ) -> Result<(), AssetPrepareError> {
+        Ok(self
+            .asset_renderer()
+            .runtime()
+            .check_texture_support(desc, linear_filtering)?)
+    }
+
+    fn upload_texture_mips(
+        &mut self,
+        name: &str,
+        desc: ImageDesc,
+        levels: std::ops::Range<u32>,
+        bytes: &[u8],
+    ) -> Result<(FrameId, ManagedImage), AssetPrepareError> {
+        let (_, pool, runtime) = self.asset_renderer().parts_mut();
+        Ok(runtime.upload_texture_mips(pool, name, desc, None, levels, bytes)?)
+    }
+
+    fn promote_texture(
+        &mut self,
+        name: &str,
+        previous: &ManagedImage,
+        levels: std::ops::Range<u32>,
+        bytes: &[u8],
+    ) -> Result<(FrameId, ManagedImage), AssetPrepareError> {
+        let (_, pool, runtime) = self.asset_renderer().parts_mut();
+        Ok(runtime.upload_texture_mips(
+            pool,
+            name,
+            previous.snapshot().desc(),
+            Some(previous),
+            levels,
+            bytes,
+        )?)
+    }
+
+    fn poll_texture_upload(&mut self, id: FrameId) -> Result<bool, AssetPrepareError> {
+        Ok(self
+            .asset_renderer()
+            .runtime()
+            .wait_for_frame(id, Duration::ZERO)?
+            .is_some())
+    }
+
+    fn upload_texture(
+        &mut self,
+        name: &str,
+        desc: ImageDesc,
+        bytes: &[u8],
+    ) -> Result<(FrameId, ManagedImage), AssetPrepareError> {
+        let (_, pool, runtime) = self.asset_renderer().parts_mut();
+        Ok(runtime.upload_texture(pool, name, desc, bytes)?)
+    }
+
+    fn replace_asset_reservations(
+        &mut self,
+        texture_name: &str,
+        buffers: &[sashiko_renderer_core::graph::BufferDesc],
+        images: &[ImageDesc],
+        samplers: &[sashiko_renderer_core::program::SamplerDescriptor],
+    ) -> Result<Poll<()>, AssetPrepareError> {
         if !self.poll_presentation_for_asset_change()? {
             return Ok(Poll::Pending);
         }
@@ -307,8 +458,6 @@ pub trait AssetPreparation: AssetTarget {
         Ok(Poll::Ready(()))
     }
 
-    /// Progress a candidate without waiting. Already accepted work survives
-    /// backpressure; retry the same candidate after recovering the reported capacity.
     fn poll_candidate(
         &mut self,
         candidate: &mut AssetCandidate,
@@ -321,8 +470,6 @@ pub trait AssetPreparation: AssetTarget {
             .map_err(Into::into)
     }
 
-    /// Publish across all current view pipelines, then invalidate the last-use
-    /// handles in `retire`. A failed call preserves the old registrations.
     fn commit_candidate(
         &mut self,
         candidate: &mut AssetCandidate,
@@ -335,8 +482,6 @@ pub trait AssetPreparation: AssetTarget {
             .map_err(Into::into)
     }
 
-    /// Discard the candidate. Supply only candidate-owned resources for retirement.
-    /// Accepted transfer completions remain with the renderer for explicit collection.
     fn cancel_candidate(
         &mut self,
         candidate: &mut AssetCandidate,
@@ -349,8 +494,6 @@ pub trait AssetPreparation: AssetTarget {
             .map_err(Into::into)
     }
 
-    /// Release completed transfer results and obsolete GPU registrations at a
-    /// maintenance boundary. Returns the number of still-pending asset submissions.
     fn collect_assets(
         &mut self,
         meshes: &mut Meshes,
@@ -368,7 +511,6 @@ pub trait AssetPreparation: AssetTarget {
         Ok(drawing.transfers.pending.len())
     }
 }
-impl<T: AssetTarget> AssetPreparation for T {}
 
 impl<R: BorrowMut<Runtime>> SceneRenderer<R> {
     pub(super) fn advance_candidate(
