@@ -55,6 +55,16 @@ fn arguments() -> Command {
     #[cfg(feature = "diagnostics")]
     let command = command
         .arg(
+            path("debug-dir")
+                .conflicts_with_all(["headless", "replay-from"])
+                .help("Enable play diagnostics and store reports here (F8 captures a report)"),
+        )
+        .arg(
+            flag("inspect-stdio")
+                .requires("debug-dir")
+                .help("Accept live inspector requests on stdin"),
+        )
+        .arg(
             path("record-report")
                 .requires("headless")
                 .conflicts_with("replay-from")
@@ -222,7 +232,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         .cloned()
         .map(Ok)
         .unwrap_or_else(survivor::catalog_path)?;
-    if initial.locomotion.is_none() && !args.get_flag("headless") {
+    #[cfg(feature = "diagnostics")]
+    let offscreen = args.contains_id("record-report") && args.contains_id("backend");
+    #[cfg(not(feature = "diagnostics"))]
+    let offscreen = false;
+    if initial.locomotion.is_none() && (!args.get_flag("headless") || offscreen) {
         let catalog = sashiko::animation::CharacterCatalog::open(&catalog_path)?;
         initial.locomotion = Some(survivor::LocomotionClips::load(&catalog, &character)?);
     }
@@ -272,11 +286,61 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?;
         #[cfg(feature = "diagnostics")]
         if let Some(evidence) = evidence {
-            evidence.save(
-                args.get_one::<PathBuf>("record-report").unwrap(),
-                "1",
-                |_| Ok(()),
-            )?;
+            let directory = args.get_one::<PathBuf>("record-report").unwrap();
+            if offscreen {
+                #[cfg(all(
+                    windows,
+                    feature = "presentation",
+                    any(feature = "vulkan", feature = "d3d12")
+                ))]
+                {
+                    let mut evidence = evidence;
+                    let shadows = initial.visual.as_ref().is_some_and(|v| v.character_shadows);
+                    let visual = survivor::visual::Visual::new(
+                        &app.game,
+                        &catalog_path,
+                        &character,
+                        survivor::visual::CharacterRendering {
+                            shadows,
+                            compute_skin: shadows,
+                        },
+                        sashiko::jobs::SharedJobs::from(sashiko::jobs::JobSystem::new(
+                            parallelism,
+                        )?),
+                    )?;
+                    evidence.set_visual(visual.content(&character))?;
+                    let extent = [profile.prefs.width, profile.prefs.height];
+                    let submitted = evidence.elapsed_ns()?;
+                    let pixels =
+                        window::render_capture(&app.game, extent, backend(&args)?, visual)?;
+                    evidence.save(directory, "1", |m| {
+                        m.settings["backend"] =
+                            serde_json::json!(args.get_one::<String>("backend"));
+                        diagnostics::save_image(
+                            directory,
+                            m,
+                            sashiko::inspect::report::FrameStamp {
+                                frame: 0,
+                                tick: app.game.tick,
+                                elapsed_ns: submitted,
+                                interpolation: None,
+                                view: "main".into(),
+                                stage: "final_srgb_ui".into(),
+                                extent,
+                            },
+                            pixels.rgba(),
+                        )
+                    })?;
+                }
+                #[cfg(not(all(
+                    windows,
+                    feature = "presentation",
+                    any(feature = "vulkan", feature = "d3d12")
+                )))]
+                return Err("offscreen Survivor images require a Windows rendering build".into());
+            } else {
+                evidence.save(directory, "1", |_| Ok(()))?;
+            }
         }
         app.game
     } else {
@@ -290,8 +354,40 @@ fn main() -> Result<(), Box<dyn Error>> {
             (character, catalog_path),
         )?
     };
+    #[cfg(feature = "diagnostics")]
+    if args.get_flag("inspect-stdio") {
+        return Ok(());
+    }
     println!("{}", serde_json::to_string(&game.snapshot())?);
     Ok(())
+}
+
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+fn backend(
+    args: &clap::ArgMatches,
+) -> Result<sashiko_renderer::core::runtime::RuntimeConfig, Box<dyn Error>> {
+    use sashiko_renderer::core::runtime::RuntimeConfig;
+    let default_api = if cfg!(feature = "vulkan") {
+        "vulkan"
+    } else {
+        "d3d12"
+    };
+    Ok(
+        match args
+            .get_one::<String>("backend")
+            .map_or(default_api, String::as_str)
+        {
+            #[cfg(feature = "vulkan")]
+            "vulkan" => RuntimeConfig::Vulkan(Default::default()),
+            #[cfg(feature = "d3d12")]
+            "d3d12" => RuntimeConfig::D3D12(Default::default()),
+            _ => return Err("selected backend is unavailable in this build".into()),
+        },
+    )
 }
 
 #[cfg(all(
@@ -308,22 +404,7 @@ fn play(
     parallelism: std::num::NonZeroUsize,
     (character, catalog_path): (String, PathBuf),
 ) -> Result<Game, Box<dyn Error>> {
-    use sashiko_renderer::core::runtime::RuntimeConfig;
-    let default_api = if cfg!(feature = "vulkan") {
-        "vulkan"
-    } else {
-        "d3d12"
-    };
-    let config = match args
-        .get_one::<String>("backend")
-        .map_or(default_api, String::as_str)
-    {
-        #[cfg(feature = "vulkan")]
-        "vulkan" => RuntimeConfig::Vulkan(Default::default()),
-        #[cfg(feature = "d3d12")]
-        "d3d12" => RuntimeConfig::D3D12(Default::default()),
-        _ => return Err("selected backend is unavailable in this build".into()),
-    };
+    let config = backend(args)?;
     let requested_shadows = args.get_flag("character-shadows");
     let shadows = if let Some(visual) = &initial.visual {
         if requested_shadows && !visual.character_shadows {
@@ -337,6 +418,10 @@ fn play(
         game,
         initial,
         window::Options {
+            #[cfg(feature = "diagnostics")]
+            debug_dir: args.get_one::<PathBuf>("debug-dir").cloned(),
+            #[cfg(feature = "diagnostics")]
+            inspect_stdio: args.get_flag("inspect-stdio"),
             config,
             parallelism,
             replay,

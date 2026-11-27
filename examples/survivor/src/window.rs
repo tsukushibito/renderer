@@ -32,6 +32,10 @@ use std::{
 use survivor::visual::Visual;
 use survivor::{Game, Input, Phase, benchmark_input};
 pub struct Options {
+    #[cfg(feature = "diagnostics")]
+    pub debug_dir: Option<PathBuf>,
+    #[cfg(feature = "diagnostics")]
+    pub inspect_stdio: bool,
     pub config: RuntimeConfig,
     pub parallelism: std::num::NonZeroUsize,
     pub extent: [u32; 2],
@@ -66,21 +70,32 @@ fn capture(
     path: &Path,
     content: &crate::RecordedVisual,
 ) -> PipelineResult<()> {
-    let mut visual = Visual::new(game, &o.catalog, &o.character, o.characters, jobs)?;
+    let visual = Visual::new(game, &o.catalog, &o.character, o.characters, jobs)?;
     if &visual.content(&o.character) != content {
         return Err("assets changed before final capture".into());
     }
+    let image = render_capture(game, extent, o.config, visual)?;
+    image.write_ppm(BufWriter::new(File::create(path)?))?;
+    Ok(())
+}
+
+pub(super) fn render_capture(
+    game: &Game,
+    extent: [u32; 2],
+    config: RuntimeConfig,
+    mut visual: Visual,
+) -> PipelineResult<sashiko::capture::CaptureImage> {
     let camera = visual.camera(game, extent)?;
-    let mut renderer = Renderer::headless(o.config, camera, visual.assets())?;
+    let mut renderer = Renderer::headless(config, camera, visual.assets())?;
     visual.prepare_headless(&mut renderer)?;
     visual.sync(game, &camera)?;
     let image = sashiko::capture::CaptureImage::render(&mut renderer, TIMEOUT, |frame| {
         visual.draw(frame, game)
     })?;
-    image.write_ppm(BufWriter::new(File::create(path)?))?;
     let mut runtime = renderer.into_runtime()?;
     visual.release(&mut runtime)?;
-    check_validation(runtime)
+    check_validation(runtime)?;
+    Ok(image)
 }
 
 fn title(phase: Phase) -> &'static str {
@@ -93,10 +108,37 @@ fn title(phase: Phase) -> &'static str {
     }
 }
 
+#[cfg(not(feature = "diagnostics"))]
+type PlayState = Game;
+#[cfg(feature = "diagnostics")]
+enum PlayState {
+    Normal(Box<Game>),
+    Observed(Box<crate::diagnostics::live::Live>),
+}
+#[cfg(feature = "diagnostics")]
+impl std::ops::Deref for PlayState {
+    type Target = Game;
+    fn deref(&self) -> &Game {
+        match self {
+            Self::Normal(g) => g,
+            Self::Observed(s) => s.game(),
+        }
+    }
+}
+#[cfg(feature = "diagnostics")]
+impl PlayState {
+    fn step(&mut self, input: Input) -> survivor::Events {
+        match self {
+            Self::Normal(g) => g.step(input),
+            Self::Observed(s) => s.step(input),
+        }
+    }
+}
+
 struct PlayWindow<'a> {
     sound: Option<audio::Soundscape>,
     profile: &'a mut crate::profile::Player,
-    app: &'a mut App<Game>,
+    app: &'a mut App<PlayState>,
     window: std::sync::Arc<sashiko::window::NativeWindow>,
     visual: &'a mut Visual,
     renderer: &'a mut WindowRenderer,
@@ -138,6 +180,10 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
         Ok(())
     }
     fn update(&mut self, controls: &mut Controls, elapsed: Duration) -> PipelineResult<()> {
+        #[cfg(feature = "diagnostics")]
+        if let PlayState::Observed(live) = &mut self.app.game {
+            live.poll(std::mem::take(&mut controls.report))?;
+        }
         let start = Instant::now();
         #[cfg(feature = "memory-profiling")]
         mark(self.measured, AllocationPhase::Host);
@@ -145,6 +191,12 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
             1
         } else {
             self.app.elapsed_ticks(elapsed)
+        };
+        #[cfg(feature = "diagnostics")]
+        let ticks = if matches!(&self.app.game, PlayState::Observed(s) if s.paused()) {
+            0
+        } else {
+            ticks
         };
         self.app.try_advance(
             ticks,
@@ -189,14 +241,21 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
         let start = Instant::now();
         #[cfg(feature = "memory-profiling")]
         mark(self.measured, AllocationPhase::Host);
-        let outcome = self.renderer.draw(|frame| {
+        let mut render = |frame: &mut sashiko_renderer::Frame<'_>, game: &Game| {
             #[cfg(feature = "memory-profiling")]
             mark(self.measured, AllocationPhase::Backend);
-            self.visual.draw(frame, &self.app.game)?;
+            self.visual.draw(frame, game)?;
             #[cfg(feature = "memory-profiling")]
             mark(self.measured, AllocationPhase::Graph);
             Ok(())
-        })?;
+        };
+        #[cfg(feature = "diagnostics")]
+        let outcome = match &mut self.app.game {
+            PlayState::Observed(live) => live.draw(self.renderer, render)?,
+            PlayState::Normal(game) => self.renderer.draw(|frame| render(frame, game))?,
+        };
+        #[cfg(not(feature = "diagnostics"))]
+        let outcome = self.renderer.draw(|frame| render(frame, &self.app.game))?;
         #[cfg(feature = "memory-profiling")]
         mark(self.measured, AllocationPhase::Backend);
         let now = Instant::now();
@@ -274,8 +333,13 @@ pub fn run(
     }
     let jobs = sashiko::jobs::SharedJobs::from(sashiko::jobs::JobSystem::new(o.parallelism)?);
     let mut visual = Visual::new(&game, &o.catalog, &o.character, o.characters, jobs.clone())?;
-    let content = (initial.visual.is_some() || o.record.is_some() || o.capture.is_some())
-        .then(|| visual.content(&o.character));
+    #[cfg(feature = "diagnostics")]
+    let inspecting = o.debug_dir.is_some();
+    #[cfg(not(feature = "diagnostics"))]
+    let inspecting = false;
+    let content =
+        (initial.visual.is_some() || o.record.is_some() || o.capture.is_some() || inspecting)
+            .then(|| visual.content(&o.character));
     if initial.visual.is_some() && initial.visual != content {
         return Err(
             "visual replay assets differ from recording (catalog, model, color or environment)"
@@ -288,6 +352,10 @@ pub fn run(
     let mut renderer = WindowRenderer::new(window.clone(), o.config, camera, visual.assets())?;
     memory.observe("window_renderer", &mut renderer, &game)?;
     visual.prepare_window(&mut renderer)?;
+    #[cfg(feature = "diagnostics")]
+    if inspecting {
+        renderer.prepare_capture(visual.assets())?;
+    }
     if o.metrics.is_some() {
         renderer.set_vsync(false)?;
     }
@@ -303,6 +371,23 @@ pub fn run(
         .record
         .as_ref()
         .map(|_| Vec::with_capacity(limit.unwrap_or(0)));
+    #[cfg(feature = "diagnostics")]
+    let game = match &o.debug_dir {
+        Some(root) => {
+            let evidence = crate::diagnostics::Evidence::new(
+                &initial,
+                o.parallelism,
+                limit.unwrap_or(216_000),
+            )?;
+            PlayState::Observed(Box::new(crate::diagnostics::live::Live::new(
+                game,
+                evidence,
+                root,
+                o.inspect_stdio,
+            )?))
+        }
+        None => PlayState::Normal(Box::new(game)),
+    };
     let mut app = App::new(game, rate());
     let current_phase = app.game.phase;
     let mut client = PlayWindow {
@@ -328,6 +413,10 @@ pub fn run(
     };
     host.run(&mut client, limit, TIMEOUT)?;
     let last_extent = client.last_extent;
+    #[cfg(feature = "diagnostics")]
+    if let PlayState::Observed(live) = &mut app.game {
+        live.finish(&mut renderer)?;
+    }
     memory.observe("active", &mut renderer, &app.game)?;
     if let Some(mut measured) = measured {
         if !renderer.wait_idle(TIMEOUT)? {
@@ -361,5 +450,11 @@ pub fn run(
             content.as_ref().expect("capture content recorded"),
         )?;
     }
+    #[cfg(feature = "diagnostics")]
+    return Ok(match app.game {
+        PlayState::Normal(g) => *g,
+        PlayState::Observed(s) => s.into_game(),
+    });
+    #[cfg(not(feature = "diagnostics"))]
     Ok(app.game)
 }

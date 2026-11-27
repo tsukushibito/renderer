@@ -72,6 +72,92 @@ fn read_input(mut reader: impl BufRead, tx: mpsc::SyncSender<Input>) -> io::Resu
     Ok(())
 }
 
+/// Nonblocking connection for a host which already owns its tick/window loop.
+pub struct StdioPort<F> {
+    requests: mpsc::Receiver<Input>,
+    out: mpsc::SyncSender<Delivery<F>>,
+    finished: mpsc::Receiver<io::Result<()>>,
+    eof: Arc<AtomicBool>,
+    pending: Option<Delivery<F>>,
+    notify_next: bool,
+}
+
+impl<F: serde::Serialize + Send + 'static> StdioPort<F> {
+    pub fn open() -> Self {
+        let (send, requests) = mpsc::sync_channel(QUEUE);
+        let eof = Arc::new(AtomicBool::new(false));
+        let closed = Arc::clone(&eof);
+        thread::spawn(move || {
+            if let Err(e) = read_input(io::stdin().lock(), send) {
+                eprintln!("inspector input: {e}")
+            }
+            closed.store(true, Ordering::Release);
+        });
+        let (out, lines) = mpsc::sync_channel::<Delivery<F>>(QUEUE);
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || {
+            let result = (|| -> io::Result<()> {
+                let mut stream = io::stdout().lock();
+                for value in lines {
+                    serde_json::to_writer(&mut stream, &value.json())?;
+                    stream.write_all(b"\n")?;
+                    stream.flush()?;
+                }
+                Ok(())
+            })();
+            let _ = done.send(result);
+        });
+        Self {
+            requests,
+            out,
+            finished,
+            eof,
+            pending: None,
+            notify_next: false,
+        }
+    }
+
+    /// Process a bounded batch. A slow client retains its next reply and the
+    /// game continues. False indicates the peer has disconnected.
+    pub fn poll<W: World<Facts = F>>(&mut self, session: &mut Session<W>) -> bool {
+        for _ in 0..QUEUE {
+            if let Some(value) = self.pending.take() {
+                match self.out.try_send(value) {
+                    Ok(()) => (),
+                    Err(TrySendError::Full(value)) => {
+                        self.pending = Some(value);
+                        return true;
+                    }
+                    Err(TrySendError::Disconnected(_)) => return false,
+                }
+            }
+            if std::mem::take(&mut self.notify_next) {
+                self.pending = session.notification(Instant::now());
+                if self.pending.is_some() {
+                    continue;
+                }
+            }
+            match self.requests.try_recv() {
+                Ok(input) => {
+                    self.notify_next = true;
+                    self.pending = Some(Delivery::Reply(match input {
+                        Input::Valid(r) => answer(json!(r.id), session.request(r, Instant::now())),
+                        Input::Invalid(v) => v,
+                    }));
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.pending = session.notification(Instant::now());
+                    if self.pending.is_none() {
+                        return true;
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return false,
+            }
+        }
+        true
+    }
+}
+
 /// Serve one development session until stdin EOF. stdout is reserved for NDJSON.
 /// The reader and writer own their I/O; the simulation thread never waits on stdout.
 pub fn serve_stdio<W: World>(world: W, period: Duration) -> io::Result<()>
@@ -81,29 +167,13 @@ where
     if period.is_zero() || period > Duration::from_secs(1) {
         return Err(io::Error::other("tick period must be in (0, 1s]"));
     }
-    let (send, requests) = mpsc::sync_channel(QUEUE);
-    let eof = Arc::new(AtomicBool::new(false));
-    let closed = Arc::clone(&eof);
-    thread::spawn(move || {
-        if let Err(e) = read_input(io::stdin().lock(), send) {
-            eprintln!("inspector input: {e}")
-        }
-        closed.store(true, Ordering::Release);
-    });
-    let (out, lines) = mpsc::sync_channel::<Delivery<W::Facts>>(QUEUE);
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let result = (|| -> io::Result<()> {
-            let mut stream = io::stdout().lock();
-            for value in lines {
-                serde_json::to_writer(&mut stream, &value.json())?;
-                stream.write_all(b"\n")?;
-                stream.flush()?;
-            }
-            Ok(())
-        })();
-        let _ = done.send(result);
-    });
+    let StdioPort {
+        requests,
+        out,
+        finished,
+        eof,
+        ..
+    } = StdioPort::open();
     let mut session = Session::new(world);
     let mut pending = None;
     let mut blocked_since = None;

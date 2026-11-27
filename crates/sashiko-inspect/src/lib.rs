@@ -1,4 +1,5 @@
 //! Optional, storage-independent inspection at completed simulation ticks.
+pub mod jobs;
 mod protocol;
 pub mod report;
 mod session;
@@ -7,7 +8,7 @@ mod stdio;
 use serde::Serialize;
 
 pub use session::{Journal, Notification, Session};
-pub use stdio::serve_stdio;
+pub use stdio::{StdioPort, serve_stdio};
 
 /// The game assigns IDs that are never reused within this world instance.
 pub type ObjectId = u64;

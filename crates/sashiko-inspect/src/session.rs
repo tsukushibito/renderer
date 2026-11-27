@@ -86,6 +86,7 @@ struct Wait {
 
 /// One local process session for one independently stepped world.
 pub struct Session<W: World> {
+    jobs: Option<crate::jobs::Jobs>,
     world: W,
     name: Arc<str>,
     journal: History<W::Facts>,
@@ -108,6 +109,7 @@ impl<W: World> Session<W> {
         );
         Self {
             world,
+            jobs: None,
             name: name.into(),
             paused: true,
             journal: History {
@@ -123,6 +125,29 @@ impl<W: World> Session<W> {
 
     pub fn world(&self) -> &W {
         &self.world
+    }
+
+    pub fn world_mut(&mut self) -> &mut W {
+        &mut self.world
+    }
+    pub fn into_world(self) -> W {
+        self.world
+    }
+    pub fn session_id(&self) -> &str {
+        &self.name
+    }
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+    pub fn set_paused(&mut self, pause: bool) {
+        self.paused = pause;
+    }
+    pub fn with_jobs(mut self, jobs: crate::jobs::Jobs) -> Self {
+        self.jobs = Some(jobs);
+        self
+    }
+    pub fn jobs(&mut self) -> Option<&mut crate::jobs::Jobs> {
+        self.jobs.as_mut()
     }
 
     pub fn tick(&self) -> u64 {
@@ -383,10 +408,34 @@ impl<W: World> Session<W> {
     pub(crate) fn request(&mut self, request: Request, now: Instant) -> Result<Value> {
         let id = &request.id;
         match request.operation {
-            Operation::Hello => Ok(
-                json!({"protocol":1,"session":&*self.name,"world":"game","state":self.status(),
-                "operations":["hello","schema","find","read","snapshot","wait","watch","cancel","pause","step","resume"]}),
-            ),
+            Operation::Hello => {
+                let mut operations = vec![
+                    "hello", "schema", "find", "read", "snapshot", "wait", "watch", "cancel",
+                    "pause", "step", "resume",
+                ];
+                if self.jobs.is_some() {
+                    operations.extend(["capture", "job"]);
+                }
+                Ok(
+                    json!({"protocol":1,"session":&*self.name,"world":"game","state":self.status(),
+                    "operations":operations,"diagnostics":self.jobs.as_ref().map(|j| j.capabilities())}),
+                )
+            }
+            Operation::Capture { request } => {
+                let tick = self.tick();
+                let id = self
+                    .jobs
+                    .as_mut()
+                    .ok_or("UNSUPPORTED")?
+                    .submit(tick, request)?;
+                Ok(
+                    json!({"job":format!("{}/j{id}", self.name),"state":"queued","requested_tick":tick.to_string()}),
+                )
+            }
+            Operation::Job { job } => {
+                let id = self.decode(&job, "j").ok_or("UNKNOWN_JOB")?;
+                Ok(json!(self.jobs.as_ref().ok_or("UNSUPPORTED")?.status(id)?))
+            }
             Operation::Schema { kind: Some(kind) } => {
                 let schema = self
                     .world

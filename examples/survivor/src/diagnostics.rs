@@ -18,6 +18,60 @@ use std::{
 };
 use survivor::{Events, Game, Input, Snapshot};
 
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+pub(super) mod live;
+
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+pub(super) fn save_image(
+    directory: &Path,
+    m: &mut Manifest,
+    stamp: sashiko::inspect::report::FrameStamp,
+    srgb: &[u8],
+) -> Result<()> {
+    png(&directory.join("frame.png"), stamp.extent, srgb)?;
+    m.files.insert("image".into(), "frame.png".into());
+    std::fs::write(
+        directory.join("summary.txt"),
+        format!(
+            "Survivor frame {} from tick {} ({} × {}, {}). Requested at tick {}.\nInputs: replay.json. End-of-tick state and events: ticks.ndjson.\n",
+            stamp.frame,
+            stamp.tick,
+            stamp.extent[0],
+            stamp.extent[1],
+            stamp.stage,
+            m.requested_tick
+        ),
+    )?;
+    m.files.insert("summary".into(), "summary.txt".into());
+    m.frames.push(stamp);
+    Ok(())
+}
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+fn png(path: &Path, extent: [u32; 2], srgb: &[u8]) -> Result<()> {
+    let mut out = BufWriter::new(File::create(path)?);
+    let mut encoder = png::Encoder::new(&mut out, extent[0], extent[1]);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(srgb)?;
+    writer.finish()?;
+    out.flush()?;
+    Ok(())
+}
+
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -41,6 +95,12 @@ impl Tick {
 
 #[derive(Clone)]
 pub(super) struct Evidence {
+    #[cfg(all(
+        windows,
+        feature = "presentation",
+        any(feature = "vulkan", feature = "d3d12")
+    ))]
+    origin: std::time::Instant,
     start: RunStart,
     build: String,
     assets: BTreeMap<String, String>,
@@ -81,12 +141,44 @@ fn initial_assets(start: &RunStart) -> Result<BTreeMap<String, String>> {
 }
 
 impl Evidence {
+    #[cfg(all(
+        windows,
+        feature = "presentation",
+        any(feature = "vulkan", feature = "d3d12")
+    ))]
+    pub(super) fn elapsed_ns(&self) -> Result<u64> {
+        Ok(self.origin.elapsed().as_nanos().try_into()?)
+    }
+    #[cfg(all(
+        windows,
+        feature = "presentation",
+        any(feature = "vulkan", feature = "d3d12")
+    ))]
+    pub(super) fn set_visual(&mut self, visual: survivor::RecordedVisual) -> Result<()> {
+        if self
+            .start
+            .visual
+            .as_ref()
+            .is_some_and(|expected| expected != &visual)
+        {
+            return Err("appearance assets differ from replay".into());
+        }
+        self.start.visual = Some(visual);
+        self.assets = initial_assets(&self.start)?;
+        Ok(())
+    }
     pub(super) fn new(start: &RunStart, workers: NonZeroUsize, limit: usize) -> Result<Self> {
         let mut ticks = Vec::new();
         let mut inputs = Vec::new();
         ticks.try_reserve_exact(limit)?;
         inputs.try_reserve_exact(limit)?;
         Ok(Self {
+            #[cfg(all(
+                windows,
+                feature = "presentation",
+                any(feature = "vulkan", feature = "d3d12")
+            ))]
+            origin: std::time::Instant::now(),
             start: start.clone(),
             build: build_id()?,
             assets: initial_assets(start)?,
@@ -138,10 +230,7 @@ impl Evidence {
         let write = || -> Result<()> {
             let mut tape = BufWriter::new(File::create(directory.join("replay.json"))?);
             // Serialize the existing Replay wire format, including its immutable start.
-            serde_json::to_writer(
-                &mut tape,
-                &Replay::new(&self.start, rate(), self.inputs),
-            )?;
+            serde_json::to_writer(&mut tape, &Replay::new(&self.start, rate(), self.inputs))?;
             tape.flush()?;
             m.files.insert("replay".into(), "replay.json".into());
             let mut out = BufWriter::new(File::create(directory.join("ticks.ndjson"))?);

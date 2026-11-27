@@ -16,6 +16,12 @@ pub(crate) struct Request {
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Operation {
     Hello,
+    Capture {
+        request: crate::jobs::CaptureRequest,
+    },
+    Job {
+        job: String,
+    },
     Schema {
         #[serde(default)]
         kind: Option<String>,

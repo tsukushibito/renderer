@@ -94,6 +94,12 @@ RGBA8 読出し、使用中の枠への要求拒否、resize 後の旧画像取�
 Vulkan core・同期検証、D3D12 Debug Layer・GBV と teardown 診断が通った。これは表示元の
 readback の正しさを対象とした検証で、動画符号化やフレーム時間の測定は含まない。
 
+`tools/diagnostics/check_live_report.py` で Survivor の表示中に NDJSON の pause、step、
+find、capture、read を送り、Vulkan・D3D12 で同じ session/world/job の 320×180 PNG と
+tick 記録を取得した。別プロセスで tick 3 まで再生・一致。D3D12 で二件目の保存先を
+衝突させると失敗理由が返り、元ファイルと以降の step/resume を確認した。
+Vulkan のオフスクリーンでは 320×180 の PNG を採取し、tick 12 まで再生・一致。
+
 Windows x64 の Rust 1.99.0 release で、通常版と検査版の同じ 69 tick の結果、NDJSON の実プロセス、確定時点の投影、低速な読み手、標準入力の EOF を照合した。tick 1 の拒否時に提示した鍵は `garden`、同じ tick の終了時に持つ鍵は `basement`。配列とコンポーネント別ストレージの試験で、個体消滅と保存した投影の寿命を照合した。通常構成の依存木から `sashiko-inspect` が外れ、通常版 EXE は検査オプションを拒否した。診断専用の代表文字列も通常版 EXE に含まれなかった。
 
 Windows Server 2022 と Ubuntu 24.04 の CPU ジョブでも、通常版・検査版のビルドと標準入出力を使う同じ受け入れ試験が通った。追加ステップはそれぞれ 11 秒、7 秒だった。[実プロセス試験を実行した CI](https://github.com/tsukushibito/sashiko/actions/runs/45751885010)

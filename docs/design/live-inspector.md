@@ -137,6 +137,23 @@ cargo run -p survivor --features diagnostics -- --headless --verify-report repor
 範囲に、物理エンジン内部のキャッシュは含めない。開始データの不足・改変を識別し、
 成功時も記録時と再生時の実行ファイルの SHA-256 を返す。
 
+Windows では `cargo run -p survivor --features diagnostics -- --debug-dir reports` で
+プレイし、**F8** で次の描画を保存する。PNG はゲームの HUD を含む。OS のウィンドウ枠は含まない。
+実行時の出力フォルダは標準エラーに表示する。`--inspect-stdio` も指定すると、同じゲームに
+下記の NDJSON を送れる。応答の job 値を `job` 操作に渡すと、待機、GPU 読出し、書込中、
+完了、失敗を識別できる。取得中も `find`、`read`、`watch`、`pause`、`step` が使える。
+
+```json
+{"id":"1","op":"hello"}
+{"id":"2","op":"capture","request":{"action":"report"}}
+{"id":"3","op":"job","job":"<session>/j1"}
+```
+
+報告はセッションと受付 ID ごとの新規ディレクトリに保存する。入力・状態は tick 0 から
+最大 216,000 更新（固定長の計測実行では指定フレーム数）を保持する。枯渇後に終了状態を再生
+できなければ欠落を記録する。画面なしで PNG も生成する場合は `--headless --ticks 120
+--backend vulkan --width 640 --height 360 --record-report report-120` を指定する。
+
 ## 実行中の編集と制作元への保存
 
 実行値は既定で読み取り専用とし、ゲームが編集可能と宣言した項目にだけ変更要求を送れる。たとえば「最大 HP を変更する」には、現在 HP の再計算も含めた操作をゲーム側で定義する。表示用の反射情報は変更権限を与えない。

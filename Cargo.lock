@@ -2454,6 +2454,7 @@ name = "survivor"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "png",
  "sashiko",
  "sashiko-renderer",
  "serde",
