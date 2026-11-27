@@ -441,6 +441,12 @@ impl<'a> PreparedSetup<'a> {
     pub fn runtime_limits(&self, base: RuntimeLimits) -> Result<RuntimeLimits, GraphError> {
         self.preparation.replacement_limits(base)
     }
+    pub(crate) fn owned_runtime_limits(&self) -> Result<RuntimeLimits, GraphError> {
+        self.runtime_limits(RuntimeLimits {
+            frames: self.preparation.frames_in_flight().get(),
+            ..RuntimeLimits::default()
+        })
+    }
     /// Fit engine-supplied backend settings before constructing a headless, windowed or adopted runtime.
     pub fn fit_backend(&self, backend: &mut RuntimeConfig) -> PipelineResult<()> {
         backend.fit_preparation(&self.preparation, self.upload_capacity()?, self.readback)?;
@@ -481,7 +487,7 @@ impl<'a> PreparedSetup<'a> {
         self.fit_backend(&mut backend)?;
         let runtime = Runtime::new(
             backend,
-            self.runtime_limits(RuntimeLimits::default())?,
+            self.owned_runtime_limits()?,
             self.preparation.working_set(),
         )?;
         self.begin_with_runtime(runtime)

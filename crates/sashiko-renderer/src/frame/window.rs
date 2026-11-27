@@ -119,7 +119,7 @@ impl WindowRenderer {
         plan.fit_backend(&mut backend)?;
         let (runtime, presenter) = Runtime::for_window(
             backend,
-            plan.runtime_limits(Default::default())?,
+            plan.owned_runtime_limits()?,
             plan.preparation().working_set(),
             window,
             presentation,
