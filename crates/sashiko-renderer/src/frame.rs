@@ -310,7 +310,8 @@ impl Renderer {
     }
 
     /// Set the 3D render resolution at a change boundary. Overlays and captures
-    /// use the full output size. Pass `None` to follow output resizes again.
+    /// of composed color use the full output size. Scene depth follows the 3D
+    /// render resolution. Pass `None` to follow output resizes again.
     pub fn set_scene_extent(
         &mut self,
         extent: Option<[u32; 2]>,

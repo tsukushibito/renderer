@@ -219,9 +219,15 @@ impl Live {
     ) -> PipelineResult<Self> {
         std::fs::create_dir_all(root)?;
         let encoder = video::probe();
-        if clip_history && encoder.is_none() {
-            return Err("clip history needs a Python FFV1 encoder (SASHIKO_VIDEO_PYTHON)".into());
+        let video_unavailable = encoder
+            .is_none()
+            .then_some("Python/PyAV FFV1 encoder unavailable (SASHIKO_VIDEO_PYTHON)");
+        let clip_unavailable =
+            video_unavailable.or_else(|| (!clip_history).then_some("start with --clip-history"));
+        if clip_history && let Some(reason) = video_unavailable {
+            eprintln!("Survivor clip history: {reason}");
         }
+        let clip_history = clip_unavailable.is_none();
         let mut actions = vec![Action::Report, Action::SetLayers];
         if encoder.is_some() {
             actions.extend([Action::StartVideo, Action::StopVideo]);
@@ -232,6 +238,8 @@ impl Live {
         let origin = evidence.origin;
         evidence.performance = Some(super::performance::Log::new(origin));
         let capabilities = Capabilities {
+            video_unavailable,
+            clip_unavailable,
             actions,
             views: vec!["main".into()],
             stages: vec!["final_srgb_ui".into(), "scene_depth_d32".into()],
@@ -393,9 +401,7 @@ impl Live {
             self.session.set_paused(false);
         }
         let tick = self.game().tick;
-        if self.capture.is_none() {
-            self.finish_clip(false)?;
-        }
+        self.finish_clip(false)?;
         if let Some((t, ns)) = self.session.world_mut().damage_trigger.take() {
             self.enqueue_trigger(Trigger::Gameplay, t, ns);
         }
@@ -533,9 +539,14 @@ impl Live {
         );
     }
     pub fn frame_time_trigger(&mut self) {
-        self.trigger_now(Trigger::FrameTime);
+        if self.history.is_some() {
+            self.trigger_now(Trigger::FrameTime);
+        }
     }
     fn finish_clip(&mut self, closing: bool) -> PipelineResult<()> {
+        if self.capture.is_some() && !closing {
+            return Ok(());
+        }
         if let Some(history) = &mut self.history {
             history.finish_due(
                 self.origin.elapsed().as_nanos().try_into()?,

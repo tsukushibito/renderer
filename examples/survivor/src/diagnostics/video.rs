@@ -294,6 +294,9 @@ impl Video {
         });
     }
     pub fn accept(&mut self, sample: Sample, pixels: Option<&[u8]>) {
+        if sample.ns < self.start_ns {
+            return;
+        }
         let pts = self.pts(sample.ns);
         if pts < self.next_pts {
             return;

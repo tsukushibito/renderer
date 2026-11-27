@@ -1,4 +1,5 @@
 """Exercise the real Survivor window, NDJSON client and offline report reader."""
+
 import argparse
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ import time
 def window_action(process_id, close=False):
     import ctypes
     from ctypes import wintypes
+
     user = ctypes.windll.user32
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     found = []
@@ -58,30 +60,32 @@ def check_layers(request, original, video):
     decorated = image(overlay)
     assert not np.array_equal(image(original)[:30, :70], decorated[:30, :70]), "HUD still visible"
     assert np.any(np.all(decorated == [0, 255, 0], axis=2)), "collision outline missing"
-    stamp, = json.loads((overlay / "manifest.json").read_bytes())["frames"]
+    (stamp,) = json.loads((overlay / "manifest.json").read_bytes())["frames"]
     assert stamp["layers"] == layers and stamp["stage"] == "final_srgb"
     depth = capture("report", stage="scene_depth_d32")
     manifest = json.loads((depth / "manifest.json").read_bytes())
-    sample, = manifest["frames"]
+    (sample,) = manifest["frames"]
     assert (sample["tick"], sample["stage"]) == (stamp["tick"], "scene_depth_d32")
     raw = np.fromfile(depth / manifest["files"]["depth"], dtype="<f4").reshape(decorated.shape[:2])
     assert 0 <= raw.min() < raw.max() <= 1 and np.isfinite(raw).all()
-    assert np.abs(image(depth)[:,:,0].astype(float) - raw * 255).max() <= 0.501
+    assert np.abs(image(depth)[:, :, 0].astype(float) - raw * 255).max() <= 0.501
     if video:
         import av
+
         capture("start_video", extent=stamp["extent"], fps=10)
         time.sleep(1.0)
         clip = capture("stop_video", ("partial", "complete"))
         with av.open(str(clip / "video.mkv")) as movie:
             frame = next(movie.decode(video=0)).to_ndarray(format="rgb24")
         assert np.array_equal(frame, decorated), "recorded view differs from the same paused PNG"
-    capture("set_layers", ("applied",), layers={"hud":True})
+    capture("set_layers", ("applied",), layers={"hud": True})
     restored = capture("report")
     assert np.array_equal(image(restored), image(original)), "paused view did not restore"
 
 
 def check_history(request, executable, directory, session):
     import av
+
     def wait(job, states):
         deadline = time.monotonic() + 30
         while True:
@@ -89,47 +93,50 @@ def check_history(request, executable, directory, session):
             if status["state"] in states:
                 return status
             assert status["state"] in ("running", "queued") and time.monotonic() < deadline, status
-            time.sleep(.025)
+            time.sleep(0.025)
 
     # Normal drawing continues at a fixed simulation tick until a manual step.
     time.sleep(5.25)
-    primary = request("capture", request={"action":"clip"})
+    primary = request("capture", request={"action": "clip"})
     request("step")
-    other = request("capture", request={"action":"clip", "trigger":"test_failure"})
+    other = request("capture", request={"action": "clip", "trigger": "test_failure"})
     assert wait(other["job"], ["linked"])["job"] == primary["job"]
-    next_id = int(other["job"].rsplit("/j",1)[1]) + 1
+    next_id = int(other["job"].rsplit("/j", 1)[1]) + 1
     (directory / f"{session}-{next_id}").write_text("existing", encoding="utf8")
-    broken = request("capture", request={"action":"report"})
+    broken = request("capture", request={"action": "report"})
     assert wait(broken["job"], ["failed"])["reason"]
     request("step")
     done = wait(primary["job"], ["partial", "complete"])
     clip = Path(done["artifact"])
     m = json.loads((clip / "manifest.json").read_bytes())
-    marks = {t["cause"]:t for t in m["settings"]["clip"]["triggers"]}
+    marks = {t["cause"]: t for t in m["settings"]["clip"]["triggers"]}
     assert set(marks) >= {"manual", "test_failure", "warning"}, marks
-    assert (m["settings"]["clip"]["pre_ms"],m["settings"]["clip"]["post_ms"]) == (5000,2000)
+    assert (m["settings"]["clip"]["pre_ms"], m["settings"]["clip"]["post_ms"]) == (5000, 2000)
     rows = [json.loads(line) for line in (clip / m["files"]["frame_map"]).read_bytes().splitlines()]
-    ticks = {v["snapshot"]["tick"] for v in map(json.loads, (clip / m["files"]["ticks"]).read_bytes().splitlines())}
+    ticks = {
+        v["snapshot"]["tick"]
+        for v in map(json.loads, (clip / m["files"]["ticks"]).read_bytes().splitlines())
+    }
     covered = {int(r["pts"]) for r in rows}
     assert len(covered) == len(rows) and all(int(r["frame"]["tick"]) in ticks for r in rows)
     assert min(covered) <= 2 and max(covered) >= 68, covered
     assert int(rows[0]["frame"]["tick"]) < int(rows[-1]["frame"]["tick"])
     for g in m["gaps"]:
         if g["unit"] == "clip_sample":
-            missing = set(range(int(g["first"]),int(g["last"])+1))
+            missing = set(range(int(g["first"]), int(g["last"]) + 1))
             assert missing.isdisjoint(covered)
             covered |= missing
     assert covered == set(range(71))
     with av.open(str(clip / m["files"]["video"])) as movie:
         frames = list(movie.decode(video=0))
         assert len(frames) == len(rows)
-        for f,r in zip(frames,rows):
-            assert abs(float(f.time) - int(r["pts"])/10) < .0011
-    subprocess.run([str(executable),"--headless","--verify-report",str(clip)], check=True)
+        for f, r in zip(frames, rows):
+            assert abs(float(f.time) - int(r["pts"]) / 10) < 0.0011
+    subprocess.run([str(executable), "--headless", "--verify-report", str(clip)], check=True)
     print(clip, flush=True)
-    closing = request("capture", request={"action":"clip","trigger":"test_failure"})
+    closing = request("capture", request={"action": "clip", "trigger": "test_failure"})
     assert wait(closing["job"], ["running"])["phase"] == "post_trigger"
-    return directory / (session + "-" + closing["job"].rsplit("/j",1)[1])
+    return directory / (session + "-" + closing["job"].rsplit("/j", 1)[1])
 
 
 def performance_report(request):
@@ -137,43 +144,76 @@ def performance_report(request):
         deadline = time.monotonic() + 60
         while int(request("hello")["displayed"]["frame"] or 0) < frame:
             assert time.monotonic() < deadline
-            time.sleep(.03)
+            time.sleep(0.03)
 
     def wait(job, expected):
-        deadline = time.monotonic()+60
+        deadline = time.monotonic() + 60
         while True:
-            s = request("job",job=job)
+            s = request("job", job=job)
             if s["state"] in expected or s.get("phase") in expected:
                 return s
-            assert s["state"] in ("queued","running") and time.monotonic()<deadline,s
-            time.sleep(.02)
+            assert s["state"] in ("queued", "running") and time.monotonic() < deadline, s
+            time.sleep(0.02)
 
     reach(10)
-    start = request("capture", request={"action":"start_video","extent":[160,90],"fps":10})
-    wait(start["job"],["recording"])
+    start = request("capture", request={"action": "start_video", "extent": [160, 90], "fps": 10})
+    wait(start["job"], ["recording"])
     reach(55)
-    job = request("capture", request={"action":"report"})
-    report = Path(wait(job["job"],["complete"])["artifact"])
-    stop = request("capture", request={"action":"stop_video"})
-    wait(stop["job"],["complete","partial"])
+    job = request("capture", request={"action": "report"})
+    report = Path(wait(job["job"], ["complete"])["artifact"])
+    stop = request("capture", request={"action": "stop_video"})
+    wait(stop["job"], ["complete", "partial"])
     return report
 
 
-def check(executable, backend, directory, video=False, layers=False, history=False, performance=False, tracy=None):
+def check(
+    executable,
+    backend,
+    directory,
+    video=False,
+    layers=False,
+    history=False,
+    performance=False,
+    tracy=None,
+):
     directory.mkdir(parents=True, exist_ok=False)
     config = directory / "settings.json"
     config.write_text('{"jobs":{"parallelism":2}}', encoding="utf-8")
-    command = [str(executable), "--backend", backend, "--debug-dir", str(directory),
-               "--inspect-stdio", "--width", "320", "--height", "180",
-               "--config", str(config), "--user-dir",str(directory/"test-profile")]
+    command = [
+        str(executable),
+        "--backend",
+        backend,
+        "--debug-dir",
+        str(directory),
+        "--inspect-stdio",
+        "--width",
+        "320",
+        "--height",
+        "180",
+        "--config",
+        str(config),
+        "--user-dir",
+        str(directory / "test-profile"),
+    ]
     if history:
         command.append("--clip-history")
     elif performance:
-        command.extend(["--frames","120","--metrics",str(directory/"native.csv"),"--gpu-profile","--debug-stall-at","40"])
+        command.extend(
+            [
+                "--frames",
+                "120",
+                "--metrics",
+                str(directory / "native.csv"),
+                "--gpu-profile",
+                "--debug-stall-at",
+                "40",
+            ]
+        )
     else:
         command.extend(["--frames", "500" if layers else "200"])
-    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                          encoding="utf-8", cwd=directory) as game:
+    with subprocess.Popen(
+        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, encoding="utf-8", cwd=directory
+    ) as game:
         messages = queue.Queue()
 
         def receive():
@@ -204,7 +244,10 @@ def check(executable, backend, directory, video=False, layers=False, history=Fal
             if performance:
                 if tracy:
                     trace = directory / (hello["session"] + ".tracy")
-                    collector = subprocess.Popen([str(tracy),"-a","127.0.0.1","-p","8086","-o",str(trace)],stdout=subprocess.DEVNULL)
+                    collector = subprocess.Popen(
+                        [str(tracy), "-a", "127.0.0.1", "-p", "8086", "-o", str(trace)],
+                        stdout=subprocess.DEVNULL,
+                    )
                 profiled = performance_report(request)
                 return
             request("pause")
@@ -216,8 +259,11 @@ def check(executable, backend, directory, video=False, layers=False, history=Fal
             player = request("find", kind="Player")["objects"][0]
             subject = player["id"]
             center = player["display_center"]
-            pointer = {"view": "main", "viewport": [15, 20, 640, 360],
-                       "point": [15 + center[0] * 640, 20 + center[1] * 360]}
+            pointer = {
+                "view": "main",
+                "viewport": [15, 20, 640, 360],
+                "point": [15 + center[0] * 640, 20 + center[1] * 360],
+            }
             assert request("pick", pointer=pointer)["object"] == subject
             assert request("selected")["object"] == subject
             pointer["point"] = [15, 20]
@@ -235,14 +281,23 @@ def check(executable, backend, directory, video=False, layers=False, history=Fal
             report = Path(job["artifact"])
             manifest = json.loads((report / "manifest.json").read_bytes())
             assert (manifest["session"], manifest["world"], manifest["job"]) == (
-                hello["session"], hello["world"], requested["job"])
+                hello["session"],
+                hello["world"],
+                requested["job"],
+            )
             assert manifest["requested_tick"] == requested["requested_tick"]
-            frame, = manifest["frames"]
+            (frame,) = manifest["frames"]
             assert frame["tick"] == requested["requested_tick"] and frame["extent"] == [320, 180]
             png = (report / manifest["files"]["image"]).read_bytes()
-            assert png[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">II", png[16:24]) == (320, 180)
-            subprocess.run([str(executable), "--headless", "--verify-report", str(report)],
-                           check=True, timeout=120)
+            assert png[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">II", png[16:24]) == (
+                320,
+                180,
+            )
+            subprocess.run(
+                [str(executable), "--headless", "--verify-report", str(report)],
+                check=True,
+                timeout=120,
+            )
             # Occupy the next report name. A failed writer must leave it intact,
             # publish the job error, and keep the simulation responsive.
             collision = directory / (hello["session"] + "-2")
@@ -254,7 +309,9 @@ def check(executable, backend, directory, video=False, layers=False, history=Fal
                 if status["state"] == "failed":
                     assert status["reason"]
                     break
-                assert status["state"] in ("queued", "running") and time.monotonic() < deadline, status
+                assert (
+                    status["state"] in ("queued", "running") and time.monotonic() < deadline
+                ), status
             assert collision.read_bytes() == b"existing file"
             if layers:
                 assert "scene_depth_d32" in hello["diagnostics"]["stages"]
@@ -263,8 +320,11 @@ def check(executable, backend, directory, video=False, layers=False, history=Fal
             request("resume")
             if video:
                 import av
+
                 assert "start_video" in hello["diagnostics"]["actions"], hello
-                start = request("capture", request={"action": "start_video", "extent": [160, 90], "fps": 15})
+                start = request(
+                    "capture", request={"action": "start_video", "extent": [160, 90], "fps": 15}
+                )
                 deadline = time.monotonic() + 20
                 while request("job", job=start["job"]).get("phase") != "recording":
                     assert time.monotonic() < deadline
@@ -281,10 +341,15 @@ def check(executable, backend, directory, video=False, layers=False, history=Fal
                     done = request("job", job=stop["job"])
                     if done["state"] in ("complete", "partial"):
                         break
-                    assert done["state"] in ("queued", "running") and time.monotonic() < deadline, done
+                    assert (
+                        done["state"] in ("queued", "running") and time.monotonic() < deadline
+                    ), done
                 clip = Path(done["artifact"])
                 index = json.loads((clip / "manifest.json").read_bytes())
-                rows = [json.loads(line) for line in (clip / index["files"]["frame_map"]).read_bytes().splitlines()]
+                rows = [
+                    json.loads(line)
+                    for line in (clip / index["files"]["frame_map"]).read_bytes().splitlines()
+                ]
                 assert len({tuple(row["frame"]["extent"]) for row in rows}) >= 2, rows
                 with av.open(str(clip / index["files"]["video"])) as movie:
                     assert not movie.streams.audio
@@ -297,7 +362,9 @@ def check(executable, backend, directory, video=False, layers=False, history=Fal
                 next_id = int(stop["job"].rsplit("/j", 1)[1]) + 1
                 collision = directory / (hello["session"] + "-" + str(next_id))
                 collision.write_bytes(b"retain")
-                failed = request("capture", request={"action": "start_video", "extent": [160, 90], "fps": 15})
+                failed = request(
+                    "capture", request={"action": "start_video", "extent": [160, 90], "fps": 15}
+                )
                 deadline = time.monotonic() + 15
                 while True:
                     status = request("job", job=failed["job"])
@@ -321,27 +388,44 @@ def check(executable, backend, directory, video=False, layers=False, history=Fal
                 raise subprocess.CalledProcessError(game.returncode, command)
             if closing_clip is not None:
                 m = json.loads((closing_clip / "manifest.json").read_bytes())
-                assert m["outcome"]["state"] == "partial" and any(g["reason"]=="shutdown" for g in m["gaps"]), m
+                assert m["outcome"]["state"] == "partial" and any(
+                    g["reason"] == "shutdown" for g in m["gaps"]
+                ), m
             if collector is not None:
                 if collector.wait(timeout=60):
                     raise RuntimeError("Tracy collector failed")
-                markers = subprocess.check_output([str(tracy.with_name("tracy-csvexport.exe")),"-m",str(trace)])
-                assert (hello["session"]+" frame 40 ").encode() in markers
+                markers = subprocess.check_output(
+                    [str(tracy.with_name("tracy-csvexport.exe")), "-m", str(trace)]
+                )
+                assert (hello["session"] + " frame 40 ").encode() in markers
             if profiled:
                 from timeline import Report
+
                 saved = Report(profiled)
                 stalled = saved.at(frame=40)["performance"]
-                assert stalled["draw_ns"] >= 90_000_000 and stalled["interval_ns"] >= 90_000_000, stalled
-                assert stalled["clock"]["frequency_hz"] > 0 and stalled["memory"]["process"]["working_set_bytes"] > 0
+                assert (
+                    stalled["draw_ns"] >= 90_000_000 and stalled["interval_ns"] >= 90_000_000
+                ), stalled
+                assert (
+                    stalled["clock"]["frequency_hz"] > 0
+                    and stalled["memory"]["process"]["working_set_bytes"] > 0
+                )
                 assert float(stalled["native"]["graph_gpu_ms"]) >= 0
                 trace_events = json.loads(saved.path("cpu_trace").read_bytes())["traceEvents"]
-                assert any(e.get("args",{}).get("frame")==40 for e in trace_events)
+                assert any(e.get("args", {}).get("frame") == 40 for e in trace_events)
                 import statistics
-                for recording in (False,True):
-                    times=[r["interval_ns"]/1e6 for r in saved.performance.values()
-                           if r["recording"]==recording and r["frame"] not in (0,40)]
-                    print(f"recording={recording} samples={len(times)} median_ms={statistics.median(times):.3f}",flush=True)
-                print(profiled,flush=True)
+
+                for recording in (False, True):
+                    times = [
+                        r["interval_ns"] / 1e6
+                        for r in saved.performance.values()
+                        if r["recording"] == recording and r["frame"] not in (0, 40)
+                    ]
+                    print(
+                        f"recording={recording} samples={len(times)} median_ms={statistics.median(times):.3f}",
+                        flush=True,
+                    )
+                print(profiled, flush=True)
         if game.returncode:
             raise subprocess.CalledProcessError(game.returncode, command)
 
@@ -357,5 +441,13 @@ if __name__ == "__main__":
     parser.add_argument("--performance", action="store_true")
     parser.add_argument("--tracy-capture", type=Path)
     args = parser.parse_args()
-    check(args.survivor.resolve(), args.backend, args.output.resolve(), args.video, args.layers, args.history,
-          args.performance, args.tracy_capture.resolve() if args.tracy_capture else None)
+    check(
+        args.survivor.resolve(),
+        args.backend,
+        args.output.resolve(),
+        args.video,
+        args.layers,
+        args.history,
+        args.performance,
+        args.tracy_capture.resolve() if args.tracy_capture else None,
+    )

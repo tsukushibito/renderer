@@ -81,7 +81,7 @@ impl History {
     pub fn due(&self, ns: u64) -> bool {
         let bucket = ns / PERIOD;
         self.slots[(bucket % COUNT as u64) as usize]
-            .is_none_or(|(s, valid)| s.ns / PERIOD != bucket || !valid)
+            .is_none_or(|(s, valid)| s.ns / PERIOD < bucket || s.ns / PERIOD == bucket && !valid)
     }
     pub fn accept(&mut self, sample: Sample, rgba: Option<&[u8]>) {
         if !self.due(sample.ns) || self.active.as_ref().is_some_and(|w| sample.ns > w.end()) {

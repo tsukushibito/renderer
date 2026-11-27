@@ -61,6 +61,84 @@ impl ApplicationHandler for Host {
 const WAIT: Duration = Duration::from_secs(20);
 
 #[test]
+#[ignore = "requires native GPUs for the configured backends"]
+fn film_and_scaled_scene_depth_keep_their_native_readback_layouts() -> PipelineResult<()> {
+    for backend in [
+        #[cfg(feature = "vulkan")]
+        RuntimeConfig::Vulkan(Default::default()),
+        #[cfg(feature = "d3d12")]
+        RuntimeConfig::D3D12(Default::default()),
+    ] {
+        let extent = [32, 16];
+        let camera = CameraView {
+            id: ViewId(1),
+            extent,
+            camera: ViewInput::new(
+                IDENTITY,
+                [0., 0., -1.],
+                [0., 0., 1.],
+                [1., 2.],
+                Projection::Orthographic,
+            )?,
+        };
+        let mut meshes = Meshes::new(MeshCapacity {
+            meshes: 1,
+            retired_mesh_versions: 1,
+        })?;
+        let mut materials = Materials::default();
+        let mut config = StandardConfig::new(extent);
+        config.film_output = true;
+        let mut renderer = sashiko_renderer::Renderer::headless_configured(
+            backend,
+            camera,
+            config,
+            SceneAssets::new(&mut meshes, &mut materials, &[]),
+            NonZeroUsize::MIN,
+            |_| Ok(()),
+        )?;
+        for scene in [[12, 8], [128, 80]] {
+            renderer.set_scene_extent(
+                Some(scene),
+                SceneAssets::new(&mut meshes, &mut materials, &[]),
+            )?;
+            let mut f = renderer.begin_frame()?;
+            f.draw_scene(SceneInput::new(&meshes, &materials, &[]), 1.)?;
+            let depth = f.capture_depth()?;
+            assert_eq!(depth.extent(), scene);
+            let mut values = vec![0; (scene[0] * scene[1] * 4) as usize];
+            assert!(renderer.read_capture(&depth, &mut values, WAIT)?);
+            assert!(
+                values
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|v| f32::from_le_bytes(*v) == 1.)
+            );
+            let mut f = renderer.begin_frame()?;
+            f.draw_overlay(&[Layer {
+                rect: RasterRect::new(0, 0, extent[0], extent[1]),
+                clip: None,
+                paint: Paint::Color([2., 0., 0., 1.]),
+            }])?;
+            let film = f.capture_linear()?;
+            assert_eq!(film.extent(), extent);
+            let mut linear = vec![0; (extent[0] * extent[1] * 8) as usize];
+            assert!(renderer.read_capture(&film, &mut linear, WAIT)?);
+            // Binary16 encodes 2.0 as 0x4000 and 1.0 as 0x3c00.
+            assert!(
+                linear
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .all(|v| v == &[0, 64, 0, 0, 0, 0, 0, 60])
+            );
+        }
+        validation::check_validation(renderer.into_runtime()?)?;
+    }
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires a Windows desktop and the selected native GPUs"]
 fn captured_presenter_input_survives_resize_and_slot_pressure() -> PipelineResult<()> {
     let mut events = EventLoop::builder().with_any_thread(true).build()?;
@@ -99,7 +177,7 @@ fn captured_presenter_input_survives_resize_and_slot_pressure() -> PipelineResul
             config.samples = samples;
             let mut r = WindowRenderer::new_configured(
                 window.clone(),
-                backend.clone(),
+                backend,
                 camera,
                 config,
                 SceneAssets::new(&mut meshes, &mut materials, &[]),

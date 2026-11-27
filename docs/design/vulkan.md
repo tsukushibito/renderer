@@ -734,6 +734,11 @@ readback と表示へ渡す。Graph の転送・host read の依存、既存の 
 で、sRGB ファイルへの変換は消費側が行う。結果を取得するまで次の採取枠は空かず、通常描画は
 継続できる。resize は旧寸法の未読結果を保持する。終了時は表示と Graph の完了後に解放する。
 
+オフスクリーンでは、表示色（RGBA8）、単一サンプルのシーン深度（D32）、
+線形フィルム（設定時の RGBA16F）で寸法と texel サイズが異なる。準備時に採取可能な
+各面の転送サイズを比較し、最大の領域を予約する。結果は採取元の寸法を保持する。
+深度にはシーンの解像度を使い、フィルムは出力解像度で1を超える値も保存する。
+
 設定・outcomeと利用手順は[二API共通の表示契約](rendergraph.md#windows-presentation)に従う。
 `PresentationConfig`／`PresentOutcome`はVulkan内部の型ではなく、`crate::presentation`に置く。
 backend選択のためにGraph、camera、入力処理を分岐させない。

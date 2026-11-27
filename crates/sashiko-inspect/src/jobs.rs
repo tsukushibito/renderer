@@ -88,6 +88,8 @@ pub struct Capabilities {
     pub stages: Vec<String>,
     pub layers: Vec<String>,
     pub depth_limit: Option<&'static str>,
+    pub video_unavailable: Option<&'static str>,
+    pub clip_unavailable: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -244,6 +246,8 @@ mod tests {
                 stages: vec![final_color()],
                 layers: vec![],
                 depth_limit: None,
+                video_unavailable: None,
+                clip_unavailable: None,
             },
             NonZeroUsize::MIN,
         );

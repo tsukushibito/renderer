@@ -434,6 +434,9 @@ jobs:
       - name: Check the memory-profiling feature with both backends
         if: matrix.backend == 'vulkan,d3d12,presentation'
         run: cargo clippy --locked --workspace --all-targets --no-default-features --features vulkan,d3d12,presentation,memory-profiling -- -D warnings
+      - name: Exercise capture history and backpressure without a desktop
+        if: matrix.backend == 'vulkan,d3d12,presentation'
+        run: cargo test --locked -p survivor --no-default-features --features vulkan,d3d12,presentation,diagnostics --bin survivor -- diagnostics::
       - name: Check independent diagnostic features
         if: matrix.backend != 'vulkan,d3d12,presentation' && (matrix.backend == 'vulkan' || contains(matrix.backend, 'd3d12'))
         shell: pwsh

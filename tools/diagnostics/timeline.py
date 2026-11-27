@@ -1,4 +1,5 @@
 """Browse a Sashiko report or run a game with an interactive live inspector."""
+
 import argparse
 import csv
 import json
@@ -19,9 +20,21 @@ class Report:
             for row in self.rows("frame_map"):
                 frame = dict(row["frame"], index=row["index"], pts=row["pts"])
                 self.frames[int(frame["frame"])] = frame
-        self.ticks = {int(t["snapshot"]["tick"]): t for t in self.rows("ticks")} if "ticks" in self.manifest["files"] else {}
-        self.inputs = json.loads(self.path("replay").read_bytes())["inputs"] if "replay" in self.manifest["files"] else []
-        self.performance = {r["frame"]: r for r in self.rows("performance")} if "performance" in self.manifest["files"] else {}
+        self.ticks = (
+            {int(t["snapshot"]["tick"]): t for t in self.rows("ticks")}
+            if "ticks" in self.manifest["files"]
+            else {}
+        )
+        self.inputs = (
+            json.loads(self.path("replay").read_bytes())["inputs"]
+            if "replay" in self.manifest["files"]
+            else []
+        )
+        self.performance = (
+            {r["frame"]: r for r in self.rows("performance")}
+            if "performance" in self.manifest["files"]
+            else {}
+        )
         self.native = {}
         session = self.manifest["session"]
         if Path(session).name == session:
@@ -31,7 +44,9 @@ class Report:
                 if native["session"] != session or native["file"] != session + ".native.csv":
                     raise ValueError("native metrics session mismatch")
                 with (index.parent / native["file"]).open(encoding="utf-8", newline="") as source:
-                    self.native = {int(row["frame"]) + native["warmup"]:row for row in csv.DictReader(source)}
+                    self.native = {
+                        int(row["frame"]) + native["warmup"]: row for row in csv.DictReader(source)
+                    }
 
     def path(self, role):
         path = (self.root / self.manifest["files"][role]).resolve()
@@ -53,10 +68,16 @@ class Report:
                 tick = int(self.frames[frame]["tick"])
         row = self.ticks.get(tick)
         frames = [f for f in self.frames.values() if int(f["tick"]) == tick]
-        detail = {"session": self.manifest["session"], "world": self.manifest["world"],
-                  "tick": tick, "frames": frames, "outcome": self.manifest["outcome"],
-                  "media": {role: str(self.path(role)) for role in ("video",)
-                            if role in self.manifest["files"]}}
+        detail = {
+            "session": self.manifest["session"],
+            "world": self.manifest["world"],
+            "tick": tick,
+            "frames": frames,
+            "outcome": self.manifest["outcome"],
+            "media": {
+                role: str(self.path(role)) for role in ("video",) if role in self.manifest["files"]
+            },
+        }
         for f in frames:
             if frame is not None and int(f["frame"]) != frame:
                 continue
@@ -68,14 +89,23 @@ class Report:
         if frame in self.performance:
             sample = self.performance[frame]
             settings = self.manifest["settings"]["performance"]
-            detail["performance"] = dict(sample, cpu_trace=str(self.path("cpu_trace")),
+            detail["performance"] = dict(
+                sample,
+                cpu_trace=str(self.path("cpu_trace")),
                 tracy_marker=f"{self.manifest['session']} frame {frame} tick {tick}",
-                clock=settings["clock"], native=self.native.get(sample["presentation"]),
-                memory=next((m for m in reversed(settings["memory_samples"]) if m["frame"] <= frame), None))
+                clock=settings["clock"],
+                native=self.native.get(sample["presentation"]),
+                memory=next(
+                    (m for m in reversed(settings["memory_samples"]) if m["frame"] <= frame), None
+                ),
+            )
             session = self.manifest["session"]
-            if Path(session).name == session and (trace := self.root.parent / (session + ".tracy")).is_file():
+            if (
+                Path(session).name == session
+                and (trace := self.root.parent / (session + ".tracy")).is_file()
+            ):
                 detail["performance"]["tracy"] = str(trace)
-        if self.manifest["world"]=="bistro" and frames:
+        if self.manifest["world"] == "bistro" and frames:
             return dict(detail, status="recorded_view", source=self.manifest["settings"]["source"])
         if row is None:
             return dict(detail, status="NOT_CAPTURED", gaps=self.manifest["gaps"])
@@ -88,11 +118,21 @@ class Report:
         if damage := events.get("damage"):
             objects["actor"] = prefix + str(player + 1 + damage["enemy"])
             decision = damage
-            actor_end = ({"position": row["actor_position"]} if "actor_position" in row
-                         else {"status": "OBJECT_GONE"})
-        return dict(detail, input=self.inputs[tick - 1] if 0 < tick <= len(self.inputs) else None,
-                    events=events, decision=decision, objects=objects, phase="end_of_tick",
-                    snapshot=row["snapshot"], actor_at_end=actor_end)
+            actor_end = (
+                {"position": row["actor_position"]}
+                if "actor_position" in row
+                else {"status": "OBJECT_GONE"}
+            )
+        return dict(
+            detail,
+            input=self.inputs[tick - 1] if 0 < tick <= len(self.inputs) else None,
+            events=events,
+            decision=decision,
+            objects=objects,
+            phase="end_of_tick",
+            snapshot=row["snapshot"],
+            actor_at_end=actor_end,
+        )
 
     def overview(self):
         frames = {}
@@ -100,9 +140,12 @@ class Report:
             frames.setdefault(int(frame["tick"]), []).append(frame["frame"])
         for tick in sorted(self.ticks.keys() | frames.keys()):
             events = self.ticks.get(tick, {}).get("events", {})
-            yield {"tick": tick, "frames": frames.get(tick, []),
-                   "input": self.inputs[tick - 1] if 0 < tick <= len(self.inputs) else None,
-                   "events": {k: v for k, v in events.items() if v}}
+            yield {
+                "tick": tick,
+                "frames": frames.get(tick, []),
+                "input": self.inputs[tick - 1] if 0 < tick <= len(self.inputs) else None,
+                "events": {k: v for k, v in events.items() if v},
+            }
 
 
 def emit(value):
@@ -115,8 +158,10 @@ def interactive(command):
     world = None
     selected = None
     report = None
-    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                          encoding="utf-8") as game:
+    with subprocess.Popen(
+        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, encoding="utf-8"
+    ) as game:
+
         def read():
             nonlocal session, world
             for line in game.stdout:
@@ -134,7 +179,10 @@ def interactive(command):
             game.stdin.flush()
 
         send({"id": "hello", "op": "hello"})
-        print("open DIR | frame N | tick N | find | read [actor|subject] | wait | watch | pause | step | resume | JSON", file=sys.stderr)
+        print(
+            "open DIR | frame N | tick N | find | read [actor|subject] | wait | watch | pause | step | resume | JSON",
+            file=sys.stderr,
+        )
         try:
             for seq, line in enumerate(sys.stdin, 1):
                 try:
@@ -153,7 +201,10 @@ def interactive(command):
                     elif verb in ("find", "read", "wait", "watch", "pause", "step", "resume"):
                         request = {"id": str(seq), "op": verb}
                         if verb in ("read", "wait", "watch"):
-                            if not selected or (selected["session"], selected["world"]) != (session, world):
+                            if not selected or (selected["session"], selected["world"]) != (
+                                session,
+                                world,
+                            ):
                                 raise ValueError("select a frame from this live session and world")
                             role = arg or "subject"
                             request["object"] = selected["objects"][role]
@@ -171,7 +222,10 @@ def interactive(command):
                     emit({"error": str(error)})
         finally:
             game.stdin.close()
-            print("Inspector disconnected. Close the game window to finish pending reports.", file=sys.stderr)
+            print(
+                "Inspector disconnected. Close the game window to finish pending reports.",
+                file=sys.stderr,
+            )
             game.wait()
             reader.join(timeout=2)
 
@@ -184,7 +238,11 @@ def main():
     target = saved.add_mutually_exclusive_group()
     target.add_argument("--tick", type=int)
     target.add_argument("--frame", type=int)
-    target.add_argument("--slowest", action="store_true", help="Show the slowest recorded presentation with CPU and native data")
+    target.add_argument(
+        "--slowest",
+        action="store_true",
+        help="Show the slowest recorded presentation with CPU and native data",
+    )
     live = sub.add_parser("live")
     live.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -198,12 +256,21 @@ def main():
         if args.slowest:
             if not report.performance:
                 parser.error("report has no presented frame timings")
-            emit(report.at(frame=max(report.performance.values(), key=lambda r:r["interval_ns"])["frame"]))
+            emit(
+                report.at(
+                    frame=max(report.performance.values(), key=lambda r: r["interval_ns"])["frame"]
+                )
+            )
         elif args.frame is not None or args.tick is not None:
             emit(report.at(frame=args.frame, tick=args.tick))
         else:
-            emit({"session": report.manifest["session"], "outcome": report.manifest["outcome"],
-                  "gaps": report.manifest["gaps"]})
+            emit(
+                {
+                    "session": report.manifest["session"],
+                    "outcome": report.manifest["outcome"],
+                    "gaps": report.manifest["gaps"],
+                }
+            )
             for row in report.overview():
                 emit(row)
 
