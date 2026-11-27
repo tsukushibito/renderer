@@ -323,7 +323,9 @@ fn check_requests(mut config: RuntimeConfig) {
             let mut bytes = [0u8; 3 * 16];
             frame.readback_into(dirty, &mut bytes).unwrap();
             let flags: Vec<_> = bytes
-                .chunks_exact(16)
+                .as_chunks::<16>()
+                .0
+                .iter()
                 .map(|slot| u32::from_le_bytes(slot[12..].try_into().unwrap()))
                 .collect();
             assert_eq!(flags, [1, 1, 0]);
