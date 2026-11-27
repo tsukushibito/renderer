@@ -2,6 +2,8 @@
 //! with the software path; the native resources are private to one synchronous bake.
 #![allow(unsafe_code)]
 mod device;
+#[cfg(feature = "film")]
+pub(crate) mod film;
 mod geometry;
 use crate::{BakeScene, Lighting, SurfaceSample, Vec3};
 use ash::vk;
@@ -35,7 +37,12 @@ impl Drop for Pipeline {
     }
 }
 impl Pipeline {
-    fn new(dev: &Arc<Device>, buffers: [&Buffer; 3], tlas: &Acceleration) -> Result<Self> {
+    fn new(
+        dev: &Arc<Device>,
+        buffers: [&Buffer; 3],
+        tlas: &Acceleration,
+        shader: &'static [u8],
+    ) -> Result<Self> {
         let mut p = Self {
             dev: dev.clone(),
             pipeline: vk::Pipeline::null(),
@@ -121,8 +128,7 @@ impl Pipeline {
                     .push_next(&mut as_info),
             );
             d.update_descriptor_sets(&writes, &[]);
-            let bytes = include_bytes!("../shaders/bake_surface_rt.comp.spv");
-            let words: Vec<_> = bytes
+            let words: Vec<_> = shader
                 .as_chunks::<4>()
                 .0
                 .iter()
@@ -186,7 +192,7 @@ impl<const N: usize> Transport<N> {
         );
         let dev = Device::new(runtime.external_device())?;
         drop(runtime);
-        let Some(alignment) = geometry::scratch_alignment(&dev, scene.triangles.len()) else {
+        let Some(alignment) = geometry::scratch_alignment(&dev, scene.triangles.len(), 2, 1) else {
             return Ok(None);
         };
         let mut commands = Commands::new(&dev)?;
@@ -256,7 +262,12 @@ impl<const N: usize> Transport<N> {
             Usage::STORAGE_BUFFER,
             Memory::HOST_ACCESS_RANDOM,
         )?;
-        let pipeline = Pipeline::new(&dev, [&world, &input, &output], &tlas)?;
+        let pipeline = Pipeline::new(
+            &dev,
+            [&world, &input, &output],
+            &tlas,
+            include_bytes!("../shaders/bake_surface_rt.comp.spv"),
+        )?;
         eprintln!("Baking surface lightmaps with Vulkan Ray Query");
         Ok(Some(Self {
             execution,

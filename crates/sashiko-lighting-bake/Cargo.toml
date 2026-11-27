@@ -7,11 +7,13 @@ publish = false
 description = "Offline surface and probe lighting for Sashiko"
 
 [features]
+film = ["vulkan", "dep:sashiko-asset"]
 vulkan = ["sashiko-renderer/vulkan", "dep:ash","dep:vk-mem"]
 d3d12 = ["sashiko-renderer/d3d12"]
 development-validation = ["sashiko-renderer/development-validation"]
 
 [dependencies]
+sashiko-asset = { version = "0.1.0", path = "../sashiko-asset", optional = true, features = ["renderer"] }
 ash = {workspace=true,optional=true}
 vk-mem = {workspace=true,optional=true}
 sashiko-renderer = { version = "0.1.0", path = "../sashiko-renderer" }

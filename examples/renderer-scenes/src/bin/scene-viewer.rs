@@ -15,6 +15,10 @@ mod window;
 #[path = "scene_viewer/film.rs"]
 mod film;
 
+#[cfg(feature = "scene-film")]
+#[path = "scene_viewer/tracing.rs"]
+mod tracing;
+
 fn backend() -> RuntimeConfig {
     RuntimeConfig::Vulkan(VulkanConfig {
         validation: if cfg!(feature = "development-validation") {
@@ -117,15 +121,31 @@ fn visibility(package: &Path, name: &str) -> PipelineResult<()> {
     Ok(())
 }
 
+fn film_rect(arg: &std::ffi::OsStr) -> PipelineResult<[u32; 4]> {
+    let values: Vec<u32> = arg
+        .to_str()
+        .ok_or("invalid film rectangle")?
+        .split(',')
+        .map(str::parse)
+        .collect::<Result<_, _>>()?;
+    values
+        .try_into()
+        .map_err(|_| "expected x,y,width,height".into())
+}
+
 fn main() -> PipelineResult<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
+        #[cfg(feature = "scene-film")]
+        [package, view, flag, samples, rect, png] if flag == "--coverage" => {
+            tracing::coverage(Path::new(package),view.to_str().ok_or("invalid view name")?,
+                samples.to_str().ok_or("invalid sample count")?.parse()?,
+                film_rect(rect)?, Path::new(png))
+        },
         [package, view, flag, samples, rect, exr, png] if flag == "--film-crop" => {
-            let rect: Vec<u32> = rect.to_str().ok_or("invalid film rectangle")?
-                .split(',').map(str::parse).collect::<Result<_,_>>()?;
             film::capture(Path::new(package),view.to_str().ok_or("invalid view name")?,
                 samples.to_str().ok_or("invalid film sample count")?.parse()?,
-                Some(rect.try_into().map_err(|_| "expected x,y,width,height")?),
+                Some(film_rect(rect)?),
                 Path::new(exr),Path::new(png))
         },
         [package, view, flag] if flag == "--visibility" => visibility(Path::new(package), view.to_str().ok_or("invalid view name")?),
@@ -158,7 +178,7 @@ fn main() -> PipelineResult<()> {
             None,
         ),
         _ => Err(
-            "usage: scene-viewer <package> <view> [--capture output.png | --film N linear.exr display.png | --film-crop N x,y,width,height linear.exr display.png | --sky linear.exr display.png | --visibility | --present-frames N]"
+            "usage: scene-viewer <package> <view> [--capture output.png | --film N linear.exr display.png | --film-crop N x,y,width,height linear.exr display.png | --sky linear.exr display.png | --visibility | --present-frames N]; scene-film also supports --coverage N x,y,width,height mask.png"
                 .into(),
         ),
     }

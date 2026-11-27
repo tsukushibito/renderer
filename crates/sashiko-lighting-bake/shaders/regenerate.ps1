@@ -18,6 +18,15 @@ $variants = @(
         SpirvOptions = @('-fspv-extension=SPV_KHR_ray_query', '-fvk-use-dx-layout')
         SpirvVersion = 0x00010500
     }
+    @{
+        Name = 'film_primary.comp'
+        Source = 'film_primary.comp.hlsl'
+        Defines = @()
+        Profile = 'cs_6_5'
+        SpirvTarget = 'vulkan1.2'
+        SpirvOptions = @('-fspv-extension=SPV_KHR_ray_query', '-fvk-use-dx-layout')
+        SpirvVersion = 0x00010500
+    }
 )
 & "$PSScriptRoot/../../../tools/shaders/compile_hlsl.ps1" -ShaderRoot $PSScriptRoot -Variants $variants `
     -SdkRoot $SdkRoot -Verify:$Verify

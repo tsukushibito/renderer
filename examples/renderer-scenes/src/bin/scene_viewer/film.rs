@@ -5,7 +5,7 @@ use sashiko_asset::{
 use sashiko_renderer::pipeline::PipelineResult;
 use std::{fs::File, io::BufWriter, num::NonZeroU32, path::Path, time::Duration};
 
-fn radical_inverse(mut n: u32, base: u32) -> f32 {
+pub(super) fn radical_inverse(mut n: u32, base: u32) -> f32 {
     let mut result = 0.;
     let mut weight = 1.;
     while n > 0 {

@@ -94,6 +94,14 @@ target/release/scene-viewer.exe build/full-package view-0 --visibility
 
 `--visibility` はカメラと方向光4カスケードの候補数・三角形数をJSONで出力します。方向光が0 luxのシーンでも、診断では同じ方向と距離で影の候補を数えます。実描画ではこの光の影パスを省きます。
 
+原形状の樹冠が画素を覆う割合は、Vulkan ray query 対応GPUで次のように比較します。撮影は元のフィルム位置・レンズ・ガウスフィルターで行い、各レイの最近接交点の有無を16 bitのグレースケールPNGに保存します。
+
+```powershell
+cargo build --release -p renderer-scenes --bin scene-viewer --features scene-film,development-validation
+target/release/scene-viewer.exe build/full-package view-0 --coverage 512 1420,52,64,64 build/canopy.png
+python tools/landscape/coverage.py $scene build/landscape --candidate-mask build/canopy.png
+```
+
 Windows で実際の描画命令を数える場合は、Vulkan SDK の API dump と Python の `psutil` を準備し、製品構成の実行ファイルを次のように起動します。1回目で所要時間とプロセスのメモリを測り、2回目で各キュー送信の直接描画命令とヒープの確保・解放を記録します。トレースには新しいファイル名を指定します。
 
 ```powershell

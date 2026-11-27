@@ -101,7 +101,12 @@ fn build(
     })?;
     Ok(acceleration)
 }
-pub(super) fn scratch_alignment(dev: &Device, count: usize) -> Option<u64> {
+pub(super) fn scratch_alignment(
+    dev: &Device,
+    count: usize,
+    geometries: u64,
+    instances: u64,
+) -> Option<u64> {
     let mut props = vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
     let mut query = vk::PhysicalDeviceProperties2::default().push_next(&mut props);
     // SAFETY: Device enabled the queried extension; the property chain and adapter are live.
@@ -111,10 +116,10 @@ pub(super) fn scratch_alignment(dev: &Device, count: usize) -> Option<u64> {
             .get_physical_device_properties2(dev.host.physical_device(), &mut query);
     }
     if count as u64 > props.max_primitive_count
-        || props.max_geometry_count < 2
+        || props.max_geometry_count < geometries
         || props.max_descriptor_set_acceleration_structures < 1
         || props.max_per_stage_descriptor_acceleration_structures < 1
-        || props.max_instance_count < 1
+        || props.max_instance_count < instances
     {
         return None;
     }
@@ -201,8 +206,32 @@ pub(super) fn scene(
         )
     };
     instance.extend(address.to_le_bytes());
-    let mut instances = Buffer::new(dev, 64, input, Memory::HOST_ACCESS_SEQUENTIAL_WRITE)?;
-    instances.write(&instance)?;
+    let tlas = top_level(dev, commands, &instance, alignment)?;
+    Ok((tlas, blas))
+}
+
+fn top_level(
+    dev: &Arc<Device>,
+    commands: &mut Commands,
+    records: &[u8],
+    alignment: u64,
+) -> Result<Acceleration> {
+    let count = u32::try_from(records.len() / 64)?;
+    if count == 0 || !records.len().is_multiple_of(64) {
+        return Err("expected nonempty Vulkan instance records".into());
+    }
+    let input =
+        Usage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR | Usage::SHADER_DEVICE_ADDRESS;
+    let mut instances = Buffer::new(
+        dev,
+        records.len() as u64,
+        input,
+        Memory::HOST_ACCESS_SEQUENTIAL_WRITE,
+    )?;
+    instances.write(records)?;
+    if !instances.address().is_multiple_of(16) {
+        return Err("Vulkan instance address must be 16-byte aligned".into());
+    }
     let geom = vk::AccelerationStructureGeometryKHR::default()
         .geometry_type(vk::GeometryTypeKHR::INSTANCES)
         .geometry(vk::AccelerationStructureGeometryDataKHR {
@@ -212,13 +241,108 @@ pub(super) fn scene(
                 },
             ),
         });
-    let tlas = build(
+    build(
         dev,
         commands,
         vk::AccelerationStructureTypeKHR::TOP_LEVEL,
         &[geom],
-        &[1],
+        &[count],
         alignment,
+    )
+}
+
+#[cfg(feature = "film")]
+pub(super) struct MeshRange {
+    pub vertices: u32,
+    pub vertex_count: u32,
+    pub indices: u32,
+    pub triangles: u32,
+}
+
+#[cfg(feature = "film")]
+pub(super) fn placed_scene(
+    dev: &Arc<Device>,
+    commands: &mut Commands,
+    world: &Buffer,
+    meshes: &[MeshRange],
+    parts: &[usize],
+    scene: &sashiko_asset::scene::ScenePackage,
+) -> Result<(Acceleration, Vec<Acceleration>)> {
+    let maximum = meshes
+        .iter()
+        .map(|m| m.triangles)
+        .max()
+        .ok_or("empty film scene")?;
+    let alignment = scratch_alignment(dev, maximum as usize, 1, scene.placements.len() as u64)
+        .ok_or("film scene exceeds acceleration structure limits")?;
+    let address = world.address();
+    let mut structures = Vec::with_capacity(meshes.len());
+    let mut addresses = Vec::with_capacity(meshes.len());
+    for mesh in meshes {
+        // MeshBlob decoding checked the finite vertex records and all indices.
+        let triangles = vk::AccelerationStructureGeometryTrianglesDataKHR::default()
+            .vertex_format(vk::Format::R32G32B32_SFLOAT)
+            .vertex_data(vk::DeviceOrHostAddressConstKHR {
+                device_address: address + u64::from(mesh.vertices),
+            })
+            .vertex_stride(20)
+            .max_vertex(mesh.vertex_count - 1)
+            .index_type(vk::IndexType::UINT32)
+            .index_data(vk::DeviceOrHostAddressConstKHR {
+                device_address: address + u64::from(mesh.indices),
+            });
+        let geometry = vk::AccelerationStructureGeometryKHR::default()
+            .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
+            .geometry(vk::AccelerationStructureGeometryDataKHR { triangles });
+        let blas = build(
+            dev,
+            commands,
+            vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            &[geometry],
+            &[mesh.triangles],
+            alignment,
+        )?;
+        // SAFETY: The completed BLAS belongs to this device. Its storage is
+        // retained through TLAS construction and every film dispatch.
+        addresses.push(unsafe {
+            dev.acceleration.get_acceleration_structure_device_address(
+                &vk::AccelerationStructureDeviceAddressInfoKHR::default()
+                    .acceleration_structure(blas.handle),
+            )
+        });
+        structures.push(blas);
+    }
+    let mut records = Vec::new();
+    records.try_reserve_exact(
+        scene
+            .placements
+            .len()
+            .checked_mul(64)
+            .ok_or("instance size overflow")?,
     )?;
-    Ok((tlas, blas))
+    let surfaces = &scene
+        .physical
+        .as_ref()
+        .ok_or("missing film surfaces")?
+        .surfaces;
+    for placement in &scene.placements {
+        let id = u32::try_from(placement.primitive)?;
+        if id > 0x00ff_ffff {
+            return Err("material identity exceeds Vulkan's 24-bit custom index".into());
+        }
+        let rows: [[f32; 4]; 3] = std::array::from_fn(|r| placement.transform.map(|c| c[r]));
+        sashiko_renderer::pbr::Transform::new(rows)?;
+        for v in rows.into_iter().flatten() {
+            records.extend(v.to_le_bytes());
+        }
+        records.extend((id | 0xff00_0000).to_le_bytes());
+        let flags = if surfaces[placement.primitive].alpha.is_none() {
+            vk::GeometryInstanceFlagsKHR::FORCE_OPAQUE.as_raw()
+        } else {
+            0
+        };
+        records.extend((flags << 24).to_le_bytes());
+        records.extend(addresses[parts[placement.primitive]].to_le_bytes());
+    }
+    Ok((top_level(dev, commands, &records, alignment)?, structures))
 }
