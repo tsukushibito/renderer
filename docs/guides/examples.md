@@ -109,9 +109,12 @@ $out = 'build/tasks/renderer-ief4.8'
 New-Item -ItemType Directory -Force $out | Out-Null
 target/release/scene-viewer.exe build/full-package view-0 --radiance 512 0,0,3840,2160 "$out/view-0.exr" "$out/view-0.png"
 target/release/scene-viewer.exe build/full-package view-4 --radiance 512 2420,1760,64,64 "$out/water.exr" "$out/water.png"
+target/release/scene-viewer.exe build/full-package view-4 --radiance 512 2650,1336,64,64 "$out/shore.exr" "$out/shore.png"
 python tools/landscape/frame_gates.py "$scene/reference/landscape/view-0.png" tools/landscape/view-0-frame-gates.json --evaluate "$out/view-0.png"
 python tools/landscape/calibrate.py $scene $out --capture "$out/view-0.png"
 ```
+
+撮影済みの画像を比較するには、リポジトリのルートで `git lfs pull --include="assets/verification/landscape-film-evidence.zip"` を実行して ZIP を展開します。`reference-view-0.png` と `sashiko-view-0.png` が原寸の比較対で、`view-4/` には水面と岸の比較対があります。全景・局所の判定は上記2本の Python コマンドの撮影画像を、展開した `sashiko-view-0.png` に置き換えて再実行できます。[測定値と目視結果](../verification/current.md#landscape)
 
 `--direct`、`--indirect`、`--unshadowed` は `--radiance` と同じ引数を取ります。direct は空と最初の散乱まで、indirect は2回以上の散乱を通った光です。線形 EXR では両者の和を全光と比較できます。unshadowed は最初の面までの被覆・材質を保ったまま、その面から空への遮蔽を外します。PNG は各出力を個別に sRGB へ現像します。
 
