@@ -144,7 +144,19 @@ python tools/landscape/compare.py "$scene/reference/landscape/view-0.png" build/
 
 比較ツールは参照 PNG の SHA-256 を照合し、リサイズや位置合わせをせずに RGB の絶対差を PNG に保存します。全画面と前景の穂・二股の幹・林の暗部・空の固定矩形について、8 bit RGB のチャンネル別平均絶対差と、sRGB を線形化して求めた CIE L* の平均絶対差・平均符号付き差を出力します。正の符号は描画結果の方が明るいことを表します。
 
-#### PBRT で局所的な画質基準を再現する
+#### PBRT で全景と局所の画質基準を再現する
+
+全景の基準は公開 PNG・公開 EXR・別途描画した EXR の同一画素を比較して決定しました。RTX 3060 で使った GPU 版 PBRT と同じソースは `20e41fd83789f12550e2c31b2047898c9e20e46c` です。次の例では評価専用の参照を原寸で再生成し、チェックイン済みの合格線で候補画像を判定します。`--calibrate` は新しいファイルにのみ書き込めます。
+
+```powershell
+$out = 'build/tasks/renderer-ief4.1'
+New-Item -ItemType Directory -Force $out | Out-Null
+& .tools/pbrt-v4-gpu/pbrt.exe --gpu --nthreads 2 --seed 0 --spp 512 --outfile "$out/independent-view-0.exr" "$scene/view-0.pbrt"
+python tools/landscape/frame_gates.py "$scene/reference/landscape/view-0.png" "$out/recomputed.json" --calibrate "$scene/reference/landscape/view-0.exr" "$out/independent-view-0.exr"
+python tools/landscape/frame_gates.py "$scene/reference/landscape/view-0.png" tools/landscape/view-0-frame-gates.json --evaluate build/cover-4k.png
+```
+
+全画面・穂・幹・林では表示 RGB と明度 L* の平均絶対差、L* の構造類似度（1−SSIM）を測ります。空では RGB・L* と、縦に16等分した帯の平均 RGB から全帯の平均を引いた勾配を比較します。各指標の上限は、3組の参照間の最大差と、その指標の劣化対照（24階調暗くする、標準偏差4画素でぼかす、空の色を一様にする）の中点です。どれか1つでも超えると終了コード1を返します。
 
 PBRT v4 のコミット `20e41fd83789f12550e2c31b2047898c9e20e46c` をサブモジュール付きでビルドし、生成した `pbrt.exe` を指定します。固定した4箇所で 64×64 画素ずつ、元のフィルム座標と 512 spp を保って seed 0 と 13 をレンダーします。スクリプトは両者と公開 PNG の差を測り、明度低下・ぼけ・位置ずれを加えた対照画像と区別できるか確認します。
 
