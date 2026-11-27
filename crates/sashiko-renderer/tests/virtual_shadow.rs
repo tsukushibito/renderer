@@ -37,7 +37,7 @@ fn check_requests(mut config: RuntimeConfig) {
     virtual_shadow::reserve_requests(&mut prep).unwrap();
     virtual_shadow::reserve_table(&mut prep).unwrap();
     virtual_shadow::reserve_invalidation(&mut prep).unwrap();
-    virtual_shadow::reserve_atlas(&mut prep, 2).unwrap();
+    virtual_shadow::reserve_atlas(&mut prep, 128).unwrap();
     virtual_shadow::reserve_camera_depth(&mut prep, [1, 1], 1).unwrap();
     prep.add_working_set(sashiko_renderer_core::capacity::WorkingSet {
         samplers: &[sashiko_renderer_core::program::SamplerDescriptor::LinearRepeat],
@@ -560,7 +560,7 @@ fn check_casters(
         } else {
             Transform::IDENTITY
         };
-        let mut casters = virtual_shadow::CasterBatch::new(2).unwrap();
+        let mut casters = virtual_shadow::CasterBatch::new(128).unwrap();
         // The first mesh lies within a coarse clipmap but intersects no
         // requested page. The caster at argument offset 20 must still draw.
         let remote =

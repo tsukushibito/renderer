@@ -94,12 +94,20 @@ impl IndexedInstanceBatch {
         let groups = (self.ranges.len() as u32).div_ceil(INDIRECT_GROUP_SIZE);
         let stride = INDIRECT_TEMPLATE_BYTES as usize;
         let len = (groups * INDIRECT_GROUP_SIZE) as usize * stride;
+        let capacity = self.templates.len() / stride;
         let templates = &mut self.templates[..len];
         templates[self.ranges.len() * stride..].fill(0);
-        let buffer = graph.encode_indirect_buffer(name, groups, counts, 0, |graph, dst| {
-            graph.upload_buffer("upload indirect templates", dst, 0, templates)?;
-            Ok(())
-        })?;
+        let buffer = graph.encode_indirect_buffer(
+            name,
+            groups,
+            capacity as u32,
+            counts,
+            0,
+            |graph, dst| {
+                graph.upload_buffer("upload indirect templates", dst, 0, templates)?;
+                Ok(())
+            },
+        )?;
         Ok(EncodedIndexedInstances {
             buffer,
             ranges: &self.ranges,

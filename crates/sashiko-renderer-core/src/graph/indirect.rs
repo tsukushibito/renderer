@@ -151,6 +151,7 @@ impl Graph {
         let buffer = self.encode_indirect_buffer(
             name,
             table.groups,
+            table.padded_count(),
             visibility,
             visibility_offset,
             |graph, template| {
@@ -179,6 +180,7 @@ impl Graph {
         &mut self,
         name: &str,
         groups: u32,
+        capacity: u32,
         visibility: BufferHandle,
         visibility_offset: u64,
         upload: impl FnOnce(&mut Graph, BufferHandle) -> Result<(), GraphError>,
@@ -200,10 +202,10 @@ impl Graph {
         let uploads = self.data().uploads.len();
         let result = (|| {
             let template_desc = BufferDesc {
-                size: padded * INDIRECT_TEMPLATE_BYTES,
+                size: u64::from(capacity) * INDIRECT_TEMPLATE_BYTES,
             };
             let command_desc = BufferDesc {
-                size: padded * INDIRECT_COMMAND_BYTES,
+                size: u64::from(capacity) * INDIRECT_COMMAND_BYTES,
             };
             let template = self.buffer("indirect templates", template_desc)?;
             let buffer = self.buffer("indirect arguments", command_desc)?;
@@ -212,9 +214,9 @@ impl Graph {
                 name,
                 &ManagedProgram::indexed_indirect_encoder(),
                 &[
-                    indirect_binding(0, template, 0, template_desc.size),
+                    indirect_binding(0, template, 0, padded * INDIRECT_TEMPLATE_BYTES),
                     indirect_binding(1, visibility, visibility_offset, visibility_size),
-                    indirect_binding(2, buffer, 0, command_desc.size),
+                    indirect_binding(2, buffer, 0, padded * INDIRECT_COMMAND_BYTES),
                 ],
                 [groups, 1],
             )?;

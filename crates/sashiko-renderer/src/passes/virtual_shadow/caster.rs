@@ -172,7 +172,8 @@ impl CasterBatch {
         }
         let padded = self.materials.len().next_multiple_of(64);
         self.rectangles.resize(padded * cull::RECT_BYTES, 0);
-        let (lists, counts) = cull::record(graph, requests, pages, &self.rectangles)?;
+        let (lists, counts) =
+            cull::record(graph, requests, pages, &self.rectangles, self.capacity)?;
         let encoded = self.instances.encode(graph, cull::ENCODE, counts)?;
         self.bindings.clear();
         let program = program();

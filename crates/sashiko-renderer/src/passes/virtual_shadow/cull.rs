@@ -136,25 +136,27 @@ pub(super) fn record(
     requests: &PageRequests,
     pages: &AssignedPages,
     rectangles: &[u8],
+    capacity: usize,
 ) -> Result<(BufferHandle, BufferHandle), GraphError> {
     let padded = rectangles.len() / RECT_BYTES;
+    let reserved = capacity.next_multiple_of(LANES);
     let bounds = graph.buffer(
         BOUNDS,
         BufferDesc {
-            size: rectangles.len() as u64,
+            size: (reserved * RECT_BYTES) as u64,
         },
     )?;
     graph.upload_buffer(BOUNDS, bounds, 0, rectangles)?;
     let lists = graph.buffer(
         LISTS,
         BufferDesc {
-            size: (padded * LIST_BYTES) as u64,
+            size: (reserved * LIST_BYTES) as u64,
         },
     )?;
     let counts = graph.buffer(
         COUNTS,
         BufferDesc {
-            size: (padded * 4) as u64,
+            size: (reserved * 4) as u64,
         },
     )?;
     let [cull, gather] = programs();
