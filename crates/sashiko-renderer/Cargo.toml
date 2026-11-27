@@ -8,6 +8,7 @@ description = "Reusable RenderGraph composition for renderer"
 
 [features]
 default = []
+window-capture = []
 webgpu = ["sashiko-renderer-core/webgpu"]
 vulkan = ["sashiko-renderer-core/vulkan"]
 d3d12 = ["sashiko-renderer-core/d3d12"]

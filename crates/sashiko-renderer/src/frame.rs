@@ -35,6 +35,18 @@ mod window;
 ))]
 pub use window::WindowRenderer;
 
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    feature = "window-capture",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+pub struct WindowCapture<'a> {
+    pub tag: u64,
+    pub extent: [u32; 2],
+    pub linear_rgba: &'a [u8],
+}
+
 const LINEAR: &str = "frame linear";
 const OUTPUT: &str = "frame output";
 const TRANSFER: &str = "frame output transfer";
@@ -51,6 +63,13 @@ enum FrameDestination {
         any(feature = "vulkan", feature = "d3d12")
     ))]
     Window(sashiko_renderer_core::PresentationConfig),
+    #[cfg(all(
+        windows,
+        feature = "presentation",
+        feature = "window-capture",
+        any(feature = "vulkan", feature = "d3d12")
+    ))]
+    CaptureWindow(sashiko_renderer_core::PresentationConfig),
 }
 
 impl FrameDestination {
@@ -63,6 +82,13 @@ impl FrameDestination {
                 any(feature = "vulkan", feature = "d3d12")
             ))]
             Self::Window(_) => SdrOutput::display(false),
+            #[cfg(all(
+                windows,
+                feature = "presentation",
+                feature = "window-capture",
+                any(feature = "vulkan", feature = "d3d12")
+            ))]
+            Self::CaptureWindow(_) => SdrOutput::display(false),
         }
     }
 }
@@ -154,6 +180,16 @@ impl Renderer {
                 any(feature = "vulkan", feature = "d3d12")
             ))]
             FrameDestination::Window(config) => prep.reserve_image(target, config.max_frames)?,
+            #[cfg(all(
+                windows,
+                feature = "presentation",
+                feature = "window-capture",
+                any(feature = "vulkan", feature = "d3d12")
+            ))]
+            FrameDestination::CaptureWindow(config) => {
+                prep.reserve_image(target, config.max_frames)?;
+                plan.reserve_readback(READBACK, target)?;
+            }
         }
         Ok(plan)
     }

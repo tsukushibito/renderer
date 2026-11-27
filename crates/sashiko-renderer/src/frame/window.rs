@@ -21,6 +21,29 @@ pub struct WindowRenderer {
     accepted: Option<FrameId>,
     profile: Option<Box<Option<SubmissionMetrics>>>,
     defer_for_asset_change: bool,
+    #[cfg(feature = "window-capture")]
+    capture: Option<CaptureBuffer>,
+}
+
+#[cfg(feature = "window-capture")]
+struct CaptureBuffer {
+    bytes: Vec<u8>,
+    pending: Option<(sashiko_renderer_core::graph::PassHandle, u64, [u32; 2])>,
+    ready: Option<(u64, [u32; 2], usize)>,
+}
+
+#[cfg(feature = "window-capture")]
+impl CaptureBuffer {
+    fn reserve(&mut self, extent: [u32; 2]) -> PipelineResult<()> {
+        let size = usize::try_from(u64::from(extent[0]) * u64::from(extent[1]))?
+            .checked_mul(4)
+            .ok_or("window capture dimensions overflow")?;
+        if size > self.bytes.len() {
+            self.bytes.try_reserve_exact(size - self.bytes.len())?;
+            self.bytes.resize(size, 0);
+        }
+        Ok(())
+    }
 }
 
 impl crate::pipeline::AssetTarget for WindowRenderer {
@@ -117,6 +140,8 @@ impl WindowRenderer {
             accepted: None,
             profile: None,
             defer_for_asset_change: false,
+            #[cfg(feature = "window-capture")]
+            capture: None,
         })
     }
 
@@ -243,6 +268,19 @@ impl WindowRenderer {
                 *slot = result.metrics().copied();
             }
             self.accepted = None;
+            #[cfg(feature = "window-capture")]
+            if let Some(buffer) = &mut self.capture
+                && let Some((pixels, tag, extent)) = buffer.pending.take()
+            {
+                let mut result = result;
+                let size = result.readback_len(pixels)?;
+                let out = buffer
+                    .bytes
+                    .get_mut(..size)
+                    .ok_or("window capture exceeded preparation")?;
+                result.readback_into(pixels, out)?;
+                buffer.ready = Some((tag, extent, size));
+            }
         }
         Ok(true)
     }
@@ -278,6 +316,10 @@ impl WindowRenderer {
                 extent,
                 ..self.renderer.camera
             };
+            #[cfg(feature = "window-capture")]
+            if let Some(buffer) = &mut self.capture {
+                buffer.reserve(extent)?;
+            }
             let changed = self.renderer.reconfigure(camera, assets);
             if self.renderer.camera.extent == extent {
                 self.presenter.resize(extent[0], extent[1]);
@@ -308,6 +350,80 @@ impl WindowRenderer {
         &mut self,
         draw: impl FnOnce(&mut Frame<'_>) -> PipelineResult<()>,
     ) -> PipelineResult<PresentOutcome> {
+        self.draw_inner(
+            #[cfg(feature = "window-capture")]
+            None,
+            draw,
+        )
+    }
+
+    /// Prepare one readback at an explicit idle/change boundary.
+    #[cfg(feature = "window-capture")]
+    pub fn prepare_capture(&mut self, assets: SceneAssets<'_>) -> PipelineResult<()> {
+        if self.capture.is_some() {
+            return Ok(());
+        }
+        self.ready_for_change()?;
+        let mut buffer = CaptureBuffer {
+            bytes: Vec::new(),
+            pending: None,
+            ready: None,
+        };
+        buffer.reserve(self.renderer.camera.extent)?;
+        let FrameDestination::Window(config) = self.renderer.destination else {
+            return Err("expected a window presentation target".into());
+        };
+        self.renderer.destination = FrameDestination::CaptureWindow(config);
+        if let Err(err) = self.renderer.reconfigure(self.renderer.camera, assets) {
+            self.renderer.destination = FrameDestination::Window(config);
+            return Err(err);
+        }
+        self.capture = Some(buffer);
+        Ok(())
+    }
+
+    /// Returns false until the prior result has been consumed or before preparation.
+    #[cfg(feature = "window-capture")]
+    pub fn capture_available(&self) -> bool {
+        self.capture
+            .as_ref()
+            .is_some_and(|b| b.pending.is_none() && b.ready.is_none())
+    }
+
+    /// Capture this draw if the draw callback runs. Presentation retries retain
+    /// the original tag and image. Call draw normally when the slot is occupied.
+    #[cfg(feature = "window-capture")]
+    pub fn draw_with_capture(
+        &mut self,
+        tag: u64,
+        draw: impl FnOnce(&mut Frame<'_>) -> PipelineResult<()>,
+    ) -> PipelineResult<PresentOutcome> {
+        if !self.capture_available() {
+            return Err("window capture slot unavailable".into());
+        }
+        self.draw_inner(Some(tag), draw)
+    }
+
+    /// Poll once and borrow the top-down, display-linear RGBA8 presenter input,
+    /// including overlays. Encode RGB to sRGB for standard PNG/video.
+    #[cfg(feature = "window-capture")]
+    pub fn take_capture(&mut self) -> PipelineResult<Option<super::WindowCapture<'_>>> {
+        self.retire_graph(Duration::ZERO)?;
+        Ok(self.capture.as_mut().and_then(|buffer| {
+            let (tag, extent, size) = buffer.ready.take()?;
+            Some(super::WindowCapture {
+                tag,
+                extent,
+                linear_rgba: &buffer.bytes[..size],
+            })
+        }))
+    }
+
+    fn draw_inner(
+        &mut self,
+        #[cfg(feature = "window-capture")] tag: Option<u64>,
+        draw: impl FnOnce(&mut Frame<'_>) -> PipelineResult<()>,
+    ) -> PipelineResult<PresentOutcome> {
         self.presenter.poll()?;
         if self.presenter.has_pending_frame() {
             return Ok(self
@@ -336,8 +452,25 @@ impl WindowRenderer {
             let mut frame = self.renderer.begin_frame()?;
             draw(&mut frame)?;
             let image = frame.output(SdrOutput::display(false))?;
+            #[cfg(feature = "window-capture")]
+            let readback = if let Some(tag) = tag {
+                Some((
+                    frame
+                        .graph()
+                        .readback_image(super::READBACK, image.raw_image())?,
+                    tag,
+                    frame.output_extent,
+                ))
+            } else {
+                None
+            };
             frame.graph().export_frame_image(image.raw_image())?;
-            frame.recording.submit()?
+            let submission = frame.recording.submit()?;
+            #[cfg(feature = "window-capture")]
+            if let Some(readback) = readback {
+                self.capture.as_mut().expect("capture prepared").pending = Some(readback);
+            }
+            submission
         };
         self.accepted = Some(receipt.id());
         self.presenter.queue_frame(&mut receipt)?;

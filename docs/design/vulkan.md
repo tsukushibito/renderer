@@ -723,6 +723,13 @@ engineのupload jobは固定staging容量・cache atom整列・未回収submissi
 
 ## Windows Presentation
 
+開発用 `window-capture` では、明示的な `prepare_capture` 時にウィンドウ寸法の readback と
+CPU バッファを一枠予約する。採取する Graph は UI と MSAA resolve 後の同じ RGBA8 出力を
+readback と表示へ渡す。Graph の転送・host read の依存、既存の submit 完了と invalidate を
+共有し、swapchain 画像の転送用途を要求しない。ピクセルは上段から並ぶ display-linear RGBA8
+で、sRGB ファイルへの変換は消費側が行う。結果を取得するまで次の採取枠は空かず、通常描画は
+継続できる。resize は旧寸法の未読結果を保持する。終了時は表示と Graph の完了後に解放する。
+
 設定・outcomeと利用手順は[二API共通の表示契約](rendergraph.md#windows-presentation)に従う。
 `PresentationConfig`／`PresentOutcome`はVulkan内部の型ではなく、`crate::presentation`に置く。
 backend選択のためにGraph、camera、入力処理を分岐させない。

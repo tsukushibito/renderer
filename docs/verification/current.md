@@ -88,6 +88,12 @@ RTX 3060、Windows、Vulkan、1920×1080、seed 506、終盤500体、120フレ�
 
 ## ライブインスペクタ初版
 
+Windows の実機で `cargo test --locked -p sashiko-renderer --features vulkan,d3d12,presentation,window-capture,development-validation --test window_capture -- --ignored`
+を実行。Vulkan と D3D12 の両方で 4× MSAA シーンに上下別色の HUD を合成し、表示元からの
+RGBA8 読出し、使用中の枠への要求拒否、resize 後の旧画像取得、未消費のままの終了を確認した。
+Vulkan core・同期検証、D3D12 Debug Layer・GBV と teardown 診断が通った。これは表示元の
+readback の正しさを対象とした検証で、動画符号化やフレーム時間の測定は含まない。
+
 Windows x64 の Rust 1.99.0 release で、通常版と検査版の同じ 69 tick の結果、NDJSON の実プロセス、確定時点の投影、低速な読み手、標準入力の EOF を照合した。tick 1 の拒否時に提示した鍵は `garden`、同じ tick の終了時に持つ鍵は `basement`。配列とコンポーネント別ストレージの試験で、個体消滅と保存した投影の寿命を照合した。通常構成の依存木から `sashiko-inspect` が外れ、通常版 EXE は検査オプションを拒否した。診断専用の代表文字列も通常版 EXE に含まれなかった。
 
 Windows Server 2022 と Ubuntu 24.04 の CPU ジョブでも、通常版・検査版のビルドと標準入出力を使う同じ受け入れ試験が通った。追加ステップはそれぞれ 11 秒、7 秒だった。[実プロセス試験を実行した CI](https://github.com/tsukushibito/sashiko/actions/runs/45751885010)
