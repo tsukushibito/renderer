@@ -49,7 +49,55 @@ target/release/scene-viewer.exe build/comparison-package front
 
 アプリに組み込む場合は `sashiko_asset::scene::DisplayScene::window` にパッケージのディレクトリ、ビュー名、表示サイズ、アプリのウィンドウとバックエンドを渡します。返されたシーンの `input()` をフレームに渡して描画します。ヘッドレスでは `DisplayScene::headless` を使います。GPU アップロードは両方のコンストラクター内で完了します。[表示ホストの実装](../../examples/renderer-scenes/src/bin/scene-viewer.rs)
 
+### PBRT v4 をシーンパッケージに変換する
+
+固定版の全ファイルを取得し、カメラを定義したファイルを `scene` に渡します。同じ入力で再実行すると、取得済みファイルを Git blob のサイズとハッシュで照合し、欠損・破損分だけを再取得します。各ファイルは検証後に公開されるため、中断後も同じコマンドで再開できます。
+
+```powershell
+python tools/landscape/reference.py
+$scene = 'build/landscape-cache/30cf4a0346ae5a80a2d7a530a3ef7d0fa4f70572'
+cargo run --release --locked -p sashiko-asset-cook -- scene "$scene/view-0.pbrt" assets/landscape/pbrt-settings.json build/full-package
+python tools/landscape/check_import.py build/full-package $scene
+```
+
+PBRT の静的な透視カメラ、RGB film、画像付き infinite light、Include、Attribute/Object スコープ、ObjectInstance、変換行列・平行移動・回転・拡縮、ReverseOrientation、名前付き材質、PNG imagemap、バイナリ little-endian 三角形 PLY に対応します。PLY は位置のみ、または位置・法線・UV の順の入力に対応します。共有形状は配置ごとに複製せず、glTF と同じ頂点・接線・材質・画像の形式に変換します。出力先と同階層の `.sashiko-pbrt-cache` に、入力・変換器・縮尺・面向きから識別したメッシュを保存します。再利用時に出力のハッシュを照合します。
+
+Landscape のレシピは原点からの距離を m に換算し、X 軸の反転を頂点・法線・巻き順・接空間・配置・カメラ・光源に適用します。`pbrt.region_xz_metres` を `[xmin,zmin,xmax,zmax]` としてレシピのコピーに追加すると、原点からの **PBRT 側の軸** で指定した半開区間に原点が入る植物配置を変換します。直接宣言された地形や水面は、全頂点を世界座標に移した境界ボックスが区画と交差する場合に含めます。レシピを移動する場合は環境マップへの相対パスも合わせます。
+
+パッケージには原作者、出典、CC BY 4.0、改変内容、物理カメラ・フィルム設定、元解像度の等面積 HDR、形状ごとの diffuse・coateddiffuse・diffusetransmission・dielectric と画像を保存します。対話表示は PBR 近似を使います。cook の診断には入力ファイルと行番号、材質近似やゼロ面積形状の法線補完が出ます。未対応の命令・形状・材質はエラーになります。
+
+別の PBRT 入力を同じ経路で表示する例です。このシーンには2色の三角形を持つ原型と2つの配置があります。
+
+```powershell
+target/release/sashiko-asset-cook.exe scene tools/sashiko-asset-cook/tests/fixtures/pbrt/postcards.pbrt tools/sashiko-asset-cook/tests/fixtures/comparison-view.json build/cards
+target/release/scene-viewer.exe build/cards postcards
+```
+
+等面積 HDR を使う PBRT 入力では、cook 時に同じ光源から拡散照度マップ・GGX反射マップ・BRDF LUT を作ります。Landscape では空に太陽円盤が含まれるため、この段階のレシピでは追加の方向光を0 luxとしています。空とフィルムだけを切り分けるには次を実行します。EXR は ISO と白色点を反映した線形 RGB、PNG は同じ値から sRGB 変換した結果です。撮影条件はパッケージから読みます。
+
+```powershell
+target/release/scene-viewer.exe build/full-package view-0 --sky build/sky-linear.exr build/sky-display.png
+python tools/landscape/check_ibl.py build/full-package
+```
+
 ### Landscape の原画と比較する
+
+幾何を含めたフィルム撮影は `scene-viewer <package> <view> --film N linear.exr display.png` で実行します。解像度、開口半径、焦点距離、ISO、白色点はビューの値を使います。N=1 はレンズと画素の中心、N>1 は開口と画素内をサンプリングし、線形値の平均から両方の出力を保存します。
+
+光量・反射方向と焦点面を独立に検査するには次を実行します。PBRT v4 の実行ファイルを `pbrt` として指定しています。
+
+```powershell
+python tools/landscape/optics_fixture.py build/optics
+foreach ($name in 'spheres','focus','black','spheres-double-iso') {
+    target/release/sashiko-asset-cook.exe scene "build/optics/$name.pbrt" build/optics/settings.json "build/optics/package-$name"
+    $samples = if ($name -eq 'focus') { 128 } else { 16 }
+    target/release/scene-viewer.exe "build/optics/package-$name" $name --film $samples "build/optics/$name-renderer.exr" "build/optics/$name-renderer.png"
+}
+foreach ($name in 'spheres','focus') {
+    pbrt --outfile "build/optics/$name-pbrt.exr" "build/optics/$name.pbrt"
+}
+python tools/landscape/optics_fixture.py build/optics --verify
+```
 
 評価用素材を取得するには、上記の Python 環境で次を実行します。取得ツールは固定版の Git blob とローカルの内容を照合し、既にあるジオメトリやテクスチャを再利用します。評価用画像はランタイムの入力から独立しています。
 
@@ -63,6 +111,29 @@ python tools/landscape/compare.py "$scene/reference/landscape/view-0.png" build/
 `view-0.pbrt` は 3840×2160 の全画面、垂直画角 44.095898°、レンズ半径 0.125 cm、焦点距離 3000 cm、ISO 150、ホワイトバランス 9000 K、Halton 512 spp を指定します。水面を含む比較視点は `view-4` です。末尾の視点名を変えて同じ簡略版を撮影できます。簡略版のカメラはピンホールです。配布元のカメラ行列を反転して得た位置をセンチメートルからシーン原点基準のメートルに変換しています。
 
 比較ツールは参照 PNG の SHA-256 を照合し、リサイズや位置合わせをせずに RGB の絶対差を PNG に保存します。全画面と前景の穂・二股の幹・林の暗部・空の固定矩形について、8 bit RGB のチャンネル別平均絶対差と、sRGB を線形化して求めた CIE L* の平均絶対差・平均符号付き差を出力します。正の符号は描画結果の方が明るいことを表します。
+
+#### PBRT で局所的な画質基準を再現する
+
+PBRT v4 のコミット `20e41fd83789f12550e2c31b2047898c9e20e46c` をサブモジュール付きでビルドし、生成した `pbrt.exe` を指定します。固定した4箇所で 64×64 画素ずつ、元のフィルム座標と 512 spp を保って seed 0 と 13 をレンダーします。スクリプトは両者と公開 PNG の差を測り、明度低下・ぼけ・位置ずれを加えた対照画像と区別できるか確認します。
+
+```powershell
+python -m pip install opencv-python==4.11.0.86
+python tools/landscape/calibrate.py $scene build/landscape --render-with path/to/pbrt.exe
+python tools/landscape/calibrate.py $scene build/landscape --capture build/cover-4k.png
+```
+
+`--capture` は固定した局所基準を1つでも超えたら終了コード1を返します。全画面の独立レンダーは `pbrt --seed 0 --spp 512 --outfile build/view-0.exr "$scene/view-0.pbrt"` で取得できます。投影の照合には `pbrt --pixelmaterial 962,1372 "$scene/view-0.pbrt"` と同様に、幹の `724,1222` と林の `1942,1036` でも最初の交点を取得します。表示 API の行列に3点を入力する回帰テストは次のコマンドで実行できます。
+
+```powershell
+cargo test --release --locked -p renderer-scenes --features scene-viewer --test landscape_projection
+```
+
+樹冠の抜きは、すべての表面を黒い拡散材にして空を一定輝度に置換し、元の形状・カメラ・アルファテクスチャを保った PBRT シーンで測ります。左上の樹冠の64×64画素と、遮蔽のない空を描画します。実装側の同条件の被覆画像は、線形グレースケール（黒が空、白が完全遮蔽）の PNG として評価します。
+
+```powershell
+python tools/landscape/coverage.py $scene build/landscape --render-with path/to/pbrt.exe
+python tools/landscape/coverage.py $scene build/landscape --candidate-mask build/canopy-mask.png
+```
 
 ## ゲーム更新を Rust で書く
 

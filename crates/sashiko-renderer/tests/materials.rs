@@ -112,6 +112,7 @@ fn rejects_incompatible_abis_and_scene_modes_at_preparation() {
         .is_err()
     );
     let config = StandardConfig {
+        film_output: false,
         extent: [16; 2],
         clear_color: [0.; 4],
         shadows: None,

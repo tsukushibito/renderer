@@ -8,6 +8,10 @@ use std::{collections::BTreeMap, fs, io, path::Path};
 mod display;
 #[cfg(feature = "renderer")]
 pub use display::DisplayScene;
+#[cfg(feature = "renderer")]
+mod optics;
+#[cfg(feature = "renderer")]
+pub use optics::{FilmProjection, FilmRay, SkyRadiance};
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +49,68 @@ pub struct ScenePackage {
     pub settings: SceneSettings,
     pub primitives: Vec<Primitive>,
     pub placements: Vec<Placement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physical: Option<PhysicalScene>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<Attribution>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Attribution {
+    pub title: String,
+    pub authors: String,
+    pub source: String,
+    pub license: String,
+    pub changes: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+pub struct PhysicalScene {
+    pub cameras: BTreeMap<String, FilmCamera>,
+    pub sky: Option<InfiniteSky>,
+    /// Same primitive index as the draw list. Values and images retain the
+    /// source BSDF independently of the interactive base-color approximation.
+    pub surfaces: Vec<Surface>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FilmCamera {
+    pub lens_radius_metres: f32,
+    pub focus_metres: f32,
+    pub iso: f32,
+    pub white_balance_kelvin: Option<f32>,
+    pub film_extent: [u32; 2],
+    pub samples_per_pixel: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InfiniteSky {
+    pub equal_area_radiance: EnvironmentImage<BlobRef>,
+    pub world_from_light: [[f32; 4]; 4],
+    pub scale: f32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum Scattering {
+    Diffuse,
+    Conductor,
+    CoatedDiffuse,
+    DiffuseTransmission,
+    Dielectric,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Surface {
+    pub scattering: Scattering,
+    pub reflectance: [f32; 3],
+    pub color: Option<BlobRef>,
+    /// DiffuseTransmission without an image uses the PBRT default 0.25 in every channel.
+    pub transmittance: Option<BlobRef>,
+    pub displacement: Option<BlobRef>,
+    pub alpha: Option<BlobRef>,
+    pub eta: f32,
+    pub roughness: f32,
+    pub scale: f32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -120,6 +186,45 @@ impl ScenePackage {
             }
             for image in &env.maps {
                 image.validate()?;
+            }
+        }
+        if let Some(physical) = &self.physical {
+            if physical.surfaces.len() != self.primitives.len()
+                || physical
+                    .cameras
+                    .keys()
+                    .any(|k| !self.settings.views.contains_key(k))
+            {
+                return Err(invalid(
+                    "physical scene bindings do not match the draw scene",
+                ));
+            }
+            for camera in physical.cameras.values() {
+                if camera.film_extent.contains(&0)
+                    || camera.samples_per_pixel == 0
+                    || !(camera.lens_radius_metres >= 0. && camera.lens_radius_metres.is_finite())
+                    || !(camera.focus_metres > 0. && camera.focus_metres.is_finite())
+                    || !(camera.iso > 0. && camera.iso.is_finite())
+                    || camera
+                        .white_balance_kelvin
+                        .is_some_and(|k| !k.is_finite() || k <= 0.)
+                {
+                    return Err(invalid("invalid film or lens settings"));
+                }
+            }
+            if let Some(sky) = &physical.sky {
+                sky.equal_area_radiance.validate()?;
+                if sky.scale < 0.
+                    || !sky.scale.is_finite()
+                    || sky.equal_area_radiance.width != sky.equal_area_radiance.height
+                    || sky
+                        .world_from_light
+                        .iter()
+                        .flatten()
+                        .any(|v| !v.is_finite())
+                {
+                    return Err(invalid("invalid equal-area infinite light"));
+                }
             }
         }
         Ok(())

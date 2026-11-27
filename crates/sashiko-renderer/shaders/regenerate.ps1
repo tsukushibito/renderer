@@ -5,6 +5,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $shaders = @(
+    'film_composite.frag',
     'pbr_lightmap_transformed.vert', 'pbr_lightmap_transformed_small.vert', 'gbuffer_lightmap_transformed.vert', 'gbuffer_lightmap_transformed_small.vert',
     'pbr_lightmap.vert', 'gbuffer_lightmap.vert', 'pick.vert', 'pick.frag', 'selection_outline.frag',
     'pbr.vert', 'pbr.frag', 'toon.frag', 'canvas.frag', 'canvas_fill.frag', 'shadow.vert', 'shadow.frag', 'bloom_extract_downsample.comp',
@@ -46,7 +47,7 @@ $variants = foreach ($name in $shaders) {
         'gbuffer_transformed.frag' { $shaderSource = 'gbuffer.frag'; $defines = @('BISTRO_TRANSFORMED_DIRECTIONS=1') }
         'shadow_transformed.frag' { $shaderSource = 'shadow.frag'; $defines = @('BISTRO_TRANSFORMED_DIRECTIONS=1') }
     }
-    $hasInline = $name -cin @('pbr_lightmap.vert','gbuffer_lightmap.vert','shadow.vert', 'pbr_instancing.vert', 'pick.vert') -or
+    $hasInline = $name -cin @('pbr_lightmap.vert','gbuffer_lightmap.vert','shadow.vert', 'pbr_instancing.vert', 'pick.vert','film_composite.frag') -or
         ($stage -ceq 'vert' -and $name.Contains('_transformed'))
     @{
         Name = $name

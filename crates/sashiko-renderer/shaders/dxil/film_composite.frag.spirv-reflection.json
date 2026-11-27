@@ -1,0 +1,73 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_8" : {
+            "name" : "type.ConstantBuffer.FilmParameters",
+            "members" : [
+                {
+                    "name" : "corner_scale",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "step_x",
+                    "type" : "vec4",
+                    "offset" : 16
+                },
+                {
+                    "name" : "step_y",
+                    "type" : "vec4",
+                    "offset" : 32
+                },
+                {
+                    "name" : "sensor_r",
+                    "type" : "vec4",
+                    "offset" : 48
+                },
+                {
+                    "name" : "sensor_g",
+                    "type" : "vec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "sensor_b",
+                    "type" : "vec4",
+                    "offset" : 80
+                }
+            ]
+        }
+    },
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "out.var.SV_Target0",
+            "location" : 0
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "scene",
+            "set" : 0,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "sky",
+            "set" : 0,
+            "binding" : 1
+        }
+    ],
+    "push_constants" : [
+        {
+            "type" : "_8",
+            "name" : "film",
+            "push_constant" : true
+        }
+    ]
+}

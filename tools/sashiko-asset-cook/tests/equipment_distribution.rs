@@ -7,6 +7,61 @@ use serde_json::Value;
 use std::{collections::BTreeSet, fs};
 
 #[test]
+fn pbrt_instances_keep_their_definition_transforms_materials_and_camera() -> Result {
+    let project = Project::new()?;
+    let directory = project.0.join("cards");
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let source = fixtures.join("pbrt/postcards.pbrt");
+    let run = |settings: &std::path::Path, source: &std::path::Path| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_sashiko-asset-cook"))
+            .arg("scene")
+            .arg(source)
+            .arg(settings)
+            .arg(&directory)
+            .output()
+    };
+    let settings = fixtures.join("comparison-view.json");
+    let result = run(&settings, &source)?;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let scene = sashiko_asset::scene::ScenePackage::open(&directory)?;
+    assert_eq!((scene.placements.len(), scene.primitives.len()), (4, 2));
+    assert_eq!(scene.primitives[0].mesh, scene.primitives[1].mesh);
+    assert_ne!(scene.primitives[0].material, scene.primitives[1].material);
+    let view = scene.view("postcards")?;
+    assert_eq!(view.position, [0., 0., 4.]);
+    assert_eq!(view.forward, [0., 0., -1.]);
+    assert_eq!(scene.placements[0].transform[3], [0.6, -0.45, 0., 1.]);
+    assert!((scene.placements[3].transform[3][1] - 0.18).abs() < 1e-6);
+    let physical = scene.physical.unwrap();
+    assert_eq!(physical.cameras["postcards"].samples_per_pixel, 32);
+    assert_eq!(physical.surfaces[0].reflectance, [0.9, 0.02, 0.01]);
+    assert_eq!(physical.surfaces[1].roughness, 0.42);
+    let mut recipe: Value = serde_json::from_slice(&fs::read(&settings)?)?;
+    recipe["pbrt"] = serde_json::json!({"region_xz_metres":[0.,-1.,1.,1.]});
+    let regional = project.0.join("region.json");
+    fs::write(&regional, serde_json::to_vec(&recipe)?)?;
+    assert!(run(&regional, &source)?.status.success());
+    assert_eq!(
+        sashiko_asset::scene::ScenePackage::open(&directory)?
+            .placements
+            .len(),
+        2
+    );
+    let previous = fs::read(directory.join("scene.json"))?;
+    let invalid = project.0.join("malformed.pbrt");
+    fs::write(&invalid, "WorldBegin\nMaterial \"missing-model\"")?;
+    let rejected = run(&settings, &invalid)?;
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("malformed.pbrt:2"));
+    assert_eq!(fs::read(directory.join("scene.json"))?, previous);
+    Ok(())
+}
+
+#[test]
 fn scene_keeps_placements_separate_from_shared_local_mesh() -> Result {
     let project = Project::new()?;
     let source = project.0.join("source/comparison.gltf");

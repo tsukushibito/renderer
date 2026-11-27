@@ -12,6 +12,9 @@ use std::{fs::File, io::BufWriter, path::Path, time::Duration};
 #[path = "scene_viewer/window.rs"]
 mod window;
 
+#[path = "scene_viewer/film.rs"]
+mod film;
+
 fn backend() -> RuntimeConfig {
     RuntimeConfig::Vulkan(VulkanConfig {
         validation: if cfg!(feature = "development-validation") {
@@ -48,7 +51,7 @@ fn capture(package: &Path, view: &str, output: &Path) -> PipelineResult<()> {
     let extent = [3840, 2160];
     let (scene, mut renderer) = DisplayScene::headless(package, view, extent, backend())?;
     let mut frame = renderer.begin_frame()?;
-    frame.draw_scene(scene.input(), 1.)?;
+    scene.draw(&mut frame)?;
     let ticket = frame.capture()?;
     let mut rgba = vec![0; extent[0] as usize * extent[1] as usize * 4];
     if !renderer.read_capture(&ticket, &mut rgba, Duration::from_secs(120))? {
@@ -66,6 +69,12 @@ fn capture(package: &Path, view: &str, output: &Path) -> PipelineResult<()> {
 fn main() -> PipelineResult<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
+        [package, view, flag, samples, exr, png] if flag == "--film" => film::capture(
+            Path::new(package), view.to_str().ok_or("invalid view name")?,
+            samples.to_str().ok_or("invalid film sample count")?.parse()?,
+            Path::new(exr), Path::new(png),
+        ),
+        [package, view, flag, exr, png] if flag == "--sky" => film::sky(Path::new(package),view.to_str().ok_or("invalid view name")?,Path::new(exr),Path::new(png)),
         [package, view, flag, png] if flag == "--capture" => capture(
             Path::new(package),
             view.to_str().ok_or("invalid view name")?,
@@ -89,7 +98,7 @@ fn main() -> PipelineResult<()> {
             None,
         ),
         _ => Err(
-            "usage: scene-viewer <package> <view> [--capture output.png | --present-frames N]"
+            "usage: scene-viewer <package> <view> [--capture output.png | --film N linear.exr display.png | --sky linear.exr display.png | --present-frames N]"
                 .into(),
         ),
     }

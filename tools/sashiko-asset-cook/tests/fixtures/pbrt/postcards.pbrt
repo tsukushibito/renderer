@@ -1,0 +1,6 @@
+LookAt 0 0 4   0 0 0   0 1 0
+Camera "perspective" "float fov" 40 "float lensradius" 0.01 "float focaldistance" 4
+Film "rgb" "integer xresolution" 640 "integer yresolution" 360 "float iso" 125
+Sampler "halton" "integer pixelsamples" 32
+WorldBegin
+Include "cards.pbrt"

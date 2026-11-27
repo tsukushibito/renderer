@@ -49,9 +49,7 @@ impl Display {
         self.view.forward = f;
         self.renderer
             .set_camera(self.view.camera(extent, [0.02, 1500.])?.camera);
-        let outcome = self
-            .renderer
-            .draw(|frame| Ok(frame.draw_scene(self.scene.input(), 1.)?))?;
+        let outcome = self.renderer.draw(|frame| self.scene.draw(frame))?;
         if matches!(
             outcome,
             PresentOutcome::RecreateRequired | PresentOutcome::Presented { suboptimal: true }

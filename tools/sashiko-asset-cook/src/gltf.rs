@@ -4,7 +4,6 @@ use gltf::{
     Document,
     mesh::{Mode, Semantic},
 };
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
@@ -14,27 +13,11 @@ use std::{
 };
 
 mod geometry;
-mod image;
 mod material;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub(crate) enum ImageRole {
-    Color,
-    Normal,
-    Orm,
-}
-
-impl ImageRole {
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::Color => "color",
-            Self::Normal => "normal",
-            Self::Orm => "orm",
-        }
-    }
-}
+pub(crate) use crate::image::ImageRole;
 
 struct Part {
     mesh: usize,
@@ -186,7 +169,7 @@ impl Source {
 }
 
 pub(super) fn cook_image_bytes(bytes: &[u8], role: ImageRole) -> Result<Vec<u8>> {
-    image::cook(bytes, role)
+    crate::image::cook(bytes, role)
 }
 
 fn scene_parts(document: &Document) -> Result<Vec<Part>> {

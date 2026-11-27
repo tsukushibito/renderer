@@ -45,6 +45,17 @@ name = "encoding_rs"
 version = "=0.8.44"
 allow = ["BSD-3-Clause"]
 
+# The offline PBRT importer decodes OpenEXR with exr and its byte-order helper.
+[[licenses.exceptions]]
+name = "exr"
+version = "=1.74.3"
+allow = ["BSD-3-Clause"]
+
+[[licenses.exceptions]]
+name = "lebe"
+version = "=0.5.3"
+allow = ["BSD-3-Clause"]
+
 [bans]
 # Incompatible transitive major versions (currently syn 2 and 3) may coexist.
 # Review these warnings rather than forcing unsupported dependency upgrades.

@@ -1,4 +1,7 @@
-use super::{Environment, EnvironmentImage, PerspectiveView, ScenePackage, SceneSettings};
+use super::{
+    Environment, EnvironmentImage, FilmProjection, InfiniteSky, PerspectiveView, ScenePackage,
+    SceneSettings,
+};
 use crate::{BlobRef, MaterialSlot, ObjectStore};
 use glam::{Mat4, Vec3};
 use sashiko_renderer::{core::graph::ImageDesc, pipeline::EnvironmentMaps};
@@ -73,6 +76,8 @@ pub struct DisplayScene {
     environment: Option<Environment<BlobRef>>,
     environment_maps: Option<EnvironmentMaps>,
     environment_images: Vec<ManagedImage>,
+    film: Option<(FilmProjection, InfiniteSky, glam::Mat3)>,
+    sky_image: Option<ManagedImage>,
     pub settings: SceneSettings,
     pub camera: CameraView,
     sun: Sun,
@@ -83,7 +88,12 @@ impl DisplayScene {
     fn config(&self) -> sashiko_renderer::pipeline::StandardConfig {
         let mut config = sashiko_renderer::pipeline::StandardConfig::new(self.camera.extent);
         let [r, g, b] = self.settings.sky_color;
-        config.clear_color = [r, g, b, 1.];
+        config.film_output = self.film.is_some();
+        config.clear_color = if config.film_output {
+            [0.; 4]
+        } else {
+            [r, g, b, 1.]
+        };
         config.shadows = Some(sashiko_renderer::pbr::ShadowSettings {
             resolution: self.settings.shadow_resolution,
             distance: self.settings.shadow_distance,
@@ -135,8 +145,23 @@ impl DisplayScene {
         Ok((scene, renderer))
     }
     fn open(directory: &Path, view: &str, extent: [u32; 2]) -> PipelineResult<Self> {
-        let scene = ScenePackage::open(directory)?;
-        let camera = scene.view(view)?.camera(extent, [0.02, 1500.])?;
+        let mut scene = ScenePackage::open(directory)?;
+        let pose = *scene.view(view)?;
+        let camera = pose.camera(extent, [0.02, 1500.])?;
+        let film = scene
+            .physical
+            .take()
+            .and_then(|mut p| p.cameras.remove(view).zip(p.sky))
+            .map(|(film, sky)| -> PipelineResult<_> {
+                let transform =
+                    glam::Mat3::from_mat4(Mat4::from_cols_array_2d(&sky.world_from_light))
+                        .inverse();
+                Ok((FilmProjection::new(&pose, &film, extent)?, sky, transform))
+            })
+            .transpose()?;
+        if film.as_ref().is_some_and(|(_, _, m)| !m.is_finite()) {
+            return Err("singular infinite light transform".into());
+        }
         let settings = scene.settings;
         let sun = Sun::from_lux(settings.sun_direction, settings.sun_color, settings.sun_lux)?;
         let store = ObjectStore::new(directory);
@@ -202,6 +227,8 @@ impl DisplayScene {
             environment: scene.environment,
             environment_maps: None,
             environment_images: Vec::new(),
+            film,
+            sky_image: None,
             settings,
             camera,
             sun,
@@ -241,6 +268,9 @@ impl DisplayScene {
         let mut descs: Vec<_> = descriptors.values().map(|(desc, _)| *desc).collect();
         if let Some(env) = &self.environment {
             descs.extend(env.maps.iter().map(env_desc));
+        }
+        if let Some((_, sky, _)) = &self.film {
+            descs.push(env_desc(&sky.equal_area_radiance));
         }
         let samplers: Vec<_> = self
             .paints
@@ -284,6 +314,28 @@ impl DisplayScene {
                 emissive,
             };
             self.materials.update_pbr(*handle, params.clone())?;
+        }
+        if let Some((_, sky, _)) = &self.film {
+            let map = &sky.equal_area_radiance;
+            self.sky_image = Some(upload(
+                renderer,
+                env_desc(map),
+                &self.store.load(&map.data)?[..],
+            )?);
+        }
+        Ok(())
+    }
+
+    /// Draw at the frame's actual scene resolution, including after window or
+    /// dynamic-resolution changes. The selected film follows the moving view.
+    pub fn draw(&self, frame: &mut sashiko_renderer::Frame<'_>) -> PipelineResult<()> {
+        if let (Some((projection, sky, matrix)), Some(image)) = (&self.film, &self.sky_image) {
+            frame.draw_film(
+                self.input(),
+                projection.output(image.snapshot(), *matrix, sky.scale, frame.scene_view()),
+            )?;
+        } else {
+            frame.draw_scene(self.input(), 1.)?;
         }
         Ok(())
     }

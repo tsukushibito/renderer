@@ -1,9 +1,31 @@
-use super::ImageRole;
+use serde::{Deserialize, Serialize};
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub(crate) enum ImageRole {
+    Color,
+    Normal,
+    Orm,
+}
+
+impl ImageRole {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Color => "color",
+            Self::Normal => "normal",
+            Self::Orm => "orm",
+        }
+    }
+}
+
 use png::{ColorType, Decoder, Transformations};
 use sashiko_asset::ImageBlob;
 use std::{error::Error, io::Cursor, ops::Range};
 
 pub(super) fn cook(bytes: &[u8], role: ImageRole) -> Result<Vec<u8>, Box<dyn Error>> {
+    let (w, h, rgba) = decode(bytes)?;
+    cook_rgba(w, h, rgba, role)
+}
+
+pub(crate) fn decode(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Box<dyn Error>> {
     let mut decoder = Decoder::new(Cursor::new(bytes));
     decoder.set_transformations(Transformations::normalize_to_color8());
     let mut reader = decoder.read_info()?;
@@ -39,14 +61,23 @@ pub(super) fn cook(bytes: &[u8], role: ImageRole) -> Result<Vec<u8>, Box<dyn Err
             rgba
         }
     };
+    Ok((frame.width, frame.height, rgba))
+}
+
+pub(crate) fn cook_rgba(
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    role: ImageRole,
+) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut blob = ImageBlob {
-        width: frame.width,
-        height: frame.height,
+        width,
+        height,
         mip_levels: 1,
         srgb: matches!(role, ImageRole::Color),
         pixels: rgba,
     };
-    let (mut w, mut h) = (width, height);
+    let (mut w, mut h) = (width as usize, height as usize);
     let mut start = 0;
     while w > 1 || h > 1 {
         let next = downsample(&blob.pixels[start..], w, h, role);
