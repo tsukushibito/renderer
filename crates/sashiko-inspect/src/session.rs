@@ -63,6 +63,7 @@ struct Snapshot {
 }
 
 struct Subscription<F> {
+    role: crate::protocol::Role,
     id: Arc<str>,
     kind: String,
     object: Option<ObjectId>,
@@ -74,7 +75,11 @@ struct Subscription<F> {
 
 impl<F> Subscription<F> {
     fn matches(&self, record: &Record<F>) -> bool {
-        record.event.kind == self.kind && self.object.is_none_or(|id| id == record.event.subject)
+        record.event.kind == self.kind
+            && self.object.is_none_or(|id| match self.role {
+                crate::protocol::Role::Subject => id == record.event.subject,
+                crate::protocol::Role::Actor => Some(id) == record.event.actor,
+            })
     }
 }
 
@@ -162,6 +167,7 @@ impl<W: World> Session<W> {
         self.subscribe(
             id,
             Filter {
+                role: crate::protocol::Role::Subject,
                 event: event.into(),
                 object: None,
             },
@@ -394,6 +400,7 @@ impl<W: World> Session<W> {
             return Err("BAD_CURSOR");
         }
         self.subscriptions.push(Subscription {
+            role: filter.role,
             id: id.into(),
             kind: filter.event,
             object,

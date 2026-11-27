@@ -86,12 +86,24 @@ struct Tick {
     events: Events,
     /// Two words keep the entire fingerprint exact in JSON clients.
     fingerprint: [u32; 2],
+    #[serde(default)]
+    player_id: u64,
+    /// End-of-tick projection of the enemy that damaged the player.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    actor_position: Option<sashiko::math::Vec2>,
 }
 
 impl Tick {
     fn observe(game: &Game, events: Events) -> Self {
         let hash = game.replay_fingerprint();
         Self {
+            player_id: 0,
+            actor_position: events.damage.and_then(|damage| {
+                game.enemies
+                    .iter()
+                    .find(|e| e.id == damage.enemy)
+                    .map(|e| e.pos)
+            }),
             snapshot: game.snapshot(),
             events,
             fingerprint: [(hash >> 32) as u32, hash as u32],
@@ -116,6 +128,34 @@ pub(super) struct Evidence {
     inputs: Vec<Input>,
     limit: usize,
     last_tick: u64,
+    ids: ObjectIds,
+}
+
+#[derive(Clone)]
+struct ObjectIds {
+    player: u64,
+    high: u64,
+    phase: survivor::Phase,
+}
+impl ObjectIds {
+    fn new() -> Self {
+        Self {
+            player: 0,
+            high: 0,
+            phase: survivor::Phase::Playing,
+        }
+    }
+    fn observe(&mut self, game: &Game, input: Input) -> u64 {
+        if self.phase == survivor::Phase::Defeated && input.restart {
+            self.player = self.high.checked_add(1).expect("world ID overflow");
+        }
+        self.phase = game.phase;
+        self.high = self
+            .player
+            .checked_add(game.enemy_ids_issued())
+            .expect("world ID overflow");
+        self.player
+    }
 }
 
 fn build_id() -> Result<String> {
@@ -198,15 +238,20 @@ impl Evidence {
             inputs,
             limit,
             last_tick: 0,
+            ids: ObjectIds::new(),
         })
     }
 
     pub(super) fn observe(&mut self, game: &Game, input: Input, events: Events) {
         self.last_tick = game.tick;
+        let player_id = self.ids.observe(game, input);
         // Keep the replayable prefix paired with tick zero. Never evict its beginning.
         if self.ticks.len() < self.limit {
             self.inputs.push(input);
-            self.ticks.push(Tick::observe(game, events));
+            self.ticks.push(Tick {
+                player_id,
+                ..Tick::observe(game, events)
+            });
         }
     }
 
@@ -323,6 +368,7 @@ pub(super) fn verify(directory: &Path) -> Result<()> {
         game.locomotion = clips.play()?;
     }
     let mut lines = BufReader::new(artifact("ticks")?).lines();
+    let mut ids = ObjectIds::new();
     for input in replay.inputs {
         let events = game.step(input);
         let expected: Tick = serde_json::from_str(
@@ -330,10 +376,15 @@ pub(super) fn verify(directory: &Path) -> Result<()> {
                 .next()
                 .ok_or_else(|| format!("missing state at tick {}", game.tick))??,
         )?;
-        let actual = Tick::observe(&game, events);
+        let actual = Tick {
+            player_id: ids.observe(&game, input),
+            ..Tick::observe(&game, events)
+        };
         if expected.snapshot != actual.snapshot
             || expected.fingerprint != actual.fingerprint
             || expected.events != actual.events
+            || expected.actor_position != actual.actor_position
+            || expected.player_id != actual.player_id
         {
             return Err(format!(
                 "first state mismatch at tick {}: expected {}, actual {}",
@@ -344,10 +395,15 @@ pub(super) fn verify(directory: &Path) -> Result<()> {
             .into());
         }
     }
-    if lines.next().transpose()?.is_some() || game.tick < manifest.requested_tick {
+    let required = manifest
+        .frames
+        .iter()
+        .map(|f| f.tick)
+        .fold(manifest.requested_tick, u64::max);
+    if lines.next().transpose()?.is_some() || game.tick < required {
         return Err(format!(
             "input history ends at tick {}, requested tick {}",
-            game.tick, manifest.requested_tick
+            game.tick, required
         )
         .into());
     }

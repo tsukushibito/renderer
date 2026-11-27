@@ -78,6 +78,16 @@ fn minute() -> u64 {
 pub(crate) struct Filter {
     pub event: String,
     pub object: Option<String>,
+    #[serde(default)]
+    pub role: Role,
+}
+
+#[derive(Default, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Role {
+    #[default]
+    Subject,
+    Actor,
 }
 
 pub(crate) fn answer(id: Value, result: Result<Value>) -> Value {

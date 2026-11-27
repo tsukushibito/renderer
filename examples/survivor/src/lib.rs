@@ -106,6 +106,18 @@ pub struct Events {
     pub reached_marker: bool,
     pub died: bool,
     pub kills: u32,
+    #[cfg(feature = "diagnostics")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub damage: Option<Damage>,
+}
+
+#[cfg(feature = "diagnostics")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Damage {
+    pub enemy: u64,
+    pub hp_before: u32,
+    pub hp_after: u32,
+    pub dashing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -250,6 +262,10 @@ impl Game {
 
     pub fn cargo_position(&self) -> Option<sashiko::math::Vec3> {
         self.hall.cargo()
+    }
+    #[cfg(feature = "diagnostics")]
+    pub fn enemy_ids_issued(&self) -> u64 {
+        self.next_id
     }
     pub fn xp_required(&self) -> u32 {
         self.level.saturating_mul(2).saturating_add(1)
@@ -515,9 +531,20 @@ impl Game {
             if enemy.pos.distance_squared(self.player) < (PLAYER_RADIUS + ENEMY_RADIUS).powi(2) {
                 events.contact = true;
                 if self.invulnerability == 0 && !enemy.windup {
+                    #[cfg(feature = "diagnostics")]
+                    let hp_before = self.hp;
                     self.hp = self
                         .hp
                         .saturating_sub(if enemy.dash_left > 0 { 16 } else { 10 });
+                    #[cfg(feature = "diagnostics")]
+                    {
+                        events.damage = Some(Damage {
+                            enemy: enemy.id,
+                            hp_before,
+                            hp_after: self.hp,
+                            dashing: enemy.dash_left > 0,
+                        });
+                    }
                     self.invulnerability = 75;
                 }
             }

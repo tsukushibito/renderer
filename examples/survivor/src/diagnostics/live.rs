@@ -14,7 +14,7 @@ use std::{
     thread,
     time::Instant,
 };
-use survivor::{Events, Game, Input, Phase};
+use survivor::{Events, Game, Input};
 
 const fn number(id: &'static str, description: &'static str) -> Field {
     Field {
@@ -30,11 +30,34 @@ const PLAYER: &[Field] = &[
     number("z", "World Z"),
 ];
 const ENEMY: &[Field] = &[number("x", "World X"), number("z", "World Z")];
-const EVENTS: &[EventSchema] = &[EventSchema {
-    id: "gameplay",
-    description: "Survivor fixed update gameplay outcomes",
-    fields: &[],
-}];
+const EVENTS: &[EventSchema] = &[
+    EventSchema {
+        id: "gameplay",
+        description: "Survivor fixed update gameplay outcomes",
+        fields: &[],
+    },
+    EventSchema {
+        id: "damage",
+        description: "Player hit by an enemy, with values copied at damage application",
+        fields: &[
+            number("hp_before", "Player HP before damage"),
+            number("hp_after", "Player HP after damage"),
+            Field {
+                id: "dashing",
+                kind: Kind::Bool,
+                description: "Enemy had an active dash",
+                unit: None,
+            },
+        ],
+    },
+];
+
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(untagged)]
+pub(crate) enum Facts {
+    Gameplay(Events),
+    Damage(survivor::Damage),
+}
 const SCHEMAS: &[Schema] = &[
     Schema {
         id: "Player",
@@ -57,12 +80,10 @@ pub(crate) struct LiveWorld {
     evidence: Evidence,
     next_input: Input,
     last_events: Events,
-    base: u64,
-    high_id: u64,
 }
 
 impl World for LiveWorld {
-    type Facts = Events;
+    type Facts = Facts;
     fn schemas(&self) -> &'static [Schema] {
         SCHEMAS
     }
@@ -74,13 +95,13 @@ impl World for LiveWorld {
         visit: &mut dyn FnMut(Object<'_>),
     ) {
         let player = Object {
-            id: self.base,
+            id: self.evidence.ids.player,
             kind: "Player",
             name: "Survivor",
         };
         for object in std::iter::once(player)
             .chain(self.game.enemies.iter().map(|enemy| Object {
-                id: self.base + 1 + enemy.id,
+                id: self.evidence.ids.player + 1 + enemy.id,
                 kind: "Enemy",
                 name: "Enemy",
             }))
@@ -92,13 +113,13 @@ impl World for LiveWorld {
         }
     }
     fn object_type(&self, id: u64) -> Option<&'static str> {
-        if id == self.base {
+        if id == self.evidence.ids.player {
             return Some("Player");
         }
         self.enemy(id).map(|_| "Enemy")
     }
     fn read(&self, id: u64, field: &str) -> Option<Value<'_>> {
-        let pos = if id == self.base {
+        let pos = if id == self.evidence.ids.player {
             if field == "hp" {
                 return Some(Value::Number(self.game.hp as f64));
             }
@@ -114,20 +135,23 @@ impl World for LiveWorld {
     }
     fn step(&mut self, journal: &mut Journal<Self::Facts>) {
         let input = std::mem::take(&mut self.next_input);
-        if self.game.phase == Phase::Defeated && input.restart {
-            self.base = self.high_id.checked_add(1).expect("world ID overflow");
-        }
         let events = self.game.step(input);
-        if let Some(max) = self.game.enemies.iter().map(|e| e.id).max() {
-            self.high_id = self.high_id.max(self.base + 1 + max);
-        }
         self.evidence.observe(&self.game, input, events);
+        let player = self.evidence.ids.player;
+        if let Some(damage) = events.damage {
+            journal.emit(Event {
+                kind: "damage",
+                subject: player,
+                actor: Some(player + 1 + damage.enemy),
+                facts: Facts::Damage(damage),
+            });
+        }
         if events != Events::default() {
             journal.emit(Event {
                 kind: "gameplay",
-                subject: self.base,
+                subject: player,
                 actor: None,
-                facts: events,
+                facts: Facts::Gameplay(events),
             });
         }
         self.last_events = events;
@@ -135,7 +159,7 @@ impl World for LiveWorld {
 }
 impl LiveWorld {
     fn enemy(&self, id: u64) -> Option<&survivor::Enemy> {
-        let local = id.checked_sub(self.base)?.checked_sub(1)?;
+        let local = id.checked_sub(self.evidence.ids.player)?.checked_sub(1)?;
         self.game.enemies.iter().find(|e| e.id == local)
     }
 }
@@ -144,7 +168,7 @@ impl LiveWorld {
 /// advance this same Session and publish the same job status.
 pub(crate) struct Live {
     session: Session<LiveWorld>,
-    port: Option<StdioPort<Events>>,
+    port: Option<StdioPort<Facts>>,
     root: PathBuf,
     origin: Instant,
     next_frame: u64,
@@ -177,15 +201,13 @@ impl Live {
             views: vec!["main".into()],
             stages: vec!["final_srgb_ui".into()],
         };
-        let high_id = game.enemies.iter().map(|e| e.id + 1).max().unwrap_or(0);
+
         evidence.last_tick = game.tick;
         let mut session = Session::new(LiveWorld {
             game,
             evidence,
             next_input: Input::default(),
             last_events: Events::default(),
-            base: 0,
-            high_id,
         })
         .with_jobs(Jobs::new(capabilities, 16.try_into()?));
         session.set_paused(false);

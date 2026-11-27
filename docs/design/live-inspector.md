@@ -167,6 +167,19 @@ Windows では `cargo run -p survivor --features diagnostics -- --debug-dir repo
 ゲームの出荷物に Python・PyAV・FFmpeg バイナリを同梱しない。
 [PyAV の符号化 API](https://pyav.org/docs/stable/cookbook/numpy.html)・[FFmpeg の配布条件](https://ffmpeg.org/legal.html)
 
+`python tools/diagnostics/timeline.py show REPORT --frame N` で、その描画の元 tick、
+入力、ゲームイベント、tick 終了時のスナップショットを読む。`--tick N` なら描画しなかった
+更新も指定できる。引数を省くと全更新を時系列で出力する。被ダメージでは判断時の HP・
+突進フラグ・敵 ID と終了時の位置を表示する。記録対象外は `NOT_CAPTURED`、終了時に
+加害個体が消えていれば `OBJECT_GONE` になる。保存された投影は期限切れにならない。
+期限つきライブスナップショットの read は満了後に `SNAPSHOT_EXPIRED` を返す。
+
+同じ標準入出力接続を保つには `python tools/diagnostics/timeline.py live -- survivor
+--debug-dir reports --inspect-stdio` で起動する。F8 の保存先を `open DIR` で開き、
+`frame N` → `read actor` でその実行中の個体を調べる。`find`、`wait`、`watch`、
+`pause`、`step`、`resume` と生の NDJSON 要求にも対応する。異なる session や world で
+過去のハンドルを再利用しない。
+
 ## 実行中の編集と制作元への保存
 
 実行値は既定で読み取り専用とし、ゲームが編集可能と宣言した項目にだけ変更要求を送れる。たとえば「最大 HP を変更する」には、現在 HP の再計算も含めた操作をゲーム側で定義する。表示用の反射情報は変更権限を与えない。
