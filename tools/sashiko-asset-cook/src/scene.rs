@@ -5,7 +5,7 @@ use sashiko_asset::{
 };
 use std::{collections::HashMap, fs, path::Path};
 
-fn object(directory: &Path, bytes: &[u8]) -> Result<BlobRef, Error> {
+pub(crate) fn object(directory: &Path, bytes: &[u8]) -> Result<BlobRef, Error> {
     let reference = BlobRef::of(bytes);
     let path = directory.join("objects").join(reference.hash.to_string());
     if store::read_if_present(&path)?.as_deref() != Some(bytes) {
@@ -20,6 +20,9 @@ pub(super) fn cook(source: &Path, settings: &Path, directory: &Path) -> Result<(
         #[serde(flatten)]
         settings: SceneSettings,
         environment: Option<Environment<std::path::PathBuf>>,
+        attribution: Option<sashiko_asset::scene::Attribution>,
+        #[serde(default)]
+        pbrt: crate::pbrt::Options,
     }
     let recipe: Recipe = serde_json::from_slice(&fs::read(settings)?)?;
     for (name, view) in &recipe.settings.views {
@@ -64,15 +67,32 @@ pub(super) fn cook(source: &Path, settings: &Path, directory: &Path) -> Result<(
         })
         .transpose()?;
     let source = source.canonicalize()?;
-    let src = Source::open(&source, source.parent().ok_or("missing source directory")?)?;
     let mut scene = ScenePackage {
         version: 1,
         profile: sashiko_asset::scene::SceneProfile::PbrRgba8Rgba16f,
         settings: recipe.settings,
         environment,
         primitives: Vec::new(),
-        placements: Vec::with_capacity(src.len()),
+        placements: Vec::new(),
+        physical: None,
+        attribution: recipe.attribution,
     };
+    if source
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("pbrt"))
+    {
+        crate::pbrt::cook(&source, directory, recipe.pbrt, &mut scene)?;
+    } else {
+        let src = Source::open(&source, source.parent().ok_or("missing source directory")?)?;
+        cook_gltf(src, directory, &mut scene)?;
+    }
+    scene.validate()?;
+    store::publish(&directory.join("scene.json"), &serde_json::to_vec(&scene)?)?;
+    Ok(())
+}
+
+fn cook_gltf(src: Source, directory: &Path, scene: &mut ScenePackage) -> Result<(), Error> {
+    scene.placements.reserve(src.len());
     let mut primitive_ids = HashMap::new();
     let mut textures = HashMap::new();
     for i in 0..src.len() {
@@ -106,7 +126,5 @@ pub(super) fn cook(source: &Path, settings: &Path, directory: &Path) -> Result<(
             transform: src.placement(i),
         });
     }
-    scene.validate()?;
-    store::publish(&directory.join("scene.json"), &serde_json::to_vec(&scene)?)?;
     Ok(())
 }

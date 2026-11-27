@@ -1,9 +1,12 @@
 //! Offline import, conversion, and atomic catalog publication for static equipment.
 mod cache;
 mod development;
+mod geometry;
 mod gltf;
+mod image;
 mod image_update;
 mod inputs;
+mod pbrt;
 mod retention;
 mod scene;
 mod setup;

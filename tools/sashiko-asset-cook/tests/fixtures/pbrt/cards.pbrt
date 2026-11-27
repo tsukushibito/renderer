@@ -1,0 +1,17 @@
+MakeNamedMaterial "vermilion" "string type" "diffuse" "rgb reflectance" [0.9 0.02 0.01]
+MakeNamedMaterial "turquoise" "string type" "coateddiffuse" "rgb reflectance" [0.01 0.65 0.4]
+    "float roughness" 0.42
+ObjectBegin "pair"
+  Scale 0.7 0.7 0.7
+  NamedMaterial "vermilion"
+  Shape "plymesh" "string filename" "card.ply"
+  Translate 0 0.9 0
+  NamedMaterial "turquoise"
+  Shape "plymesh" "string filename" "card.ply"
+ObjectEnd
+AttributeBegin
+  Translate -0.6 -0.45 0
+  ObjectInstance "pair"
+AttributeEnd
+Translate 0.6 -0.45 0
+ObjectInstance "pair"

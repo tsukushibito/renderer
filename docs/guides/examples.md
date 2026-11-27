@@ -49,6 +49,30 @@ target/release/scene-viewer.exe build/comparison-package front
 
 アプリに組み込む場合は `sashiko_asset::scene::DisplayScene::window` にパッケージのディレクトリ、ビュー名、表示サイズ、アプリのウィンドウとバックエンドを渡します。返されたシーンの `input()` をフレームに渡して描画します。ヘッドレスでは `DisplayScene::headless` を使います。GPU アップロードは両方のコンストラクター内で完了します。[表示ホストの実装](../../examples/renderer-scenes/src/bin/scene-viewer.rs)
 
+### PBRT v4 をシーンパッケージに変換する
+
+固定版の全ファイルを取得し、カメラを定義したファイルを `scene` に渡します。同じ入力で再実行すると、取得済みファイルを Git blob のサイズとハッシュで照合し、欠損・破損分だけを再取得します。各ファイルは検証後に公開されるため、中断後も同じコマンドで再開できます。
+
+```powershell
+python tools/landscape/reference.py
+$scene = 'build/landscape-cache/30cf4a0346ae5a80a2d7a530a3ef7d0fa4f70572'
+cargo run --release --locked -p sashiko-asset-cook -- scene "$scene/view-0.pbrt" assets/landscape/pbrt-settings.json build/full-package
+python tools/landscape/check_import.py build/full-package $scene
+```
+
+PBRT の静的な透視カメラ、RGB film、画像付き infinite light、Include、Attribute/Object スコープ、ObjectInstance、変換行列・平行移動・回転・拡縮、ReverseOrientation、名前付き材質、PNG imagemap、バイナリ little-endian 三角形 PLY に対応します。PLY は位置のみ、または位置・法線・UV の順の入力に対応します。共有形状は配置ごとに複製せず、glTF と同じ頂点・接線・材質・画像の形式に変換します。出力先と同階層の `.sashiko-pbrt-cache` に、入力・変換器・縮尺・面向きから識別したメッシュを保存します。再利用時に出力のハッシュを照合します。
+
+Landscape のレシピは原点からの距離を m に換算し、X 軸の反転を頂点・法線・巻き順・接空間・配置・カメラ・光源に適用します。`pbrt.region_xz_metres` を `[xmin,zmin,xmax,zmax]` としてレシピのコピーに追加すると、原点からの **PBRT 側の軸** で指定した半開区間に原点が入る植物配置を変換します。直接宣言された地形や水面は、全頂点を世界座標に移した境界ボックスが区画と交差する場合に含めます。レシピを移動する場合は環境マップへの相対パスも合わせます。
+
+パッケージには原作者、出典、CC BY 4.0、改変内容、物理カメラ・フィルム設定、元解像度の等面積 HDR、形状ごとの diffuse・coateddiffuse・diffusetransmission・dielectric と画像を保存します。対話表示は PBR 近似を使います。cook の診断には入力ファイルと行番号、材質近似やゼロ面積形状の法線補完が出ます。未対応の命令・形状・材質はエラーになります。
+
+別の PBRT 入力を同じ経路で表示する例です。このシーンには2色の三角形を持つ原型と2つの配置があります。
+
+```powershell
+target/release/sashiko-asset-cook.exe scene tools/sashiko-asset-cook/tests/fixtures/pbrt/postcards.pbrt tools/sashiko-asset-cook/tests/fixtures/comparison-view.json build/cards
+target/release/scene-viewer.exe build/cards postcards
+```
+
 ### Landscape の原画と比較する
 
 評価用素材を取得するには、上記の Python 環境で次を実行します。取得ツールは固定版の Git blob とローカルの内容を照合し、既にあるジオメトリやテクスチャを再利用します。評価用画像はランタイムの入力から独立しています。
