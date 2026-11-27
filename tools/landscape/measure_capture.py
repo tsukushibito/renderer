@@ -110,6 +110,14 @@ def run_viewer(argv, env):
                 observed_peak_working_set_bytes=peak)
 
 
+def trace_viewer(argv, path):
+    env = os.environ.copy()
+    env.update(VK_INSTANCE_LAYERS="VK_LAYER_LUNARG_api_dump", VK_APIDUMP_FILE="true",
+               VK_APIDUMP_LOG_FILENAME=str(path.resolve()), VK_APIDUMP_DETAILED="true",
+               VK_APIDUMP_OUTPUT_FORMAT="text", VK_APIDUMP_NO_ADDR="false")
+    subprocess.run(argv, env=env, check=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace", type=Path)
@@ -120,13 +128,9 @@ def main():
     if args.command:
         if args.trace.exists():
             parser.error("choose an unused trace filename")
-        env = os.environ.copy()
-        env.update(VK_INSTANCE_LAYERS="VK_LAYER_LUNARG_api_dump", VK_APIDUMP_FILE="true",
-                   VK_APIDUMP_LOG_FILENAME=str(args.trace.resolve()), VK_APIDUMP_DETAILED="true",
-                   VK_APIDUMP_OUTPUT_FORMAT="text", VK_APIDUMP_NO_ADDR="false")
         # Time a normal run. Layer logging adds substantial CPU and file I/O.
         timing = run_viewer(args.command, os.environ.copy())
-        subprocess.run(args.command, env=env, check=True)
+        trace_viewer(args.command, args.trace)
     print(json.dumps({**timing, **submitted(args.trace)}, indent=2))
 
 

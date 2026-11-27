@@ -110,6 +110,12 @@ $env:SASHIKO_VISIBILITY_PACKAGE=(Resolve-Path build/overview-package).Path
 cargo test --release -p sashiko-asset --features vulkan-presentation,sashiko-renderer/development-validation --lib fixed_selection_preserves -- --ignored --nocapture
 ```
 
+原形状の全景を同じ条件で測るには、HDR環境光のみのパッケージから4Kフィルムをタイルに分けて撮影します。各タイルの通常撮影とAPI dumpを別々に実行し、完了したタイルのEXR・PNGと計測値を保存します。中断後は同じコマンドで続行できます。全タイルの照合後に `film.exr`、`film.png`、集計した `totals.json` が出力されます。
+
+```powershell
+python tools/landscape/tiled_capture.py target/release/scene-viewer.exe build/full-package view-0 build/tasks/renderer-ief4.6/whole-raster --samples 1 --tile 384 216 --measure
+```
+
 光量・反射方向と焦点面を独立に検査するには次を実行します。PBRT v4 の実行ファイルを `pbrt` として指定しています。
 
 ```powershell
