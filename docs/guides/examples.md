@@ -62,6 +62,15 @@ target/release/scene-viewer.exe --api d3d12 "$ref/restored-stills" b --capture "
 
 経路を測る場合は `--benchmark-route assets/namaqualand/walk.json 出力.json` を使う。両APIの9視点、UE5の同一経路計測、単体植生の対照を保存している。[比較結果](../verification/current.md#near-csm)
 
+同じベイク・カメラで太陽VSMを表示するには、上で復元した歩行パッケージを使ってVSM用マニフェストを展開する。通常のアプリでは `settings.virtual_shadows` が太陽VSMの切替設定となる。[VSMの画質・速度](../verification/current.md#太陽vsmのページ管理と受光)
+
+```powershell
+$vsm = "build/tasks/sashiko-ya35.8/restored-walk"
+git lfs pull --include="assets/verification/namaqualand-vsm-evidence.zip"
+python tools/namaqualand/restore_near_csm.py "$ref/restored-walk" "$vsm" --archive assets/verification/namaqualand-vsm-evidence.zip
+target/release/scene-viewer.exe --api vulkan "$vsm" rock --walk-route assets/namaqualand/walk.json
+```
+
 <a id="landscape"></a>
 
 ## Landscape の草原を描画する
