@@ -58,6 +58,7 @@ python tools/landscape/reference.py
 $scene = 'build/landscape-cache/30cf4a0346ae5a80a2d7a530a3ef7d0fa4f70572'
 cargo run --release --locked -p sashiko-asset-cook -- scene "$scene/view-0.pbrt" assets/landscape/pbrt-settings.json build/full-package
 python tools/landscape/check_import.py build/full-package $scene
+python tools/landscape/check_masks.py build/full-package $scene
 ```
 
 PBRT の静的な透視カメラ、RGB film、画像付き infinite light、Include、Attribute/Object スコープ、ObjectInstance、変換行列・平行移動・回転・拡縮、ReverseOrientation、名前付き材質、PNG imagemap、バイナリ little-endian 三角形 PLY に対応します。PLY は位置のみ、または位置・法線・UV の順の入力に対応します。共有形状は配置ごとに複製せず、glTF と同じ頂点・接線・材質・画像の形式に変換します。出力先と同階層の `.sashiko-pbrt-cache` に、入力・変換器・縮尺・面向きから識別したメッシュを保存します。再利用時に出力のハッシュを照合します。

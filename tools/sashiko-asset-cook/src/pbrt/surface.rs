@@ -111,20 +111,35 @@ impl Material {
 #[derive(Default)]
 pub(super) struct Materials {
     images: HashMap<(Option<PathBuf>, Option<PathBuf>), BlobRef>,
-    originals: HashMap<PathBuf, BlobRef>,
+    originals: HashMap<(PathBuf, ImageRole), BlobRef>,
 }
 
 impl Materials {
-    fn original(&mut self, out: &Path, path: Option<&Path>) -> Result<Option<BlobRef>> {
+    fn source_map(
+        &mut self,
+        out: &Path,
+        path: Option<&Path>,
+        role: ImageRole,
+    ) -> Result<Option<BlobRef>> {
         let Some(path) = path else { return Ok(None) };
-        if let Some(image) = self.originals.get(path) {
+        let key = (path.to_owned(), role);
+        if let Some(image) = self.originals.get(&key) {
             return Ok(Some(*image));
         }
-        // PBRT uses sRGB transfer for PNG imagemaps, including float textures.
-        let encoded = image::cook(&fs::read(path)?, ImageRole::Color)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let source =
+            image::decode(&fs::read(path)?).map_err(|e| format!("{}: {e}", path.display()))?;
+        let pixels = if role == ImageRole::Color {
+            source.rgba
+        } else {
+            source
+                .pbrt_scalar()
+                .into_iter()
+                .flat_map(|v| [v, v, v, 255])
+                .collect()
+        };
+        let encoded = image::cook_rgba(source.width, source.height, pixels, role)?;
         let image = object(out, &encoded)?;
-        self.originals.insert(path.to_owned(), image);
+        self.originals.insert(key, image);
         Ok(Some(image))
     }
     fn color(
@@ -143,12 +158,16 @@ impl Materials {
         let load = |p: &Path| -> Result<_> {
             image::decode(&fs::read(p)?).map_err(|e| format!("{}: {e}", p.display()).into())
         };
-        let mask = alpha.map(load).transpose()?;
+        let mask = alpha
+            .map(load)
+            .transpose()?
+            .map(|s| (s.width, s.height, s.pbrt_scalar()));
         let (width, height, mut rgba) = if let Some(path) = color {
-            load(path)?
+            let source = load(path)?;
+            (source.width, source.height, source.rgba)
         } else {
-            let (w, h, data) = mask.as_ref().unwrap();
-            (*w, *h, vec![255; data.len()])
+            let (w, h, scalar) = mask.as_ref().unwrap();
+            (*w, *h, vec![255; scalar.len() * 4])
         };
         for (i, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             pixel[3] = match &mask {
@@ -157,15 +176,17 @@ impl Materials {
                     let y = i / width as usize;
                     let sx = (2 * x as u64 + 1) * u64::from(*w) / (2 * u64::from(width));
                     let sy = (2 * y as u64 + 1) * u64::from(*h) / (2 * u64::from(height));
-                    mask[4 * (sy * u64::from(*w) + sx) as usize]
+                    mask[(sy * u64::from(*w) + sx) as usize]
                 }
                 None => 255,
             };
         }
-        let reference = object(
-            out,
-            &image::cook_rgba(width, height, rgba, ImageRole::Color)?,
-        )?;
+        let encoded = if mask.is_some() {
+            image::cook_cutout(width, height, rgba)?
+        } else {
+            image::cook_rgba(width, height, rgba, ImageRole::Color)?
+        };
+        let reference = object(out, &encoded)?;
         self.images.insert(key, reference);
         Ok(Some(reference))
     }
@@ -221,10 +242,10 @@ impl Materials {
         let surface = Surface {
             scattering,
             reflectance: mat.rgb,
-            color: self.original(out, mat.color.as_deref())?,
-            transmittance: self.original(out, mat.transmission.as_deref())?,
-            displacement: self.original(out, mat.displacement.as_deref())?,
-            alpha: self.original(out, alpha)?,
+            color: self.source_map(out, mat.color.as_deref(), ImageRole::Color)?,
+            transmittance: self.source_map(out, mat.transmission.as_deref(), ImageRole::Color)?,
+            displacement: self.source_map(out, mat.displacement.as_deref(), ImageRole::Scalar)?,
+            alpha: self.source_map(out, alpha, ImageRole::Scalar)?,
             eta: mat.eta,
             roughness: mat.roughness,
             scale: mat.scale,
