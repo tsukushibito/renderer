@@ -149,6 +149,18 @@ impl Source {
         geometry::cook(self.primitive(i), &self.buffers, self.parts[i].transform)
     }
 
+    pub(crate) fn local_primitive(&self, i: usize) -> (usize, usize) {
+        (self.parts[i].mesh, self.parts[i].primitive)
+    }
+
+    pub(crate) fn placement(&self, i: usize) -> [[f32; 4]; 4] {
+        self.parts[i].transform.to_cols_array_2d()
+    }
+
+    pub(crate) fn cook_local_mesh(&self, i: usize) -> Result<Vec<u8>> {
+        geometry::cook(self.primitive(i), &self.buffers, Mat4::IDENTITY)
+    }
+
     pub(crate) fn material_inputs(&self, i: usize) -> Result<Vec<u8>> {
         self.parts[i].material.inputs()
     }

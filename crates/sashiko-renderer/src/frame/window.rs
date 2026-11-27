@@ -57,8 +57,30 @@ impl WindowRenderer {
     /// Prepare application passes and capacity for overlapping frame and asset submissions.
     pub fn new_with(
         window: impl HasWindowHandle + 'static,
+        backend: RuntimeConfig,
+        camera: CameraView,
+        assets: SceneAssets<'_>,
+        frames_in_flight: NonZeroUsize,
+        configure: impl FnOnce(
+            &mut sashiko_renderer_core::capacity::Preparation,
+        ) -> Result<(), sashiko_renderer_core::graph::GraphError>,
+    ) -> PipelineResult<Self> {
+        Self::new_configured(
+            window,
+            backend,
+            camera,
+            crate::pipeline::StandardConfig::new(camera.extent),
+            assets,
+            frames_in_flight,
+            configure,
+        )
+    }
+
+    pub fn new_configured(
+        window: impl HasWindowHandle + 'static,
         mut backend: RuntimeConfig,
         camera: CameraView,
+        config: crate::pipeline::StandardConfig,
         assets: SceneAssets<'_>,
         frames_in_flight: NonZeroUsize,
         configure: impl FnOnce(
@@ -67,7 +89,8 @@ impl WindowRenderer {
     ) -> PipelineResult<Self> {
         let presentation = sashiko_renderer_core::PresentationConfig::default();
         let destination = FrameDestination::Window(presentation);
-        let mut plan = Renderer::prepare(camera, None, assets, destination, frames_in_flight)?;
+        let mut plan =
+            Renderer::prepare(camera, config, None, assets, destination, frames_in_flight)?;
         let host = Renderer::prepare_host(&mut plan, configure)?;
         plan.fit_backend(&mut backend)?;
         let (runtime, presenter) = Runtime::for_window(
@@ -82,6 +105,7 @@ impl WindowRenderer {
         Ok(Self {
             presenter,
             renderer: Renderer {
+                config,
                 drawing,
                 captures: Default::default(),
                 camera,

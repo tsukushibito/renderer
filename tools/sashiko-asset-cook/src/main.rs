@@ -5,6 +5,7 @@ mod gltf;
 mod image_update;
 mod inputs;
 mod retention;
+mod scene;
 mod setup;
 mod store;
 
@@ -209,11 +210,14 @@ fn run(args: &[OsString]) -> Result<(), Error> {
         [cmd, source] if cmd == "release" => development::release(Path::new(source), false)?,
         [cmd, source, opt] if cmd == "release" && opt == "--apply" => development::release(Path::new(source), true)?,
         [cmd, source] if cmd == "import" => println!("{}", import(Path::new(source))?),
+        [cmd, source, settings, directory] if cmd == "scene" => {
+            scene::cook(Path::new(source), Path::new(settings), Path::new(directory))?;
+        }
         [cmd, source, output, opt, cache] if cmd == "cook" && opt == "--cache" => {
             let report = cook(Path::new(source), Path::new(output), Path::new(cache))?;
             println!("{}", serde_json::to_string(&report)?);
         }
-        _ => return Err("usage: sashiko-asset-cook setup | dev <source> | repair <source> | release <source> [--apply] | gc <source> | import <source.gltf> | cook <source> <output> --cache <cache>".into()),
+        _ => return Err("usage: sashiko-asset-cook setup | dev <source> | repair <source> | release <source> [--apply] | gc <source> | import <source.gltf> | cook <source> <output> --cache <cache> | scene <source.gltf> <settings.json> <output>".into()),
     }
     Ok(())
 }

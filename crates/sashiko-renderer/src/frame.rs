@@ -69,6 +69,7 @@ impl FrameDestination {
 
 /// Standard drawing context for a camera. A frame borrows it until submission or cancellation.
 pub struct Renderer {
+    config: StandardConfig,
     drawing: SceneRenderer,
     captures: Box<[CaptureSlot]>,
     camera: CameraView,
@@ -95,6 +96,7 @@ impl Renderer {
     }
     fn prepare<'a>(
         camera: CameraView,
+        mut config: StandardConfig,
         scene_extent: Option<[u32; 2]>,
         assets: SceneAssets<'a>,
         destination: FrameDestination,
@@ -104,8 +106,8 @@ impl Renderer {
             extent: scene_extent.unwrap_or(camera.extent),
             ..camera
         };
-        let mut group =
-            CameraGroup::standard(scene, Technique::Forward, StandardConfig::new(scene.extent));
+        config.extent = scene.extent;
+        let mut group = CameraGroup::standard(scene, Technique::Forward, config);
         group.output = None;
         let mut setup = RendererSetup::new(group);
         setup.frames_in_flight = frames_in_flight;
@@ -172,12 +174,31 @@ impl Renderer {
         frames_in_flight: NonZeroUsize,
         configure: impl FnOnce(&mut Preparation) -> Result<(), GraphError>,
     ) -> PipelineResult<Self> {
+        Self::headless_configured(
+            backend,
+            camera,
+            StandardConfig::new(camera.extent),
+            assets,
+            frames_in_flight,
+            configure,
+        )
+    }
+
+    pub fn headless_configured(
+        backend: RuntimeConfig,
+        camera: CameraView,
+        config: StandardConfig,
+        assets: SceneAssets<'_>,
+        frames_in_flight: NonZeroUsize,
+        configure: impl FnOnce(&mut Preparation) -> Result<(), GraphError>,
+    ) -> PipelineResult<Self> {
         let destination = FrameDestination::Capture;
-        let mut plan = Self::prepare(camera, None, assets, destination, frames_in_flight)?;
+        let mut plan = Self::prepare(camera, config, None, assets, destination, frames_in_flight)?;
         let host = Self::prepare_host(&mut plan, configure)?;
         let working_set = Self::base_working_set(&plan)?;
         let drawing = plan.build(backend)?;
         Ok(Self {
+            config,
             drawing,
             captures: (0..frames_in_flight.get())
                 .map(|_| CaptureSlot::default())
@@ -243,6 +264,7 @@ impl Renderer {
         }
         let mut plan = Self::prepare(
             camera,
+            self.config,
             scene_extent,
             assets,
             self.destination,

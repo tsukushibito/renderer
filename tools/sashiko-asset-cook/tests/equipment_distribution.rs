@@ -7,6 +7,38 @@ use serde_json::Value;
 use std::{collections::BTreeSet, fs};
 
 #[test]
+fn scene_keeps_placements_separate_from_shared_local_mesh() -> Result {
+    let project = Project::new()?;
+    let source = project.0.join("source/comparison.gltf");
+    let mut doc: Value = serde_json::from_slice(&fs::read(&source)?)?;
+    doc["nodes"] = serde_json::json!([{"mesh":0},{"mesh":0,"translation":[1,2,3]}]);
+    doc["scenes"][0]["nodes"] = serde_json::json!([0, 1]);
+    fs::write(&source, serde_json::to_vec(&doc)?)?;
+    let directory = project.0.join("scene");
+    let settings = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/comparison-view.json");
+    let command = std::process::Command::new(env!("CARGO_BIN_EXE_sashiko-asset-cook"))
+        .arg("scene")
+        .arg(source)
+        .arg(settings)
+        .arg(&directory)
+        .output()?;
+    assert!(
+        command.status.success(),
+        "{}",
+        String::from_utf8_lossy(&command.stderr)
+    );
+    let scene = sashiko_asset::scene::ScenePackage::open(&directory)?;
+    assert_eq!(scene.primitives.len(), 1);
+    assert_eq!(scene.placements.len(), 2);
+    assert_eq!(scene.placements[0].primitive, scene.placements[1].primitive);
+    assert_eq!(scene.placements[1].transform[3], [1., 2., 3., 1.]);
+    assert_eq!(scene.view("front")?.position, [0., 0., 2.]);
+    assert!(scene.view("absent").is_err());
+    Ok(())
+}
+
+#[test]
 fn a_cached_tangent_vector_does_not_accept_matrix_input() -> Result {
     let project = Project::new()?;
     project.report()?;

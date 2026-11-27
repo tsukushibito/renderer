@@ -1,0 +1,17 @@
+{
+  "views": {
+    "front": {
+      "position": [0, 0, 2],
+      "forward": [0, 0, -1],
+      "up": [0, 1, 0],
+      "vertical_fov_degrees": 40,
+      "mirror_x": false
+    }
+  },
+  "sun_direction": [0, 0, 1],
+  "sun_color": [1, 1, 1],
+  "sun_lux": 6,
+  "sky_color": [0.1, 0.1, 0.1],
+  "shadow_resolution": 256,
+  "shadow_distance": 10
+}

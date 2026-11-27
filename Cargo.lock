@@ -1988,6 +1988,7 @@ dependencies = [
  "js-sys",
  "png",
  "pollster",
+ "sashiko-asset",
  "sashiko-example-support",
  "sashiko-lighting-bake",
  "sashiko-renderer",
@@ -2135,6 +2136,8 @@ dependencies = [
 name = "sashiko-asset"
 version = "0.1.0"
 dependencies = [
+ "glam 0.30.10",
+ "raw-window-handle",
  "sashiko-renderer",
  "serde",
  "serde_json",

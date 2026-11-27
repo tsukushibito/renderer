@@ -30,6 +30,25 @@ cargo run --locked --release -p renderer-scenes --features landscape --bin lands
 
 原作は Laubwerk の Jan-Walter Schliep、Burak Kahraman、Timm Dapper による **Landscape**（CC BY 4.0）。変換版では座標の再配置、テクスチャ縮小、反射色とカットアウトへの材質変換を行い、太陽光・一定の環境光・カスケードシャドウで描画しています。水の屈折、葉の透過散乱、原作の HDR 照明は省略しています。[固定版の配布元](https://github.com/mmp/pbrt-v4-scenes/tree/30cf4a0346ae5a80a2d7a530a3ef7d0fa4f70572/landscape)・[ライセンス](https://creativecommons.org/licenses/by/4.0/)
 
+### cook 済みシーンを表示する
+
+展開済みの全景 glTF から、ジオメトリ・材質・テクスチャ・環境を含む配布ディレクトリを作ります。Windows ビューアは WASD で移動し、矢印キーで向きを変えます。Esc で終了します。
+
+```powershell
+cargo run --release --locked -p sashiko-asset-cook -- scene build/landscape-overview/landscape.gltf assets/landscape/overview-settings.json build/overview-package
+cargo run --release --locked -p renderer-scenes --features scene-viewer --bin scene-viewer -- build/overview-package view-0
+target/release/scene-viewer.exe build/overview-package view-4 --capture build/water.png
+```
+
+ウィンドウと 4K キャプチャは同じ `scene.json` と `objects/` を読みます。パッケージを別の場所へ移すときはこの2つを一緒にコピーします。小型の別シーンでも同じ経路を使えます。
+
+```powershell
+target/release/sashiko-asset-cook.exe scene examples/training-yard/assets/equipment/source/comparison.gltf tools/sashiko-asset-cook/tests/fixtures/comparison-view.json build/comparison-package
+target/release/scene-viewer.exe build/comparison-package front
+```
+
+アプリに組み込む場合は `sashiko_asset::scene::DisplayScene::window` にパッケージのディレクトリ、ビュー名、表示サイズ、アプリのウィンドウとバックエンドを渡します。返されたシーンの `input()` をフレームに渡して描画します。ヘッドレスでは `DisplayScene::headless` を使います。GPU アップロードは両方のコンストラクター内で完了します。[表示ホストの実装](../../examples/renderer-scenes/src/bin/scene-viewer.rs)
+
 ### Landscape の原画と比較する
 
 評価用素材を取得するには、上記の Python 環境で次を実行します。取得ツールは固定版の Git blob とローカルの内容を照合し、既にあるジオメトリやテクスチャを再利用します。評価用画像はランタイムの入力から独立しています。

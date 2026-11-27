@@ -1,0 +1,33 @@
+{
+  "views": {
+    "view-0": {
+      "position": [-8.99305, 1.51107, -19.81427],
+      "forward": [0.39362455, 0.04013179, 0.9183949],
+      "up": [0, 1, 0],
+      "vertical_fov_degrees": 44.095898,
+      "mirror_x": true
+    },
+    "view-4": {
+      "position": [16.439646, 21.71107, 71.46965],
+      "forward": [0.026704177, -0.4756242, -0.87924314],
+      "up": [0, 1, 0],
+      "vertical_fov_degrees": 28.409271,
+      "mirror_x": true
+    }
+  },
+  "sun_direction": [0.55, 0.78, 0.30],
+  "sun_color": [1, 0.96, 0.87],
+  "sun_lux": 6,
+  "sky_color": [0.43, 0.61, 0.85],
+  "shadow_resolution": 1024,
+  "shadow_distance": 80,
+  "environment": {
+    "nits_per_unit": 30,
+    "yaw_radians": 0,
+    "maps": [
+      {"width": 1, "height": 1, "mip_levels": 1, "data": "overview-irradiance.rgba16f"},
+      {"width": 1, "height": 1, "mip_levels": 1, "data": "overview-reflection.rgba16f"},
+      {"width": 16, "height": 16, "mip_levels": 1, "data": "../../examples/renderer-scenes/src/shared/ibl-fixture-brdf.rgba16f"}
+    ]
+  }
+}

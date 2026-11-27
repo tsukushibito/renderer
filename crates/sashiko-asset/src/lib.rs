@@ -3,6 +3,7 @@ mod blob;
 mod catalog;
 #[cfg(feature = "renderer")]
 mod renderer;
+pub mod scene;
 pub mod skin;
 mod store;
 #[cfg(feature = "renderer")]

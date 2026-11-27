@@ -8,9 +8,12 @@ description = "Immutable cooked equipment catalogs and shared offline asset read
 
 [features]
 metrics = []
-renderer = ["dep:sashiko-renderer"]
+vulkan-presentation = ["renderer", "sashiko-renderer/vulkan", "sashiko-renderer/presentation", "dep:raw-window-handle"]
+renderer = ["dep:sashiko-renderer", "dep:glam"]
 
 [dependencies]
+glam = { version = "0.30", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
 sashiko-renderer = { version = "0.1.0", path = "../sashiko-renderer", default-features = false, optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
