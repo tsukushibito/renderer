@@ -4,6 +4,48 @@
 [必要なツール](development.md#必要なツール)、GPUの検証設定は
 [製品・開発用の検証設定](development.md#validation-settings)を参照してください。
 
+<a id="namaqualand"></a>
+
+## Namaqualand の岩場と花畑を歩く
+
+Poly Haven の Blender シーンから岩場・花畑・遠景の低木を含む区画を作る。素材は CC0。配布ページの「Download the Blender Scene」から取得できる。公式 UE5 ショーケースは景観の比較に使う。[公式素材](https://polyhaven.com/collections/namaqualand)・[ライセンス](https://polyhaven.com/license)・[ショーケースと画像](https://www.fab.com/listings/295ed897-fe78-4711-a583-d9b80fde554a)
+
+Windows、Vulkan、Python 3.11、Node.js を使う。ZIP を `build/namaqualand-cache/namaqualand.zip` に置き、初回のみハッシュを照合して展開し、ツールを用意する。
+
+```powershell
+$source = "build/namaqualand-cache"
+$task = "build/tasks/sashiko-ya35.1"
+$python = ".tools/namaqualand-blender/Scripts/python.exe"
+if ((Get-FileHash "$source/namaqualand.zip").Hash -ne "e2c61ac273ca291e7f0ddb0f27a4b22a8c2375133228d918c86169ad464a97e7") { throw "Namaqualand ZIP hash mismatch" }
+Expand-Archive "$source/namaqualand.zip" $source
+py -3.11 -m venv .tools/namaqualand-blender
+& $python -m pip install bpy==4.2.0 numpy==1.26.4 opencv-python-headless==4.11.0.86 imageio-ffmpeg==0.8.1 psutil pywin32
+npm install --prefix .tools/namaqualand-meshopt meshoptimizer@0.23.0
+```
+
+共有する形状と配置を取り出し、テクスチャ・空・環境照明・LOD を含むパッケージを生成する。地表の散布は Blender 座標の X が −5～6 m、Y が −15～0 m の範囲で全配置を使い、外側の 14 m では元の配置を決定的に間引く。地形と遠景の樹木は区画の外にも残す。色・法線・粗さ・抜きマスクを変換し、テクスチャの長辺は植生で 1,024、地形等で 2,048 texel に制限する。地面の多層シェーダーは単層のタイル材質に近似する。背景と環境光には同梱の Rogland Sunset HDR を使う。太陽を別の指向光として与えるため、環境マップは各 RGB 成分を16で上限処理する。
+
+```powershell
+& $python tools/namaqualand/export.py "$source/Namaqualand.blend" "$task/gltf"
+& $python tools/namaqualand/prepare.py $task "$source/textures/rogland_sunset_8k.hdr" .tools/namaqualand-meshopt/node_modules/meshoptimizer
+cargo build --locked --release -p sashiko-asset-cook -p renderer-scenes --features renderer-scenes/scene-viewer --bin sashiko-asset-cook --bin scene-viewer
+target/release/sashiko-asset-cook.exe scene "$task/gltf/section.gltf" "$task/recipe.json" "$task/package"
+target/release/scene-viewer.exe "$task/package" rock --walk-route assets/namaqualand/walk.json
+```
+
+R で30秒の固定経路と自由移動を切り替える。自由移動では WASD で前後左右へ移動し、矢印キーで視線を変える。Esc で終了する。静止画の視点名は `rock`、`flowers`、`vista`。最高詳細は書き出した各配置の元形状、通常は同じ位置・材質・テクスチャで距離に応じて簡略形状を使う。どちらも対象資産を起動時に常駐させる。
+
+```powershell
+$viewer = "target/release/scene-viewer.exe"
+& $python tools/namaqualand/measure.py $viewer $task --mode still
+& $python tools/namaqualand/measure.py $viewer $task --mode timing
+& $python tools/namaqualand/measure.py $viewer $task --mode profile
+& $python tools/namaqualand/measure.py $viewer $task --mode movie
+& $python tools/namaqualand/compare.py "$task/evidence"
+```
+
+NVIDIA GPU を使い、計測中はほかの GPU 作業を止める。各モードで VSync 無効・1920×1080 のウィンドウを開き、1周ウォームアップした後に3周測る。`profile` は別走行で GPU タイムスタンプを有効にする。動画は同じ時刻を 24 fps で記録する。対話表示のフレーム時間は `timing` に保存する。`package` は再生用で、`gltf` と `*.rgb8` は変換・比較用の中間データ。結果を保存した後は元の ZIP とレシピから再生成できる。[実機検証と成果物](../verification/current.md#namaqualand)
+
 <a id="landscape"></a>
 
 ## Landscape の草原を描画する

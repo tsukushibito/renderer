@@ -1,0 +1,86 @@
+{
+  "views": {
+    "rock": {
+      "position": [
+        0.25,
+        6.6,
+        13.5
+      ],
+      "forward": [
+        0.86,
+        -0.26,
+        -0.44
+      ],
+      "up": [
+        0,
+        1,
+        0
+      ],
+      "vertical_fov_degrees": 53,
+      "mirror_x": false
+    },
+    "flowers": {
+      "position": [
+        -1,
+        5.7,
+        8
+      ],
+      "forward": [
+        0.67,
+        -0.34,
+        -0.66
+      ],
+      "up": [
+        0,
+        1,
+        0
+      ],
+      "vertical_fov_degrees": 53,
+      "mirror_x": false
+    },
+    "vista": {
+      "position": [
+        0,
+        6.25,
+        5
+      ],
+      "forward": [
+        0.42,
+        0.05,
+        -0.906
+      ],
+      "up": [
+        0,
+        1,
+        0
+      ],
+      "vertical_fov_degrees": 53,
+      "mirror_x": false
+    }
+  },
+  "sun_direction": [
+    -0.66,
+    0.51,
+    0.55
+  ],
+  "sun_color": [
+    1,
+    0.91,
+    0.75
+  ],
+  "sun_lux": 6,
+  "sky_color": [
+    0.32,
+    0.52,
+    0.76
+  ],
+  "shadow_resolution": 1024,
+  "shadow_distance": 60,
+  "attribution": {
+    "title": "Namaqualand",
+    "authors": "Poly Haven",
+    "source": "https://polyhaven.com/collections/namaqualand",
+    "license": "CC0",
+    "changes": "Exported a section of the evaluated Blender scene in metres. Packed and resized PBR textures."
+  }
+}

@@ -194,7 +194,7 @@ fn brdf_lut(directory: &Path) -> Result<EnvironmentImage<BlobRef>> {
     map(directory, SIZE, SIZE, 1, &bytes)
 }
 
-pub(super) fn cook(directory: &Path, sky: &InfiniteSky) -> Result<Environment<BlobRef>> {
+pub(crate) fn cook(directory: &Path, sky: &InfiniteSky) -> Result<Environment<BlobRef>> {
     let store = ObjectStore::new(directory);
     let cells = cells(&store, sky)?;
     let mut bytes = Vec::new();

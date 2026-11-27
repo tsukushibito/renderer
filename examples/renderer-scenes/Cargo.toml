@@ -9,7 +9,7 @@ description = "Reference scene applications for Bistro, Sponza and Landscape"
 
 [features]
 landscape = ["vulkan", "dep:gltf", "dep:png"]
-scene-viewer = ["vulkan", "presentation", "sashiko-asset/vulkan-presentation", "dep:png", "dep:exr"]
+scene-viewer = ["vulkan", "presentation", "sashiko-asset/vulkan-presentation", "dep:png", "dep:exr", "dep:serde"]
 scene-film = ["scene-viewer", "sashiko-lighting-bake/film"]
 default = []
 bake-tool = ["dep:sashiko-lighting-bake", "dep:serde", "dep:half"]

@@ -12,6 +12,9 @@ use std::{fs::File, io::BufWriter, path::Path, time::Duration};
 #[path = "scene_viewer/window.rs"]
 mod window;
 
+#[path = "scene_viewer/route.rs"]
+mod route;
+
 #[path = "scene_viewer/film.rs"]
 mod film;
 
@@ -51,9 +54,10 @@ fn finish(
     Ok(())
 }
 
-fn capture(package: &Path, view: &str, output: &Path) -> PipelineResult<()> {
-    let extent = [3840, 2160];
-    let (scene, mut renderer) = DisplayScene::headless(package, view, extent, backend())?;
+fn capture(package: &Path, view: &str, extent: [u32; 2], output: &Path) -> PipelineResult<()> {
+    let (mut scene, mut renderer) = DisplayScene::headless(package, view, extent, backend())?;
+    let pose = scene.settings.views[view];
+    scene.select_lods(&pose, extent[1]);
     let mut frame = renderer.begin_frame()?;
     scene.draw(&mut frame)?;
     let ticket = frame.capture()?;
@@ -168,11 +172,28 @@ fn main() -> PipelineResult<()> {
             Path::new(exr), Path::new(png),
         ),
         [package, view, flag, exr, png] if flag == "--sky" => film::sky(Path::new(package),view.to_str().ok_or("invalid view name")?,Path::new(exr),Path::new(png)),
+        [package, view, flag, png] if flag == "--capture-1080p" => capture(
+            Path::new(package),
+            view.to_str().ok_or("invalid view name")?,
+            [1920, 1080],
+            Path::new(png),
+        ),
         [package, view, flag, png] if flag == "--capture" => capture(
             Path::new(package),
             view.to_str().ok_or("invalid view name")?,
+            [3840, 2160],
             Path::new(png),
         ),
+        [package, view, flag, route_path, fps] if flag == "--route-rgba" => route::record(
+            Path::new(package), view.to_str().ok_or("invalid view name")?,
+            Path::new(route_path),fps.to_str().ok_or("invalid frame rate")?.parse()?),
+        #[cfg(windows)]
+        [package, view, flag, route_path] if flag == "--walk-route" => window::walk(
+            package.into(), view.to_str().ok_or("invalid view name")?.to_owned(), route::Route::load(Path::new(route_path))?),
+        #[cfg(windows)]
+        [package, view, flag, route_path, report] if flag == "--benchmark-route" => window::benchmark(
+            package.into(),view.to_str().ok_or("invalid view name")?.to_owned(),
+            route::Route::load(Path::new(route_path))?,report.into()),
         #[cfg(windows)]
         [package, view, flag, n] if flag == "--present-frames" => window::run(
             package.into(),
@@ -191,7 +212,7 @@ fn main() -> PipelineResult<()> {
             None,
         ),
         _ => Err(
-            "usage: scene-viewer <package> <view> [--capture output.png | --film N linear.exr display.png | --film-crop N x,y,width,height linear.exr display.png | --sky linear.exr display.png | --visibility | --present-frames N]; scene-film also supports --coverage N x,y,width,height mask.png and --radiance N x,y,width,height linear.exr display.png"
+            "usage: scene-viewer <package> <view> [--capture output.png | --capture-1080p output.png | --walk-route route.json | --benchmark-route route.json report.json | --route-rgba route.json fps | --film N linear.exr display.png | --film-crop N x,y,width,height linear.exr display.png | --sky linear.exr display.png | --visibility | --present-frames N]; scene-film also supports --coverage N x,y,width,height mask.png and --radiance N x,y,width,height linear.exr display.png"
                 .into(),
         ),
     }

@@ -132,6 +132,10 @@ impl Source {
         geometry::cook(self.primitive(i), &self.buffers, self.parts[i].transform)
     }
 
+    pub(crate) fn material_index(&self, i: usize) -> Option<usize> {
+        self.primitive(i).material().index()
+    }
+
     pub(crate) fn local_primitive(&self, i: usize) -> (usize, usize) {
         (self.parts[i].mesh, self.parts[i].primitive)
     }

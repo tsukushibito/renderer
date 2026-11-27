@@ -14,6 +14,14 @@ pub(crate) fn object(directory: &Path, bytes: &[u8]) -> Result<BlobRef, Error> {
     Ok(reference)
 }
 
+#[derive(serde::Deserialize)]
+struct ReducedGltf {
+    path: std::path::PathBuf,
+    min_pixels: f32,
+    #[serde(default)]
+    material_min_pixels: HashMap<usize, f32>,
+}
+
 pub(super) fn cook(source: &Path, settings: &Path, directory: &Path) -> Result<(), Error> {
     #[derive(serde::Deserialize)]
     struct Recipe {
@@ -21,6 +29,8 @@ pub(super) fn cook(source: &Path, settings: &Path, directory: &Path) -> Result<(
         settings: SceneSettings,
         environment: Option<Environment<std::path::PathBuf>>,
         attribution: Option<sashiko_asset::scene::Attribution>,
+        backdrop: Option<EnvironmentImage<std::path::PathBuf>>,
+        reduced_gltf: Option<ReducedGltf>,
         #[serde(default)]
         pbrt: crate::pbrt::Options,
     }
@@ -75,6 +85,8 @@ pub(super) fn cook(source: &Path, settings: &Path, directory: &Path) -> Result<(
         primitives: Vec::new(),
         placements: Vec::new(),
         physical: None,
+        backdrop: None,
+        mesh_lods: Vec::new(),
         attribution: recipe.attribution,
     };
     if source
@@ -84,19 +96,86 @@ pub(super) fn cook(source: &Path, settings: &Path, directory: &Path) -> Result<(
         crate::pbrt::cook(&source, directory, recipe.pbrt, &mut scene)?;
     } else {
         let src = Source::open(&source, source.parent().ok_or("missing source directory")?)?;
-        cook_gltf(src, directory, &mut scene)?;
+        let alternate = recipe
+            .reduced_gltf
+            .map(|lod| -> Result<_, Error> {
+                let path = settings
+                    .parent()
+                    .ok_or("missing recipe directory")?
+                    .join(&lod.path)
+                    .canonicalize()?;
+                if std::iter::once(&lod.min_pixels)
+                    .chain(lod.material_min_pixels.values())
+                    .any(|size| !size.is_finite() || *size <= 0.)
+                {
+                    return Err("invalid LOD size".into());
+                }
+                Ok((
+                    Source::open(
+                        &path,
+                        path.parent().ok_or("missing reduced source directory")?,
+                    )?,
+                    lod,
+                ))
+            })
+            .transpose()?;
+        cook_gltf(src, alternate, directory, &mut scene)?;
+        if let Some(map) = recipe.backdrop {
+            let data = fs::read(
+                settings
+                    .parent()
+                    .ok_or("missing recipe directory")?
+                    .join(map.data),
+            )?;
+            let sky = sashiko_asset::scene::InfiniteSky {
+                equal_area_radiance: EnvironmentImage {
+                    width: map.width,
+                    height: map.height,
+                    mip_levels: map.mip_levels,
+                    data: object(directory, &data)?,
+                },
+                world_from_light: glam::Mat4::IDENTITY.to_cols_array_2d(),
+                scale: 1.,
+            };
+            sky.equal_area_radiance.validate()?;
+            if map.width != map.height || map.mip_levels != 1 {
+                return Err("expected square equal-area sky".into());
+            }
+            if scene.environment.is_none() {
+                scene.environment = Some(crate::pbrt::lighting::cook(directory, &sky)?);
+            }
+            scene.backdrop = Some(sky);
+        }
     }
     scene.validate()?;
     store::publish(&directory.join("scene.json"), &serde_json::to_vec(&scene)?)?;
     Ok(())
 }
 
-fn cook_gltf(src: Source, directory: &Path, scene: &mut ScenePackage) -> Result<(), Error> {
+fn cook_gltf(
+    src: Source,
+    alternate: Option<(Source, ReducedGltf)>,
+    directory: &Path,
+    scene: &mut ScenePackage,
+) -> Result<(), Error> {
+    if alternate
+        .as_ref()
+        .is_some_and(|(s, _)| s.len() != src.len())
+    {
+        return Err("LOD source placements differ".into());
+    }
+    let mut alternates = HashMap::new();
     scene.placements.reserve(src.len());
     let mut primitive_ids = HashMap::new();
     let mut textures = HashMap::new();
     for i in 0..src.len() {
         let key = src.local_primitive(i);
+        if alternate
+            .as_ref()
+            .is_some_and(|(s, _)| s.local_primitive(i) != key || s.placement(i) != src.placement(i))
+        {
+            return Err("LOD source placement identity differs".into());
+        }
         let index = match primitive_ids.entry(key) {
             std::collections::hash_map::Entry::Occupied(entry) => *entry.get(),
             std::collections::hash_map::Entry::Vacant(entry) => {
@@ -113,8 +192,22 @@ fn cook_gltf(src: Source, directory: &Path, scene: &mut ScenePackage) -> Result<
                     }
                 }
                 let index = scene.primitives.len();
+                let mesh = object(directory, &src.cook_local_mesh(i)?)?;
+                if let Some((reduced, recipe)) = &alternate {
+                    let low = object(directory, &reduced.cook_local_mesh(i)?)?;
+                    let size = src
+                        .material_index(i)
+                        .and_then(|id| recipe.material_min_pixels.get(&id))
+                        .copied()
+                        .unwrap_or(recipe.min_pixels);
+                    let (previous, min_pixels) = alternates.entry(mesh).or_insert((low, size));
+                    if *previous != low {
+                        return Err("conflicting reduced geometry for shared mesh".into());
+                    }
+                    *min_pixels = min_pixels.min(size);
+                }
                 scene.primitives.push(Primitive {
-                    mesh: object(directory, &src.cook_local_mesh(i)?)?,
+                    mesh,
                     material: object(directory, &src.cook_material(i)?)?,
                     images,
                 });
@@ -125,6 +218,27 @@ fn cook_gltf(src: Source, directory: &Path, scene: &mut ScenePackage) -> Result<
             primitive: index,
             transform: src.placement(i),
         });
+    }
+    if alternate.is_some() {
+        // The runtime imports one mesh per adjacent run. Preserve placement order
+        // inside each primitive group so repeats share the same graph import.
+        scene
+            .placements
+            .sort_by_key(|placement| placement.primitive);
+        scene.mesh_lods = alternates
+            .into_iter()
+            .filter(|(source, (reduced, _))| source != reduced)
+            .map(
+                |(source, (reduced, min_pixels))| sashiko_asset::scene::MeshLod {
+                    source,
+                    reduced,
+                    min_pixels,
+                },
+            )
+            .collect();
+        scene
+            .mesh_lods
+            .sort_by_key(|lod| lod.source.hash.to_string());
     }
     Ok(())
 }

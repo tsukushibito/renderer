@@ -56,7 +56,18 @@ pub struct ScenePackage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub physical: Option<PhysicalScene>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backdrop: Option<InfiniteSky>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mesh_lods: Vec<MeshLod>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribution: Option<Attribution>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct MeshLod {
+    pub source: BlobRef,
+    pub reduced: BlobRef,
+    pub min_pixels: f32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -195,6 +206,19 @@ impl ScenePackage {
                 image.validate()?;
             }
         }
+        if !self.mesh_lods.is_empty() {
+            let mut available: std::collections::HashSet<_> =
+                self.primitives.iter().map(|part| part.mesh).collect();
+            for lod in &self.mesh_lods {
+                if !lod.min_pixels.is_finite()
+                    || lod.min_pixels <= 0.
+                    || lod.source == lod.reduced
+                    || !available.remove(&lod.source)
+                {
+                    return Err(invalid("invalid or duplicate mesh LOD"));
+                }
+            }
+        }
         if let Some(physical) = &self.physical {
             if physical
                 .displacement_unit_metres
@@ -236,19 +260,23 @@ impl ScenePackage {
                     return Err(invalid("invalid film or lens settings"));
                 }
             }
-            if let Some(sky) = &physical.sky {
-                sky.equal_area_radiance.validate()?;
-                if sky.scale < 0.
-                    || !sky.scale.is_finite()
-                    || sky.equal_area_radiance.width != sky.equal_area_radiance.height
-                    || sky
-                        .world_from_light
-                        .iter()
-                        .flatten()
-                        .any(|v| !v.is_finite())
-                {
-                    return Err(invalid("invalid equal-area infinite light"));
-                }
+        }
+        for sky in self
+            .backdrop
+            .iter()
+            .chain(self.physical.iter().filter_map(|p| p.sky.as_ref()))
+        {
+            sky.equal_area_radiance.validate()?;
+            if sky.scale < 0.
+                || !sky.scale.is_finite()
+                || sky.equal_area_radiance.width != sky.equal_area_radiance.height
+                || sky
+                    .world_from_light
+                    .iter()
+                    .flatten()
+                    .any(|v| !v.is_finite())
+            {
+                return Err(invalid("invalid equal-area infinite light"));
             }
         }
         Ok(())

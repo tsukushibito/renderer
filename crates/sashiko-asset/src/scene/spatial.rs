@@ -43,6 +43,10 @@ pub(super) fn select(
     }
     let mut keep = remap.iter();
     scene.primitives.retain(|_| keep.next().unwrap().is_some());
+    if !scene.mesh_lods.is_empty() {
+        let kept: std::collections::HashSet<_> = scene.primitives.iter().map(|p| p.mesh).collect();
+        scene.mesh_lods.retain(|lod| kept.contains(&lod.source));
+    }
     if let Some(physical) = &mut scene.physical {
         let mut keep = remap.iter();
         physical.surfaces.retain(|_| keep.next().unwrap().is_some());

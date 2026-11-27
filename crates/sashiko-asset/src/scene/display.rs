@@ -71,6 +71,8 @@ pub struct DisplayScene {
     meshes: Meshes,
     materials: Materials,
     objects: Vec<RenderObject>,
+    lods: Vec<PlacementLod>,
+    lod_pairs: Vec<(sashiko_renderer::mesh::MeshHandle, MaterialHandle)>,
     paints: Vec<(MaterialHandle, PbrParams, [Option<BlobRef>; 4])>,
     images: HashMap<BlobRef, ManagedImage>,
     environment: Option<Environment<BlobRef>>,
@@ -84,7 +86,34 @@ pub struct DisplayScene {
     bounds: Bounds,
 }
 
+struct PlacementLod {
+    object: usize,
+    full: sashiko_renderer::mesh::MeshHandle,
+    coarse: sashiko_renderer::mesh::MeshHandle,
+    center: Vec3,
+    diameter: f32,
+    min_pixels: f32,
+}
+
 impl DisplayScene {
+    /// Choose from the geometry prepared at scene load. The same draw is used for
+    /// the visible surface and its directional shadow in this frame.
+    pub fn select_lods(&mut self, view: &PerspectiveView, height: u32) {
+        let eye = Vec3::from(view.position);
+        let focal = 0.5 * height as f32 / (0.5 * view.vertical_fov_degrees.to_radians()).tan();
+        for lod in &self.lods {
+            // Keep the current level inside a 10% distance band to prevent
+            // subpixel camera jitter repeatedly changing silhouettes.
+            let mesh = &mut self.objects[lod.object].mesh;
+            let margin = if *mesh == lod.full { 1.05 } else { 0.95 };
+            let cutoff = focal * lod.diameter / lod.min_pixels * margin;
+            *mesh = if lod.center.distance_squared(eye) <= cutoff * cutoff {
+                lod.full
+            } else {
+                lod.coarse
+            };
+        }
+    }
     fn config(&self) -> sashiko_renderer::pipeline::StandardConfig {
         let mut config = sashiko_renderer::pipeline::StandardConfig::new(self.camera.extent);
         let [r, g, b] = self.settings.sky_color;
@@ -184,6 +213,21 @@ impl DisplayScene {
             .physical
             .take()
             .and_then(|mut p| p.cameras.remove(view).zip(p.sky))
+            .or_else(|| {
+                scene.backdrop.take().map(|sky| {
+                    (
+                        super::FilmCamera {
+                            lens_radius_metres: 0.,
+                            focus_metres: 1.,
+                            iso: 100.,
+                            white_balance_kelvin: None,
+                            film_extent: extent,
+                            samples_per_pixel: 1,
+                        },
+                        sky,
+                    )
+                })
+            })
             .map(|(film, sky)| -> PipelineResult<_> {
                 let transform =
                     glam::Mat3::from_mat4(Mat4::from_cols_array_2d(&sky.world_from_light))
@@ -197,23 +241,33 @@ impl DisplayScene {
         let settings = scene.settings;
         let sun = Sun::from_lux(settings.sun_direction, settings.sun_color, settings.sun_lux)?;
         let mut meshes = Meshes::new(MeshCapacity {
-            meshes: scene.primitives.len().max(1),
+            meshes: (scene.primitives.len() + scene.mesh_lods.len()).max(1),
             retired_mesh_versions: 1,
         })?;
         let mut materials = Materials::default();
         let mut mesh_handles = HashMap::new();
-        let mut mat_handles = HashMap::new();
-        let mut paints = Vec::new();
-        let mut parts = Vec::new();
-        for part in scene.primitives {
-            let mesh = match mesh_handles.entry(part.mesh) {
+        let mut load_mesh = |reference: BlobRef| -> PipelineResult<_> {
+            Ok(match mesh_handles.entry(reference) {
                 std::collections::hash_map::Entry::Occupied(e) => *e.get(),
                 std::collections::hash_map::Entry::Vacant(e) => {
-                    let bytes = store.load(&part.mesh)?;
+                    let bytes = store.load(&reference)?;
                     let blob = bytes.mesh()?;
                     *e.insert((meshes.create(blob.mesh_data()?)?, blob.local_bounds()?))
                 }
-            };
+            })
+        };
+        let mut mat_handles = HashMap::new();
+        let mut paints = Vec::new();
+        let mut parts = Vec::new();
+        let mut coarse_meshes = HashMap::new();
+        for lod in &scene.mesh_lods {
+            let coarse = load_mesh(lod.reduced)?;
+            coarse_meshes.insert(lod.source, (coarse.0, lod.min_pixels));
+        }
+        let mut lod_pairs = Vec::new();
+        let mut lods = Vec::new();
+        for part in scene.primitives {
+            let mesh = load_mesh(part.mesh)?;
             let material = match mat_handles.entry((part.material, part.images)) {
                 std::collections::hash_map::Entry::Occupied(e) => *e.get(),
                 std::collections::hash_map::Entry::Vacant(e) => {
@@ -223,13 +277,18 @@ impl DisplayScene {
                     *e.insert(id)
                 }
             };
-            parts.push((mesh, material));
+            let coarse = coarse_meshes.get(&part.mesh).copied();
+            if let Some((low, _)) = coarse {
+                lod_pairs.push((mesh.0, material));
+                lod_pairs.push((low, material));
+            }
+            parts.push((mesh, material, coarse));
         }
         let mut objects = Vec::with_capacity(scene.placements.len());
         let mut min = Vec3::splat(f32::INFINITY);
         let mut max = Vec3::splat(f32::NEG_INFINITY);
         for placement in scene.placements {
-            let ((mesh, local), material) = parts[placement.primitive];
+            let ((mesh, local), material, coarse) = parts[placement.primitive];
             let t = Transform::new(std::array::from_fn(|r| {
                 placement.transform.map(|col| col[r])
             }))?;
@@ -240,6 +299,19 @@ impl DisplayScene {
                 min = min.min(world.min().into());
                 max = max.max(world.max().into());
             }
+            if let Some((coarse, min_pixels)) = coarse {
+                let world = t.bounds(local).ok_or("unrepresentable LOD bounds")?;
+                let lo = Vec3::from(world.min());
+                let hi = Vec3::from(world.max());
+                lods.push(PlacementLod {
+                    object: objects.len(),
+                    full: mesh,
+                    coarse,
+                    min_pixels,
+                    center: (hi + lo) * 0.5,
+                    diameter: (hi - lo).length(),
+                });
+            }
             objects.push(RenderObject::new(mesh, material).with_transform(t));
         }
         Ok(Self {
@@ -247,6 +319,8 @@ impl DisplayScene {
             meshes,
             materials,
             objects,
+            lods,
+            lod_pairs,
             paints,
             images: HashMap::new(),
             environment: scene.environment,
@@ -265,7 +339,11 @@ impl DisplayScene {
     }
 
     pub fn assets(&mut self) -> SceneAssets<'_> {
-        SceneAssets::new(&mut self.meshes, &mut self.materials, &self.objects)
+        let mut assets = SceneAssets::new(&mut self.meshes, &mut self.materials, &self.objects);
+        for &(mesh, material) in &self.lod_pairs {
+            assets.preload_pair(mesh, material);
+        }
+        assets
     }
 
     pub fn input(&self) -> SceneInput<'_> {

@@ -1,6 +1,6 @@
 //! Static PBRT v4 import. Resolve source files relative to the scene root,
 //! preserve graphics state across includes, and keep object definitions local.
-mod lighting;
+pub(crate) mod lighting;
 mod ply;
 mod surface;
 mod syntax;
