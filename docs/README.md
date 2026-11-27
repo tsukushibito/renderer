@@ -13,7 +13,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | 読みたいこと | 入口 |
 |---|---|
 | ブラウザで Bistro と Sponza を開く、Canvas に組み込む | [WebGPU ビューアーの起動と操作](guides/examples.md#webgpu-scenes) |
-| ゲームとエンジンの実装をどこで分けるか | [ゲーム制作 API と編集データの責務](design/game-engine.md) |
+| 人と LLM がゲームとエンジンを一緒に改修し、複数作品で使うには | [Sashiko ゲームエンジン設計](design/game-engine.md)（作品ごとの組み込み、プレイ評価、編集データ、受け入れ条件） |
 | プレイ中の個体を人と LLM が同じ時点で調べるには | [ライブインスペクタの設計](design/live-inspector.md) |
 | 骨格アニメーションを再生・合成し、キャラクター制御や描画に組み込みたい | [アニメーションのクレート構成、固定 tick、GPU スキニングと受け入れ条件](design/animation.md) |
 | 大量オブジェクトの可視判定、Graph構築、コマンド記録を並列化したい | [標準RendererとGraphの仕組み](design/rendergraph.md#raster-recording)、[専用ベンチの実行手順](guides/development.md#standard-renderer-jobs)、[Vulkan・D3D12の実測](verification/current.md#standard-renderer-jobs) |

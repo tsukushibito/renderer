@@ -6,7 +6,7 @@
 
 # 現在の設計
 
-- [ゲーム制作 API と編集データの責務](design/game-engine.md)
+- [Sashiko ゲームエンジン設計](design/game-engine.md)
 - [ライブインスペクタの設計](design/live-inspector.md)
 - [キャラクターアニメーションの設計方針](design/animation.md)
 
