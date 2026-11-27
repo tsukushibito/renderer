@@ -98,7 +98,7 @@ pub struct Input {
     pub menu: sashiko::ui::MenuInput,
 }
 
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Events {
     /// Number of authored foot-contact markers crossed by the player this tick.
     pub footsteps: usize,
@@ -272,6 +272,69 @@ impl Game {
             contacts: self.contacts,
             marker_entries: self.marker_entries,
         }
+    }
+
+    /// Order-sensitive fingerprint of gameplay data omitted from the public HUD snapshot.
+    /// Float bit patterns preserve small movement differences between equal-sized crowds.
+    #[cfg(feature = "diagnostics")]
+    pub fn replay_fingerprint(&self) -> u64 {
+        let mut value = 0xcbf2_9ce4_8422_2325u64;
+        let mut mix = |word: u64| {
+            value = (value ^ word).wrapping_mul(0x0000_0100_0000_01b3);
+        };
+        for word in [
+            self.rng.0,
+            self.elapsed,
+            self.next_id,
+            self.reload.into(),
+            self.invulnerability.into(),
+            self.pulse_radius.to_bits().into(),
+            self.upgrade_focus.index() as u64,
+        ] {
+            mix(word);
+        }
+        let (walk, jog, blend) = self.locomotion.sample();
+        mix(walk.to_bits());
+        mix(jog.to_bits());
+        mix(blend.to_bits().into());
+        for enemy in &self.enemies {
+            for word in [
+                enemy.id,
+                enemy.archetype as u64,
+                enemy.hp.into(),
+                enemy.windup.into(),
+                enemy.windup_left.into(),
+                enemy.dashing.into(),
+                enemy.dash_left.into(),
+                enemy.recovery.into(),
+            ] {
+                mix(word);
+            }
+            for scalar in enemy
+                .pos
+                .to_array()
+                .into_iter()
+                .chain(enemy.facing.to_array())
+            {
+                mix(scalar.to_bits().into());
+            }
+        }
+        for shot in &self.shots {
+            mix(shot.remaining_ticks.into());
+            mix(shot.pierce_left.into());
+            mix(shot.last_hit.is_some().into());
+            mix(shot.last_hit.unwrap_or_default());
+            for scalar in shot.pos.to_array().into_iter().chain(shot.dir.to_array()) {
+                mix(scalar.to_bits().into());
+            }
+        }
+        for drop in &self.drops {
+            mix(drop.value.into());
+            for scalar in drop.pos.to_array() {
+                mix(scalar.to_bits().into());
+            }
+        }
+        value
     }
 
     pub fn step(&mut self, input: Input) -> Events {
@@ -462,7 +525,7 @@ impl Game {
     }
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub cargo: Option<sashiko::math::Vec3>,
     pub tick: u64,

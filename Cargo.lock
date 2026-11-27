@@ -2458,6 +2458,7 @@ dependencies = [
  "sashiko-renderer",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

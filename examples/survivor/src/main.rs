@@ -1,3 +1,5 @@
+#[cfg(feature = "diagnostics")]
+mod diagnostics;
 mod profile;
 
 use clap::{Arg, ArgAction, Command, value_parser};
@@ -49,7 +51,29 @@ fn arguments() -> Command {
             .long(name)
             .value_parser(value_parser!(PathBuf))
     };
-    profile::Player::arguments(sashiko::cli::game_command(Command::new("survivor")))
+    let command = profile::Player::arguments(sashiko::cli::game_command(Command::new("survivor")));
+    #[cfg(feature = "diagnostics")]
+    let command = command
+        .arg(
+            path("record-report")
+                .requires("headless")
+                .conflicts_with("replay-from")
+                .help("Write a replayable diagnostic report into a new directory"),
+        )
+        .arg(
+            path("verify-report")
+                .requires("headless")
+                .conflicts_with_all([
+                    "record-report",
+                    "replay",
+                    "ticks",
+                    "arena",
+                    "scenario",
+                    "seed",
+                ])
+                .help("Verify a report's initial assets, input sequence and each completed tick"),
+        );
+    command
         .about("Research facility survivor. Move with WASD, choose an upgrade with 1/2/3.")
         .arg(
             Arg::new("scenario")
@@ -109,6 +133,10 @@ fn packaged_arena() -> std::io::Result<serde_json::Value> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = arguments().get_matches();
+    #[cfg(feature = "diagnostics")]
+    if let Some(directory) = args.get_one::<PathBuf>("verify-report") {
+        return diagnostics::verify(directory);
+    }
     let engine = survivor::engine_config(args.get_one::<PathBuf>("config").map(PathBuf::as_path))?;
     let mut profile = profile::Player::load(&args)?;
     if args.get_flag("profile-status") {
@@ -221,6 +249,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         if replay.as_ref().is_some_and(|inputs| ticks > inputs.len()) {
             return Err("replay ends before the requested tick count".into());
         }
+        #[cfg(feature = "diagnostics")]
+        let mut evidence = args
+            .get_one::<PathBuf>("record-report")
+            .map(|_| diagnostics::Evidence::new(&initial, parallelism, ticks))
+            .transpose()?;
         app.try_advance(
             ticks as u128,
             |tick, game| {
@@ -228,8 +261,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .as_ref()
                     .map_or_else(|| benchmark_input(game), |inputs| inputs[tick])
             },
-            |game, input| profile.observe(game.step(input).kills),
+            |game, input| {
+                let events = game.step(input);
+                #[cfg(feature = "diagnostics")]
+                if let Some(recorder) = &mut evidence {
+                    recorder.observe(game, input, events);
+                }
+                profile.observe(events.kills)
+            },
         )?;
+        #[cfg(feature = "diagnostics")]
+        if let Some(evidence) = evidence {
+            evidence.save(
+                args.get_one::<PathBuf>("record-report").unwrap(),
+                "1",
+                |_| Ok(()),
+            )?;
+        }
         app.game
     } else {
         play(

@@ -123,6 +123,20 @@ sashiko inspect read --session play-1 --world game --snapshot snap-91 --object p
 元 tick と直前 tick の補間係数（補間しないときは null）を持つ。再提示だけの試行は
 同じ描画を参照する。これにより表示順、固定更新、非同期ファイル保存の完了順を識別できる。
 
+Survivor の `diagnostics` 構成では、描画なしの報告も作成・照合できる。
+
+```sh
+cargo run -p survivor --features diagnostics -- --headless --ticks 120 --record-report report-120
+cargo run -p survivor --features diagnostics -- --headless --verify-report report-120
+```
+
+報告は新しいディレクトリに作る。`replay.json` に tick 0 のアリーナ、シナリオ、乱数 seed、
+ルール版と以降の入力を含める。`ticks.ndjson` は確定状態、ゲームイベント、群衆・弾・
+ドロップ・乱数列・アニメーションなどの指紋を更新順に持つ。検証は記録時の physics worker 数で
+先頭から再生し、最初の状態差の tick と比較値を返す。公開状態とゲーム側の指紋を照合する
+範囲に、物理エンジン内部のキャッシュは含めない。開始データの不足・改変を識別し、
+成功時も記録時と再生時の実行ファイルの SHA-256 を返す。
+
 ## 実行中の編集と制作元への保存
 
 実行値は既定で読み取り専用とし、ゲームが編集可能と宣言した項目にだけ変更要求を送れる。たとえば「最大 HP を変更する」には、現在 HP の再計算も含めた操作をゲーム側で定義する。表示用の反射情報は変更権限を与えない。
