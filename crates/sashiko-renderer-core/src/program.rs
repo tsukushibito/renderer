@@ -674,7 +674,7 @@ static STORAGE_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
 
 pub(crate) const INDIRECT_GROUP_SIZE: u32 = 64;
 pub(crate) const MAX_INDIRECT_GROUPS: u32 = 65_535;
-pub(crate) const INDIRECT_TEMPLATE_BYTES: u64 = 8;
+pub(crate) const INDIRECT_TEMPLATE_BYTES: u64 = 16;
 pub(crate) const INDIRECT_MASK_BYTES: u64 = 4;
 pub(crate) const INDIRECT_COMMAND_BYTES: u64 = 20;
 

@@ -59,7 +59,10 @@ pub(crate) use dispatch::BindingOperands;
 pub use dispatch::{Binding, BindingResource, RasterBindings};
 pub use error::{GraphCapacityError, GraphCapacityKind, GraphError, GraphErrorKind};
 pub use image_transfer::ImageRegion;
-pub use indirect::{IndexedIndirectArgs, IndexedIndirectTable, IndexedIndirectTemplate};
+pub use indirect::{
+    EncodedIndexedInstances, IndexedIndirectArgs, IndexedIndirectTable, IndexedIndirectTemplate,
+    IndexedInstanceBatch,
+};
 pub use output::{FrameGraph, FrameOutputOwnership};
 pub use pass::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, ImageAspect, LoadOp, PassKind,

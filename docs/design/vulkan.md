@@ -109,6 +109,7 @@ InstanceとVMAが要求するAPIはVulkan 1.3とする。
 Indexed Indirect Drawでは、照会で対応した場合に `multiDrawIndirect` を追加で有効化する。
 対応時は実Deviceの `maxDrawIndirectCount`、非対応時は1をコマンド数上限とする。
 引数bufferにINDIRECT_BUFFER用途を持たせ、Computeの書き込みからDRAW_INDIRECT／INDIRECT_COMMAND_READへ同期する。
+異なるメッシュのインスタンス数をGPUで決める場合、準備済みの `IndexedInstanceBatch` にジオメトリと範囲、インスタンス上限を登録する。Computeが件数を上限に収め、20バイトずつ連続したコマンドを書き込む。各描画は対応するジオメトリとバイトオフセットを一緒に保持する。
 初期化で取得した不変な`VkPhysicalDeviceLimits`をDevice所有者に保持し、画像/Program作成でも再利用する。
 実際のformat/type/usage/extentの対応確認とnative作成失敗は別に処理する。
 

@@ -23,6 +23,7 @@ pub(in crate::backends::vulkan) enum NativeIndexedDraw {
     },
     Indirect {
         buffer: vk::Buffer,
+        command_offset: u64,
         command_count: u32,
     },
 }
@@ -187,11 +188,12 @@ impl ShaderPrograms {
                                 ),
                                 NativeIndexedDraw::Indirect {
                                     buffer,
+                                    command_offset,
                                     command_count,
                                 } => device.cmd_draw_indexed_indirect(
                                     command,
                                     buffer,
-                                    0,
+                                    command_offset,
                                     command_count,
                                     crate::program::INDIRECT_COMMAND_BYTES as u32,
                                 ),

@@ -10,7 +10,7 @@
 ; Name                 Index   Mask Register SysValue  Format   Used
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; no parameters
-; shader hash: 17933eeddb5936210daeacc357fc7b2d
+; shader hash: 4f706a510b6a07e2876ec189ec182d20
 ;
 ; Pipeline Runtime Information:
 ;

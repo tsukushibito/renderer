@@ -121,7 +121,7 @@ function Assert-IndexedIndirectAbi([object]$Spirv, [string]$Dxil) {
 
     $buffers = @($Spirv.ssbos | Sort-Object binding)
     if ($buffers.Count -ne 3) { throw "$asset requires three storage buffers." }
-    $strides = @(8, 4, 20)
+    $strides = @(16, 4, 20)
     for ($slot = 0; $slot -lt $buffers.Count; $slot++) {
         $buffer = $buffers[$slot]
         $usage = if ($slot -eq 2) { 'writeonly' } else { 'readonly' }
@@ -139,7 +139,7 @@ function Assert-IndexedIndirectAbi([object]$Spirv, [string]$Dxil) {
             throw "$asset storage slot $slot has the wrong entry offset, stride or array shape."
         }
         if ($slot -lt 2) {
-            $inputType = if ($slot -eq 0) { 'uvec2' } else { 'uint' }
+            $inputType = if ($slot -eq 0) { 'uvec4' } else { 'uint' }
             if ($member.type -cne $inputType) { throw "$asset storage slot $slot has the wrong entry type." }
         } else {
             $fields = @($Spirv.types.PSObject.Properties[$member.type].Value.members)

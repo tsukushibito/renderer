@@ -2,10 +2,9 @@
 #include "grid.hlsli"
 
 StructuredBuffer<uint4> slots : register(t2);
-StructuredBuffer<uint> page_table : register(t3);
+StructuredBuffer<uint> caster_list : register(t3);
 struct Placement {
     float4 model[3];
-    uint4 rectangle; // level, min local page X/Y, width (zero scans physical slots)
     uint mirrored;
 };
 #ifdef __spirv__
@@ -27,18 +26,12 @@ Vertex main(BISTRO_LOCATION(0) float3 pos : TEXCOORD0,
     v.tile = 0;
     v.mirrored = placement.mirrored;
     v.clip = float4(2.0, 2.0, 1.0, 1.0);
-    uint4 rect = placement.rectangle;
-    uint level = min(rect.x, 7u);
-    uint slot = min(instance, VSM_CAPACITY - 1);
-    if (rect.w > 0) {
-        uint2 local = rect.yz + uint2(instance % rect.w, instance / rect.w);
-        if (any(local >= 128u)) return v;
-        uint entry = page_table[(level * 128 + local.y) * 128 + local.x];
-        if (entry == 0 || entry > VSM_CAPACITY) return v;
-        slot = entry - 1;
-    }
+    if (instance >= VSM_CAPACITY) return v;
+    uint slot = caster_list[1 + instance];
+    if (slot >= VSM_CAPACITY) return v;
     uint4 owner = slots[slot];
-    if (owner.x != level + 1 || owner.w == 0) return v;
+    if (owner.x == 0 || owner.x > 8 || owner.w == 0) return v;
+    uint level = owner.x - 1;
     float4 local_position = float4(pos, 1.0);
     float3 world = float3(dot(local_position, placement.model[0]), dot(local_position, placement.model[1]),
                           dot(local_position, placement.model[2]));

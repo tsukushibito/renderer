@@ -21,7 +21,7 @@
             "members" : [
                 {
                     "name" : "_m0",
-                    "type" : "uvec2",
+                    "type" : "uvec4",
                     "array" : [
                         0
                     ],
@@ -29,7 +29,7 @@
                         true
                     ],
                     "offset" : 0,
-                    "array_stride" : 8
+                    "array_stride" : 16
                 }
             ]
         },

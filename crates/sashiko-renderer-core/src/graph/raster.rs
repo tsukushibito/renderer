@@ -207,7 +207,9 @@ impl RasterPass<'_, '_> {
         )?;
         graph.append_access(read(
             buffer,
-            0..u64::from(arguments.command_count) * INDIRECT_COMMAND_BYTES,
+            arguments.command_offset
+                ..arguments.command_offset
+                    + u64::from(arguments.command_count) * INDIRECT_COMMAND_BYTES,
             AccessPurpose::Indirect,
         ))?;
         graph.data_mut().raster_batches.push(RasterBatchOperands {
@@ -218,6 +220,7 @@ impl RasterPass<'_, '_> {
             constant_words_per_draw: program.parameter_size() as usize / size_of::<u32>(),
             indirect: Some(IndirectDrawOperands {
                 buffer,
+                command_offset: arguments.command_offset,
                 command_count: arguments.command_count,
             }),
         });

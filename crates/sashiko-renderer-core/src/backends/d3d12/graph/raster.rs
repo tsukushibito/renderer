@@ -738,7 +738,12 @@ pub(super) fn record_draws(
         let signature = indexed_indirect
             .expect("preflight checked the encoder that owns this prepared signature");
         let buffer = buffers[resource_map[command.buffer]].raw();
-        (signature, buffer, command.command_count)
+        (
+            signature,
+            buffer,
+            command.command_offset,
+            command.command_count,
+        )
     });
     let fully_clipped = batch
         .regions
@@ -912,12 +917,12 @@ pub(super) fn record_draws(
             // DRAW_INDEXED records; the pass establishes INDIRECT_ARGUMENT state.
             // The fullscreen Program accepts vertex IDs 0..3 without a layout.
             unsafe {
-                if let Some((signature, commands, count)) = indirect {
+                if let Some((signature, commands, offset, count)) = indirect {
                     list.ExecuteIndirect(
                         signature.raw(),
                         count,
                         commands,
-                        0,
+                        offset,
                         None::<&ID3D12Resource>,
                         0,
                     );

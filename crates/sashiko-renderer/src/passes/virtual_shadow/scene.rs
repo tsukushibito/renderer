@@ -1,4 +1,4 @@
-use super::{CasterDraw, VirtualSun};
+use super::{CasterBatch, VirtualSun};
 use crate::{
     pbr::{Bounds, GraphMaterial, ShadowSettings, Sun, Transform, ViewInput},
     pipeline::Mesh,
@@ -28,7 +28,7 @@ pub(crate) struct SceneShadows {
     capacity: usize,
     surfaces: Vec<Surface>,
     receivers: Vec<RasterDraw>,
-    casters: Vec<CasterDraw>,
+    casters: CasterBatch,
 }
 impl SceneShadows {
     pub(crate) fn prepare(
@@ -66,7 +66,7 @@ impl SceneShadows {
             capacity,
             surfaces: Vec::with_capacity(capacity),
             receivers: Vec::with_capacity(capacity),
-            casters: Vec::with_capacity(capacity),
+            casters: CasterBatch::new(capacity)?,
         })
     }
     pub(crate) fn clear(&mut self) {
@@ -136,19 +136,12 @@ impl SceneShadows {
             graph.image("directional virtual shadow atlas", super::ATLAS_DESC)?
         };
         for s in &self.surfaces {
-            if s.casts
-                && let Some(draw) =
-                    super::bind_caster(graph, &requests, &pages, s.mesh, s.pose, s.material)?
-            {
-                self.casters.push(draw);
+            if s.casts {
+                self.casters.add(&requests, s.mesh, s.pose, s.material)?;
             }
         }
-        super::draw_atlas(graph, atlas, &pages, previous.is_some(), |pass| {
-            for draw in &self.casters {
-                draw.record(pass)?;
-            }
-            Ok(())
-        })?;
+        self.casters
+            .draw(graph, &requests, &pages, atlas, previous.is_some())?;
         super::lighting(graph, &requests, &pages, atlas)
     }
 }

@@ -37,7 +37,7 @@ fn check_requests(mut config: RuntimeConfig) {
     virtual_shadow::reserve_requests(&mut prep).unwrap();
     virtual_shadow::reserve_table(&mut prep).unwrap();
     virtual_shadow::reserve_invalidation(&mut prep).unwrap();
-    virtual_shadow::reserve_atlas(&mut prep, 1).unwrap();
+    virtual_shadow::reserve_atlas(&mut prep, 2).unwrap();
     virtual_shadow::reserve_camera_depth(&mut prep, [1, 1], 1).unwrap();
     prep.add_working_set(sashiko_renderer_core::capacity::WorkingSet {
         samplers: &[sashiko_renderer_core::program::SamplerDescriptor::LinearRepeat],
@@ -559,16 +559,16 @@ fn check_casters(
         } else {
             Transform::IDENTITY
         };
-        let caster =
-            virtual_shadow::bind_caster(&mut graph, &requests, &pages, mesh, transform, material)
-                .unwrap();
-        virtual_shadow::draw_atlas(&mut graph, atlas, &pages, false, |pass| {
-            if let Some(caster) = caster {
-                caster.record(pass)?;
-            }
-            Ok(())
-        })
-        .unwrap();
+        let mut casters = virtual_shadow::CasterBatch::new(2).unwrap();
+        // The first mesh lies within a coarse clipmap but intersects no
+        // requested page. The caster at argument offset 20 must still draw.
+        let remote = Transform::new([[1.,0.,0.,12.], [0.,1.,0.,12.], [0.,0.,1.,0.]]).unwrap();
+        let triangle = sashiko_renderer::pipeline::Mesh { first_index: 3, index_count: 3, ..mesh };
+        casters.add(&requests, triangle, remote, material).unwrap();
+        casters.add(&requests, mesh, transform, material).unwrap();
+        casters
+            .draw(&mut graph, &requests, &pages, atlas, false)
+            .unwrap();
         let image =
             virtual_shadow::resolve_visibility(&mut graph, depth, requests, &pages, atlas).unwrap();
         let capture = graph.readback_image("shadow", image).unwrap();

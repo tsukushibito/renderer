@@ -404,6 +404,7 @@ pub(crate) struct RasterBatchOperands {
     )
 )]
 pub(crate) struct IndirectDrawOperands {
+    pub command_offset: u64,
     pub buffer: usize,
     pub command_count: u32,
 }

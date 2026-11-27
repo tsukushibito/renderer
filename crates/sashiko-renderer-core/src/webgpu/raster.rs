@@ -198,8 +198,10 @@ impl Raster {
                     if let Some(indirect) = batch.indirect {
                         let arguments = resources.buffer(indirect.buffer)?;
                         for command in 0..u64::from(indirect.command_count) {
-                            render
-                                .draw_indexed_indirect(arguments, command * INDIRECT_COMMAND_BYTES);
+                            render.draw_indexed_indirect(
+                                arguments,
+                                indirect.command_offset + command * INDIRECT_COMMAND_BYTES,
+                            );
                         }
                     } else {
                         let end =

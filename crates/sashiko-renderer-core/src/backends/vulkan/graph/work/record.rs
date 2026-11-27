@@ -473,6 +473,7 @@ unsafe fn record_batch(
     let draw_operands = plan.raster_draws(&batch.draws);
     let indirect = batch.indirect.map(|args| NativeIndexedDraw::Indirect {
         buffer: physical[args.buffer].as_ref().unwrap().buffer().handle,
+        command_offset: args.command_offset,
         command_count: args.command_count,
     });
     let draws = draw_operands

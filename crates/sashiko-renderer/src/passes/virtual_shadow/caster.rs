@@ -1,6 +1,4 @@
-use super::{
-    AssignedPages, CAMERA_BYTES, LEVELS, PHYSICAL_PAGES, PageRequests, SLOT_BYTES, TABLE_BYTES,
-};
+use super::{AssignedPages, CAMERA_BYTES, LEVELS, PHYSICAL_PAGES, PageRequests, SLOT_BYTES, cull};
 use crate::{
     passes::pbr::SHADOW,
     pbr::{AlphaMode, GraphMaterial, Transform},
@@ -8,8 +6,8 @@ use crate::{
 };
 use sashiko_renderer_core::{
     graph::{
-        Binding, BindingResource, Graph, GraphError, RasterBindings, RasterConstants, RasterDraw,
-        RasterPass,
+        Binding, BindingResource, BufferHandle, Graph, GraphCapacityKind, GraphError, ImageHandle,
+        IndexedIndirectTemplate, IndexedInstanceBatch, RasterBindings, RasterConstants,
     },
     program::{
         BindingLayout, BindingType, ManagedRasterProgram, RasterParameterLayout,
@@ -30,14 +28,14 @@ pub(super) fn program() -> ManagedRasterProgram {
     }
     static DESC: RasterProgramDescriptor = RasterProgramDescriptor {
         parameters: RasterParameterLayout {
-            size: 68,
+            size: 52,
             stages: ShaderStages::VERTEX,
         },
         bindings: &[
             vertex(0, BindingType::Uniform, CAMERA_BYTES),
             SHADOW.bindings[1],
             vertex(2, BindingType::StorageRead, SLOT_BYTES),
-            vertex(3, BindingType::StorageRead, TABLE_BYTES),
+            vertex(3, BindingType::StorageRead, cull::LIST_BYTES),
             SHADOW.bindings[2],
             SHADOW.bindings[3],
         ],
@@ -45,7 +43,7 @@ pub(super) fn program() -> ManagedRasterProgram {
             CAMERA_BYTES as u64,
             64,
             SLOT_BYTES as u64,
-            TABLE_BYTES as u64,
+            cull::LIST_BYTES as u64,
             0,
             0,
         ],
@@ -79,52 +77,145 @@ pub(super) fn program() -> ManagedRasterProgram {
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&DESC) }
 }
 
-/// Draw state for a mesh intersecting the current light grid. Store these
-/// records in prepared caller storage before opening the atlas raster pass.
-pub struct CasterDraw {
-    mesh: Mesh,
-    bindings: RasterBindings,
-    transform: Transform,
-    rectangles: [Option<[u32; 4]>; LEVELS],
+/// Prepared host storage for GPU-culling and drawing independent caster meshes.
+pub struct CasterBatch {
+    capacity: usize,
+    instances: IndexedInstanceBatch,
+    rectangles: Vec<u8>,
+    materials: Vec<(GraphMaterial, RasterConstants)>,
+    bindings: Vec<RasterBindings>,
 }
 
-/// Prepare one standard PBR mesh range, including casters outside the camera.
-pub fn bind_caster(
+impl CasterBatch {
+    pub fn new(capacity: usize) -> Result<Self, GraphError> {
+        let instances = IndexedInstanceBatch::new(capacity)?;
+        let padded = capacity.next_multiple_of(64);
+        padded
+            .checked_mul(cull::LIST_BYTES)
+            .ok_or_else(|| GraphError::invalid_input("virtual caster list size overflow"))?;
+        Ok(Self {
+            capacity,
+            instances,
+            rectangles: Vec::with_capacity(padded * cull::RECT_BYTES),
+            materials: Vec::with_capacity(capacity),
+            bindings: Vec::with_capacity(capacity),
+        })
+    }
+
+    pub fn clear(&mut self) {
+        self.instances.clear();
+        self.rectangles.clear();
+        self.materials.clear();
+        self.bindings.clear();
+    }
+
+    pub fn add(
+        &mut self,
+        requests: &PageRequests,
+        mesh: Mesh,
+        transform: Transform,
+        material: GraphMaterial,
+    ) -> Result<(), GraphError> {
+        if material.alpha_mode() == AlphaMode::Blend {
+            return Ok(());
+        }
+        if mesh.vertex_stride != SHADOW.vertex_stride {
+            return Err(GraphError::invalid_input(
+                "virtual shadows require the PBR vertex stream",
+            ));
+        }
+        let bounds = rectangles(requests, transform.bounds(mesh.bounds));
+        if bounds.iter().all(Option::is_none) {
+            return Ok(());
+        }
+        if self.materials.len() >= self.capacity {
+            return Err(GraphError::capacity_error(
+                GraphCapacityKind::Draws,
+                self.capacity,
+                self.capacity.checked_add(1),
+            ));
+        }
+        let mut words = [0u32; 13];
+        words[..12].copy_from_slice(transform.model_key().as_flattened());
+        words[12] = u32::from(transform.mirrored());
+        let constants = RasterConstants::new(&words)?;
+        self.instances.push(
+            mesh.vertices,
+            mesh.indices,
+            IndexedIndirectTemplate {
+                first_index: mesh.first_index,
+                index_count: mesh.index_count,
+            },
+            PHYSICAL_PAGES as u32,
+        )?;
+        self.rectangles
+            .truncate(self.materials.len() * cull::RECT_BYTES);
+        for rect in bounds {
+            let [x, y, w, h] = rect.unwrap_or([0; 4]);
+            self.rectangles
+                .extend_from_slice([x, y, x + w, y + h].map(u32::to_le_bytes).as_flattened());
+        }
+        self.materials.push((material, constants));
+        Ok(())
+    }
+
+    pub fn draw(
+        &mut self,
+        graph: &mut Graph,
+        requests: &PageRequests,
+        pages: &AssignedPages,
+        atlas: ImageHandle,
+        preserve: bool,
+    ) -> Result<(), GraphError> {
+        if self.materials.is_empty() {
+            return super::draw_atlas(graph, atlas, pages, preserve, |_| Ok(()));
+        }
+        let padded = self.materials.len().next_multiple_of(64);
+        self.rectangles.resize(padded * cull::RECT_BYTES, 0);
+        let (lists, counts) = cull::record(graph, requests, pages, &self.rectangles)?;
+        let encoded = self.instances.encode(graph, cull::ENCODE, counts)?;
+        self.bindings.clear();
+        let program = program();
+        for (i, (material, _)) in self.materials.iter().enumerate() {
+            self.bindings
+                .push(bind(graph, &program, requests, pages, *material, lists, i)?);
+        }
+        super::draw_atlas(graph, atlas, pages, preserve, |pass| {
+            for ((args, &bindings), &(_, constants)) in
+                encoded.commands().zip(&self.bindings).zip(&self.materials)
+            {
+                pass.draw_indirect(&program, args, Some(bindings), constants)?;
+            }
+            Ok(())
+        })
+    }
+}
+
+fn bind(
     graph: &mut Graph,
+    program: &ManagedRasterProgram,
     requests: &PageRequests,
     pages: &AssignedPages,
-    mesh: Mesh,
-    transform: Transform,
     material: GraphMaterial,
-) -> Result<Option<CasterDraw>, GraphError> {
-    if material.alpha_mode() == AlphaMode::Blend {
-        return Ok(None);
-    }
-    if mesh.vertex_stride != SHADOW.vertex_stride {
-        return Err(GraphError::invalid_input(
-            "virtual shadows require the PBR vertex stream",
-        ));
-    }
-    let rectangles = rectangles(requests, transform.bounds(mesh.bounds));
-    if rectangles.iter().all(Option::is_none) {
-        return Ok(None);
-    }
-    let buf = |binding, buffer, size: usize| Binding {
+    lists: BufferHandle,
+    index: usize,
+) -> Result<RasterBindings, GraphError> {
+    let buffer = |binding, handle, offset, size: usize| Binding {
         group: 0,
         binding,
         resource: BindingResource::Buffer {
-            buffer,
-            offset: 0,
+            buffer: handle,
+            offset: offset as u64,
             size: size as u64,
         },
     };
-    let bindings = material.factors().raster_bindings(
+    material.factors().raster_bindings(
         graph,
-        &program(),
+        program,
         &[
-            buf(0, requests.camera, CAMERA_BYTES),
-            buf(2, pages.slots, SLOT_BYTES),
-            buf(3, pages.table, TABLE_BYTES),
+            buffer(0, requests.camera, 0, CAMERA_BYTES),
+            buffer(2, pages.slots, 0, SLOT_BYTES),
+            buffer(3, lists, index * cull::LIST_BYTES, cull::LIST_BYTES),
             Binding {
                 group: 1,
                 binding: 0,
@@ -136,48 +227,7 @@ pub fn bind_caster(
                 resource: BindingResource::Sampler(material.samplers().base_color),
             },
         ],
-    )?;
-    Ok(Some(CasterDraw {
-        mesh,
-        bindings,
-        transform,
-        rectangles,
-    }))
-}
-
-impl CasterDraw {
-    /// Emit one instance per candidate page, bounded by the physical pool.
-    pub fn record(&self, pass: &mut RasterPass<'_, '_>) -> Result<(), GraphError> {
-        let mut words = [0u32; 17];
-        words[..12].copy_from_slice(self.transform.model_key().as_flattened());
-        words[16] = u32::from(self.transform.mirrored());
-        for (level, rect) in self.rectangles.iter().enumerate() {
-            let Some([x, y, width, height]) = *rect else {
-                continue;
-            };
-            let count = width * height;
-            let width = if count > PHYSICAL_PAGES as u32 {
-                0
-            } else {
-                width
-            };
-            words[12..16].copy_from_slice(&[level as u32, x, y, width]);
-            pass.draw(
-                &program(),
-                [RasterDraw {
-                    vertices: self.mesh.vertices,
-                    indices: self.mesh.indices,
-                    first_index: self.mesh.first_index,
-                    index_count: self.mesh.index_count,
-                    instance_count: count.min(PHYSICAL_PAGES as u32),
-                    bindings: Some(self.bindings),
-                    secondary_vertices: None,
-                    parameters: RasterConstants::new(&words)?,
-                }],
-            )?;
-        }
-        Ok(())
-    }
+    )
 }
 
 pub(super) fn rectangles(

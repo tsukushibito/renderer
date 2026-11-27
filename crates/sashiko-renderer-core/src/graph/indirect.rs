@@ -9,6 +9,9 @@ use crate::program::{
 };
 use std::sync::Arc;
 
+mod instances;
+pub use instances::{EncodedIndexedInstances, IndexedInstanceBatch};
+
 /// One immutable triangle-list index range in an indirect draw table.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IndexedIndirectTemplate {
@@ -54,13 +57,15 @@ impl IndexedIndirectTable {
         }
         let groups = command_count.div_ceil(INDIRECT_GROUP_SIZE);
         // The checked group count limits the addressable template bytes to
-        // roughly 32 MiB on both supported host and shader ABIs.
+        // roughly 64 MiB on both supported host and shader ABIs.
         let bytes =
             (u64::from(groups) * u64::from(INDIRECT_GROUP_SIZE) * INDIRECT_TEMPLATE_BYTES) as usize;
         let mut templates = Vec::with_capacity(bytes);
         for command in commands {
             templates.extend_from_slice(&command.first_index.to_le_bytes());
             templates.extend_from_slice(&command.index_count.to_le_bytes());
+            templates.extend_from_slice(&1u32.to_le_bytes());
+            templates.extend_from_slice(&0u32.to_le_bytes());
         }
         templates.resize(bytes, 0);
         Ok(Self {
@@ -105,6 +110,7 @@ pub struct IndexedIndirectArgs {
     pub(super) buffer: BufferHandle,
     pub(super) vertices: BufferHandle,
     pub(super) indices: BufferHandle,
+    pub(super) command_offset: u64,
     pub(super) command_count: u32,
     pub(super) max_index_end: u32,
 }
@@ -142,32 +148,66 @@ impl Graph {
             u64::from(table.max_index_end) * 4,
             true,
         )?;
-        let visibility_size = u64::from(table.padded_count()) * INDIRECT_MASK_BYTES;
+        let buffer = self.encode_indirect_buffer(
+            name,
+            table.groups,
+            visibility,
+            visibility_offset,
+            |graph, template| {
+                graph.upload_buffer_slice(
+                    "upload indirect templates",
+                    template,
+                    0,
+                    Arc::clone(&table.templates),
+                    0..table.templates.len(),
+                )?;
+                Ok(())
+            },
+        )?;
+        Ok(IndexedIndirectArgs {
+            secondary_vertices: None,
+            buffer,
+            vertices,
+            indices,
+            command_offset: 0,
+            command_count: table.command_count,
+            max_index_end: table.max_index_end,
+        })
+    }
+
+    fn encode_indirect_buffer(
+        &mut self,
+        name: &str,
+        groups: u32,
+        visibility: BufferHandle,
+        visibility_offset: u64,
+        upload: impl FnOnce(&mut Graph, BufferHandle) -> Result<(), GraphError>,
+    ) -> Result<BufferHandle, GraphError> {
+        let padded = u64::from(groups) * u64::from(INDIRECT_GROUP_SIZE);
+        let visibility_size = padded * INDIRECT_MASK_BYTES;
         self.buffer_range(
             self.buffer_id(visibility)?,
             visibility_offset,
             visibility_size,
             true,
         )?;
-
         // Only transient buffers and two passes are appended before publishing
         // the token. Restore the whole group if a later reservation fails.
         let resources = self.data().resources.len();
         let passes = self.data().passes.len();
         let accesses = self.data().accesses.len();
         let names = self.data().names.len();
+        let uploads = self.data().uploads.len();
         let result = (|| {
-            let template_desc = table.template_buffer_desc();
-            let command_desc = table.command_buffer_desc();
+            let template_desc = BufferDesc {
+                size: padded * INDIRECT_TEMPLATE_BYTES,
+            };
+            let command_desc = BufferDesc {
+                size: padded * INDIRECT_COMMAND_BYTES,
+            };
             let template = self.buffer("indirect templates", template_desc)?;
             let buffer = self.buffer("indirect arguments", command_desc)?;
-            self.upload_buffer_slice(
-                "upload indirect templates",
-                template,
-                0,
-                Arc::clone(&table.templates),
-                0..table.templates.len(),
-            )?;
+            upload(self, template)?;
             self.dispatch_buffer_grid(
                 name,
                 &ManagedProgram::indexed_indirect_encoder(),
@@ -176,26 +216,20 @@ impl Graph {
                     indirect_binding(1, visibility, visibility_offset, visibility_size),
                     indirect_binding(2, buffer, 0, command_desc.size),
                 ],
-                [table.groups, 1],
+                [groups, 1],
             )?;
-            Ok(IndexedIndirectArgs {
-                secondary_vertices: None,
-                buffer,
-                vertices,
-                indices,
-                command_count: table.command_count,
-                max_index_end: table.max_index_end,
-            })
+            Ok(buffer)
         })();
         if result.is_err() {
             // Individual passes already rolled back their own storage. A
-            // successful upload adds no bindings or extra upload arena bytes.
+            // successful upload can own a prefix of the frame upload arena.
             let data = self.data_mut();
             data.resources.truncate(resources);
             data.exported.truncate(resources);
             data.passes.truncate(passes);
             data.accesses.truncate(accesses);
             data.names.truncate(names);
+            data.uploads.truncate(uploads);
         }
         result
     }
@@ -240,10 +274,12 @@ mod tests {
         assert_eq!(table.padded_count(), 64);
         assert_eq!(table.max_index_end, 10);
         assert_eq!(
-            &table.templates[..16],
-            &[7, 0, 0, 0, 3, 0, 0, 0, 2, 0, 0, 0, 6, 0, 0, 0]
+            &table.templates[..32],
+            [7u32, 3, 1, 0, 2, 6, 1, 0]
+                .map(u32::to_le_bytes)
+                .as_flattened()
         );
-        assert!(table.templates[16..].iter().all(|&byte| byte == 0));
+        assert!(table.templates[32..].iter().all(|&byte| byte == 0));
     }
 
     #[test]

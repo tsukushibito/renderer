@@ -21,10 +21,10 @@ struct SPIRV_Cross_Input
 
 void comp_main()
 {
-    uint2 _28 = _22.Load2(gl_GlobalInvocationID.x * 8 + 0);
+    uint4 _28 = _22.Load4(gl_GlobalInvocationID.x * 16 + 0);
     uint _37 = _33.Load(gl_GlobalInvocationID.x * 4 + 0);
     _46.Store(gl_GlobalInvocationID.x * 20 + 0, _28.y);
-    _46.Store(gl_GlobalInvocationID.x * 20 + 4, uint(_37 != 0u));
+    _46.Store(gl_GlobalInvocationID.x * 20 + 4, min(_37, _28.z));
     _46.Store(gl_GlobalInvocationID.x * 20 + 8, _28.x);
     _46.Store(gl_GlobalInvocationID.x * 20 + 12, uint(0));
     _46.Store(gl_GlobalInvocationID.x * 20 + 16, 0u);

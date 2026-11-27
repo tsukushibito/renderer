@@ -6,7 +6,7 @@
         }
     ],
     "types" : {
-        "_10" : {
+        "_9" : {
             "name" : "type.Camera",
             "members" : [
                 {
@@ -54,7 +54,7 @@
                 }
             ]
         },
-        "_12" : {
+        "_11" : {
             "name" : "type.StructuredBuffer.v4uint",
             "members" : [
                 {
@@ -71,7 +71,7 @@
                 }
             ]
         },
-        "_14" : {
+        "_13" : {
             "name" : "type.StructuredBuffer.uint",
             "members" : [
                 {
@@ -88,7 +88,7 @@
                 }
             ]
         },
-        "_16" : {
+        "_15" : {
             "name" : "type.ConstantBuffer.Placement",
             "members" : [
                 {
@@ -104,14 +104,9 @@
                     "array_stride" : 16
                 },
                 {
-                    "name" : "rectangle",
-                    "type" : "uvec4",
-                    "offset" : 48
-                },
-                {
                     "name" : "mirrored",
                     "type" : "uint",
-                    "offset" : 64
+                    "offset" : 48
                 }
             ]
         }
@@ -147,7 +142,7 @@
     ],
     "ssbos" : [
         {
-            "type" : "_12",
+            "type" : "_11",
             "name" : "slots",
             "readonly" : true,
             "block_size" : 0,
@@ -155,8 +150,8 @@
             "binding" : 2
         },
         {
-            "type" : "_14",
-            "name" : "page_table",
+            "type" : "_13",
+            "name" : "caster_list",
             "readonly" : true,
             "block_size" : 0,
             "set" : 0,
@@ -165,7 +160,7 @@
     ],
     "ubos" : [
         {
-            "type" : "_10",
+            "type" : "_9",
             "name" : "type.Camera",
             "block_size" : 272,
             "set" : 0,
@@ -174,7 +169,7 @@
     ],
     "push_constants" : [
         {
-            "type" : "_16",
+            "type" : "_15",
             "name" : "placement",
             "push_constant" : true
         }

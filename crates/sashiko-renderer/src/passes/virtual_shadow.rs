@@ -3,7 +3,7 @@
 mod atlas;
 pub use atlas::{ATLAS_DESC, draw_atlas, reserve_atlas};
 mod caster;
-pub use caster::{CasterDraw, bind_caster};
+pub use caster::CasterBatch;
 mod camera_depth;
 pub use camera_depth::{bind_receiver, camera_matrix, draw_camera_depth, reserve_camera_depth};
 
@@ -83,6 +83,7 @@ macro_rules! native_shader {
     };
 }
 
+mod cull;
 mod receiver;
 pub use receiver::{reserve_visibility, resolve_visibility};
 mod invalidate;
