@@ -27,6 +27,7 @@ pub struct WindowRenderer {
 
 #[cfg(feature = "window-capture")]
 struct CaptureBuffer {
+    plane: super::CapturePlane,
     bytes: Vec<u8>,
     pending: Option<(sashiko_renderer_core::graph::PassHandle, u64, [u32; 2])>,
     ready: Option<(u64, [u32; 2], usize)>,
@@ -196,6 +197,10 @@ impl WindowRenderer {
         assets: SceneAssets<'_>,
     ) -> PipelineResult<()> {
         self.ready_for_change()?;
+        #[cfg(feature = "window-capture")]
+        if let (Some(buffer), Some(size)) = (&mut self.capture, extent) {
+            buffer.reserve(size)?;
+        }
         self.renderer.set_scene_extent(extent, assets)
     }
 
@@ -365,11 +370,15 @@ impl WindowRenderer {
         }
         self.ready_for_change()?;
         let mut buffer = CaptureBuffer {
+            plane: super::CapturePlane::DisplayColor,
             bytes: Vec::new(),
             pending: None,
             ready: None,
         };
         buffer.reserve(self.renderer.camera.extent)?;
+        if let Some(extent) = self.renderer.scene_extent {
+            buffer.reserve(extent)?;
+        }
         let FrameDestination::Window(config) = self.renderer.destination else {
             return Err("expected a window presentation target".into());
         };
@@ -396,16 +405,22 @@ impl WindowRenderer {
     pub fn draw_with_capture(
         &mut self,
         tag: u64,
+        plane: super::CapturePlane,
         draw: impl FnOnce(&mut Frame<'_>) -> PipelineResult<()>,
     ) -> PipelineResult<PresentOutcome> {
         if !self.capture_available() {
             return Err("window capture slot unavailable".into());
         }
-        self.draw_inner(Some(tag), draw)
+        if plane == super::CapturePlane::SceneDepth
+            && self.renderer.config.samples != sashiko_renderer_core::graph::SampleCount::X1
+        {
+            return Err("multisampled view has no single-sample scene depth".into());
+        }
+        self.draw_inner(Some((tag, plane)), draw)
     }
 
-    /// Poll once and borrow the top-down, display-linear RGBA8 presenter input,
-    /// including overlays. Encode RGB to sRGB for standard PNG/video.
+    /// Poll once and borrow tightly packed top-down texels. Display color is
+    /// linear RGBA8 after overlays. Scene depth is D32 before compositing.
     #[cfg(feature = "window-capture")]
     pub fn take_capture(&mut self) -> PipelineResult<Option<super::WindowCapture<'_>>> {
         self.retire_graph(Duration::ZERO)?;
@@ -414,14 +429,15 @@ impl WindowRenderer {
             Some(super::WindowCapture {
                 tag,
                 extent,
-                linear_rgba: &buffer.bytes[..size],
+                plane: buffer.plane,
+                bytes: &buffer.bytes[..size],
             })
         }))
     }
 
     fn draw_inner(
         &mut self,
-        #[cfg(feature = "window-capture")] tag: Option<u64>,
+        #[cfg(feature = "window-capture")] tag: Option<(u64, super::CapturePlane)>,
         draw: impl FnOnce(&mut Frame<'_>) -> PipelineResult<()>,
     ) -> PipelineResult<PresentOutcome> {
         self.presenter.poll()?;
@@ -453,13 +469,18 @@ impl WindowRenderer {
             draw(&mut frame)?;
             let image = frame.output(SdrOutput::display(false))?;
             #[cfg(feature = "window-capture")]
-            let readback = if let Some(tag) = tag {
+            let readback = if let Some((tag, plane)) = tag {
+                let (source, size) = match plane {
+                    super::CapturePlane::DisplayColor => (image.raw_image(), frame.output_extent),
+                    super::CapturePlane::SceneDepth => (
+                        frame.depth.ok_or("frame has no scene depth")?,
+                        frame.camera.extent,
+                    ),
+                };
                 Some((
-                    frame
-                        .graph()
-                        .readback_image(super::READBACK, image.raw_image())?,
+                    frame.graph().readback_image(super::READBACK, source)?,
                     tag,
-                    frame.output_extent,
+                    size,
                 ))
             } else {
                 None
@@ -468,7 +489,9 @@ impl WindowRenderer {
             let submission = frame.recording.submit()?;
             #[cfg(feature = "window-capture")]
             if let Some(readback) = readback {
-                self.capture.as_mut().expect("capture prepared").pending = Some(readback);
+                let buffer = self.capture.as_mut().expect("capture prepared");
+                buffer.pending = Some(readback);
+                buffer.plane = tag.expect("requested capture").1;
             }
             submission
         };

@@ -4,11 +4,11 @@ use super::{
 };
 use sashiko::inspect::{
     Event, EventSchema, Field, Journal, Kind, Object, Schema, Session, StdioPort, Value, World,
-    jobs::{Action, Capabilities, CaptureRequest, Jobs, Status, Ticket},
+    jobs::{Action, Capabilities, CaptureRequest, Jobs, RenderLayers, Status, Ticket},
     picking::{PickView, Pointer},
     report::Outcome,
 };
-use sashiko_renderer::{WindowRenderer, pipeline::PipelineResult};
+use sashiko_renderer::{CapturePlane, WindowRenderer, pipeline::PipelineResult};
 use std::{
     path::{Path, PathBuf},
     sync::mpsc,
@@ -82,6 +82,7 @@ pub(crate) struct LiveWorld {
     evidence: Evidence,
     next_input: Input,
     last_events: Events,
+    velocity: sashiko::math::Vec2,
 }
 
 impl World for LiveWorld {
@@ -140,7 +141,9 @@ impl World for LiveWorld {
     }
     fn step(&mut self, journal: &mut Journal<Self::Facts>) {
         let input = std::mem::take(&mut self.next_input);
+        let position = self.game.player;
         let events = self.game.step(input);
+        self.velocity = (self.game.player - position) * survivor::TICK_HZ as f32;
         self.evidence.observe(&self.game, input, events);
         let player = self.evidence.ids.player;
         if let Some(damage) = events.damage {
@@ -172,6 +175,7 @@ impl LiveWorld {
 /// The original game remains the owner of simulation state; all three controls
 /// advance this same Session and publish the same job status.
 pub(crate) struct Live {
+    layers: RenderLayers,
     pending_view: PickView,
     session: Session<LiveWorld>,
     port: Option<StdioPort<Facts>>,
@@ -197,7 +201,7 @@ impl Live {
     ) -> PipelineResult<Self> {
         std::fs::create_dir_all(root)?;
         let encoder = video::probe();
-        let mut actions = vec![Action::Report];
+        let mut actions = vec![Action::Report, Action::SetLayers];
         if encoder.is_some() {
             actions.extend([Action::StartVideo, Action::StopVideo]);
         }
@@ -205,7 +209,13 @@ impl Live {
         let capabilities = Capabilities {
             actions,
             views: vec!["main".into()],
-            stages: vec!["final_srgb_ui".into()],
+            stages: vec!["final_srgb_ui".into(), "scene_depth_d32".into()],
+            layers: ["hud", "collision", "velocity", "ai"]
+                .map(String::from)
+                .into(),
+            depth_limit: Some(
+                "main scene, single-sample D32, still images only; before HUD and debug layers",
+            ),
         };
 
         evidence.last_tick = game.tick;
@@ -215,12 +225,14 @@ impl Live {
             evidence,
             next_input: Input::default(),
             last_events: Events::default(),
+            velocity: sashiko::math::Vec2::ZERO,
         })
         .with_jobs(Jobs::new(capabilities, 16.try_into()?));
         session.set_paused(false);
         session.world_mut().evidence.session = session.session_id().to_owned();
         let (send, done) = mpsc::channel();
         Ok(Self {
+            layers: RenderLayers::default(),
             pending_view: PickView::new("main", survivor::MAX_ENEMIES + 1),
             session,
             port: stdio.then(StdioPort::open),
@@ -240,6 +252,9 @@ impl Live {
     }
     pub(crate) fn game(&self) -> &Game {
         &self.session.world().game
+    }
+    pub(crate) fn overlay(&self) -> (RenderLayers, sashiko::math::Vec2) {
+        (self.layers, self.session.world().velocity)
     }
     pub(crate) fn paused(&self) -> bool {
         self.session.is_paused()
@@ -335,6 +350,10 @@ impl Live {
         {
             let id = ticket.id;
             let status = match ticket.request.action {
+                Action::SetLayers => {
+                    self.layers = ticket.request.layers.ok_or("missing requested layers")?;
+                    Status::Applied
+                }
                 Action::StartVideo if self.video.is_none() && self.finishing.is_none() => {
                     let dir = self
                         .root
@@ -401,8 +420,18 @@ impl Live {
         let for_video = self.stop_job.is_none() && self.video.as_ref().is_some_and(|v| v.due(ns));
         let still = self.waiting.is_some() && self.worker.is_none();
         let capturing = (still || for_video) && renderer.capture_available();
+        let plane = if still
+            && self
+                .waiting
+                .as_ref()
+                .is_some_and(|t| t.request.stage == "scene_depth_d32")
+        {
+            CapturePlane::SceneDepth
+        } else {
+            CapturePlane::DisplayColor
+        };
         let outcome = if capturing {
-            renderer.draw_with_capture(tag, render)?
+            renderer.draw_with_capture(tag, plane, render)?
         } else {
             renderer.draw(render)?
         };
@@ -450,6 +479,7 @@ impl Live {
                 self.capture = Some((
                     Sample {
                         frame: tag,
+                        layers: self.layers,
                         tick: self.game().tick,
                         ns,
                         source: [0, 0],
@@ -461,6 +491,7 @@ impl Live {
                 self.video.as_mut().unwrap().accept(
                     Sample {
                         frame: tag,
+                        layers: self.layers,
                         tick,
                         ns,
                         source: [0, 0],
@@ -493,13 +524,17 @@ impl Live {
         }
         sample.source = image.extent;
         if let Some(v) = &mut self.video {
-            v.accept(sample, Some(image.linear_rgba));
+            v.accept(
+                sample,
+                (image.plane == CapturePlane::DisplayColor).then_some(image.bytes),
+            );
         }
         let Some((ticket, evidence)) = report else {
             return Ok(());
         };
-        let stamp = sample.stamp();
-        let mut pixels = image.linear_rgba.to_vec();
+        let mut stamp = sample.stamp();
+        let plane = image.plane;
+        let mut pixels = image.bytes.to_vec();
         let id = ticket.id;
         self.session
             .jobs()
@@ -510,17 +545,30 @@ impl Live {
             .join(format!("{}-{id}", self.session.session_id()));
         let send = self.send.clone();
         self.worker = Some(thread::spawn(move || {
-            let lut = video::srgb_table();
-            for pixel in pixels.as_chunks_mut::<4>().0 {
-                for c in &mut pixel[..3] {
-                    *c = lut[*c as usize];
-                }
-            }
             let result = evidence
                 .save(&directory, &id.to_string(), |m| {
                     m.requested_tick = ticket.requested_tick;
                     m.world = "game".into();
                     m.job = format!("{}/j{id}", m.session);
+                    match plane {
+                        CapturePlane::SceneDepth => {
+                            std::fs::write(directory.join("depth.f32le"), &pixels)?;
+                            m.files.insert("depth".into(), "depth.f32le".into());
+                            m.settings["depth"] = serde_json::json!({"format":"D32_FLOAT","layout":"top-down, tightly packed little endian","range":[0,1],"preview":"normalized device depth × 255","source":"main scene, before overlays","msaa":"single-sample only"});
+                            stamp.stage = "scene_depth_d32".into();
+                            stamp.layers = None;
+                            for pixel in pixels.as_chunks_mut::<4>().0 {
+                                let level = (f32::from_le_bytes(*pixel).clamp(0.,1.) * 255.).round() as u8;
+                                *pixel = [level,level,level,255];
+                            }
+                        }
+                        CapturePlane::DisplayColor => {
+                            let lut = video::srgb_table();
+                            for pixel in pixels.as_chunks_mut::<4>().0 {
+                                for c in &mut pixel[..3] { *c = lut[*c as usize]; }
+                            }
+                        }
+                    }
                     super::save_image(&directory, m, stamp, &pixels)
                 })
                 .and_then(|()| {

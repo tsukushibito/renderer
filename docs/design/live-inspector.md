@@ -189,6 +189,28 @@ Windows では `cargo run -p survivor --features diagnostics -- --debug-dir repo
 resize 時は次の表示成功まで選択範囲を失効させる。選択済み個体が消滅した後の
 `selected` は元の ID と `OBJECT_GONE` を返す。
 
+### 表示レイヤーと深度
+
+Survivor の `--debug-dir` 実行で `hello.diagnostics` にビュー、採取段階、切替可能な
+レイヤーが出る。たとえば次の要求を送り、ジョブが `applied` になった後に F8 で
+保存すると、HUD を消した状態で、プレイヤーと最寄りの敵の衝突半径が緑で映る。
+
+```json
+{"id":"1","op":"capture","request":{"action":"set_layers","layers":{"hud":false,"collision":true,"velocity":true,"ai":true}}}
+```
+
+水色はプレイヤーの直近の固定更新での速度を 0.25 秒分に換算した線、紫は最寄りの
+敵からプレイヤーへの目標線。ゲームは `sashiko::ui::debug::DebugDraw` にカテゴリ付きの
+線・楕円・ラベルを渡す。HUD と合わせて準備済みの 256 描画を使用し、長い線は点線で
+表す。表示設定は次の変更まで続き、PNG と動画の各フレームに設定が残る。
+
+`{"action":"report","view":"main","stage":"scene_depth_d32"}` では、シーン描画後、
+合成前の正規化デバイス深度を採る。`depth.f32le` は上から順に並ぶ D32 の
+リトルエンディアン生値で、行末パディングはない。`frame.png` は 0〜1 を 8 ビット
+グレーにした確認用画像。Survivor は単一サンプルの main ビューを公開する。
+4× MSAA のシーン深度は描画時に破棄されるため、Renderer は取得要求を拒否する。
+深度の録画は提供していない。
+
 ## 実行中の編集と制作元への保存
 
 実行値は既定で読み取り専用とし、ゲームが編集可能と宣言した項目にだけ変更要求を送れる。たとえば「最大 HP を変更する」には、現在 HP の再計算も含めた操作をゲーム側で定義する。表示用の反射情報は変更権限を与えない。

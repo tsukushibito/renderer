@@ -32,6 +32,8 @@ pub struct FrameStamp {
     pub view: String,
     pub extent: [u32; 2],
     pub stage: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<crate::jobs::RenderLayers>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -145,6 +147,7 @@ mod tests {
         );
         for frame in [u64::MAX - 1, u64::MAX] {
             report.frames.push(FrameStamp {
+                layers: None,
                 frame,
                 tick: 42,
                 elapsed_ns: frame,

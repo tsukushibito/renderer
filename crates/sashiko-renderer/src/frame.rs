@@ -44,7 +44,15 @@ pub use window::WindowRenderer;
 pub struct WindowCapture<'a> {
     pub tag: u64,
     pub extent: [u32; 2],
-    pub linear_rgba: &'a [u8],
+    pub plane: CapturePlane,
+    pub bytes: &'a [u8],
+}
+
+#[cfg(feature = "window-capture")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CapturePlane {
+    DisplayColor,
+    SceneDepth,
 }
 
 const LINEAR: &str = "frame linear";
@@ -143,6 +151,10 @@ impl Renderer {
         let mut plan = setup.prepare(assets)?;
         let [w, h] = camera.extent;
         let target = ImageDesc::rgba8(w, h);
+        #[cfg(feature = "window-capture")]
+        let readback_size = ImageDesc::rgba8(w.max(scene.extent[0]), h.max(scene.extent[1]));
+        #[cfg(not(feature = "window-capture"))]
+        let readback_size = target;
         let prep = plan.preparation_mut();
         prep.reserve_sampler(canvas::IMAGE_SAMPLER);
         prep.reserve_sampler(output::TONE_MAP_SAMPLER);
@@ -171,7 +183,7 @@ impl Renderer {
             pass.draws(&destination.encoding().pipeline().program, 1)
         })?;
         match destination {
-            FrameDestination::Capture => plan.reserve_readback(READBACK, target)?,
+            FrameDestination::Capture => plan.reserve_readback(READBACK, readback_size)?,
             // Each outstanding present may still lease its source after the render
             // submission completes. The next Graph needs its own writable output.
             #[cfg(all(
@@ -188,7 +200,7 @@ impl Renderer {
             ))]
             FrameDestination::CaptureWindow(config) => {
                 prep.reserve_image(target, config.max_frames)?;
-                plan.reserve_readback(READBACK, target)?;
+                plan.reserve_readback(READBACK, readback_size)?;
             }
         }
         Ok(plan)
@@ -483,6 +495,8 @@ impl Renderer {
             },
             output_extent: self.camera.extent,
             linear: None,
+            #[cfg(feature = "window-capture")]
+            depth: None,
         })
     }
 
@@ -581,6 +595,8 @@ impl Drop for Capture {
 }
 
 pub struct Frame<'a> {
+    #[cfg(feature = "window-capture")]
+    depth: Option<ImageHandle>,
     recording: SceneFrame<'a>,
     captures: &'a mut [CaptureSlot],
     camera: CameraView,
@@ -609,7 +625,12 @@ impl Frame<'_> {
                 "draw the main scene before its overlays",
             ));
         }
-        let hdr = self.recording.draw_scene(&self.camera, input)?.color;
+        let images = self.recording.draw_scene(&self.camera, input)?;
+        #[cfg(feature = "window-capture")]
+        {
+            self.depth = images.depth;
+        }
+        let hdr = images.color;
         let view = self.graph().image_view(hdr, 0, 0)?;
         let scaled = self.camera.extent != self.output_extent;
         let target = if scaled {
@@ -657,13 +678,27 @@ impl Frame<'_> {
 
     /// Submit this frame and obtain its sRGB readback ticket without waiting.
     pub fn capture(mut self) -> PipelineResult<Capture> {
+        let image = self.output(SdrOutput::capture(false))?.raw_image();
+        let extent = self.output_extent;
+        self.submit_capture(image, extent)
+    }
+
+    /// Native D32 floating-point values after scene rasterization, before overlays.
+    #[cfg(feature = "window-capture")]
+    pub fn capture_depth(self) -> PipelineResult<Capture> {
+        let image = self
+            .depth
+            .ok_or("scene did not expose single-sample depth")?;
+        let extent = self.camera.extent;
+        self.submit_capture(image, extent)
+    }
+    fn submit_capture(mut self, image: ImageHandle, extent: [u32; 2]) -> PipelineResult<Capture> {
         let slot = self
             .captures
             .iter()
             .position(|slot| slot.frame.is_none())
             .ok_or("outstanding captures exhaust the prepared frame count")?;
-        let output = self.output(SdrOutput::capture(false))?;
-        let pixels = self.graph().readback_image(READBACK, output.raw_image())?;
+        let pixels = self.graph().readback_image(READBACK, image)?;
         let accepted: FrameSubmission = self.recording.submit()?;
         self.captures[slot].frame = Some(accepted.id());
         Ok(Capture {
@@ -672,7 +707,7 @@ impl Frame<'_> {
             slot,
             frame: accepted.id(),
             pixels,
-            extent: self.output_extent,
+            extent,
         })
     }
 }

@@ -31,6 +31,7 @@ pub(super) fn probe() -> Option<OsString> {
 
 #[derive(Clone, Copy)]
 pub(super) struct Sample {
+    pub layers: sashiko::inspect::jobs::RenderLayers,
     pub frame: u64,
     pub tick: u64,
     pub ns: u64,
@@ -44,7 +45,13 @@ impl Sample {
             elapsed_ns: self.ns,
             extent: self.source,
             view: "main".into(),
-            stage: "final_srgb_ui".into(),
+            stage: if self.layers.hud {
+                "final_srgb_ui"
+            } else {
+                "final_srgb"
+            }
+            .into(),
+            layers: Some(self.layers),
             interpolation: None,
         }
     }
@@ -342,6 +349,7 @@ mod tests {
         };
         release.send(vec![0; 6]).unwrap();
         let mut sample = Sample {
+            layers: Default::default(),
             frame: 9,
             tick: 7,
             ns: 0,

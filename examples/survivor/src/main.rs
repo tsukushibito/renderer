@@ -320,6 +320,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             directory,
                             m,
                             sashiko::inspect::report::FrameStamp {
+                                layers: Some(Default::default()),
                                 frame: 0,
                                 tick: app.game.tick,
                                 elapsed_ns: submitted,

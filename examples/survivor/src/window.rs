@@ -252,9 +252,21 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
         let start = Instant::now();
         #[cfg(feature = "memory-profiling")]
         mark(self.measured, AllocationPhase::Host);
+        #[cfg(feature = "diagnostics")]
+        let overlay = match &self.app.game {
+            PlayState::Normal(_) => None,
+            PlayState::Observed(live) => Some(live.overlay()),
+        };
         let mut render = |frame: &mut sashiko_renderer::Frame<'_>, game: &Game| {
             #[cfg(feature = "memory-profiling")]
             mark(self.measured, AllocationPhase::Backend);
+            #[cfg(feature = "diagnostics")]
+            if let Some((layers, velocity)) = overlay {
+                self.visual.draw_debug(frame, game, layers, velocity)?;
+            } else {
+                self.visual.draw(frame, game)?;
+            }
+            #[cfg(not(feature = "diagnostics"))]
             self.visual.draw(frame, game)?;
             #[cfg(feature = "memory-profiling")]
             mark(self.measured, AllocationPhase::Graph);

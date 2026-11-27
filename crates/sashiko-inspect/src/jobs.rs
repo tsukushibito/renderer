@@ -9,6 +9,27 @@ pub enum Action {
     StartVideo,
     StopVideo,
     Clip,
+    SetLayers,
+}
+
+/// The host applies these switches to its displayed view at a frame boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RenderLayers {
+    pub hud: bool,
+    pub collision: bool,
+    pub velocity: bool,
+    pub ai: bool,
+}
+impl Default for RenderLayers {
+    fn default() -> Self {
+        Self {
+            hud: true,
+            collision: false,
+            velocity: false,
+            ai: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,6 +42,7 @@ pub struct CaptureRequest {
     pub stage: String,
     pub extent: Option<[u32; 2]>,
     pub fps: Option<u32>,
+    pub layers: Option<RenderLayers>,
 }
 
 fn main_view() -> String {
@@ -38,6 +60,7 @@ impl CaptureRequest {
             stage: final_color(),
             extent: None,
             fps: None,
+            layers: None,
         }
     }
 }
@@ -47,6 +70,8 @@ pub struct Capabilities {
     pub actions: Vec<Action>,
     pub views: Vec<String>,
     pub stages: Vec<String>,
+    pub layers: Vec<String>,
+    pub depth_limit: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -55,6 +80,7 @@ pub enum Status {
     Queued,
     Running { phase: &'static str },
     Complete { artifact: String },
+    Applied,
     Partial { artifact: String, reason: String },
     Failed { reason: String },
 }
@@ -63,7 +89,7 @@ impl Status {
     fn terminal(&self) -> bool {
         matches!(
             self,
-            Self::Complete { .. } | Self::Partial { .. } | Self::Failed { .. }
+            Self::Complete { .. } | Self::Partial { .. } | Self::Failed { .. } | Self::Applied
         )
     }
 }
@@ -111,6 +137,12 @@ impl Jobs {
         }
         if request.extent.is_some_and(|size| size.contains(&0)) || request.fps == Some(0) {
             return Err("BAD_REQUEST");
+        }
+        if (request.action == Action::SetLayers) != request.layers.is_some() {
+            return Err("BAD_REQUEST");
+        }
+        if request.stage == "scene_depth_d32" && request.action != Action::Report {
+            return Err("UNSUPPORTED");
         }
         if request.action != Action::StartVideo
             && (request.extent.is_some() || request.fps.is_some())
@@ -181,6 +213,8 @@ mod tests {
                 actions: vec![Action::Report],
                 views: vec![main_view()],
                 stages: vec![final_color()],
+                layers: vec![],
+                depth_limit: None,
             },
             NonZeroUsize::MIN,
         );

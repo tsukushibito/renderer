@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 pub type Color = [f32; 4];
 
+#[cfg(feature = "live-inspector")]
+pub mod debug;
+
 /// Menu gestures captured once per game update, independently of the physical keys.
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]

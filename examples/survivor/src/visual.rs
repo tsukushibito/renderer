@@ -438,6 +438,83 @@ impl Visual {
             .with_lights(&self.lights)
             .with_bounds(self.bounds)
     }
+    #[cfg(feature = "diagnostics")]
+    pub fn draw_debug(
+        &mut self,
+        frame: &mut sashiko_renderer::Frame<'_>,
+        game: &Game,
+        layers: sashiko::inspect::jobs::RenderLayers,
+        velocity: Vec2,
+    ) -> PipelineResult<()> {
+        use sashiko::ui::debug::{Category, DebugDraw, Shape};
+        let view = *frame.scene_view();
+        let extent = view.extent;
+        let m = view.camera.clip_from_world();
+        let project = |p: Vec2| {
+            [
+                (1. + m[0][0] * p.x() + m[2][0] * p.y() + m[3][0]) * 0.5 * extent[0] as f32,
+                (1. + m[0][1] * p.x() + m[2][1] * p.y() + m[3][1]) * 0.5 * extent[1] as f32,
+            ]
+        };
+        frame.draw_scene(self.scene(), 1.)?;
+        if layers.hud {
+            hud::paint(&mut self.hud, game, extent);
+        } else {
+            self.hud.clear();
+        }
+        let mut debug = DebugDraw::new(&mut self.hud, extent, layers, 256);
+        let center = project(game.player);
+        let green = [0., 1., 0., 1.];
+        let cyan = [0., 1., 1., 1.];
+        let magenta = [1., 0., 1., 1.];
+        let collision = |position: Vec2, radius: f32| Shape::Ellipse {
+            center: project(position),
+            radius: [
+                m[0][0].hypot(m[2][0]) * radius * extent[0] as f32 / 2.,
+                m[0][1].hypot(m[2][1]) * radius * extent[1] as f32 / 2.,
+            ],
+        };
+        debug.draw(
+            Category::Collision,
+            collision(game.player, crate::PLAYER_RADIUS),
+            green,
+        );
+        debug.draw(
+            Category::Velocity,
+            Shape::Line {
+                from: center,
+                to: project(game.player + velocity * 0.25),
+            },
+            cyan,
+        );
+        if (layers.collision || layers.ai)
+            && let Some(enemy) = game.enemies.iter().min_by(|a, b| {
+                a.pos
+                    .distance_squared(game.player)
+                    .total_cmp(&b.pos.distance_squared(game.player))
+            })
+        {
+            let at = project(enemy.pos);
+            debug.draw(
+                Category::Collision,
+                collision(enemy.pos, crate::ENEMY_RADIUS),
+                green,
+            );
+            debug.draw(
+                Category::Ai,
+                Shape::Line {
+                    from: at,
+                    to: center,
+                },
+                magenta,
+            );
+            debug.draw(Category::Ai, Shape::Label { at, text: "AI" }, magenta);
+        }
+        if !self.hud.is_empty() {
+            frame.draw_overlay(&self.hud)?;
+        }
+        Ok(())
+    }
     pub fn overlay(&mut self, game: &Game, extent: [u32; 2]) -> &[Layer] {
         hud::paint(&mut self.hud, game, extent);
         &self.hud

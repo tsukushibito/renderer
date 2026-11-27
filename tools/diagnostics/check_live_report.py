@@ -30,12 +30,59 @@ def resize_window(process_id):
     assert user.SetWindowPos(wintypes.HWND(found[0]), 0, 0, 0, 480, 340, 0x0016)
 
 
-def check(executable, backend, directory, video=False):
+def check_layers(request, original, video):
+    from PIL import Image
+    import numpy as np
+
+    def capture(action, terminal=("complete",), **options):
+        accepted = request("capture", request={"action": action, **options})
+        deadline = time.monotonic() + 90
+        while True:
+            status = request("job", job=accepted["job"])
+            if status.get("phase") == "recording" and action == "start_video":
+                return
+            if status["state"] in terminal:
+                return Path(status["artifact"]) if "artifact" in status else None
+            assert status["state"] in ("running", "queued") and time.monotonic() < deadline, status
+            time.sleep(0.03)
+
+    def image(directory):
+        return np.asarray(Image.open(directory / "frame.png").convert("RGB"))
+
+    layers = dict(hud=False, velocity=True, ai=True, collision=True)
+    capture("set_layers", ("applied",), layers=layers)
+    overlay = capture("report")
+    decorated = image(overlay)
+    assert not np.array_equal(image(original)[:30, :70], decorated[:30, :70]), "HUD still visible"
+    assert np.any(np.all(decorated == [0, 255, 0], axis=2)), "collision outline missing"
+    stamp, = json.loads((overlay / "manifest.json").read_bytes())["frames"]
+    assert stamp["layers"] == layers and stamp["stage"] == "final_srgb"
+    depth = capture("report", stage="scene_depth_d32")
+    manifest = json.loads((depth / "manifest.json").read_bytes())
+    sample, = manifest["frames"]
+    assert (sample["tick"], sample["stage"]) == (stamp["tick"], "scene_depth_d32")
+    raw = np.fromfile(depth / manifest["files"]["depth"], dtype="<f4").reshape(decorated.shape[:2])
+    assert 0 <= raw.min() < raw.max() <= 1 and np.isfinite(raw).all()
+    assert np.abs(image(depth)[:,:,0].astype(float) - raw * 255).max() <= 0.501
+    if video:
+        import av
+        capture("start_video", extent=stamp["extent"], fps=10)
+        time.sleep(1.0)
+        clip = capture("stop_video", ("partial", "complete"))
+        with av.open(str(clip / "video.mkv")) as movie:
+            frame = next(movie.decode(video=0)).to_ndarray(format="rgb24")
+        assert np.array_equal(frame, decorated), "recorded view differs from the same paused PNG"
+    capture("set_layers", ("applied",), layers={"hud":True})
+    restored = capture("report")
+    assert np.array_equal(image(restored), image(original)), "paused view did not restore"
+
+
+def check(executable, backend, directory, video=False, layers=False):
     directory.mkdir(parents=True, exist_ok=False)
     config = directory / "settings.json"
     config.write_text('{"jobs":{"parallelism":2}}', encoding="utf-8")
     command = [str(executable), "--backend", backend, "--debug-dir", str(directory),
-               "--inspect-stdio", "--frames", "200", "--width", "320", "--height", "180",
+               "--inspect-stdio", "--frames", "500" if layers else "200", "--width", "320", "--height", "180",
                "--config", str(config)]
     with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           encoding="utf-8", cwd=directory) as game:
@@ -108,6 +155,9 @@ def check(executable, backend, directory, video=False):
                     break
                 assert status["state"] in ("queued", "running") and time.monotonic() < deadline, status
             assert collision.read_bytes() == b"existing file"
+            if layers:
+                assert "scene_depth_d32" in hello["diagnostics"]["stages"]
+                check_layers(request, report, video)
             request("step")
             request("resume")
             if video:
@@ -143,7 +193,8 @@ def check(executable, backend, directory, video=False):
                         assert (frame.width, frame.height) == (160, 90)
                         assert abs(float(frame.time) - int(row["pts"]) / 15) < 0.0011
                 print(clip, flush=True)
-                collision = directory / (hello["session"] + "-5")
+                next_id = int(stop["job"].rsplit("/j", 1)[1]) + 1
+                collision = directory / (hello["session"] + "-" + str(next_id))
                 collision.write_bytes(b"retain")
                 failed = request("capture", request={"action": "start_video", "extent": [160, 90], "fps": 15})
                 deadline = time.monotonic() + 15
@@ -173,5 +224,6 @@ if __name__ == "__main__":
     parser.add_argument("backend", choices=["vulkan", "d3d12"])
     parser.add_argument("output", type=Path)
     parser.add_argument("--video", action="store_true")
+    parser.add_argument("--layers", action="store_true")
     args = parser.parse_args()
-    check(args.survivor.resolve(), args.backend, args.output.resolve(), args.video)
+    check(args.survivor.resolve(), args.backend, args.output.resolve(), args.video, args.layers)
