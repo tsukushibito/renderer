@@ -10,7 +10,7 @@
 ; Name                 Index   Mask Register SysValue  Format   Used
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; no parameters
-; shader hash: 31b76cbc854a925a19993ce4b505cb06
+; shader hash: ad1352feee73ab48475bf001539daa91
 ;
 ; Pipeline Runtime Information:
 ;
@@ -66,13 +66,6 @@
 ;
 ; }
 ;
-; Resource bind info for previous
-; {
-;
-;   uint4 $Element;                                   ; Offset:    0 Size:    16
-;
-; }
-;
 ; Resource bind info for mapping
 ; {
 ;
@@ -95,7 +88,6 @@
 ; Camera                            cbuffer      NA          NA     CB0            cb0     1
 ; requests                          texture  struct         r/o      T0             t1     1
 ; counts                            texture  struct         r/o      T1             t2     1
-; previous                          texture  struct         r/o      T2             t3     1
-; mapping                           texture  struct         r/o      T3             t5     1
+; mapping                           texture  struct         r/o      T2             t3     1
 ; slots                                 UAV  struct         r/w      U0             u4     1
 ;

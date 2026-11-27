@@ -185,9 +185,8 @@ fn slot_program() -> ManagedProgram {
             layout(0, BindingType::Uniform, CAMERA_BYTES),
             layout(1, BindingType::StorageRead, REQUEST_BYTES),
             layout(2, BindingType::StorageRead, BLOCK_BYTES),
-            layout(3, BindingType::StorageRead, SLOT_BYTES),
+            layout(3, BindingType::StorageRead, MAP_BYTES),
             layout(4, BindingType::StorageWrite, SLOT_BYTES),
-            layout(5, BindingType::StorageRead, MAP_BYTES),
         ],
         dispatch: DispatchContract {
             workgroups: DispatchWorkgroups::Fixed([16, 1, 1]),
@@ -195,9 +194,8 @@ fn slot_program() -> ManagedProgram {
                 CAMERA_BYTES as u64,
                 REQUEST_BYTES as u64,
                 BLOCK_BYTES as u64,
-                SLOT_BYTES as u64,
-                SLOT_BYTES as u64,
                 MAP_BYTES as u64,
+                SLOT_BYTES as u64,
             ],
         },
         shaders: native_shader!("page_state"),
@@ -380,9 +378,8 @@ pub fn assign_pages(
             slot(0, requests.camera, CAMERA_BYTES),
             slot(1, requests.mask, REQUEST_BYTES),
             slot(2, counts, BLOCK_BYTES),
-            slot(3, previous, SLOT_BYTES),
+            slot(3, mapping, MAP_BYTES),
             slot(4, slots, SLOT_BYTES),
-            slot(5, mapping, MAP_BYTES),
         ],
     )?;
     Ok(AssignedPages { table, slots })

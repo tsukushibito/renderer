@@ -82,23 +82,6 @@
             ]
         },
         "_9" : {
-            "name" : "type.StructuredBuffer.v4uint",
-            "members" : [
-                {
-                    "name" : "_m0",
-                    "type" : "uvec4",
-                    "array" : [
-                        0
-                    ],
-                    "array_size_is_literal" : [
-                        true
-                    ],
-                    "offset" : 0,
-                    "array_stride" : 16
-                }
-            ]
-        },
-        "_11" : {
             "name" : "type.StructuredBuffer.v2uint",
             "members" : [
                 {
@@ -115,7 +98,7 @@
                 }
             ]
         },
-        "_13" : {
+        "_11" : {
             "name" : "type.RWStructuredBuffer.v4uint",
             "members" : [
                 {
@@ -152,7 +135,7 @@
         },
         {
             "type" : "_9",
-            "name" : "previous",
+            "name" : "mapping",
             "readonly" : true,
             "block_size" : 0,
             "set" : 0,
@@ -160,14 +143,6 @@
         },
         {
             "type" : "_11",
-            "name" : "mapping",
-            "readonly" : true,
-            "block_size" : 0,
-            "set" : 0,
-            "binding" : 5
-        },
-        {
-            "type" : "_13",
             "name" : "slots",
             "writeonly" : true,
             "block_size" : 0,

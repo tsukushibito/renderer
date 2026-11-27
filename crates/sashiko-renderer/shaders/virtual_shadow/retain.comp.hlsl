@@ -13,8 +13,7 @@ groupshared uint claim[VSM_CAPACITY];
 groupshared uint old_rank[VSM_CAPACITY];
 groupshared uint missing[VSM_CAPACITY];
 groupshared uint available[VSM_CAPACITY];
-groupshared uint forward_map[VSM_CAPACITY];
-groupshared uint inverse_map[VSM_CAPACITY];
+// Reuse claim and old_rank as the completed permutations after compaction.
 groupshared uint2 prefixes[64];
 
 uint requested_rank(uint4 prior) {
@@ -49,13 +48,11 @@ void main(uint lane : SV_GroupIndex) {
     }
     GroupMemoryBarrierWithGroupSync();
     uint2 n = 0;
+    uint retained_mask = 0;
     for (uint i = first; i < end; ++i) {
         bool taken = old_rank[i] < VSM_CAPACITY && claim[min(old_rank[i], VSM_CAPACITY - 1u)] == i;
         n += uint2(claim[i] == VSM_CAPACITY, !taken);
-        if (taken) {
-            forward_map[old_rank[i]] = i;
-            inverse_map[i] = old_rank[i];
-        }
+        if (taken) retained_mask |= 1u << (i - first);
     }
     prefixes[lane] = n;
     GroupMemoryBarrierWithGroupSync();
@@ -70,9 +67,12 @@ void main(uint lane : SV_GroupIndex) {
     for (uint j = offset.x - n.x; j < offset.x; ++j) {
         uint rank = missing[j];
         uint slot = available[j];
-        forward_map[rank] = slot;
-        inverse_map[slot] = rank;
+        claim[rank] = slot;
+        old_rank[slot] = rank;
     }
     GroupMemoryBarrierWithGroupSync();
-    for (uint i = first; i < end; ++i) mapping[i] = uint2(forward_map[i], inverse_map[i]);
+    for (uint i = first; i < end; ++i) {
+        uint retained = (retained_mask >> (i - first)) & 1u;
+        mapping[i] = uint2(claim[i], old_rank[i] | (retained << 31));
+    }
 }

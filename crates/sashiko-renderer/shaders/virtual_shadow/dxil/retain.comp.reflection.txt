@@ -10,14 +10,14 @@
 ; Name                 Index   Mask Register SysValue  Format   Used
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; no parameters
-; shader hash: 5a53bd35eee0cb6f1f610c4a05d0e240
+; shader hash: 8da7a05b3e7ff8dac82ccdf02c20266b
 ;
 ; Pipeline Runtime Information:
 ;
 ;PSVRuntimeInfo:
 ; Compute Shader
 ; NumThreads=(64,1,1)
-; NumBytesGroupSharedMemory: 23576
+; NumBytesGroupSharedMemory: 15888
 ; MinimumExpectedWaveLaneCount: 0
 ; MaximumExpectedWaveLaneCount: 4294967295
 ; UsesViewID: false
