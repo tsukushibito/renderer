@@ -46,6 +46,22 @@ $viewer = "target/release/scene-viewer.exe"
 
 NVIDIA GPU を使い、計測中はほかの GPU 作業を止める。各モードで VSync 無効・1920×1080 のウィンドウを開き、1周ウォームアップした後に3周測る。`profile` は別走行で GPU タイムスタンプを有効にする。動画は同じ時刻を 24 fps で記録する。対話表示のフレーム時間は `timing` に保存する。`package` は再生用で、`gltf` と `*.rgb8` は変換・比較用の中間データ。結果を保存した後は元の ZIP とレシピから再生成できる。[実機検証と成果物](../verification/current.md#namaqualand)
 
+### 近距離の影を比較する
+
+比較用パッケージには、4分割・各1024²、距離60 m、分割係数0.86のCSM、670配置のライトマップ、拡散照度プローブと27個の反射プローブを使う。上でcookした通常LODのパッケージから共通のメッシュとテクスチャを再利用し、ベイク済みデータとカメラを検証用ZIPから復元する。復元先は新しいディレクトリを指定する。ネイティブ1080pの歩行用はFXAA有効、静止画用は4K描画・2×2サンプルの線形平均用にLODの画素しきい値を2倍にしている。
+
+```powershell
+$ref = "build/tasks/sashiko-ya35.7"
+git lfs pull --include="assets/verification/namaqualand-near-csm-evidence.zip"
+python tools/namaqualand/restore_near_csm.py "$task/package" "$ref/restored-walk"
+python tools/namaqualand/restore_near_csm.py "$task/package" "$ref/restored-stills" --mode scene
+cargo build --locked --release -p renderer-scenes --features scene-viewer,d3d12 --bin scene-viewer
+target/release/scene-viewer.exe --api vulkan "$ref/restored-walk" rock --walk-route assets/namaqualand/walk.json
+target/release/scene-viewer.exe --api d3d12 "$ref/restored-stills" b --capture "$ref/flowers-4k.png"
+```
+
+経路を測る場合は `--benchmark-route assets/namaqualand/walk.json 出力.json` を使う。両APIの9視点、UE5の同一経路計測、単体植生の対照を保存している。[比較結果](../verification/current.md#near-csm)
+
 <a id="landscape"></a>
 
 ## Landscape の草原を描画する

@@ -8,11 +8,13 @@ use sashiko_renderer::{
 use std::collections::HashMap;
 
 impl super::SceneSettings {
-    pub(super) fn direct_shadows(&self) -> Option<sashiko_renderer::pbr::ShadowSettings> {
+    pub fn direct_shadows(&self) -> Option<sashiko_renderer::pbr::ShadowSettings> {
+        let defaults = sashiko_renderer::pbr::ShadowSettings::default();
         (self.sun_lux > 0.).then_some(sashiko_renderer::pbr::ShadowSettings {
             resolution: self.shadow_resolution,
             distance: self.shadow_distance,
-            ..Default::default()
+            split_lambda: self.shadow_split_lambda.unwrap_or(defaults.split_lambda),
+            ..defaults
         })
     }
 }

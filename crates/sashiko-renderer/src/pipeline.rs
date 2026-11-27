@@ -129,6 +129,8 @@ struct Resolved {
 /// Settings for the standard scene-linear HDR view.
 #[derive(Clone, Copy, Debug)]
 pub struct StandardConfig {
+    /// Apply FXAA during the frame API's final SDR transfer.
+    pub fxaa: bool,
     /// Prepare the equal-area sky and physical film output pass for the standard frame API.
     pub film_output: bool,
     pub extent: [u32; 2],
@@ -142,6 +144,7 @@ impl StandardConfig {
     pub fn new(extent: [u32; 2]) -> Self {
         Self {
             film_output: false,
+            fxaa: false,
             extent,
             clear_color: [0., 0., 0., 1.],
             shadows: None,

@@ -67,6 +67,11 @@ impl PerspectiveView {
 
 /// CPU-side draw registrations and device image owners for a cooked scene.
 pub struct DisplayScene {
+    bake: Option<(
+        sashiko_renderer::pbr::SurfaceLightmaps,
+        sashiko_renderer::pbr::ReflectionProbes,
+    )>,
+    lighting: Option<sashiko_renderer::pipeline::ResidentBakedLighting>,
     store: ObjectStore,
     meshes: Meshes,
     materials: Materials,
@@ -119,6 +124,7 @@ impl DisplayScene {
         let mut config = sashiko_renderer::pipeline::StandardConfig::new(self.camera.extent);
         let [r, g, b] = self.settings.sky_color;
         config.film_output = self.film.is_some();
+        config.fxaa = self.settings.fxaa;
         config.clear_color = if config.film_output {
             [0.; 4]
         } else {
@@ -169,6 +175,9 @@ impl DisplayScene {
             |_| Ok(()),
         )?;
         self.upload_materials(&mut renderer)?;
+        if let Some((surfaces, reflections)) = self.bake.take() {
+            self.lighting = Some(renderer.load_surface_lighting(&surfaces, Some(&reflections))?);
+        }
         renderer.prepare_scene(self.assets())?;
         Ok((self, renderer))
     }
@@ -192,6 +201,9 @@ impl DisplayScene {
             |_| Ok(()),
         )?;
         scene.upload_materials(&mut renderer)?;
+        if let Some((surfaces, reflections)) = scene.bake.take() {
+            scene.lighting = Some(renderer.load_surface_lighting(&surfaces, Some(&reflections))?);
+        }
         renderer.prepare_scene(scene.assets())?;
         Ok((scene, renderer))
     }
@@ -203,6 +215,20 @@ impl DisplayScene {
     ) -> PipelineResult<Self> {
         let mut scene = ScenePackage::open(directory)?;
         let store = ObjectStore::new(directory);
+        let bake = scene
+            .baked
+            .as_ref()
+            .map(|b| b.lighting(&store))
+            .transpose()?;
+        if let Some((surfaces, _)) = &bake
+            && scene
+                .placements
+                .iter()
+                .filter_map(|p| p.lightmap)
+                .any(|id| !surfaces.placements().contains_key(&id))
+        {
+            return Err("placement absent from baked surface index".into());
+        }
         let all_bounds = if let Some(samples) = samples {
             Some(super::spatial::select(&mut scene, &store, samples)?)
         } else {
@@ -255,7 +281,29 @@ impl DisplayScene {
                 std::collections::hash_map::Entry::Vacant(e) => {
                     let bytes = store.load(&reference)?;
                     let blob = bytes.mesh()?;
-                    *e.insert((meshes.create(blob.mesh_data()?)?, blob.local_bounds()?))
+                    let mut data = blob.mesh_data()?;
+                    if let Some(uv) = scene
+                        .baked
+                        .as_ref()
+                        .and_then(|b| b.mesh_uvs.get(&reference.hash))
+                    {
+                        let bytes = store.load(uv)?;
+                        let (pairs, remainder) = bytes.as_chunks::<8>();
+                        if !remainder.is_empty() || pairs.len() != blob.vertices.len() {
+                            return Err("invalid baked mesh UV stream length".into());
+                        }
+                        let uvs: Vec<_> = pairs
+                            .iter()
+                            .map(|p| {
+                                [
+                                    f32::from_le_bytes(p[..4].try_into().unwrap()),
+                                    f32::from_le_bytes(p[4..].try_into().unwrap()),
+                                ]
+                            })
+                            .collect();
+                        data = data.with_lightmap_uvs(&uvs)?;
+                    }
+                    *e.insert((meshes.create(data)?, blob.local_bounds()?))
                 }
             })
         };
@@ -315,9 +363,15 @@ impl DisplayScene {
                     diameter: (hi - lo).length(),
                 });
             }
-            objects.push(RenderObject::new(mesh, material).with_transform(t));
+            let mut object = RenderObject::new(mesh, material).with_transform(t);
+            if let Some(id) = placement.lightmap {
+                object = object.with_lightmap(id);
+            }
+            objects.push(object);
         }
         Ok(Self {
+            bake,
+            lighting: None,
             store,
             meshes,
             materials,
@@ -355,6 +409,9 @@ impl DisplayScene {
             .with_sun(self.sun)
             .with_bounds(self.bounds);
         input.environment = self.environment_maps.as_ref();
+        if let Some(lighting) = &self.lighting {
+            input = input.with_baked_lighting(lighting, 0.);
+        }
         input
     }
 
@@ -460,6 +517,39 @@ impl DisplayScene {
         self.meshes.release_gpu(runtime)?;
         self.materials.clear(runtime)?;
         Ok(())
+    }
+}
+
+impl super::SceneBake {
+    fn lighting(
+        &self,
+        store: &ObjectStore,
+    ) -> PipelineResult<(
+        sashiko_renderer::pbr::SurfaceLightmaps,
+        sashiko_renderer::pbr::ReflectionProbes,
+    )> {
+        use sashiko_renderer::pbr::{ReflectionProbes, SurfaceLightmapIndex};
+        let index = SurfaceLightmapIndex::from_bytes(&store.load(&self.index)?[..])?;
+        let diffuse = store.load(&self.diffuse)?;
+        let pages: HashMap<_, _> = self.pages.iter().map(|p| (p.hash, p)).collect();
+        let required: std::collections::HashSet<_> = index
+            .pages()
+            .iter()
+            .map(|page| crate::Digest::from_sha256(*page.sha256()))
+            .collect();
+        if pages.len() != self.pages.len() || pages.len() != required.len() {
+            return Err("surface page references do not match the baked index".into());
+        }
+        let surfaces = index.load(0..index.page_count(), Some(&diffuse), |hash| {
+            let page = pages
+                .get(&crate::Digest::from_sha256(*hash))
+                .ok_or("missing surface page")?;
+            Ok(store.load(page)?.to_vec())
+        })?;
+        Ok((
+            surfaces,
+            ReflectionProbes::from_bytes(&store.load(&self.reflections)?[..])?,
+        ))
     }
 }
 

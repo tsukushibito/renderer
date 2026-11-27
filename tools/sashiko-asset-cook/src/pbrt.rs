@@ -600,6 +600,7 @@ pub(super) fn cook(
         let mut transform = placement * shape.state.matrix;
         transform.w_axis = ((transform.w_axis.truncate() - origin) * scale).extend(1.);
         scene.placements.push(Placement {
+            lightmap: None,
             primitive,
             transform: (change_basis() * transform * change_basis()).to_cols_array_2d(),
         });

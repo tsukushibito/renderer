@@ -72,6 +72,10 @@ impl AssetId {
 }
 
 impl Digest {
+    pub fn from_sha256(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     pub fn of(bytes: &[u8]) -> Self {
         Self(Sha256::digest(bytes).into())
     }

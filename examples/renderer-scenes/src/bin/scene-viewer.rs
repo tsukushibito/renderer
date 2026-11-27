@@ -22,15 +22,28 @@ mod film;
 #[path = "scene_viewer/tracing.rs"]
 mod tracing;
 
+static BACKEND: std::sync::OnceLock<RuntimeConfig> = std::sync::OnceLock::new();
+
 fn backend() -> RuntimeConfig {
-    RuntimeConfig::Vulkan(VulkanConfig {
-        validation: if cfg!(feature = "development-validation") {
-            ValidationMode::Required
-        } else {
-            ValidationMode::Disabled
-        },
-        ..Default::default()
-    })
+    *BACKEND.get().expect("viewer backend selected at startup")
+}
+
+fn select_backend(name: &std::ffi::OsStr) -> PipelineResult<RuntimeConfig> {
+    if name == "vulkan" {
+        return Ok(RuntimeConfig::Vulkan(VulkanConfig {
+            validation: if cfg!(feature = "development-validation") {
+                ValidationMode::Required
+            } else {
+                ValidationMode::Disabled
+            },
+            ..Default::default()
+        }));
+    }
+    #[cfg(all(windows, feature = "d3d12"))]
+    if name == "d3d12" {
+        return Ok(RuntimeConfig::D3D12(Default::default()));
+    }
+    Err(format!("unavailable scene-viewer API: {name:?}").into())
 }
 
 fn finish(
@@ -38,6 +51,22 @@ fn finish(
     mut runtime: sashiko_renderer::core::runtime::Runtime,
 ) -> PipelineResult<()> {
     scene.release(&mut runtime)?;
+    #[cfg(all(windows, feature = "d3d12"))]
+    if let Some(native) = runtime.as_d3d12() {
+        let monitor = native.validation_monitor();
+        drop(runtime);
+        let report = monitor.snapshot();
+        let strict = cfg!(feature = "development-validation");
+        if !report.is_clean()
+            || (strict
+                && !(report.debug_layer_enabled
+                    && report.gpu_based_validation_enabled
+                    && report.teardown_checked))
+        {
+            return Err(format!("D3D12 validation: {report:?}").into());
+        }
+        return Ok(());
+    }
     let monitor = runtime
         .as_vulkan()
         .ok_or("expected Vulkan")?
@@ -93,6 +122,9 @@ fn visibility(package: &Path, name: &str) -> PipelineResult<()> {
         Some(ShadowSettings {
             resolution: s.shadow_resolution,
             distance: s.shadow_distance,
+            split_lambda: s
+                .shadow_split_lambda
+                .unwrap_or(ShadowSettings::default().split_lambda),
             ..Default::default()
         }),
     )?;
@@ -139,7 +171,12 @@ fn film_rect(arg: &std::ffi::OsStr) -> PipelineResult<[u32; 4]> {
 
 fn main() -> PipelineResult<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    match args.as_slice() {
+    let (api, args) = match args.as_slice() {
+        [flag, api, rest @ ..] if flag == "--api" => (api.as_os_str(), rest),
+        rest => (std::ffi::OsStr::new("vulkan"), rest),
+    };
+    BACKEND.set(select_backend(api)?).expect("single startup");
+    match args {
         #[cfg(feature = "scene-film")]
         [package, view, flag, samples, rect, png] if flag == "--coverage" => {
             tracing::capture(Path::new(package),view.to_str().ok_or("invalid view name")?,
@@ -212,7 +249,7 @@ fn main() -> PipelineResult<()> {
             None,
         ),
         _ => Err(
-            "usage: scene-viewer <package> <view> [--capture output.png | --capture-1080p output.png | --walk-route route.json | --benchmark-route route.json report.json | --route-rgba route.json fps | --film N linear.exr display.png | --film-crop N x,y,width,height linear.exr display.png | --sky linear.exr display.png | --visibility | --present-frames N]; scene-film also supports --coverage N x,y,width,height mask.png and --radiance N x,y,width,height linear.exr display.png"
+            "usage: scene-viewer [--api vulkan|d3d12] <package> <view> [--capture output.png | --capture-1080p output.png | --walk-route route.json | --benchmark-route route.json report.json | --route-rgba route.json fps | --film N linear.exr display.png | --film-crop N x,y,width,height linear.exr display.png | --sky linear.exr display.png | --visibility | --present-frames N]; scene-film also supports --coverage N x,y,width,height mask.png and --radiance N x,y,width,height linear.exr display.png"
                 .into(),
         ),
     }

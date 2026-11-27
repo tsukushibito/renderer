@@ -84,6 +84,7 @@ pub(super) fn cook(source: &Path, settings: &Path, directory: &Path) -> Result<(
         environment,
         primitives: Vec::new(),
         placements: Vec::new(),
+        baked: None,
         physical: None,
         backdrop: None,
         mesh_lods: Vec::new(),
@@ -215,6 +216,7 @@ fn cook_gltf(
             }
         };
         scene.placements.push(Placement {
+            lightmap: None,
             primitive: index,
             transform: src.placement(i),
         });

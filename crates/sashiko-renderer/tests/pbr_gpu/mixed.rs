@@ -94,6 +94,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
         technique,
         StandardConfig {
             film_output: false,
+            fxaa: false,
             extent: [32, 16],
             clear_color: [0.; 4],
             shadows: (technique == pbr::Technique::Deferred).then_some(pbr::ShadowSettings {

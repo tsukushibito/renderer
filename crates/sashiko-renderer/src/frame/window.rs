@@ -467,7 +467,7 @@ impl WindowRenderer {
         let mut receipt = {
             let mut frame = self.renderer.begin_frame()?;
             draw(&mut frame)?;
-            let image = frame.output(SdrOutput::display(false))?;
+            let image = frame.output(SdrOutput::display(frame.fxaa))?;
             #[cfg(feature = "window-capture")]
             let readback = if let Some((tag, plane)) = tag {
                 let (source, size) = match plane {

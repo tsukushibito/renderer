@@ -37,11 +37,18 @@ pub struct SceneSettings {
     pub sky_color: [f32; 3],
     pub shadow_resolution: u32,
     pub shadow_distance: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_split_lambda: Option<f32>,
+    #[serde(default)]
+    pub fxaa: bool,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct Placement {
     pub primitive: usize,
+    /// Stable key into the baked surface index, independent of spatial selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lightmap: Option<u32>,
     pub transform: [[f32; 4]; 4],
 }
 
@@ -54,6 +61,8 @@ pub struct ScenePackage {
     pub primitives: Vec<Primitive>,
     pub placements: Vec<Placement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baked: Option<SceneBake>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub physical: Option<PhysicalScene>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backdrop: Option<InfiniteSky>,
@@ -61,6 +70,16 @@ pub struct ScenePackage {
     pub mesh_lods: Vec<MeshLod>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribution: Option<Attribution>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SceneBake {
+    pub index: BlobRef,
+    pub pages: Vec<BlobRef>,
+    pub diffuse: BlobRef,
+    pub reflections: BlobRef,
+    /// Normalized little-endian UV pairs keyed by the complete mesh digest (including LODs).
+    pub mesh_uvs: BTreeMap<crate::Digest, BlobRef>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -186,6 +205,13 @@ impl ScenePackage {
         if self.version != 1 || self.settings.views.is_empty() || self.placements.is_empty() {
             return Err(invalid("unsupported or empty scene package"));
         }
+        if self
+            .settings
+            .shadow_split_lambda
+            .is_some_and(|v| !(0.0..=1.0).contains(&v))
+        {
+            return Err(invalid("invalid shadow split fraction"));
+        }
         for placement in &self.placements {
             let m = &placement.transform;
             if placement.primitive >= self.primitives.len()
@@ -193,6 +219,29 @@ impl ScenePackage {
                 || m.each_ref().map(|column| column[3]) != [0., 0., 0., 1.]
             {
                 return Err(invalid("invalid scene placement"));
+            }
+        }
+        let lods: BTreeMap<_, _> = self
+            .mesh_lods
+            .iter()
+            .map(|lod| (lod.source.hash, lod.reduced.hash))
+            .collect();
+        let mut mapped = std::collections::BTreeSet::new();
+        for placement in self.placements.iter().filter(|p| p.lightmap.is_some()) {
+            let bake = self
+                .baked
+                .as_ref()
+                .ok_or_else(|| invalid("missing surface lighting"))?;
+            let mesh = self.primitives[placement.primitive].mesh.hash;
+            if !mapped.insert(placement.lightmap)
+                || !bake.mesh_uvs.contains_key(&mesh)
+                || lods
+                    .get(&mesh)
+                    .is_some_and(|lod| !bake.mesh_uvs.contains_key(lod))
+            {
+                return Err(invalid(
+                    "duplicate lightmap placement or missing mesh UV stream",
+                ));
             }
         }
         if let Some(env) = &self.environment {

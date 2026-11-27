@@ -81,22 +81,22 @@ enum FrameDestination {
 }
 
 impl FrameDestination {
-    fn encoding(self) -> SdrOutput {
+    fn encoding(self, fxaa: bool) -> SdrOutput {
         match self {
-            Self::Capture => SdrOutput::capture(false),
+            Self::Capture => SdrOutput::capture(fxaa),
             #[cfg(all(
                 windows,
                 feature = "presentation",
                 any(feature = "vulkan", feature = "d3d12")
             ))]
-            Self::Window(_) => SdrOutput::display(false),
+            Self::Window(_) => SdrOutput::display(fxaa),
             #[cfg(all(
                 windows,
                 feature = "presentation",
                 feature = "window-capture",
                 any(feature = "vulkan", feature = "d3d12")
             ))]
-            Self::CaptureWindow(_) => SdrOutput::display(false),
+            Self::CaptureWindow(_) => SdrOutput::display(fxaa),
         }
     }
 }
@@ -175,7 +175,8 @@ impl Renderer {
             prep.reserve_sampler(output::BACKDROP_SAMPLER);
         }
         prep.reserve_sampler(output::TONE_MAP_SAMPLER);
-        prep.reserve_sampler(destination.encoding().sampler());
+        let encoding = destination.encoding(config.fxaa);
+        prep.reserve_sampler(encoding.sampler());
         prep.reserve_transient_image(LINEAR, ImageDesc::rgba16_float(w, h))?;
         if scene.extent != camera.extent {
             let [sw, sh] = scene.extent;
@@ -201,7 +202,7 @@ impl Renderer {
         })?;
         prep.reserve_raster_pass(TRANSFER, SampleCount::X1, |pass| {
             pass.transient_attachment(OUTPUT, target)?;
-            pass.draws(&destination.encoding().pipeline().program, 1)
+            pass.draws(&encoding.pipeline().program, 1)
         })?;
         match destination {
             FrameDestination::Capture => plan.reserve_readback(READBACK, readback_size)?,
@@ -509,6 +510,7 @@ impl Renderer {
         self.poll_abandoned_captures()?;
         let recording = self.drawing.begin_frame()?;
         Ok(Frame {
+            fxaa: self.config.fxaa,
             recording,
             captures: &mut self.captures,
             camera: CameraView {
@@ -620,6 +622,7 @@ impl Drop for Capture {
 }
 
 pub struct Frame<'a> {
+    fxaa: bool,
     #[cfg(feature = "window-capture")]
     depth: Option<ImageHandle>,
     recording: SceneFrame<'a>,
@@ -730,7 +733,7 @@ impl Frame<'_> {
 
     /// Submit this frame and obtain its sRGB readback ticket without waiting.
     pub fn capture(mut self) -> PipelineResult<Capture> {
-        let image = self.output(SdrOutput::capture(false))?.raw_image();
+        let image = self.output(SdrOutput::capture(self.fxaa))?.raw_image();
         let extent = self.output_extent;
         self.submit_capture(image, extent, 4)
     }
