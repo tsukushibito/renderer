@@ -353,6 +353,7 @@ mod tests {
         };
         let indirect = batch.indirect.unwrap();
         assert_eq!(batch.regions.scissor, Some(clip));
+        assert_eq!(indirect.command_offset, 0);
         assert_eq!(indirect.command_count, 65);
         assert_eq!(indirect.buffer, args.buffer.index);
         assert_eq!(

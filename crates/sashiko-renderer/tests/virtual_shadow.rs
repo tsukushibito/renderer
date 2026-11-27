@@ -562,8 +562,13 @@ fn check_casters(
         let mut casters = virtual_shadow::CasterBatch::new(2).unwrap();
         // The first mesh lies within a coarse clipmap but intersects no
         // requested page. The caster at argument offset 20 must still draw.
-        let remote = Transform::new([[1.,0.,0.,12.], [0.,1.,0.,12.], [0.,0.,1.,0.]]).unwrap();
-        let triangle = sashiko_renderer::pipeline::Mesh { first_index: 3, index_count: 3, ..mesh };
+        let remote =
+            Transform::new([[1., 0., 0., 12.], [0., 1., 0., 12.], [0., 0., 1., 0.]]).unwrap();
+        let triangle = sashiko_renderer::pipeline::Mesh {
+            first_index: 3,
+            index_count: 3,
+            ..mesh
+        };
         casters.add(&requests, triangle, remote, material).unwrap();
         casters.add(&requests, mesh, transform, material).unwrap();
         casters

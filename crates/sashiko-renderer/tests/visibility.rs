@@ -26,7 +26,7 @@ fn bounds_preserve_group_order_and_zero_every_padding_slot() {
     let visibility = prepared(&[1, 65]);
     assert_eq!(visibility.bounds_desc().size, 3 * 64 * 32);
     assert_eq!(visibility.mask_desc().size, 3 * 64 * 4);
-    assert_eq!(visibility.template_transfer_bytes(), 3 * 64 * 8);
+    assert_eq!(visibility.template_transfer_bytes(), 3 * 64 * 16);
     assert_eq!(visibility.template_transfer_count(), 2);
 
     let mut bytes = vec![255; visibility.bounds_desc().size as usize];
