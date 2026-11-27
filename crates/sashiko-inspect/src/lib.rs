@@ -1,5 +1,6 @@
 //! Optional, storage-independent inspection at completed simulation ticks.
 mod protocol;
+pub mod report;
 mod session;
 mod stdio;
 
