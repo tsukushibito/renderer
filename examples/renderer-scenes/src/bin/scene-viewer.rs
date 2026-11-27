@@ -51,7 +51,7 @@ fn capture(package: &Path, view: &str, output: &Path) -> PipelineResult<()> {
     let extent = [3840, 2160];
     let (scene, mut renderer) = DisplayScene::headless(package, view, extent, backend())?;
     let mut frame = renderer.begin_frame()?;
-    frame.draw_scene(scene.input(), 1.)?;
+    scene.draw(&mut frame)?;
     let ticket = frame.capture()?;
     let mut rgba = vec![0; extent[0] as usize * extent[1] as usize * 4];
     if !renderer.read_capture(&ticket, &mut rgba, Duration::from_secs(120))? {

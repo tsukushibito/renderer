@@ -75,6 +75,33 @@ impl FilmProjection {
     pub fn develop(&self, radiance: Vec3) -> Vec3 {
         self.sensor * radiance
     }
+
+    pub(super) fn output<'a>(
+        &self,
+        sky: &'a sashiko_renderer::core::graph::ImportImage,
+        light_from_world: Mat3,
+        scale: f32,
+        view: &sashiko_renderer::pipeline::CameraView,
+    ) -> sashiko_renderer::passes::output::FilmOutput<'a> {
+        // Unproject the frame's actual projection, including a moved camera,
+        // without performing perspective division at the far plane.
+        let inverse = Mat4::from_cols_array_2d(&view.camera.clip_from_world())
+            .as_dmat4()
+            .inverse();
+        let eye = Vec3::from(view.camera.eye()).as_dvec3();
+        let direction = |v: glam::DVec4| light_from_world * (v.truncate() - eye * v.w).as_vec3();
+        let corner = direction(inverse * glam::DVec4::new(-1., -1., 1., 1.));
+        let dx = direction(inverse.x_axis) * (2. / view.extent[0] as f32);
+        let dy = direction(inverse.y_axis) * (2. / view.extent[1] as f32);
+        sashiko_renderer::passes::output::FilmOutput {
+            sky,
+            light_scale: scale,
+            ray_corner: corner.into(),
+            ray_step_x: dx.into(),
+            ray_step_y: dy.into(),
+            sensor: self.sensor.transpose().to_cols_array_2d(),
+        }
+    }
 }
 
 fn white_balance(kelvin: Option<f32>) -> io::Result<Mat3> {

@@ -15,6 +15,12 @@ pub(super) const fn tone_map_neutral() -> ManagedRasterProgram {
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&TONE_NEUTRAL) }
 }
 
+pub(crate) const fn film_composite() -> ManagedRasterProgram {
+    // SAFETY: The reviewed fullscreen fragment loads two 2D color images
+    // and six float4 constants; it writes a single display-linear HDR target.
+    unsafe { ManagedRasterProgram::from_trusted_descriptor(&FILM_COMPOSITE) }
+}
+
 pub(super) const fn sdr(output: SdrOutput) -> ManagedRasterProgram {
     let descriptor = match (output.encoding, output.fxaa) {
         (SdrEncoding::Linear, false) => &SDR_LINEAR,
@@ -99,4 +105,36 @@ static TONE_NEUTRAL: RasterProgramDescriptor = RasterProgramDescriptor {
         })
     ),
     ..SDR_SRGB
+};
+
+static FILM_COMPOSITE: RasterProgramDescriptor = RasterProgramDescriptor {
+    parameters: RasterParameterLayout {
+        size: 96,
+        stages: ShaderStages::FRAGMENT,
+    },
+    bindings: &[
+        BindingLayout {
+            group: 0,
+            binding: 0,
+            kind: BindingType::SampledImage,
+            min_size: 0,
+            stages: ShaderStages::FRAGMENT,
+        },
+        BindingLayout {
+            group: 0,
+            binding: 1,
+            kind: BindingType::SampledImage,
+            min_size: 0,
+            stages: ShaderStages::FRAGMENT,
+        },
+    ],
+    sampling_pairs: &[],
+    shaders: fullscreen_triangle_shaders(
+        packaged_shaders!(module:"film_composite.frag",folder:"",nonfiltering:&[(0,0),(0,1)]),
+        Some(sashiko_renderer_core::program::D3D12InlineConstantBinding {
+            register: 7,
+            space: 0,
+        }),
+    ),
+    ..TONE_NEUTRAL
 };

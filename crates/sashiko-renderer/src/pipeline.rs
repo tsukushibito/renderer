@@ -129,6 +129,8 @@ struct Resolved {
 /// Settings for the standard scene-linear HDR view.
 #[derive(Clone, Copy, Debug)]
 pub struct StandardConfig {
+    /// Prepare the equal-area sky and physical film output pass for the standard frame API.
+    pub film_output: bool,
     pub extent: [u32; 2],
     pub clear_color: [f32; 4],
     pub shadows: Option<ShadowSettings>,
@@ -139,6 +141,7 @@ impl StandardConfig {
     /// Single-sample view with an opaque black background.
     pub fn new(extent: [u32; 2]) -> Self {
         Self {
+            film_output: false,
             extent,
             clear_color: [0., 0., 0., 1.],
             shadows: None,

@@ -93,6 +93,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
     let mut standard = StandardPipeline::new(
         technique,
         StandardConfig {
+            film_output: false,
             extent: [32, 16],
             clear_color: [0.; 4],
             shadows: (technique == pbr::Technique::Deferred).then_some(pbr::ShadowSettings {

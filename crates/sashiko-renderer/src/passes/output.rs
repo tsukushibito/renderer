@@ -2,6 +2,69 @@
 
 #[allow(unsafe_code)]
 mod programs;
+pub(crate) use programs::film_composite as film_program;
+
+/// Perspective ray basis in light space and a linear RGB camera response.
+/// Ray coordinates are top-origin pixel centres; the scale is in cd/m²
+/// per unit equal-area light texel. The sensor contains three matrix rows.
+pub struct FilmOutput<'a> {
+    pub sky: &'a sashiko_renderer_core::graph::ImportImage,
+    pub ray_corner: [f32; 3],
+    pub ray_step_x: [f32; 3],
+    pub ray_step_y: [f32; 3],
+    pub light_scale: f32,
+    pub sensor: [[f32; 3]; 3],
+}
+
+pub(crate) fn film_composite(
+    graph: &mut Graph,
+    name: &str,
+    source: ImageView,
+    destination: ImageHandle,
+    film: FilmOutput<'_>,
+) -> Result<PassHandle, GraphError> {
+    let color = output_view(graph, name, source, destination, ImageFormat::Rgba16Float)?;
+    let sky = crate::material::texture_view(graph, film.sky)?;
+    let bindings = [
+        Binding {
+            group: 0,
+            binding: 0,
+            resource: BindingResource::ImageView(source),
+        },
+        Binding {
+            group: 0,
+            binding: 1,
+            resource: BindingResource::ImageView(sky),
+        },
+    ];
+    let rows = [
+        film.ray_corner,
+        film.ray_step_x,
+        film.ray_step_y,
+        film.sensor[0],
+        film.sensor[1],
+        film.sensor[2],
+    ];
+    let mut words = [0; 24];
+    for (src, dst) in rows.into_iter().zip(words.as_chunks_mut::<4>().0) {
+        dst[..3].copy_from_slice(&src.map(f32::to_bits));
+    }
+    words[3] = film.light_scale.to_bits();
+    let parameters = RasterConstants::new(&words)?;
+    graph.raster(
+        name,
+        RasterAttachments {
+            colors: &[Attachment {
+                view: color,
+                load: LoadOp::Clear([0., 0., 0., 1.]),
+                store: StoreOp::Store,
+            }],
+            depth: None,
+            color_resolves: &[],
+        },
+        |pass| pass.draw_fullscreen(&film_program(), &bindings, parameters),
+    )
+}
 
 use sashiko_renderer_core::ImageFormat;
 use sashiko_renderer_core::capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet};

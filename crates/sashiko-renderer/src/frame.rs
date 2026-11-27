@@ -132,7 +132,11 @@ impl Renderer {
         }
         prep.reserve_raster_pass(TONE_MAP, SampleCount::X1, |pass| {
             pass.attachment()?;
-            pass.draws(&output::tone_map_neutral_pipeline().program, 1)
+            pass.draws(&output::tone_map_neutral_pipeline().program, 1)?;
+            if config.film_output {
+                pass.draws(&output::film_program(), 1)?;
+            }
+            Ok(())
         })?;
         prep.reserve_raster_pass("canvas", SampleCount::X1, |pass| {
             pass.attachment()?;
@@ -568,6 +572,32 @@ impl Frame<'_> {
 
     /// Draw scene-linear geometry and apply the camera exposure before UI compositing.
     pub fn draw_scene(&mut self, input: SceneInput<'_>, exposure: f32) -> Result<(), GraphError> {
+        self.draw_with_output(input, |graph, view, target| {
+            output::tone_map_neutral(graph, TONE_MAP, view, target, exposure)
+        })
+    }
+
+    /// Composite geometry rendered over transparent black with the source sky
+    /// and apply the physical camera's linear response before display encoding.
+    pub fn draw_film(
+        &mut self,
+        input: SceneInput<'_>,
+        film: output::FilmOutput<'_>,
+    ) -> Result<(), GraphError> {
+        self.draw_with_output(input, |graph, view, target| {
+            output::film_composite(graph, TONE_MAP, view, target, film)
+        })
+    }
+
+    fn draw_with_output(
+        &mut self,
+        input: SceneInput<'_>,
+        compose: impl FnOnce(
+            &mut Graph,
+            sashiko_renderer_core::graph::ImageView,
+            ImageHandle,
+        ) -> Result<PassHandle, GraphError>,
+    ) -> Result<(), GraphError> {
         if self.linear.is_some() {
             return Err(GraphError::invalid_input(
                 "draw the main scene before its overlays",
@@ -583,7 +613,7 @@ impl Frame<'_> {
         } else {
             self.new_target()?
         };
-        output::tone_map_neutral(self.graph(), TONE_MAP, view, target, exposure)?;
+        compose(self.graph(), view, target)?;
         if scaled {
             let image = self.graph().image_view(target, 0, 0)?;
             let [w, h] = self.output_extent;

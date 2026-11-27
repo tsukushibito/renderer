@@ -278,6 +278,8 @@ VMAの配置は実測のbufferImageGranularityを満たしており、原因をa
 
 ## GraphのShaderと描画
 
+物理フィルムを指定したシーンは、透過黒でクリアした HDR の色と合成後のアルファ、初期化時にアップロードした等面積 RGBA16F の空を fullscreen pass に渡す。空の寄与は残りの透過率で重み付けし、幾何と空に同じ ISO・色順応行列を適用する。最終の sRGB エンコードは既存の表示・キャプチャ経路で一度適用する。Graph に2画像の read と出力 attachment を明示し、空の所有者はシーンに保持する。2つの読取画像と96バイトの定数を持つパイプラインはフィルムを使う描画構成の準備時に予約する。描画中の画像生成や CPU 読み戻しは不要。Vulkan、DXIL、WGSL の生成には既存の固定ツールチェーンを使う。
+
 標準表示パスは HLSL から固定版 DXC で SPIR-V を生成する。Core の GLSL とともに生成済み SPIR-V を保持し、通常のRustビルドへshaderコンパイラーを要求しない。
 固定SDKでVulkan 1.3をtargetにし、SPIR-V 1.3を明示する。
 Deviceで有効にしていない`maintenance4`の`LocalSizeId`へ暗黙に依存しない。
