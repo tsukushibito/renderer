@@ -437,6 +437,7 @@ impl Registry {
         for &s in samplers {
             self.samplers.entry(s).or_insert_with(|| {
                 device.create_sampler(&wgpu::SamplerDescriptor {
+                    compare: s.compare_depth.then_some(wgpu::CompareFunction::LessEqual),
                     address_mode_u: address(s.wrap_u),
                     address_mode_v: address(s.wrap_v),
                     mag_filter: filter(s.mag_filter),

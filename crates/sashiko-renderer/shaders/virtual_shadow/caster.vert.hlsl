@@ -29,12 +29,12 @@ Vertex main(BISTRO_LOCATION(0) float3 pos : TEXCOORD0,
     v.clip = float4(2.0, 2.0, 1.0, 1.0);
     uint4 rect = placement.rectangle;
     uint level = min(rect.x, 7u);
-    uint slot = min(instance, 1023u);
+    uint slot = min(instance, VSM_CAPACITY - 1);
     if (rect.w > 0) {
         uint2 local = rect.yz + uint2(instance % rect.w, instance / rect.w);
         if (any(local >= 128u)) return v;
         uint entry = page_table[(level * 128 + local.y) * 128 + local.x];
-        if (entry == 0 || entry > 1024) return v;
+        if (entry == 0 || entry > VSM_CAPACITY) return v;
         slot = entry - 1;
     }
     uint4 owner = slots[slot];
@@ -44,7 +44,7 @@ Vertex main(BISTRO_LOCATION(0) float3 pos : TEXCOORD0,
                           dot(local_position, placement.model[2]));
     float2 light_uv = float2(dot(light_x.xyz, world), dot(light_y.xyz, world));
     float2 local_uv = light_uv * (25.0 / float(1u << level)) - float2(asint(owner.yz));
-    float2 xy = (uint2(slot % 32, slot / 32) + local_uv) / 16.0 - 1.0;
+    float2 xy = (virtual_tile_origin(slot) + VSM_GUTTER + local_uv * 128.0) / 2048.0 - 1.0;
 #ifndef __spirv__
     xy.y = -xy.y;
 #endif

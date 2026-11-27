@@ -111,22 +111,22 @@ fn deferred_lighting(
         binding,
         resource: BindingResource::ImageView(view),
     };
-    let sampler = |group, binding| Binding {
+    let sampler = |group, binding, descriptor| Binding {
         group,
         binding,
-        resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+        resource: BindingResource::Sampler(descriptor),
     };
     [
         image(2, 0, environment),
         image(2, 1, environment),
         image(2, 2, environment),
-        sampler(2, 3),
+        sampler(2, 3, SamplerDescriptor::NearestClamp),
         image(2, 4, environment),
         image(3, 0, shadow),
         image(3, 1, shadow),
         image(3, 2, shadow),
         image(3, 3, shadow),
-        sampler(3, 4),
+        sampler(3, 4, SamplerDescriptor::ShadowCompare),
         sashiko_renderer::pbr::ReflectionProbes::bind_metadata(metadata),
     ]
 }

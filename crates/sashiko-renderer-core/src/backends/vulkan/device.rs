@@ -1112,6 +1112,7 @@ mod tests {
         assert_ne!(device.device_type(), vk::PhysicalDeviceType::CPU);
         device.sampler_limit = 1;
         let custom = SamplerDescriptor {
+            compare_depth: false,
             wrap_u: AddressMode::MirroredRepeat,
             wrap_v: AddressMode::ClampToEdge,
             mag_filter: FilterMode::Nearest,

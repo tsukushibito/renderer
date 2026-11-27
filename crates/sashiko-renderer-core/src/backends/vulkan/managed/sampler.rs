@@ -25,6 +25,8 @@ pub(in crate::backends::vulkan) fn sampler_info(
         MipFilter::Nearest | MipFilter::Linear => vk::LOD_CLAMP_NONE,
     };
     vk::SamplerCreateInfo::default()
+        .compare_enable(desc.compare_depth)
+        .compare_op(vk::CompareOp::LESS_OR_EQUAL)
         .min_filter(filter(desc.min_filter))
         .mag_filter(filter(desc.mag_filter))
         .mipmap_mode(match desc.mip_filter {
@@ -45,6 +47,7 @@ mod tests {
     fn gltf_non_mipmap_filters_keep_base_level_and_independent_minification() {
         use crate::program::{AddressMode, FilterMode, MipFilter};
         let desc = SamplerDescriptor {
+            compare_depth: false,
             wrap_u: AddressMode::MirroredRepeat,
             wrap_v: AddressMode::ClampToEdge,
             mag_filter: FilterMode::Nearest,

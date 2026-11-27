@@ -12,7 +12,7 @@ use crate::{
 fn content_accesses(layout: &[BindingLayout]) -> usize {
     layout
         .iter()
-        .filter(|slot| slot.kind != BindingType::Sampler)
+        .filter(|slot| slot.kind.descriptor_class() != BindingType::Sampler)
         .count()
 }
 
@@ -265,7 +265,7 @@ mod tests {
         let mut prep = Preparation::new(frames);
         prep.add_graph_requirements(GraphRequirements::imports("mesh", 4, 1).unwrap())
             .unwrap();
-        prep.reserve_raster_pass("描画", SampleCount::X1, |pass| {
+        prep.reserve_raster_pass("隰蜀怜愛", SampleCount::X1, |pass| {
             pass.transient_attachment("color", color)?;
             pass.draws(&program, 2)
         })
@@ -320,7 +320,7 @@ mod tests {
         let output = graph.image("color", color).unwrap();
         graph
             .raster(
-                "描画",
+                "隰蜀怜愛",
                 RasterAttachments {
                     colors: &[Attachment {
                         view: graph.image_view(output, 0, 0).unwrap(),

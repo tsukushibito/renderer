@@ -596,7 +596,9 @@ fn require_image_format(owner: &DeviceOwner, desc: ImageDesc) -> Result<(), D3D1
             require_format(
                 owner,
                 DXGI_FORMAT_R32_FLOAT,
-                D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE,
+                D3D12_FORMAT_SUPPORT1_TEXTURE2D
+                    | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE
+                    | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE_COMPARISON,
             )
         }
         ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float => require_format(

@@ -7,11 +7,11 @@ Texture2D<float4> irradiance_image : register(t0, space2);
 Texture2D<float4> reflection_image : register(t1, space2);
 Texture2D<float4> brdf_image : register(t2, space2);
 SamplerState environment_sampler : register(s3, space2);
-Texture2D<float4> shadow_image0 : register(t0, space3);
+Texture2D<float> shadow_image0 : register(t0, space3);
 Texture2D<float4> shadow_image1 : register(t1, space3);
 Texture2D<float4> shadow_image2 : register(t2, space3);
 Texture2D<float4> shadow_image3 : register(t3, space3);
-SamplerState shadow_sampler : register(s4, space3);
+SamplerComparisonState shadow_sampler : register(s4, space3);
 
 #include "probe_volume.hlsli"
 #include "reflection_probes.hlsli"
@@ -29,10 +29,18 @@ float2 environment_uv(float3 direction) {
 }
 
 float shadow_depth(uint cascade, float2 uv) {
-    if (cascade == 0u) { return shadow_image0.SampleLevel(shadow_sampler, uv, 0.0).r; }
-    if (cascade == 1u) { return shadow_image1.SampleLevel(shadow_sampler, uv, 0.0).r; }
-    if (cascade == 2u) { return shadow_image2.SampleLevel(shadow_sampler, uv, 0.0).r; }
-    return shadow_image3.SampleLevel(shadow_sampler, uv, 0.0).r;
+    // CSM preserves its point-sampled comparison at normalized coordinates,
+    // including the right and bottom edges at uv == 1.
+    uint2 size;
+    if (cascade == 0u) shadow_image0.GetDimensions(size.x, size.y);
+    else if (cascade == 1u) shadow_image1.GetDimensions(size.x, size.y);
+    else if (cascade == 2u) shadow_image2.GetDimensions(size.x, size.y);
+    else shadow_image3.GetDimensions(size.x, size.y);
+    int3 texel = int3(min(uint2(saturate(uv) * size), size - 1), 0);
+    if (cascade == 0u) return shadow_image0.Load(texel);
+    if (cascade == 1u) return shadow_image1.Load(texel).r;
+    if (cascade == 2u) return shadow_image2.Load(texel).r;
+    return shadow_image3.Load(texel).r;
 }
 
 float cascade_visibility(uint cascade, float3 position, float3 geometric_normal, float3 light) {
@@ -52,7 +60,9 @@ float cascade_visibility(uint cascade, float3 position, float3 geometric_normal,
     float depth_bias = texel_world * camera.shadow_depth_scale[cascade] *
         (camera.shadow_bias.x + camera.shadow_bias.y * slope);
     float reference = ndc.z - depth_bias;
-    float2 texel = 1.0 / texture_size(shadow_image0);
+    uint2 extent;
+    shadow_image0.GetDimensions(extent.x, extent.y);
+    float2 texel = 1.0 / float2(extent);
     float visible = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
@@ -80,7 +90,9 @@ uint virtual_page_entry(uint level, uint2 page) {
     float4 entries = shadow_image1.Load(int3(page.x / 4, level * 128 + page.y, 0));
     return uint(entries[page.x % 4]);
 }
-float virtual_depth(uint2 address) { return shadow_image0.Load(int3(address, 0)).r; }
+float virtual_compare(float2 uv, float reference) {
+    return shadow_image0.SampleCmpLevelZero(shadow_sampler, uv, reference);
+}
 #include "virtual_shadow_lookup.hlsli"
 
 float sun_visibility(float3 position, float3 geometric_normal, float3 light) {

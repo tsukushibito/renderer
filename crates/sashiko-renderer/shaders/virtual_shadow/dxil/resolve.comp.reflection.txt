@@ -10,7 +10,7 @@
 ; Name                 Index   Mask Register SysValue  Format   Used
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; no parameters
-; shader hash: 3750ee9beaa82759ae5e84ba025d14a0
+; shader hash: 8c935da9c4bf200599ed988f2336c7af
 ;
 ; Pipeline Runtime Information:
 ;
@@ -65,6 +65,7 @@
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
 ; Camera                            cbuffer      NA          NA     CB0            cb0     1
+; shadow_compare                    sampler      NA          NA      S0             s5     1
 ; depth_image                       texture     f32          2d      T0             t1     1
 ; page_table                        texture  struct         r/o      T1             t2     1
 ; shadow_atlas                      texture     f32          2d      T2             t3     1

@@ -69,7 +69,7 @@ fn clear_program() -> ManagedRasterProgram {
         ),
     };
     // SAFETY: one float2 vertex input, one read-only 16-byte record for an
-    // instance id clamped to 1023. The vertex stage emits fixed-function depth.
+    // instance id bounded by the physical slot count. The vertex stage emits fixed-function depth.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&DESC) }
 }
 

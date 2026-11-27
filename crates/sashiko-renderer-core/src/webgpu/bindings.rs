@@ -139,6 +139,14 @@ impl ProgramLayout {
                         has_dynamic_offset: false,
                         min_binding_size: NonZeroU64::new(slot.min_size),
                     },
+                    BindingType::ComparisonSampler => {
+                        wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison)
+                    }
+                    BindingType::SampledDepth => wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     BindingType::SampledImage => wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable },
                         view_dimension: wgpu::TextureViewDimension::D2,

@@ -126,11 +126,17 @@ pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         image(2, 2),
         sampler(2, 3),
         image(2, 4),
-        image(3, 0),
+        BindingLayout {
+            kind: BindingType::SampledDepth,
+            ..image(3, 0)
+        },
         image(3, 1),
         image(3, 2),
         image(3, 3),
-        sampler(3, 4),
+        BindingLayout {
+            kind: BindingType::ComparisonSampler,
+            ..sampler(3, 4)
+        },
         REFLECTION_METADATA,
     ],
     binding_bytes: &[
@@ -166,9 +172,6 @@ pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         pair(2, 2, 3),
         pair(2, 4, 3),
         pair(3, 0, 4),
-        pair(3, 1, 4),
-        pair(3, 2, 4),
-        pair(3, 3, 4),
     ],
     blend: BlendState::Replace,
     depth: DepthState::Required {
@@ -179,7 +182,7 @@ pub(super) static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     shaders: packaged_shaders!(
         raster: ("pbr.vert", "pbr.frag"),
         inline_constants: None,
-        nonfiltering: &[(3, 4)],
+        nonfiltering: &[],
     ),
 };
 pub(super) static BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
@@ -275,7 +278,7 @@ static INSTANCING: RasterProgramDescriptor = RasterProgramDescriptor {
     shaders: packaged_shaders!(
         raster: ("pbr_instancing.vert", "pbr.frag"),
         inline_constants: Some(sashiko_renderer_core::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
-        nonfiltering: &[(3, 4)],
+        nonfiltering: &[],
     ),
     ..OPAQUE
 };
@@ -722,7 +725,11 @@ mod tests {
         for layout in program.bindings() {
             assert_eq!(
                 reflected[&(layout.group, layout.binding)],
-                (layout.kind, layout.min_size, layout.stages)
+                (
+                    layout.kind.descriptor_class(),
+                    layout.min_size,
+                    layout.stages
+                )
             );
         }
         for (reflection, expected) in [

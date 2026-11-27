@@ -29,6 +29,8 @@ pub struct SamplerDescriptor {
     pub mag_filter: FilterMode,
     pub min_filter: FilterMode,
     pub mip_filter: MipFilter,
+    /// Compare a receiver depth against the sampled depth using LessEqual.
+    pub compare_depth: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +58,7 @@ impl Default for SamplerDescriptor {
 #[allow(non_upper_case_globals)]
 impl SamplerDescriptor {
     pub const NearestClamp: Self = Self {
+        compare_depth: false,
         wrap_u: AddressMode::ClampToEdge,
         wrap_v: AddressMode::ClampToEdge,
         min_filter: FilterMode::Nearest,
@@ -63,11 +66,17 @@ impl SamplerDescriptor {
         mip_filter: MipFilter::None,
     };
     pub const LinearRepeat: Self = Self {
+        compare_depth: false,
         wrap_u: AddressMode::Repeat,
         wrap_v: AddressMode::Repeat,
         min_filter: FilterMode::Linear,
         mag_filter: FilterMode::Linear,
         mip_filter: MipFilter::Linear,
+    };
+    pub const ShadowCompare: Self = Self {
+        compare_depth: true,
+        mip_filter: MipFilter::None,
+        ..Self::LinearClamp
     };
     pub const LinearClamp: Self = Self {
         wrap_u: AddressMode::ClampToEdge,
@@ -80,13 +89,15 @@ impl SamplerDescriptor {
     };
 
     /// Number of distinct normalized policies. Used to bound native cache storage.
-    pub const COUNT: usize = 3 * 3 * 2 * 2 * 3;
+    pub const COUNT: usize = 2 * 3 * 3 * 2 * 2 * 3;
 
     /// Dense local cache index. Serialized assets store the individual fields.
     pub const fn index(self) -> usize {
-        ((((self.wrap_u as usize * 3 + self.wrap_v as usize) * 2 + self.mag_filter as usize) * 2
-            + self.min_filter as usize)
-            * 3)
+        self.compare_depth as usize * (Self::COUNT / 2)
+            + ((((self.wrap_u as usize * 3 + self.wrap_v as usize) * 2 + self.mag_filter as usize)
+                * 2
+                + self.min_filter as usize)
+                * 3)
             + self.mip_filter as usize
     }
 
@@ -133,6 +144,7 @@ impl SamplerDescriptor {
         Ok(Self {
             wrap_u: wrap(wrap_s, "wrapS")?,
             wrap_v: wrap(wrap_t, "wrapT")?,
+            compare_depth: false,
             mag_filter,
             min_filter,
             mip_filter,
@@ -165,7 +177,12 @@ mod tests {
                 }
             }
         }
-        assert!(seen.into_iter().all(|entry| entry));
+        assert!(
+            seen[..SamplerDescriptor::COUNT / 2]
+                .iter()
+                .all(|entry| *entry)
+        );
+        assert!(!seen[SamplerDescriptor::ShadowCompare.index()]);
         assert_eq!(
             SamplerDescriptor::from_gltf(None, None, None, None),
             Ok(SamplerDescriptor::LinearRepeat)

@@ -143,8 +143,10 @@ impl ShaderPrograms {
                         descriptors[match slot.kind {
                             crate::program::BindingType::Uniform => 0,
                             crate::program::BindingType::StorageRead => 1,
-                            crate::program::BindingType::SampledImage => 2,
-                            crate::program::BindingType::Sampler => 3,
+                            crate::program::BindingType::SampledImage
+                            | crate::program::BindingType::SampledDepth => 2,
+                            crate::program::BindingType::Sampler
+                            | crate::program::BindingType::ComparisonSampler => 3,
                             _ => unreachable!("trusted Raster read-only layout"),
                         }] += 1;
                     }

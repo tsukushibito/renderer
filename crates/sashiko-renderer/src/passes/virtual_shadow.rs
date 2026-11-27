@@ -22,7 +22,10 @@ pub const LEVELS: usize = 8;
 pub const PAGES_PER_AXIS: usize = 128;
 pub const PAGE_TEXELS: usize = 128;
 pub const REQUEST_BYTES: usize = LEVELS * PAGES_PER_AXIS * PAGES_PER_AXIS / 8;
-pub const PHYSICAL_PAGES: usize = 1024;
+pub const GUTTER: usize = 2;
+pub const TILE_TEXELS: usize = PAGE_TEXELS + 2 * GUTTER;
+pub const TILES_PER_AXIS: usize = 4096 / TILE_TEXELS;
+pub const PHYSICAL_PAGES: usize = TILES_PER_AXIS * TILES_PER_AXIS;
 pub const TABLE_BYTES: usize = LEVELS * PAGES_PER_AXIS * PAGES_PER_AXIS * 4;
 const BLOCK_BYTES: usize = 64 * 4;
 const CAMERA_BYTES: usize = 112 + LEVELS * 16 + 32;
@@ -83,6 +86,7 @@ macro_rules! native_shader {
 mod receiver;
 pub use receiver::{reserve_visibility, resolve_visibility};
 mod invalidate;
+pub use invalidate::{invalidate_casters, reserve_invalidation};
 mod lighting;
 pub use lighting::{VirtualSun, lighting, reserve_lighting};
 mod scene;
@@ -186,7 +190,7 @@ fn slot_program() -> ManagedProgram {
         },
         shaders: native_shader!("page_state"),
     };
-    // SAFETY: the fixed dispatch maps injectively onto all 1024 records. All
+    // SAFETY: the fixed dispatch covers all guarded physical slot records. All
     // search indices depend only on bounded loop counters. A rank smaller than
     // a word's population count selects one of its set bits.
     unsafe { ManagedProgram::from_trusted_descriptor(&DESC) }
@@ -226,7 +230,7 @@ pub fn reserve_table(preparation: &mut Preparation) -> Result<(), GraphError> {
     })
 }
 
-/// Assign up to 1,024 physical slots. Table entries encode slot + 1, or zero
+/// Assign up to 961 physical slots. Table entries encode slot + 1, or zero
 /// when unallocated. Requested coarsest pages are assigned before finer levels.
 /// Pass the previous accepted slot buffer only when the same atlas, light
 /// basis, depth range and caster contents are available. None invalidates all

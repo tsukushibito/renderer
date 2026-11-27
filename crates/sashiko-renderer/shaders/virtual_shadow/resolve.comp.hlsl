@@ -8,7 +8,10 @@ Texture2D<float> shadow_atlas : register(t3);
 RWTexture2D<float4> visibility : register(u4);
 int2 virtual_origin(uint level) { return page_origin[level].xy; }
 uint virtual_page_entry(uint level, uint2 page) { return page_table[(level * 128 + page.y) * 128 + page.x]; }
-float virtual_depth(uint2 address) { return shadow_atlas.Load(int3(address, 0)); }
+SamplerComparisonState shadow_compare : register(s5);
+float virtual_compare(float2 uv, float reference) {
+    return shadow_atlas.SampleCmpLevelZero(shadow_compare, uv, reference);
+}
 #include "virtual_shadow_lookup.hlsli"
 
 [numthreads(8, 8, 1)]

@@ -20,19 +20,20 @@ fn program() -> ManagedProgram {
             layout(0, BindingType::Uniform, CAMERA_BYTES),
             layout(1, BindingType::SampledImage, 0),
             layout(2, BindingType::StorageRead, TABLE_BYTES),
-            layout(3, BindingType::SampledImage, 0),
+            layout(3, BindingType::SampledDepth, 0),
             layout(
                 4,
                 BindingType::StorageImageWrite(ImageFormat::Rgba16Float),
                 0,
             ),
+            layout(5, BindingType::ComparisonSampler, 0),
         ],
         dispatch: DispatchContract {
             workgroups: DispatchWorkgroups::Image2d {
                 group: 0,
                 binding: 4,
             },
-            bytes: &[CAMERA_BYTES as u64, 0, TABLE_BYTES as u64, 0, 0],
+            bytes: &[CAMERA_BYTES as u64, 0, TABLE_BYTES as u64, 0, 0, 0],
         },
         shaders: native_shader!("resolve"),
     };
@@ -44,6 +45,7 @@ fn program() -> ManagedProgram {
 
 /// Reserve an optional depth-only inspection of the filtered sun visibility.
 pub fn reserve_visibility(prep: &mut Preparation, extent: [u32; 2]) -> Result<(), GraphError> {
+    prep.reserve_sampler(sashiko_renderer_core::program::SamplerDescriptor::ShadowCompare);
     prep.reserve_transient_image(IMAGE, ImageDesc::rgba16_float(extent[0], extent[1]))?;
     prep.reserve_dispatch(PASS, &program())
 }
@@ -77,11 +79,12 @@ pub fn resolve_visibility(
         buffer(pages.table, TABLE_BYTES as u64),
         BindingResource::ImageView(graph.image_view(atlas, 0, 0)?),
         BindingResource::ImageView(graph.image_view(output, 0, 0)?),
+        BindingResource::Sampler(sashiko_renderer_core::program::SamplerDescriptor::ShadowCompare),
     ];
     graph.dispatch(
         PASS,
         &program(),
-        &std::array::from_fn::<_, 5, _>(|i| Binding {
+        &std::array::from_fn::<_, 6, _>(|i| Binding {
             group: 0,
             binding: i as u32,
             resource: resources[i],

@@ -96,6 +96,14 @@
             "binding" : 3
         }
     ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "shadow_compare",
+            "set" : 0,
+            "binding" : 5
+        }
+    ],
     "images" : [
         {
             "type" : "image2D",

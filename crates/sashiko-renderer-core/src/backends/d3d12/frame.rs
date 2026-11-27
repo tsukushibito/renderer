@@ -658,7 +658,9 @@ impl FramePool {
                 program
                     .bindings()
                     .iter()
-                    .filter(|slot| slot.kind == crate::program::BindingType::SampledImage)
+                    .filter(|slot| {
+                        slot.kind.descriptor_class() == crate::program::BindingType::SampledImage
+                    })
                     .count(),
             );
             for depth in [false, true] {
@@ -722,6 +724,7 @@ impl FramePool {
                         matches!(
                             slot.kind,
                             crate::program::BindingType::SampledImage
+                                | crate::program::BindingType::SampledDepth
                                 | crate::program::BindingType::StorageImageRead(_)
                                 | crate::program::BindingType::StorageImageWrite(_)
                         )

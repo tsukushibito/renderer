@@ -880,6 +880,7 @@ impl Scene {
     pub(crate) fn render_samplers(&self, uses_fxaa: bool) -> Vec<SamplerDescriptor> {
         let mut selected = std::collections::BTreeSet::from([
             SamplerDescriptor::NearestClamp,
+            SamplerDescriptor::ShadowCompare,
             SamplerDescriptor::LinearRepeatUClampV,
         ]);
         if uses_fxaa {

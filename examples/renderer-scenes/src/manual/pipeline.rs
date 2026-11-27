@@ -1257,7 +1257,7 @@ pub(super) fn build(
         Binding {
             group: 3,
             binding: 4,
-            resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+            resource: BindingResource::Sampler(SamplerDescriptor::ShadowCompare),
         },
         sashiko_renderer::pbr::ReflectionProbes::bind_metadata(
             graph.import_buffer("reflection metadata", &resident.reflection_metadata)?,

@@ -30,13 +30,22 @@ fn sampler_desc(desc: SamplerDescriptor) -> D3D12_SAMPLER_DESC {
         _ => f32::MAX,
     };
     D3D12_SAMPLER_DESC {
-        Filter: filter,
+        Filter: filter
+            | if desc.compare_depth {
+                D3D12_FILTER_COMPARISON_MIN_MAG_MIP_POINT
+            } else {
+                0
+            },
         AddressU: address(desc.wrap_u),
         AddressV: address(desc.wrap_v),
         AddressW: address(desc.wrap_v),
         MipLODBias: 0.0,
         MaxAnisotropy: 1,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_NEVER,
+        ComparisonFunc: if desc.compare_depth {
+            D3D12_COMPARISON_FUNC_LESS_EQUAL
+        } else {
+            D3D12_COMPARISON_FUNC_NEVER
+        },
         BorderColor: [0.0; 4],
         MinLOD: 0.0,
         MaxLOD: max_lod,

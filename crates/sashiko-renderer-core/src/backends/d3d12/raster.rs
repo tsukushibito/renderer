@@ -175,7 +175,10 @@ fn signature(
         .try_fold(inline.size / 4, |cost, slot| {
             cost.checked_add(match slot.kind {
                 BindingType::Uniform | BindingType::StorageRead => 2,
-                BindingType::SampledImage | BindingType::Sampler => 1,
+                BindingType::SampledImage
+                | BindingType::SampledDepth
+                | BindingType::Sampler
+                | BindingType::ComparisonSampler => 1,
                 _ => unreachable!("trusted Raster only has read-only bindings"),
             })
         });
@@ -191,8 +194,12 @@ fn signature(
         .iter()
         .filter_map(|slot| {
             let kind = match slot.kind {
-                BindingType::SampledImage => D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-                BindingType::Sampler => D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
+                BindingType::SampledImage | BindingType::SampledDepth => {
+                    D3D12_DESCRIPTOR_RANGE_TYPE_SRV
+                }
+                BindingType::Sampler | BindingType::ComparisonSampler => {
+                    D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER
+                }
                 _ => return None,
             };
             Some(D3D12_DESCRIPTOR_RANGE {
@@ -235,7 +242,10 @@ fn signature(
                     },
                 },
             ),
-            BindingType::SampledImage | BindingType::Sampler => (
+            BindingType::SampledImage
+            | BindingType::SampledDepth
+            | BindingType::Sampler
+            | BindingType::ComparisonSampler => (
                 D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
                 D3D12_ROOT_PARAMETER_0 {
                     DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {

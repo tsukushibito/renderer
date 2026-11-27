@@ -18,8 +18,9 @@ void mark_receiver(float3 position) {
     for (uint level = virtual_receiver_level(distance); level < 8; ++level) {
         float2 texel = virtual_page_texel(light_uv, level, page_origin[level].xy);
         if (!all(texel >= 0.0) || !all(texel < 16384.0)) continue;
-        // Include any receiver normal offset in addition to the PCF taps.
-        float radius = 1.0 + shadow_bias.z;
+        // The normal bias may move the centre onto a different page.
+        // All PCF taps live in the centre page and its rasterized gutter.
+        float radius = shadow_bias.z;
         int2 lo = int2(floor(max(texel - radius, 0.0) / 128.0));
         int2 hi = min(int2(floor(min(texel + radius, 16384.0) / 128.0)), 127);
         if (any(hi - lo > 1)) {

@@ -98,7 +98,9 @@ pub(super) fn validate_sampled_operands(
 
 /// Raster declares every actual pair at the trusted asset boundary. Compute
 /// keeps its existing conservative contract: any linear sampler requires every
-/// sampled image to support linear filtering.
+/// sampled image to support ordinary linear filtering. Vulkan 1.3 guarantees
+/// depth comparison on a sampled depth format. A Dref operation may be
+/// linearly filtered even without SAMPLED_IMAGE_FILTER_LINEAR.
 fn image_requires_linear_filtering(
     layout: &[crate::program::BindingLayout],
     operands: &[crate::graph::BindingOperands],
@@ -108,7 +110,7 @@ fn image_requires_linear_filtering(
     use crate::graph::BindingOperands;
     let Some(pairs) = raster_pairs else {
         return operands.iter().any(
-            |operand| matches!(operand, BindingOperands::Sampler(policy) if policy.is_linear()),
+            |operand| matches!(operand, BindingOperands::Sampler(policy) if !policy.compare_depth && policy.is_linear()),
         );
     };
     let image = layout[image_index];
@@ -126,7 +128,7 @@ fn image_requires_linear_filtering(
             })
             .expect("trusted Raster sampling pair references a sampler slot");
         match operands[sampler_index] {
-            BindingOperands::Sampler(policy) => policy.is_linear(),
+            BindingOperands::Sampler(policy) => !policy.compare_depth && policy.is_linear(),
             _ => unreachable!("trusted Raster sampling pair kind"),
         }
     })

@@ -25,11 +25,12 @@ fn program() -> ManagedProgram {
         },
         shaders: native_shader!("invalidate"),
     };
-    // SAFETY: exactly 1024 independent slot records. Check the encoded level
+    // SAFETY: one guarded invocation per slot. Check the encoded level
     // and both page coordinates before indexing the initialized change mask.
     unsafe { ManagedProgram::from_trusted_descriptor(&DESC) }
 }
-pub(super) fn reserve(prep: &mut Preparation) -> Result<(), GraphError> {
+/// Prepare GPU marking of resident tiles touched by changed caster bounds.
+pub fn reserve_invalidation(prep: &mut Preparation) -> Result<(), GraphError> {
     prep.reserve_buffer(
         BufferDesc {
             size: REQUEST_BYTES as u64,
@@ -46,7 +47,9 @@ pub(super) fn reserve(prep: &mut Preparation) -> Result<(), GraphError> {
         ..Default::default()
     })
 }
-pub(super) fn record(
+/// Invalidate pages whose interior or filter gutter intersects an old or new
+/// world-space caster bound. An unknown bound invalidates all resident pages.
+pub fn invalidate_casters(
     graph: &mut Graph,
     requests: &PageRequests,
     pages: &AssignedPages,

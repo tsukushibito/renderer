@@ -13,6 +13,9 @@ use sashiko_renderer_core::{
 };
 use std::{num::NonZeroUsize, time::Duration};
 
+#[path = "virtual_shadow/timing.rs"]
+mod timing;
+
 fn check_requests(mut config: RuntimeConfig) {
     // The sole pixel projects to the intersection of four pages at every level.
     let identity = std::array::from_fn(|col| std::array::from_fn(|row| f32::from(row == col)));
@@ -33,6 +36,7 @@ fn check_requests(mut config: RuntimeConfig) {
     let mut prep = Preparation::new(NonZeroUsize::MIN);
     virtual_shadow::reserve_requests(&mut prep).unwrap();
     virtual_shadow::reserve_table(&mut prep).unwrap();
+    virtual_shadow::reserve_invalidation(&mut prep).unwrap();
     virtual_shadow::reserve_atlas(&mut prep, 1).unwrap();
     virtual_shadow::reserve_camera_depth(&mut prep, [1, 1], 1).unwrap();
     prep.add_working_set(sashiko_renderer_core::capacity::WorkingSet {
@@ -186,7 +190,7 @@ fn check_requests(mut config: RuntimeConfig) {
     drop(plan);
     // Slot zero already owns the coarse page (-1,-1). Other requested
     // pages must be cleared, adjacent unallocated and matching slots retained.
-    for mode in 0..3 {
+    for mode in 0..4 {
         let mut graph = pool.begin().unwrap();
         let depth = graph.image("depth", depth).unwrap();
         let view = graph.image_view(depth, 0, 0).unwrap();
@@ -210,7 +214,7 @@ fn check_requests(mut config: RuntimeConfig) {
                 .unwrap();
         if mode != 0 {
             // Keep four coarse tiles; optionally keep only the centre fine tile.
-            // The top-left PCF tap must then find the retained, dark coarse tile.
+            // An absent fine centre must resolve its whole footprint in the coarse tile.
             let mut sparse = vec![0u8; REQUEST_BYTES];
             for (level, x, y) in [
                 (7, 63, 63),
@@ -224,6 +228,12 @@ fn check_requests(mut config: RuntimeConfig) {
                 }
                 let index = (level * 128 + y) * 128 + x;
                 sparse[index / 8] |= 1 << (index % 8);
+            }
+            if mode == 3 {
+                for x in [68, 80] {
+                    let i = 64 * PAGES_PER_AXIS + x;
+                    sparse[i / 8] |= 1 << (i % 8);
+                }
             }
             graph
                 .upload_buffer("force parent fallback", requests.mask, 0, &sparse)
@@ -243,10 +253,41 @@ fn check_requests(mut config: RuntimeConfig) {
                 .map(u32::to_le_bytes)
                 .as_flattened(),
         );
+        if mode == 2 {
+            prior_bytes[3 * 16..4 * 16]
+                .copy_from_slice([8u32, 0, 0, 1].map(u32::to_le_bytes).as_flattened());
+        }
+        if mode == 3 {
+            for (slot, page_x) in [(4, 0), (5, 4), (6, 16)] {
+                prior_bytes[slot * 16..(slot + 1) * 16]
+                    .copy_from_slice([1u32, page_x, 0, 0].map(u32::to_le_bytes).as_flattened());
+            }
+        }
         graph
             .upload_buffer("seed owners", prior, 0, &prior_bytes)
             .unwrap();
         let pages = virtual_shadow::assign_pages(&mut graph, requests, Some(prior)).unwrap();
+        let dirty = if mode == 3 {
+            // A caster is removed from the old tile's outer corner and added
+            // to a second tile's outer corner. A third retained tile is remote.
+            let changed = [0., 0.16].map(|x| {
+                Some(
+                    Bounds::new(
+                        [x - 1.5 / 3200., -1.5 / 3200., 0.5],
+                        [x - 0.75 / 3200., -0.75 / 3200., 1.0],
+                    )
+                    .unwrap(),
+                )
+            });
+            virtual_shadow::invalidate_casters(&mut graph, &requests, &pages, &changed).unwrap();
+            Some(
+                graph
+                    .readback_buffer("three fine owners", pages.slots, 4 * 16, 3 * 16)
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
         let atlas = graph.image("atlas", virtual_shadow::ATLAS_DESC).unwrap();
         let atlas_view = graph.image_view(atlas, 0, 0).unwrap();
         graph
@@ -278,37 +319,34 @@ fn check_requests(mut config: RuntimeConfig) {
             .unwrap();
         let mut result = [0u8; 8];
         frame.readback_into(visible, &mut result).unwrap();
-        let red = u16::from_le_bytes([result[0], result[1]]);
-        if mode == 0 {
-            assert_eq!(red, 0x3c00);
-        } else {
-            // 8/9 rounded to binary16, allowing either adjacent value.
-            assert!(
-                (0x3b1c..=0x3b1d).contains(&red),
-                "mode {mode}, got {red:#06x}"
-            );
+        if let Some(dirty) = dirty {
+            let mut bytes = [0u8; 3 * 16];
+            frame.readback_into(dirty, &mut bytes).unwrap();
+            let flags: Vec<_> = bytes
+                .chunks_exact(16)
+                .map(|slot| u32::from_le_bytes(slot[12..].try_into().unwrap()))
+                .collect();
+            assert_eq!(flags, [1, 1, 0]);
         }
+        let red = u16::from_le_bytes([result[0], result[1]]);
+        assert_eq!(red, if mode == 2 { 0 } else { 0x3c00 }, "mode {mode}");
         let Some(capture) = capture else {
             continue;
         };
         let mut pixels = vec![0u8; 4096 * 4096 * 4];
         frame.readback_into(capture, &mut pixels).unwrap();
         for (y, row) in pixels.as_chunks::<{ 4096 * 4 }>().0.iter().enumerate() {
-            let split = if y < 128 { 128 } else { 4096 };
-            assert!(
-                row[..split * 4]
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .all(|v| *v == 0.25_f32.to_le_bytes())
-            );
-            assert!(
-                row[split * 4..]
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .all(|v| *v == 1.0_f32.to_le_bytes())
-            );
+            for (x, value) in row.as_chunks::<4>().0.iter().enumerate() {
+                let tile = virtual_shadow::TILE_TEXELS;
+                let columns = virtual_shadow::TILES_PER_AXIS;
+                let slot = y / tile * columns + x / tile;
+                let dirty = x / tile < columns && (1..32).contains(&slot);
+                assert_eq!(
+                    *value,
+                    if dirty { 1.0_f32 } else { 0.25 }.to_le_bytes(),
+                    "atlas pixel {x},{y}"
+                );
+            }
         }
     }
     check_casters(
@@ -360,16 +398,57 @@ fn check_casters(
     use sashiko_renderer_core::graph::BufferDesc;
     // An opaque square or an alpha-tested leaf covers the receiver. Reversing
     // its winding tests single-sided, double-sided, and mirrored placements.
-    for (mode, alpha, back, double_sided, mirror, expected) in [
+    let materials = [
         (AlphaMode::Opaque, [0, 0], false, false, false, 0),
         (AlphaMode::Mask, [0, 0], false, false, false, 0x3c00),
         (AlphaMode::Mask, [255, 255], false, false, false, 0),
         (AlphaMode::Mask, [255, 255], true, false, false, 0x3c00),
         (AlphaMode::Mask, [255, 255], true, true, false, 0),
         (AlphaMode::Mask, [255, 255], false, false, true, 0),
-        (AlphaMode::Mask, [0, 255], false, true, false, 0x3555),
+        (AlphaMode::Mask, [0, 255], false, true, false, 0x3800),
         (AlphaMode::Blend, [255, 255], false, true, false, 0x3c00),
-    ] {
+    ];
+    // A receiver sits 1/8 texel inside an edge or corner. Only its centre
+    // page is resident. A square stops 3/4 texel outside the interior, so
+    // only the outer gutter texel can store its depth. Its PCF weight is
+    // (1/2 - 1/8) / 3 = 1/8 per crossed axis.
+    let gutters = [
+        [-1, -1],
+        [-1, 1],
+        [1, -1],
+        [1, 1],
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+    ];
+    let cases = materials
+        .into_iter()
+        .map(|case| (case, [0, 0]))
+        .chain(gutters.map(|side| {
+            let expected = if side.contains(&0) { 0x3b00 } else { 0x3be0 };
+            (
+                (AlphaMode::Opaque, [255; 2], false, true, false, expected),
+                side,
+            )
+        }));
+    for ((mode, alpha, back, double_sided, mirror, expected), side) in cases {
+        let camera = if side == [0, 0] {
+            camera
+        } else {
+            let [x, y] = side.map(|v| v as f32 * 0.125 / 3200.);
+            let mut clip = camera.clip_from_world();
+            clip[3][0] -= x;
+            clip[3][1] -= y;
+            ViewInput::new(
+                clip,
+                [x, y, -0.01],
+                [0., 0., 1.],
+                [0.01, 1.01],
+                Projection::Orthographic,
+            )
+            .unwrap()
+        };
         let mut graph = pool.begin().unwrap();
         let vertices = graph.buffer("square", BufferDesc { size: 4 * 48 }).unwrap();
         let mut words = [0f32; 48];
@@ -460,9 +539,20 @@ fn check_casters(
             ShadowSettings::default(),
         )
         .unwrap();
+        if side != [0, 0] {
+            let mut center_only = vec![0; REQUEST_BYTES];
+            let index = 64 * PAGES_PER_AXIS + 64;
+            center_only[index / 8] = 1 << (index % 8);
+            graph
+                .upload_buffer("only centre page", requests.mask, 0, &center_only)
+                .unwrap();
+        }
         let pages = virtual_shadow::assign_pages(&mut graph, requests, None).unwrap();
         let atlas = graph.image("atlas", virtual_shadow::ATLAS_DESC).unwrap();
-        let transform = if mirror {
+        let transform = if side != [0, 0] {
+            let [x, y] = side.map(|v| -v as f32 * (0.02 + 0.75 / 3200.));
+            Transform::new([[1., 0., 0., x], [0., 1., 0., y], [0., 0., 1., 0.]]).unwrap()
+        } else if mirror {
             Transform::new([[-1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]]).unwrap()
         } else {
             Transform::IDENTITY
@@ -492,7 +582,7 @@ fn check_casters(
         assert_eq!(
             u16::from_le_bytes([pixel[0], pixel[1]]),
             expected,
-            "{mode:?} alpha {alpha:?} back {back} double {double_sided} mirror {mirror}"
+            "{mode:?} alpha {alpha:?} back {back} double {double_sided} mirror {mirror} gutter {side:?}"
         );
     }
 }

@@ -1,15 +1,14 @@
-// Callers supply the current grid, virtual page table and physical D32 atlas.
-// An address of zero is unmapped. Physical neighbours can be unrelated pages.
-bool map_texel(float2 light_uv, uint level, out uint2 physical) {
-    physical = 0;
+// Resolve the biased centre once at the finest resident level. Filter taps
+// address this tile's rasterized guard band, including at a clipmap corner.
+bool virtual_address(float2 light_uv, uint level, out float2 atlas_texel) {
+    atlas_texel = 0;
     float2 texel = virtual_page_texel(light_uv, level, virtual_origin(level));
     if (!all(texel >= 0.0) || !all(texel < 16384.0)) return false;
-    uint2 xy = uint2(texel);
-    uint2 page = xy >> 7;
+    uint2 page = uint2(texel) >> 7;
     uint entry = virtual_page_entry(level, page);
-    if (entry == 0 || entry > 1024) return false;
-    uint slot = entry - 1;
-    physical = uint2(slot % 32, slot / 32) * 128 + (xy & 127);
+    if (entry == 0 || entry > VSM_CAPACITY) return false;
+    atlas_texel = float2(virtual_tile_origin(entry - 1) + VSM_GUTTER)
+                + (texel - float2(page * 128));
     return true;
 }
 
@@ -28,23 +27,16 @@ float virtual_visibility(float3 world, float3 normal, float4 eye_distance, float
         float pitch = float(1u << level) / 3200.0;
         float offset = pitch * shadow_bias.z * slope;
         float2 center = uv + normal_uv * offset;
-        uint2 center_address;
-        if (!map_texel(center, level, center_address)) continue;
-        float reference = depth + normal_depth * offset;
-        float bias_per_metre = shadow_bias.w * (shadow_bias.x + slope * shadow_bias.y);
+        float2 center_address;
+        if (!virtual_address(center, level, center_address)) continue;
+        float bias = pitch * shadow_bias.w * (shadow_bias.x + slope * shadow_bias.y);
+        float reference = depth + normal_depth * offset - bias;
         float visible = 0.0;
+        [unroll]
         for (int y = -1; y <= 1; ++y) {
+            [unroll]
             for (int x = -1; x <= 1; ++x) {
-                float2 tap = center + float2(x, y) * pitch;
-                float lit = 1.0;
-                for (uint parent = level; parent < 8; ++parent) {
-                    uint2 address;
-                    if (!map_texel(tap, parent, address)) continue;
-                    float bias = float(1u << parent) / 3200.0 * bias_per_metre;
-                    lit = reference - bias <= virtual_depth(address) ? 1.0 : 0.0;
-                    break;
-                }
-                visible += lit;
+                visible += virtual_compare((center_address + float2(x, y)) / 4096.0, reference);
             }
         }
         return visible / 9.0;

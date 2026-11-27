@@ -85,7 +85,7 @@ pub(in crate::passes::pbr) static REFERENCE_OPAQUE: RasterProgramDescriptor =
         shaders: packaged_shaders!(
             raster: ("pbr.vert", "pbr_all_lights.frag"),
             inline_constants: None,
-            nonfiltering: &[(3, 4)],
+            nonfiltering: &[],
         ),
         ..OPAQUE
     };
@@ -100,7 +100,7 @@ pub(in crate::passes::pbr) static TILED_OPAQUE: RasterProgramDescriptor = Raster
     shaders: packaged_shaders!(
         raster: ("pbr.vert", "pbr_forward_plus.frag"),
         inline_constants: None,
-        nonfiltering: &[(3, 4)],
+        nonfiltering: &[],
     ),
     ..OPAQUE
 };

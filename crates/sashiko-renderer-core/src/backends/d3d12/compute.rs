@@ -118,7 +118,7 @@ pub(super) fn requirements(
                 }
             }
             BindingOperands::ImageView(view) => {
-                if layout.kind != BindingType::SampledImage
+                if layout.kind.descriptor_class() != BindingType::SampledImage
                     && (view.mip_level() != 0
                         || view.mip_level_count() != 1
                         || !matches!(graph.resources[view.image().index].desc, ResourceDesc::Image(desc) if desc.is_single_subresource()))
@@ -344,7 +344,7 @@ pub(super) fn record(
                 // flags. Preflight bounded a unique descriptor slot, unmodified
                 // until actual completion returns this execution lease.
                 unsafe {
-                    if layout.kind == BindingType::SampledImage {
+                    if layout.kind.descriptor_class() == BindingType::SampledImage {
                         let desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
                             Format: super::resources::sampled_format(image.desc.format),
                             ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,

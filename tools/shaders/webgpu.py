@@ -53,6 +53,12 @@ def generate(module, directory, args, recipe):
     else:
         run([args.naga, module, out])
     source = out.read_text(encoding="utf-8")
+    # Slang 2026.1 emits a float texture for the Dref operand and a scalar
+    # swizzle for its Load. WGSL requires a depth texture for this shadow map.
+    if "textureSampleCompareLevel((shadow_image0_0)" in source:
+        source = source.replace("var shadow_image0_0 : texture_2d<f32>",
+                                "var shadow_image0_0 : texture_depth_2d")
+        source = re.sub(r"(textureLoad\(\(shadow_image0_0\)[^;\n]*\))\.x\b", r"\1", source)
     # Inline words use a per-draw aligned uniform slice on WebGPU.
     source = source.replace("var<immediate>", "@group(0) @binding(255) var<uniform>")
     # This Slang revision prints its HLSL qualifier verbatim, but WGSL

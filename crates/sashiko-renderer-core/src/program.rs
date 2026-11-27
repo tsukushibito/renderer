@@ -356,12 +356,26 @@ pub enum BindingType {
     /// Compute may read and modify any subset of this already initialized prefix.
     StorageReadWrite,
     SampledImage,
+    /// A depth-aspect sampled view for shader depth comparisons.
+    SampledDepth,
     /// Read-only typed storage image. The selected View must have this format.
     StorageImageRead(ImageFormat),
     /// Write-only typed storage image. An accepted dispatch initializes the
     /// complete selected View under the trusted Program's execution contract.
     StorageImageWrite(ImageFormat),
     Sampler,
+    ComparisonSampler,
+}
+
+impl BindingType {
+    /// The native descriptor class shared by ordinary and comparison sampling.
+    pub const fn descriptor_class(self) -> Self {
+        match self {
+            Self::SampledDepth => Self::SampledImage,
+            Self::ComparisonSampler => Self::Sampler,
+            kind => kind,
+        }
+    }
 }
 
 /// Shader execution scopes derived from a reviewed Program, independent of

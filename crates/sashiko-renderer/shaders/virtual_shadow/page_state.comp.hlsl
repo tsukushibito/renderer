@@ -39,6 +39,7 @@ uint4 owner(uint rank) {
 
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= VSM_CAPACITY) return;
     uint4 current = owner(id.x);
     // Ignore the previous frame's dirty flag. Its depth is valid as soon as
     // the graph containing the corresponding tile raster has been accepted.

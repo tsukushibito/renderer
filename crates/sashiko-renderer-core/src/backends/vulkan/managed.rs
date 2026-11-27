@@ -20,11 +20,11 @@ pub(super) fn descriptor_type(kind: BindingType) -> vk::DescriptorType {
         BindingType::StorageRead | BindingType::StorageWrite | BindingType::StorageReadWrite => {
             vk::DescriptorType::STORAGE_BUFFER
         }
-        BindingType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
+        BindingType::SampledImage | BindingType::SampledDepth => vk::DescriptorType::SAMPLED_IMAGE,
         BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_) => {
             vk::DescriptorType::STORAGE_IMAGE
         }
-        BindingType::Sampler => vk::DescriptorType::SAMPLER,
+        BindingType::Sampler | BindingType::ComparisonSampler => vk::DescriptorType::SAMPLER,
     }
 }
 
@@ -70,11 +70,11 @@ impl ComputePipeline {
             .unwrap_or(0);
         let image_count = bindings
             .iter()
-            .filter(|b| b.kind == BindingType::SampledImage)
+            .filter(|b| b.kind.descriptor_class() == BindingType::SampledImage)
             .count() as u32;
         let sampler_count = bindings
             .iter()
-            .filter(|b| b.kind == BindingType::Sampler)
+            .filter(|b| b.kind.descriptor_class() == BindingType::Sampler)
             .count() as u32;
         let storage_image_count = bindings
             .iter()
@@ -111,7 +111,9 @@ impl ComputePipeline {
                             u64::from(limits.max_storage_buffer_range)
                         }
                         BindingType::SampledImage
+                        | BindingType::SampledDepth
                         | BindingType::Sampler
+                        | BindingType::ComparisonSampler
                         | BindingType::StorageImageRead(_)
                         | BindingType::StorageImageWrite(_) => 0,
                     }

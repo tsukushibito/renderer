@@ -41,7 +41,7 @@ impl SceneShadows {
         super::reserve_table(prep)?;
         super::reserve_atlas(prep, capacity)?;
         super::reserve_lighting(prep)?;
-        super::invalidate::reserve(prep)?;
+        super::reserve_invalidation(prep)?;
         use sashiko_renderer_core::capacity::{GraphRequirements, ResourceClass, WorkingSet};
         prep.add_requirements(
             GraphRequirements {
@@ -121,7 +121,7 @@ impl SceneShadows {
         let pages = super::assign_pages(graph, requests, previous)?;
         let atlas = if let Some(cache) = cache {
             if cache.reuse {
-                super::invalidate::record(graph, &requests, &pages, cache.changed)?;
+                super::invalidate_casters(graph, &requests, &pages, cache.changed)?;
             }
             graph.copy_buffer(
                 "remember virtual shadow owners",

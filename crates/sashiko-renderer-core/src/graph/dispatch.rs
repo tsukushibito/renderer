@@ -286,7 +286,7 @@ impl Graph {
                 let slot = program
                     .bindings()
                     .iter()
-                    .filter(|slot| slot.kind != BindingType::Sampler)
+                    .filter(|slot| slot.kind.descriptor_class() != BindingType::Sampler)
                     .nth(left)
                     .unwrap();
                 return Err(graph
@@ -320,7 +320,7 @@ impl Graph {
         // View those two layouts within one dispatch. Multiple storage reads
         // remain valid; their descriptors share the GENERAL layout.
         for (index, slot) in layout.iter().enumerate() {
-            if slot.kind != BindingType::SampledImage {
+            if slot.kind.descriptor_class() != BindingType::SampledImage {
                 continue;
             }
             let BindingOperands::ImageView(sampled) = self.data().bindings[owned.start + index]
@@ -549,6 +549,7 @@ impl Graph {
                     }
                     (
                         BindingType::SampledImage
+                        | BindingType::SampledDepth
                         | BindingType::StorageImageRead(_)
                         | BindingType::StorageImageWrite(_),
                         BindingResource::ImageView(view),
@@ -557,7 +558,18 @@ impl Graph {
                         self.single_sample_image(resource)?;
                         let desc = self.image_desc_at(resource)?;
                         let (read, write, purpose) = match slot.kind {
-                            BindingType::SampledImage => (true, false, AccessPurpose::Sampled),
+                            BindingType::SampledDepth
+                                if desc.format != crate::ImageFormat::Depth32Float =>
+                            {
+                                return Err(self.resource_error(
+                                    GraphErrorKind::InvalidInput,
+                                    "comparison sampling requires a depth view",
+                                    resource,
+                                ));
+                            }
+                            BindingType::SampledImage | BindingType::SampledDepth => {
+                                (true, false, AccessPurpose::Sampled)
+                            }
                             BindingType::StorageImageRead(format)
                             | BindingType::StorageImageWrite(format) => {
                                 if !format.supports_storage() {
@@ -613,7 +625,10 @@ impl Graph {
                         )?;
                         BindingOperands::ImageView(view)
                     }
-                    (BindingType::Sampler, BindingResource::Sampler(sampler)) => {
+                    (
+                        kind @ (BindingType::Sampler | BindingType::ComparisonSampler),
+                        BindingResource::Sampler(sampler),
+                    ) if sampler.compare_depth == (kind == BindingType::ComparisonSampler) => {
                         BindingOperands::Sampler(sampler)
                     }
                     _ => {
@@ -966,9 +981,11 @@ mod tests {
                         assert!(bytes > 0 && bytes <= slot.min_size)
                     }
                     BindingType::SampledImage
+                    | BindingType::SampledDepth
                     | BindingType::StorageImageRead(_)
                     | BindingType::StorageImageWrite(_)
-                    | BindingType::Sampler => assert_eq!(bytes, 0),
+                    | BindingType::Sampler
+                    | BindingType::ComparisonSampler => assert_eq!(bytes, 0),
                 }
             }
         }

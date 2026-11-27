@@ -348,7 +348,9 @@ impl ComputeLease {
                         .view_for_mips(view.mip_level(), view.mip_level_count())
                         .expect("validated prepared image view range");
                     image_info.image_layout = match slot.kind {
-                        BindingType::SampledImage => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        BindingType::SampledImage | BindingType::SampledDepth => {
+                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+                        }
                         _ => vk::ImageLayout::GENERAL,
                     };
                     write = write.image_info(std::slice::from_ref(&image_info));

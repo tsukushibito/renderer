@@ -237,26 +237,33 @@ impl<B> RasterProgramDescriptor<'_, B> {
                         BindingType::Uniform
                             | BindingType::StorageRead
                             | BindingType::SampledImage
+                            | BindingType::SampledDepth
                             | BindingType::Sampler
+                            | BindingType::ComparisonSampler
                     )
             })
         {
             return Err(ShaderImportError::InvalidDescriptor("raster bindings"));
         }
-        let has_slot = |group, binding, kind| {
+        let kind_at = |group, binding| {
             self.bindings
                 .iter()
-                .any(|slot| (slot.group, slot.binding, slot.kind) == (group, binding, kind))
+                .find(|slot| (slot.group, slot.binding) == (group, binding))
+                .map(|slot| slot.kind)
         };
         if self.sampling_pairs.iter().any(|pair| {
-            !has_slot(
-                pair.image_group,
-                pair.image_binding,
-                BindingType::SampledImage,
-            ) || !has_slot(
-                pair.sampler_group,
-                pair.sampler_binding,
-                BindingType::Sampler,
+            !matches!(
+                (
+                    kind_at(pair.image_group, pair.image_binding),
+                    kind_at(pair.sampler_group, pair.sampler_binding)
+                ),
+                (
+                    Some(BindingType::SampledImage | BindingType::SampledDepth),
+                    Some(BindingType::Sampler)
+                ) | (
+                    Some(BindingType::SampledDepth),
+                    Some(BindingType::ComparisonSampler)
+                )
             )
         }) {
             return Err(ShaderImportError::InvalidDescriptor(
@@ -784,7 +791,7 @@ impl ManagedRasterProgram {
     fn is_textured(&self) -> bool {
         self.bindings()
             .iter()
-            .any(|slot| slot.kind == BindingType::SampledImage)
+            .any(|slot| slot.kind.descriptor_class() == BindingType::SampledImage)
     }
     #[cfg(test)]
     fn is_prepassed(&self) -> bool {

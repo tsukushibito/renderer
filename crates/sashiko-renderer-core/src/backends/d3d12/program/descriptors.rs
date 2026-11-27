@@ -19,9 +19,11 @@ pub(super) fn root_parameters(
             | BindingType::StorageWrite
             | BindingType::StorageReadWrite => 2,
             BindingType::SampledImage
+            | BindingType::SampledDepth
             | BindingType::StorageImageRead(_)
             | BindingType::StorageImageWrite(_)
-            | BindingType::Sampler => 1,
+            | BindingType::Sampler
+            | BindingType::ComparisonSampler => 1,
         })
         .sum();
     if cost > 64 {
@@ -35,15 +37,21 @@ pub(super) fn root_parameters(
             matches!(
                 slot.kind,
                 BindingType::SampledImage
+                    | BindingType::SampledDepth
                     | BindingType::StorageImageRead(_)
                     | BindingType::StorageImageWrite(_)
                     | BindingType::Sampler
+                    | BindingType::ComparisonSampler
             )
         })
         .map(|slot| D3D12_DESCRIPTOR_RANGE {
             RangeType: match slot.kind {
-                BindingType::Sampler => D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
-                BindingType::SampledImage => D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+                BindingType::Sampler | BindingType::ComparisonSampler => {
+                    D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER
+                }
+                BindingType::SampledImage | BindingType::SampledDepth => {
+                    D3D12_DESCRIPTOR_RANGE_TYPE_SRV
+                }
                 BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_) => {
                     D3D12_DESCRIPTOR_RANGE_TYPE_UAV
                 }
@@ -82,9 +90,11 @@ pub(super) fn root_parameters(
                     },
                 ),
                 BindingType::SampledImage
+                | BindingType::SampledDepth
                 | BindingType::StorageImageRead(_)
                 | BindingType::StorageImageWrite(_)
-                | BindingType::Sampler => (
+                | BindingType::Sampler
+                | BindingType::ComparisonSampler => (
                     D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
                     D3D12_ROOT_PARAMETER_0 {
                         DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {

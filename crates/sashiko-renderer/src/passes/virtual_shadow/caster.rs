@@ -207,9 +207,12 @@ pub(super) fn rectangles(
             return Some([0, 0, 128, 128]);
         };
         let [x, y] = std::array::from_fn(|i| {
-            bounds[i].map(|v| {
-                (v * (25. / (1u32 << level) as f64)).floor() - f64::from(requests.origins[level][i])
-            })
+            // Expand both axes so geometry outside the interior also fills the
+            // four edges and corners. Invalidation uses this same projection.
+            let scale = 25. / (1u32 << level) as f64;
+            let gutter = super::GUTTER as f64 / super::PAGE_TEXELS as f64;
+            [bounds[i][0] * scale - gutter, bounds[i][1] * scale + gutter]
+                .map(|v| v.floor() - f64::from(requests.origins[level][i]))
         });
         if x[1] < 0. || y[1] < 0. || x[0] >= 128. || y[0] >= 128. {
             return None;

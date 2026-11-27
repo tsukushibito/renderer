@@ -1106,7 +1106,7 @@ impl RasterScene<'_> {
 }
 
 const ENVIRONMENT_SAMPLER: SamplerDescriptor = SamplerDescriptor::LinearRepeatUClampV;
-const SHADOW_SAMPLER: SamplerDescriptor = SamplerDescriptor::NearestClamp;
+const SHADOW_SAMPLER: SamplerDescriptor = SamplerDescriptor::ShadowCompare;
 
 fn lighting_bindings(
     environment: Environment,

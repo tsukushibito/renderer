@@ -516,6 +516,8 @@ root bufferに対応するraw／structured ABIを使い、typed buffer、push co
 生成条件とRust側ABIは固定ツールの反射結果に照合する。パイプラインの準備・完了後回収とABIの事前照合は
 [VulkanガイドのShader・ABIとPipelineの方針](../guides/vulkan-best-practices.md#shaderspir-vcpugpu-abi)に従う。
 
+深度比較用のGraphスロットは単一サンプルD32のViewと比較有効なサンプラを要求する。太陽VSMはLESS_OR_EQUAL、min/mag線形、LOD 0でDrefを使う。Vulkan 1.3のサンプル可能なD32は深度比較に対応する。通常の線形フィルタbitがないアダプタでは、比較結果の補間ウェイトが実装依存になり得るため、境界画質を実機で検証する。[Vulkanの形式能力](https://docs.vulkan.org/spec/latest/chapters/formats.html)
+
 `SamplerDescriptor` のU/V、min/mag、mipを独立にVkSamplerへ写す。mipを使わずmin/magが異なる場合、
 nearest mipと最大LOD 0.25を指定する。縮小時にもminFilterを選べ、参照レベルはViewの先頭に保たれる。
 Deviceごとに要求されたdescriptorだけを作成し、実Deviceの生存sampler数をnative作成前に予約する。

@@ -3,6 +3,7 @@ StructuredBuffer<uint> changed : register(t1);
 RWStructuredBuffer<uint4> slots : register(u2);
 [numthreads(64,1,1)]
 void main(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= VSM_CAPACITY) return;
     uint4 owner = slots[id.x];
     if (owner.x == 0 || owner.x > 8 || owner.w != 0) return;
     uint level = owner.x - 1;

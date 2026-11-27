@@ -1542,7 +1542,7 @@ fn lighting_bindings(
         image_binding(3, 1, shadows[1]),
         image_binding(3, 2, shadows[2]),
         image_binding(3, 3, shadows[3]),
-        sampler_binding(3, 4, SamplerDescriptor::NearestClamp),
+        sampler_binding(3, 4, SamplerDescriptor::ShadowCompare),
         pbr::ReflectionProbes::bind_metadata(
             graph.import_buffer("reflection metadata", &resident.reflection_metadata)?,
         ),

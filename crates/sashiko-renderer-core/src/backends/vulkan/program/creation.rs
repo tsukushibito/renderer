@@ -34,8 +34,8 @@ pub(super) fn descriptor_type(kind: BindingType) -> vk::DescriptorType {
     match kind {
         BindingType::Uniform => vk::DescriptorType::UNIFORM_BUFFER,
         BindingType::StorageRead => vk::DescriptorType::STORAGE_BUFFER,
-        BindingType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
-        BindingType::Sampler => vk::DescriptorType::SAMPLER,
+        BindingType::SampledImage | BindingType::SampledDepth => vk::DescriptorType::SAMPLED_IMAGE,
+        BindingType::Sampler | BindingType::ComparisonSampler => vk::DescriptorType::SAMPLER,
         _ => unreachable!("trusted Raster read-only layout"),
     }
 }
@@ -191,8 +191,8 @@ impl Program {
                 counts[match slot.kind {
                     BindingType::Uniform => 0,
                     BindingType::StorageRead => 1,
-                    BindingType::SampledImage => 2,
-                    BindingType::Sampler => 3,
+                    BindingType::SampledImage | BindingType::SampledDepth => 2,
+                    BindingType::Sampler | BindingType::ComparisonSampler => 3,
                     _ => unreachable!("trusted Raster layout"),
                 }] += 1;
             }
@@ -212,8 +212,8 @@ impl Program {
             totals[match slot.kind {
                 BindingType::Uniform => 0,
                 BindingType::StorageRead => 1,
-                BindingType::SampledImage => 2,
-                BindingType::Sampler => 3,
+                BindingType::SampledImage | BindingType::SampledDepth => 2,
+                BindingType::Sampler | BindingType::ComparisonSampler => 3,
                 _ => unreachable!("trusted Raster layout"),
             }] += 1;
             let maximum = match slot.kind {

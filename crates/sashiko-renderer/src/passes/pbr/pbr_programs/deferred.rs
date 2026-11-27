@@ -69,11 +69,17 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         image(2, 2),
         sampler(2, 3),
         image(2, 4),
-        image(3, 0),
+        BindingLayout {
+            kind: BindingType::SampledDepth,
+            ..image(3, 0)
+        },
         image(3, 1),
         image(3, 2),
         image(3, 3),
-        sampler(3, 4),
+        BindingLayout {
+            kind: BindingType::ComparisonSampler,
+            ..sampler(3, 4)
+        },
         super::REFLECTION_METADATA,
     ],
     binding_bytes: &[
@@ -106,12 +112,9 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         pair(2, 2, 3),
         pair(2, 4, 3),
         pair(3, 0, 4),
-        pair(3, 1, 4),
-        pair(3, 2, 4),
-        pair(3, 3, 4),
     ],
     shaders: fullscreen_triangle_shaders(
-        packaged_shaders!(module: "deferred_lighting.frag", folder: "", nonfiltering: &[(1, 4), (3, 4)]),
+        packaged_shaders!(module: "deferred_lighting.frag", folder: "", nonfiltering: &[(1, 4)]),
         None,
     ),
     entry: "main",
@@ -142,7 +145,7 @@ static LOCAL_LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         bytes
     },
     shaders: fullscreen_triangle_shaders(
-        packaged_shaders!(module: "deferred_local_lights.frag", folder: "", nonfiltering: &[(1, 4), (3, 4)]),
+        packaged_shaders!(module: "deferred_local_lights.frag", folder: "", nonfiltering: &[(1, 4)]),
         None,
     ),
     ..LIGHTING
@@ -192,7 +195,7 @@ mod tests {
             .iter()
             .filter(|layout| layout.stages.contains(stage))
         {
-            let column = match layout.kind {
+            let column = match layout.kind.descriptor_class() {
                 BindingType::Uniform => "cb",
                 BindingType::Sampler => "s",
                 BindingType::SampledImage => "t",
@@ -205,7 +208,7 @@ mod tests {
             register_names.insert(name);
             descriptor_slots.insert(
                 (layout.group, layout.binding),
-                (layout.kind, layout.min_size),
+                (layout.kind.descriptor_class(), layout.min_size),
             );
         }
 
