@@ -174,6 +174,14 @@ This repository uses **Beads (`bd`)** for issue tracking. Read
 
 # Documentation
 
+- Put new task-specific generated files under `build/tasks/<beads-id>/` in
+  the working checkout. Reuse `target/` for Cargo builds. Keep outputs for
+  open or paused work, including background jobs that outlive a session.
+- Before closing an issue, preserve any evidence needed later in Git or a
+  durable location linked from Beads and the relevant document. Once all
+  consumers finish, the closed task's output directory is disposable.
+  See the [retention workflow](docs/guides/development.md#課題別の生成物の保管と削除).
+
 - Keep current documentation under `docs/guides/` and `docs/design/`, with the
   latest verification results in `docs/verification/current.md`.
 - Update existing topic documents rather than adding milestone baseline reports
