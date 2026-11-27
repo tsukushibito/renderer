@@ -149,7 +149,14 @@ impl Renderer {
             pass.draws(&destination.encoding().pipeline().program, 1)
         })?;
         match destination {
-            FrameDestination::Capture => plan.reserve_readback(READBACK, target)?,
+            FrameDestination::Capture => {
+                let largest_capture = if config.film_output {
+                    ImageDesc::rgba16_float(w, h)
+                } else {
+                    target
+                };
+                plan.reserve_readback(READBACK, largest_capture)?;
+            }
             // Each outstanding present may still lease its source after the render
             // submission completes. The next Graph needs its own writable output.
             #[cfg(all(
@@ -450,6 +457,8 @@ impl Renderer {
                 ..self.camera
             },
             output_extent: self.camera.extent,
+            film_capture: self.config.film_output
+                && matches!(self.destination, FrameDestination::Capture),
             linear: None,
         })
     }
@@ -498,7 +507,7 @@ impl Renderer {
         let [w, h] = capture.extent;
         if usize::try_from(u64::from(w) * u64::from(h))
             .ok()
-            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| n.checked_mul(capture.texel_bytes))
             != Some(bytes.len())
         {
             return Err("capture buffer has the wrong extent".into());
@@ -531,6 +540,7 @@ pub struct Capture {
     frame: FrameId,
     pixels: PassHandle,
     extent: [u32; 2],
+    texel_bytes: usize,
     abandoned: Arc<AtomicBool>,
     consumed: AtomicBool,
     slot: usize,
@@ -553,6 +563,7 @@ pub struct Frame<'a> {
     captures: &'a mut [CaptureSlot],
     camera: CameraView,
     output_extent: [u32; 2],
+    film_capture: bool,
     linear: Option<ImageHandle>,
 }
 
@@ -651,13 +662,27 @@ impl Frame<'_> {
 
     /// Submit this frame and obtain its sRGB readback ticket without waiting.
     pub fn capture(mut self) -> PipelineResult<Capture> {
+        let image = self.output(SdrOutput::capture(false))?.raw_image();
+        self.submit_capture(image, 4)
+    }
+
+    /// Capture the composed linear film as tightly packed RGBA16F, before
+    /// display clipping and encoding. Prepared by headless physical-film views.
+    pub fn capture_linear(self) -> PipelineResult<Capture> {
+        if !self.film_capture {
+            return Err("linear film capture requires a prepared headless film output".into());
+        }
+        let image = self.linear.ok_or("draw the film before capturing it")?;
+        self.submit_capture(image, 8)
+    }
+
+    fn submit_capture(mut self, image: ImageHandle, texel_bytes: usize) -> PipelineResult<Capture> {
         let slot = self
             .captures
             .iter()
             .position(|slot| slot.frame.is_none())
             .ok_or("outstanding captures exhaust the prepared frame count")?;
-        let output = self.output(SdrOutput::capture(false))?;
-        let pixels = self.graph().readback_image(READBACK, output.raw_image())?;
+        let pixels = self.graph().readback_image(READBACK, image)?;
         let accepted: FrameSubmission = self.recording.submit()?;
         self.captures[slot].frame = Some(accepted.id());
         Ok(Capture {
@@ -667,6 +692,7 @@ impl Frame<'_> {
             frame: accepted.id(),
             pixels,
             extent: self.output_extent,
+            texel_bytes,
         })
     }
 }

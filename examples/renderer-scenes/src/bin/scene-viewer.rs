@@ -69,6 +69,11 @@ fn capture(package: &Path, view: &str, output: &Path) -> PipelineResult<()> {
 fn main() -> PipelineResult<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
+        [package, view, flag, samples, exr, png] if flag == "--film" => film::capture(
+            Path::new(package), view.to_str().ok_or("invalid view name")?,
+            samples.to_str().ok_or("invalid film sample count")?.parse()?,
+            Path::new(exr), Path::new(png),
+        ),
         [package, view, flag, exr, png] if flag == "--sky" => film::sky(Path::new(package),view.to_str().ok_or("invalid view name")?,Path::new(exr),Path::new(png)),
         [package, view, flag, png] if flag == "--capture" => capture(
             Path::new(package),
@@ -93,7 +98,7 @@ fn main() -> PipelineResult<()> {
             None,
         ),
         _ => Err(
-            "usage: scene-viewer <package> <view> [--capture output.png | --sky linear.exr display.png | --present-frames N]"
+            "usage: scene-viewer <package> <view> [--capture output.png | --film N linear.exr display.png | --sky linear.exr display.png | --present-frames N]"
                 .into(),
         ),
     }

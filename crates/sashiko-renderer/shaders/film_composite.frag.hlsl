@@ -33,5 +33,5 @@ float4 main(float4 position : SV_Position) : SV_Target0 {
         uint2 texel = min(uint2(w-1,h-1), uint2(equal_area(ray)*float2(w,h)));
         radiance += (1.0-surface.a)*film.corner_scale.w*sky.Load(int3(texel,0)).rgb;
     }
-    return float4(saturate(float3(dot(film.sensor_r.xyz,radiance), dot(film.sensor_g.xyz,radiance), dot(film.sensor_b.xyz,radiance))), 1.0);
+    return float4(dot(film.sensor_r.xyz,radiance), dot(film.sensor_g.xyz,radiance), dot(film.sensor_b.xyz,radiance), 1.0);
 }

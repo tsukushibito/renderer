@@ -71,6 +71,35 @@ impl FilmProjection {
         }
     }
 
+    /// Rasterize one sample of the same lens as `ray`. Translate the eye
+    /// parallel to the film and shift the frustum to keep the focal plane fixed.
+    /// The pixel offset is relative to its centre, positive right and down.
+    pub fn raster_sample(
+        &self,
+        centred: &sashiko_renderer::pipeline::CameraView,
+        pixel_offset: Vec2,
+        aperture: Vec2,
+    ) -> sashiko_renderer::pipeline::PipelineResult<sashiko_renderer::pbr::ViewInput> {
+        use sashiko_renderer::pbr::{Projection, ViewInput};
+        let base = centred.camera;
+        let matrix = Mat4::from_cols_array_2d(&base.clip_from_world()).as_dmat4();
+        let offset = (self.radius * (aperture.x * self.right + aperture.y * self.up)).as_dvec3();
+        let focus = self.eye.as_dvec3() + self.forward.as_dvec3() * f64::from(self.focus);
+        let w = (matrix * focus.extend(1.)).w;
+        let lens_shift = (matrix * offset.extend(0.)).truncate().truncate() / w;
+        let shift = lens_shift - (pixel_offset / self.centre).as_dvec2();
+        let sampled = glam::DMat4::from_translation(shift.extend(0.))
+            * matrix
+            * glam::DMat4::from_translation(-offset);
+        Ok(ViewInput::new(
+            sampled.as_mat4().to_cols_array_2d(),
+            (self.eye.as_dvec3() + offset).as_vec3().into(),
+            base.forward(),
+            base.near_far(),
+            Projection::Perspective,
+        )?)
+    }
+
     /// Apply the exposure and chromatic adaptation once to integrated linear RGB.
     pub fn develop(&self, radiance: Vec3) -> Vec3 {
         self.sensor * radiance

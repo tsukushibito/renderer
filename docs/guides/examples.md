@@ -82,6 +82,23 @@ python tools/landscape/check_ibl.py build/full-package
 
 ### Landscape の原画と比較する
 
+幾何を含めたフィルム撮影は `scene-viewer <package> <view> --film N linear.exr display.png` で実行します。解像度、開口半径、焦点距離、ISO、白色点はビューの値を使います。N=1 はレンズと画素の中心、N>1 は開口と画素内をサンプリングし、線形値の平均から両方の出力を保存します。
+
+光量・反射方向と焦点面を独立に検査するには次を実行します。PBRT v4 の実行ファイルを `pbrt` として指定しています。
+
+```powershell
+python tools/landscape/optics_fixture.py build/optics
+foreach ($name in 'spheres','focus','black','spheres-double-iso') {
+    target/release/sashiko-asset-cook.exe scene "build/optics/$name.pbrt" build/optics/settings.json "build/optics/package-$name"
+    $samples = if ($name -eq 'focus') { 128 } else { 16 }
+    target/release/scene-viewer.exe "build/optics/package-$name" $name --film $samples "build/optics/$name-renderer.exr" "build/optics/$name-renderer.png"
+}
+foreach ($name in 'spheres','focus') {
+    pbrt --outfile "build/optics/$name-pbrt.exr" "build/optics/$name.pbrt"
+}
+python tools/landscape/optics_fixture.py build/optics --verify
+```
+
 評価用素材を取得するには、上記の Python 環境で次を実行します。取得ツールは固定版の Git blob とローカルの内容を照合し、既にあるジオメトリやテクスチャを再利用します。評価用画像はランタイムの入力から独立しています。
 
 ```powershell

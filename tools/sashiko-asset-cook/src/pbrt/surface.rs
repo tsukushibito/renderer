@@ -43,7 +43,7 @@ impl Material {
     pub(super) fn parse(cmd: &Command<'_>, kind: &str, textures: &Textures) -> Result<Self> {
         if !matches!(
             kind,
-            "coateddiffuse" | "diffusetransmission" | "dielectric" | "diffuse"
+            "coateddiffuse" | "diffusetransmission" | "dielectric" | "diffuse" | "conductor"
         ) {
             return Err(format!("unsupported PBRT material {kind}").into());
         }
@@ -77,6 +77,12 @@ impl Material {
                 .transpose()
         };
         let color = texture("texture reflectance")?;
+        if kind == "conductor"
+            && ((color.is_none() && !cmd.params.contains_key("rgb reflectance"))
+                || cmd.params.contains_key("float eta"))
+        {
+            return Err("conductor requires an explicit reflectance without eta/k".into());
+        }
         let rgb = if let Some(rgb) = cmd.params.get("rgb reflectance") {
             let [r, g, b] = rgb.as_slice() else {
                 return Err("expected RGB reflectance triplet".into());
@@ -175,8 +181,8 @@ impl Materials {
         let color = self.color(out, mat.color.as_deref(), alpha)?;
         let factors = MaterialFactors {
             base_color: [mat.rgb[0], mat.rgb[1], mat.rgb[2], 1.],
-            metallic: 0.,
-            roughness: if mat.kind == "coateddiffuse" {
+            metallic: if mat.kind == "conductor" { 1. } else { 0. },
+            roughness: if matches!(mat.kind.as_str(), "coateddiffuse" | "conductor") {
                 mat.roughness
             } else {
                 1.
@@ -206,6 +212,7 @@ impl Materials {
         };
         let scattering = match mat.kind.as_str() {
             "diffuse" => Scattering::Diffuse,
+            "conductor" => Scattering::Conductor,
             "coateddiffuse" => Scattering::CoatedDiffuse,
             "diffusetransmission" => Scattering::DiffuseTransmission,
             "dielectric" => Scattering::Dielectric,

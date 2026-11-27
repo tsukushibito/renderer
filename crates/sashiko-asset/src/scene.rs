@@ -93,6 +93,7 @@ pub struct InfiniteSky {
 #[derive(Serialize, Deserialize)]
 pub enum Scattering {
     Diffuse,
+    Conductor,
     CoatedDiffuse,
     DiffuseTransmission,
     Dielectric,
