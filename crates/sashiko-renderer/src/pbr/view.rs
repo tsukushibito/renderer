@@ -36,6 +36,9 @@ pub struct Sun {
 }
 
 impl Sun {
+    pub(crate) fn light_basis(self) -> Result<[[f64; 3]; 3], GraphError> {
+        shadow::light_basis(self.direction)
+    }
     pub const OFF: Self = Self {
         direction: [0., 1., 0.],
         rgb_lux: [0.; 3],

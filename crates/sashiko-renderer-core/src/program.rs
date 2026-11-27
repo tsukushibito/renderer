@@ -229,7 +229,10 @@ fn validate_binding_shape(
     for (index, (slot, &bytes)) in bindings.iter().zip(footprints).enumerate() {
         let buffer = matches!(
             slot.kind,
-            BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite
+            BindingType::Uniform
+                | BindingType::StorageRead
+                | BindingType::StorageWrite
+                | BindingType::StorageReadWrite
         );
         if slot.stages.is_empty()
             || !stages.contains(slot.stages)
@@ -350,6 +353,8 @@ pub enum BindingType {
     Uniform,
     StorageRead,
     StorageWrite,
+    /// Compute may read and modify any subset of this already initialized prefix.
+    StorageReadWrite,
     SampledImage,
     /// Read-only typed storage image. The selected View must have this format.
     StorageImageRead(ImageFormat),
@@ -820,8 +825,10 @@ impl ManagedProgram {
     /// shader may access only the declared buffer prefixes and selected image
     /// Views. It must not perform out-of-bounds accesses, races, unsupported
     /// feature-dependent operations, or omit required shader-internal
-    /// synchronization. Storage writes must initialize every declared byte or
-    /// image texel, and no other contents. Aliased read/write bindings are
+    /// synchronization. Write-only slots must initialize every declared byte or
+    /// image texel, and no other contents. Read/write buffer slots may update a
+    /// subset of their declared prefix, including via race-free 32-bit atomics.
+    /// Aliased read/write bindings are
     /// rejected by Graph, but invocation-level race freedom remains a caller
     /// obligation. Only the typed formats supported by the backend are allowed.
     ///
@@ -1140,7 +1147,10 @@ mod tests {
                     seen.push((slot.group, slot.binding));
                     if matches!(
                         kind,
-                        BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite
+                        BindingType::Uniform
+                            | BindingType::StorageRead
+                            | BindingType::StorageWrite
+                            | BindingType::StorageReadWrite
                     ) {
                         assert_eq!(Some(slot.min_size), resource["block_size"].as_u64());
                         let member =

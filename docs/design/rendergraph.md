@@ -127,6 +127,7 @@ D3D12では `windows_core::IUnknown` を受け取り、実際の `ID3D12Resource
 `Graph::dispatch`が各bindingと論理資源を所有し、両runtimeが明示準備したpipelineとdescriptorへ具体化する。
 sampled image ViewとD32のdepth attachmentは画像の用途とformatで区別し、aspectはformatから導出する。
 StorageReadとStorageWriteはStorage資源へのアクセス用途であり、資源作成やbindingだけで内容を初期化しない。
+ComputeのStorageReadWriteは、atomic ORなど元の値を使う更新を表す。Graphは宣言した範囲の全バイトが既に初期化済みであることを要求し、読み書きの両方を依存関係に含める。部分更新だけで未定義のバイトを初期化済みにはできない。
 [管理下Programの契約](vulkan.md#managed-uniform)を参照する。
 
 <a id="owned-shader-bindings"></a>

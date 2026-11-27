@@ -1,0 +1,127 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "comp",
+            "workgroup_size" : [
+                8,
+                8,
+                1
+            ],
+            "workgroup_size_is_spec_constant_id" : [
+                false,
+                false,
+                false
+            ]
+        }
+    ],
+    "types" : {
+        "_4" : {
+            "name" : "type.Camera",
+            "members" : [
+                {
+                    "name" : "world_from_clip",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "eye_distance",
+                    "type" : "vec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "light_x",
+                    "type" : "vec4",
+                    "offset" : 80
+                },
+                {
+                    "name" : "light_y",
+                    "type" : "vec4",
+                    "offset" : 96
+                },
+                {
+                    "name" : "page_origin",
+                    "type" : "ivec4",
+                    "array" : [
+                        8
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 112,
+                    "array_stride" : 16
+                },
+                {
+                    "name" : "depth_plane",
+                    "type" : "vec4",
+                    "offset" : 240
+                },
+                {
+                    "name" : "shadow_bias",
+                    "type" : "vec4",
+                    "offset" : 256
+                }
+            ]
+        },
+        "_8" : {
+            "name" : "type.StructuredBuffer.uint",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uint",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 4
+                }
+            ]
+        }
+    },
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "depth_image",
+            "set" : 0,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "shadow_atlas",
+            "set" : 0,
+            "binding" : 3
+        }
+    ],
+    "images" : [
+        {
+            "type" : "image2D",
+            "name" : "visibility",
+            "set" : 0,
+            "binding" : 4,
+            "format" : "rgba16f"
+        }
+    ],
+    "ssbos" : [
+        {
+            "type" : "_8",
+            "name" : "page_table",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 2
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_4",
+            "name" : "type.Camera",
+            "block_size" : 272,
+            "set" : 0,
+            "binding" : 0
+        }
+    ]
+}

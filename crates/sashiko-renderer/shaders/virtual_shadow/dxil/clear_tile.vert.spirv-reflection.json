@@ -1,0 +1,44 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "vert"
+        }
+    ],
+    "types" : {
+        "_6" : {
+            "name" : "type.StructuredBuffer.v4uint",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uvec4",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 16
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec2",
+            "name" : "in.var.TEXCOORD0",
+            "location" : 0
+        }
+    ],
+    "ssbos" : [
+        {
+            "type" : "_6",
+            "name" : "slots",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 0
+        }
+    ]
+}

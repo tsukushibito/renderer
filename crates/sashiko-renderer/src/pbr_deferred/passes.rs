@@ -252,7 +252,9 @@ fn sample(binding: u32, view: ImageView) -> Binding {
     }
 }
 
-fn inverse_bytes(matrix: [[f32; 4]; 4]) -> Result<[u8; DEFERRED_RECONSTRUCTION_BYTES], GraphError> {
+pub(crate) fn inverse_bytes(
+    matrix: [[f32; 4]; 4],
+) -> Result<[u8; DEFERRED_RECONSTRUCTION_BYTES], GraphError> {
     // Row operations use f64 and partial pivoting. Serialize the inverse in the
     // original column-major convention shared by the two shader binaries.
     let mut rows = std::array::from_fn::<_, 4, _>(|row| {

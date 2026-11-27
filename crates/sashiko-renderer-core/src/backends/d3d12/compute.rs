@@ -135,15 +135,19 @@ pub(super) fn requirements(
     // D3D12 states cover complete buffers. A root UAV cannot coexist with a
     // CBV/SRV state for the same resource, even for disjoint logical byte ranges.
     for access in graph.accesses(pass) {
-        if access.purpose == AccessPurpose::StorageWrite
-            && matches!(
-                graph.resources[access.resource].desc,
-                ResourceDesc::Buffer(_)
-            )
-            && graph.accesses(pass).iter().any(|other| {
-                other.resource == access.resource && other.purpose != AccessPurpose::StorageWrite
-            })
-        {
+        if matches!(
+            access.purpose,
+            AccessPurpose::StorageWrite | AccessPurpose::StorageReadWrite
+        ) && matches!(
+            graph.resources[access.resource].desc,
+            ResourceDesc::Buffer(_)
+        ) && graph.accesses(pass).iter().any(|other| {
+            other.resource == access.resource
+                && !matches!(
+                    other.purpose,
+                    AccessPurpose::StorageWrite | AccessPurpose::StorageReadWrite
+                )
+        }) {
             return Err(D3D12RuntimeError::unsupported(
                 "D3D12 Compute cannot bind one buffer as both UAV and CBV/SRV",
             ));
@@ -210,7 +214,9 @@ pub(super) fn record(
                 slot.buffer_scopes[physical] |= match access.purpose {
                     AccessPurpose::Uniform => D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
                     AccessPurpose::StorageRead => D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                    AccessPurpose::StorageWrite => D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    AccessPurpose::StorageWrite | AccessPurpose::StorageReadWrite => {
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+                    }
                     _ => unreachable!(),
                 };
             }
@@ -262,12 +268,13 @@ pub(super) fn record(
     }
     // Drain all scope scratch before this fallible provenance operation.
     for access in graph.data().accesses(pass) {
-        if access.purpose == AccessPurpose::StorageWrite
-            && matches!(
-                graph.data().resources[access.resource].desc,
-                ResourceDesc::Buffer(_)
-            )
-            && slot.provenance_needed[access.resource]
+        if matches!(
+            access.purpose,
+            AccessPurpose::StorageWrite | AccessPurpose::StorageReadWrite
+        ) && matches!(
+            graph.data().resources[access.resource].desc,
+            ResourceDesc::Buffer(_)
+        ) && slot.provenance_needed[access.resource]
         {
             slot.provenance[slot.resource_map[access.resource]]
                 .clear_range(access.range.clone())
@@ -322,7 +329,7 @@ pub(super) fn record(
                         BindingType::StorageRead => slot
                             .list
                             .SetComputeRootShaderResourceView(root as u32, address),
-                        BindingType::StorageWrite => slot
+                        BindingType::StorageWrite | BindingType::StorageReadWrite => slot
                             .list
                             .SetComputeRootUnorderedAccessView(root as u32, address),
                         _ => unreachable!(),

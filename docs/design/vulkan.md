@@ -495,8 +495,8 @@ Graphがbinding、実際のshader stage、アクセス範囲を所有し、runti
 `prepare_compute_programs(&[ManagedProgram])` は明示準備境界で実Deviceのcompute／descriptor上限を確認し、
 pipelineとgroup別set layout、容量付きdescriptorを作る。実際のbindingはoffset alignment、range、format／usageに適合させる。
 通常frameはその容量を借用し、未準備Programや枠不足は型付きエラーで返す。
-Uniformは`std140`の既存ABIを使う。StorageReadとStorageWriteはどちらも`STORAGE_BUFFER`へlowerし、
-storage画像のアクセスは実shader stageと`GENERAL` layoutを使う。形式を宣言するshaderを使い、
+Uniformは`std140`の既存ABIを使う。StorageRead、StorageWrite、StorageReadWriteは`STORAGE_BUFFER`へlowerする。VSMの要求ビットをatomic ORするdispatchではcomputeのstorage readとwriteの両方に同期する。
+Storage画像のアクセスは実shader stageと`GENERAL` layoutを使う。形式を宣言するshaderを使い、
 read/write-without-formatのfeatureを暗黙に要求しない。
 
 safeな入口はレビュー済みの`uniform_readback`、`storage_readback`、`sampled_readback`、

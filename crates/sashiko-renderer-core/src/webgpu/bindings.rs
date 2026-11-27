@@ -125,19 +125,20 @@ impl ProgramLayout {
                             && !is_nonfiltering(pair.sampler_group, pair.sampler_binding)
                     });
                 let ty = match slot.kind {
-                    BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite => {
-                        wgpu::BindingType::Buffer {
-                            ty: if slot.kind == BindingType::Uniform {
-                                wgpu::BufferBindingType::Uniform
-                            } else {
-                                wgpu::BufferBindingType::Storage {
-                                    read_only: slot.kind == BindingType::StorageRead,
-                                }
-                            },
-                            has_dynamic_offset: false,
-                            min_binding_size: NonZeroU64::new(slot.min_size),
-                        }
-                    }
+                    BindingType::Uniform
+                    | BindingType::StorageRead
+                    | BindingType::StorageWrite
+                    | BindingType::StorageReadWrite => wgpu::BindingType::Buffer {
+                        ty: if slot.kind == BindingType::Uniform {
+                            wgpu::BufferBindingType::Uniform
+                        } else {
+                            wgpu::BufferBindingType::Storage {
+                                read_only: slot.kind == BindingType::StorageRead,
+                            }
+                        },
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(slot.min_size),
+                    },
                     BindingType::SampledImage => wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -166,7 +167,9 @@ impl ProgramLayout {
                         limits.min_uniform_buffer_offset_alignment,
                         limits.max_uniform_buffer_binding_size,
                     ),
-                    BindingType::StorageRead | BindingType::StorageWrite => (
+                    BindingType::StorageRead
+                    | BindingType::StorageWrite
+                    | BindingType::StorageReadWrite => (
                         limits.min_storage_buffer_offset_alignment,
                         limits.max_storage_buffer_binding_size,
                     ),

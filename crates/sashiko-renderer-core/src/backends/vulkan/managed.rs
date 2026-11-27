@@ -17,7 +17,9 @@ fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeEr
 pub(super) fn descriptor_type(kind: BindingType) -> vk::DescriptorType {
     match kind {
         BindingType::Uniform => vk::DescriptorType::UNIFORM_BUFFER,
-        BindingType::StorageRead | BindingType::StorageWrite => vk::DescriptorType::STORAGE_BUFFER,
+        BindingType::StorageRead | BindingType::StorageWrite | BindingType::StorageReadWrite => {
+            vk::DescriptorType::STORAGE_BUFFER
+        }
         BindingType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
         BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_) => {
             vk::DescriptorType::STORAGE_IMAGE
@@ -49,7 +51,14 @@ impl ComputePipeline {
             .count() as u32;
         let storage_count = bindings
             .iter()
-            .filter(|b| matches!(b.kind, BindingType::StorageRead | BindingType::StorageWrite))
+            .filter(|b| {
+                matches!(
+                    b.kind,
+                    BindingType::StorageRead
+                        | BindingType::StorageWrite
+                        | BindingType::StorageReadWrite
+                )
+            })
             .count() as u32;
         let group_count = bindings
             .iter()
@@ -96,7 +105,9 @@ impl ComputePipeline {
                 b.min_size
                     > match b.kind {
                         BindingType::Uniform => u64::from(limits.max_uniform_buffer_range),
-                        BindingType::StorageRead | BindingType::StorageWrite => {
+                        BindingType::StorageRead
+                        | BindingType::StorageWrite
+                        | BindingType::StorageReadWrite => {
                             u64::from(limits.max_storage_buffer_range)
                         }
                         BindingType::SampledImage

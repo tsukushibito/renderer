@@ -480,7 +480,10 @@ impl Graph {
             let result = (|| {
                 let operand = match (slot.kind, input.resource) {
                     (
-                        BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite,
+                        BindingType::Uniform
+                        | BindingType::StorageRead
+                        | BindingType::StorageWrite
+                        | BindingType::StorageReadWrite,
                         BindingResource::Buffer {
                             buffer,
                             offset,
@@ -519,6 +522,9 @@ impl Graph {
                             BindingType::Uniform => (true, false, AccessPurpose::Uniform),
                             BindingType::StorageRead => (true, false, AccessPurpose::StorageRead),
                             BindingType::StorageWrite => (false, true, AccessPurpose::StorageWrite),
+                            BindingType::StorageReadWrite => {
+                                (true, true, AccessPurpose::StorageReadWrite)
+                            }
                             _ => unreachable!(),
                         };
                         self.append_binding_access(
@@ -527,6 +533,8 @@ impl Graph {
                                 range: offset..end,
                                 read,
                                 write,
+                                // A read/write slot requires the complete prior prefix.
+                                // Untouched bytes therefore also remain valid afterwards.
                                 initializes: write,
                                 discard_after: false,
                                 purpose,
@@ -951,7 +959,10 @@ mod tests {
             for (slot, &bytes) in program.bindings().iter().zip(contract.bytes) {
                 assert_eq!(slot.stages, crate::program::ShaderStages::COMPUTE);
                 match slot.kind {
-                    BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite => {
+                    BindingType::Uniform
+                    | BindingType::StorageRead
+                    | BindingType::StorageWrite
+                    | BindingType::StorageReadWrite => {
                         assert!(bytes > 0 && bytes <= slot.min_size)
                     }
                     BindingType::SampledImage
@@ -959,6 +970,58 @@ mod tests {
                     | BindingType::StorageImageWrite(_)
                     | BindingType::Sampler => assert_eq!(bytes, 0),
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn partial_atomic_updates_require_the_entire_prior_prefix() {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        for initialized in [4, 8] {
+            let mut graph = pool.begin().unwrap();
+            let buffer = graph
+                .buffer("page requests", BufferDesc { size: 8 })
+                .unwrap();
+            graph
+                .upload_buffer("clear", buffer, 0, &[0; 8][..initialized])
+                .unwrap();
+            let layout = [BindingLayout {
+                group: 0,
+                binding: 0,
+                kind: BindingType::StorageReadWrite,
+                stages: crate::program::ShaderStages::COMPUTE,
+                min_size: 8,
+            }];
+            let binding = [Binding {
+                group: 0,
+                binding: 0,
+                resource: BindingResource::Buffer {
+                    buffer,
+                    offset: 0,
+                    size: 8,
+                },
+            }];
+            graph
+                .build_pass("mark", |graph| {
+                    let first = graph.data().accesses.len();
+                    graph.append_bindings(&layout, &[8], &binding, None)?;
+                    Ok((
+                        Operation::Declared(crate::graph::PassKind::Compute),
+                        first..graph.data().accesses.len(),
+                        false,
+                    ))
+                })
+                .unwrap();
+            graph.readback_buffer("result", buffer, 0, 8).unwrap();
+            let plan = graph.compile();
+            if initialized == 8 {
+                assert!(
+                    plan.unwrap()
+                        .ordered_pass_names()
+                        .eq(["clear", "mark", "result"])
+                );
+            } else {
+                assert_eq!(plan.unwrap_err().kind(), GraphErrorKind::UninitializedRead);
             }
         }
     }

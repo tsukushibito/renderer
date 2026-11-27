@@ -63,12 +63,16 @@ fn root_descriptors_and_tables_follow_manifest_registers_and_weighted_budget() {
         unsafe {
             if matches!(
                 slot.kind,
-                BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite
+                BindingType::Uniform
+                    | BindingType::StorageRead
+                    | BindingType::StorageWrite
+                    | BindingType::StorageReadWrite
             ) {
                 assert_eq!(
                     parameter.ParameterType,
                     match slot.kind {
-                        BindingType::StorageWrite => D3D12_ROOT_PARAMETER_TYPE_UAV,
+                        BindingType::StorageWrite | BindingType::StorageReadWrite =>
+                            D3D12_ROOT_PARAMETER_TYPE_UAV,
                         BindingType::Uniform => D3D12_ROOT_PARAMETER_TYPE_CBV,
                         BindingType::StorageRead => D3D12_ROOT_PARAMETER_TYPE_SRV,
                         _ => unreachable!(),

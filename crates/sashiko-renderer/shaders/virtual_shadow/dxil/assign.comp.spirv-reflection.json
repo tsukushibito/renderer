@@ -1,0 +1,80 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "comp",
+            "workgroup_size" : [
+                64,
+                1,
+                1
+            ],
+            "workgroup_size_is_spec_constant_id" : [
+                false,
+                false,
+                false
+            ]
+        }
+    ],
+    "types" : {
+        "_4" : {
+            "name" : "type.StructuredBuffer.uint",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uint",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 4
+                }
+            ]
+        },
+        "_7" : {
+            "name" : "type.RWStructuredBuffer.uint",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uint",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 4
+                }
+            ]
+        }
+    },
+    "ssbos" : [
+        {
+            "type" : "_4",
+            "name" : "requests",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 0
+        },
+        {
+            "type" : "_4",
+            "name" : "counts",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 1
+        },
+        {
+            "type" : "_7",
+            "name" : "table",
+            "writeonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 2
+        }
+    ]
+}

@@ -3,6 +3,7 @@
 pub mod bloom;
 pub mod output;
 pub mod pbr;
+pub mod virtual_shadow;
 pub mod visibility;
 
 use std::borrow::Borrow;

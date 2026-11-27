@@ -190,6 +190,17 @@ fn slice_sphere(view: ViewInput, start: f64, end: f64) -> ([f64; 3], f64) {
     (add_scaled(position, center, 1.0), radius_squared.sqrt())
 }
 
+pub(crate) fn light_basis(direction_to_light: [f32; 3]) -> Result<[[f64; 3]; 3], GraphError> {
+    let z = normalize(direction_to_light.map(f64::from))?;
+    let up = if z[1].abs() < 0.99 {
+        [0., 1., 0.]
+    } else {
+        [0., 0., 1.]
+    };
+    let x = normalize(cross(up, z))?;
+    Ok([x, cross(z, x), z])
+}
+
 /// Calculate four immutable shadow cameras using only stack-sized workspaces.
 ///
 /// `direction_to_light` has the same meaning as the PBR sun vector. Geometry
@@ -207,14 +218,7 @@ pub(super) fn calculate(
             "shadow distance must exceed the camera near plane",
         ));
     }
-    let light_z = normalize(direction_to_light.map(f64::from))?;
-    let reference_up = if light_z[1].abs() < 0.99 {
-        [0.0, 1.0, 0.0]
-    } else {
-        [0.0, 0.0, 1.0]
-    };
-    let light_x = normalize(cross(reference_up, light_z))?;
-    let light_y = cross(light_z, light_x);
+    let [light_x, light_y, light_z] = light_basis(direction_to_light)?;
     let mut minimum_z = f64::INFINITY;
     let mut maximum_z = f64::NEG_INFINITY;
     for corner in bounds.corners() {

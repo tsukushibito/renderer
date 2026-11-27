@@ -1,0 +1,72 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; no parameters
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; no parameters
+; shader hash: d5806580987f65be147a276fd226381a
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Compute Shader
+; NumThreads=(8,8,1)
+; NumBytesGroupSharedMemory: 0
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 0
+; SigOutputElements: 0
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 0
+; SigOutputVectors[0]: 0
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Buffer Definitions:
+;
+; cbuffer Camera
+; {
+;
+;   struct hostlayout.Camera
+;   {
+;
+;       row_major float4x4 world_from_clip;           ; Offset:    0
+;       float4 eye_distance;                          ; Offset:   64
+;       float4 light_x;                               ; Offset:   80
+;       float4 light_y;                               ; Offset:   96
+;       int4 page_origin[8];                          ; Offset:  112
+;       float4 depth_plane;                           ; Offset:  240
+;       float4 shadow_bias;                           ; Offset:  256
+;
+;   } Camera;                                         ; Offset:    0 Size:   272
+;
+; }
+;
+; Resource bind info for page_table
+; {
+;
+;   uint $Element;                                    ; Offset:    0 Size:     4
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; Camera                            cbuffer      NA          NA     CB0            cb0     1
+; depth_image                       texture     f32          2d      T0             t1     1
+; page_table                        texture  struct         r/o      T1             t2     1
+; shadow_atlas                      texture     f32          2d      T2             t3     1
+; visibility                            UAV     f32          2d      U0             u4     1
+;
