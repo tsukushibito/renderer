@@ -25,6 +25,17 @@ impl MaterialSlot {
 }
 
 impl MeshBlob {
+    pub(crate) fn local_bounds(&self) -> PipelineResult<sashiko_renderer::pbr::Bounds> {
+        let mut min = glam::Vec3::splat(f32::INFINITY);
+        let mut max = -min;
+        for vertex in &self.vertices {
+            let position = glam::Vec3::from(vertex.position);
+            min = min.min(position);
+            max = max.max(position);
+        }
+        Ok(sashiko_renderer::pbr::Bounds::new(min.into(), max.into())?)
+    }
+
     pub fn mesh_data(&self) -> PipelineResult<MeshData> {
         let vertices = self
             .vertices

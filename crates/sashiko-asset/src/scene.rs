@@ -12,6 +12,10 @@ pub use display::DisplayScene;
 mod optics;
 #[cfg(feature = "renderer")]
 pub use optics::{FilmProjection, FilmRay, SkyRadiance};
+#[cfg(feature = "renderer")]
+mod spatial;
+#[cfg(feature = "renderer")]
+pub use spatial::{PlacementVisibility, SceneSpatialIndex};
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

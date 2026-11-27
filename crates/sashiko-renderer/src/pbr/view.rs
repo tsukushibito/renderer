@@ -9,6 +9,25 @@ use sashiko_renderer_core::graph::GraphError;
 pub use input::{Projection, ViewInput};
 pub use shadow::{Bounds, ShadowSettings};
 
+impl ViewInput {
+    /// The same conservative frustum and cascade clips used during drawing.
+    pub fn culling(
+        self,
+        bounds: Bounds,
+        sun: Sun,
+        settings: Option<ShadowSettings>,
+    ) -> Result<super::ViewCulling, GraphError> {
+        let cascades = settings
+            .map(|s| shadow::calculate(self, sun.direction, bounds, s))
+            .transpose()?;
+        Ok(super::ViewCulling::new(
+            self.matrix,
+            cascades.as_ref().map(|s| &s.matrices),
+            bounds,
+        ))
+    }
+}
+
 /// Directional light pointing from the scene toward the sun, with normal-incidence RGB illuminance in lux.
 #[derive(Clone, Copy, Debug)]
 pub struct Sun {

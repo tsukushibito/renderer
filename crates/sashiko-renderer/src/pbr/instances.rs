@@ -107,6 +107,32 @@ impl Transform {
             .map(|[x, y, z, _]| x * n[0] + y * n[1] + z * n[2])
     }
 
+    /// Enclose the transformed mesh, including FP32 vertex arithmetic error.
+    /// Overflow returns `None` so a culler can conservatively retain the draw.
+    pub fn bounds(self, local: super::Bounds) -> Option<super::Bounds> {
+        let min = local.min().map(f64::from);
+        let max = local.max().map(f64::from);
+        let mut lower = [0.; 3];
+        let mut upper = [0.; 3];
+        for (row, coefficients) in self.model.iter().enumerate() {
+            let translation = f64::from(coefficients[3]);
+            let mut lo = translation;
+            let mut hi = translation;
+            let mut magnitude = translation.abs();
+            for col in 0..3 {
+                let a = f64::from(coefficients[col]) * min[col];
+                let b = f64::from(coefficients[col]) * max[col];
+                lo += a.min(b);
+                hi += a.max(b);
+                magnitude += a.abs().max(b.abs());
+            }
+            let margin = magnitude * 8. * f64::from(f32::EPSILON) + f64::from(f32::MIN_POSITIVE);
+            lower[row] = ((lo - margin) as f32).next_down();
+            upper[row] = ((hi + margin) as f32).next_up();
+        }
+        super::Bounds::new(lower, upper).ok()
+    }
+
     pub fn columns(self) -> [[f32; 4]; 4] {
         std::array::from_fn(|col| {
             [

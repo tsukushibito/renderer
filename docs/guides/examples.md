@@ -85,6 +85,15 @@ python tools/landscape/check_ibl.py build/full-package
 
 幾何を含めたフィルム撮影は `scene-viewer <package> <view> --film N linear.exr display.png` で実行します。解像度、開口半径、焦点距離、ISO、白色点はビューの値を使います。N=1 はレンズと画素の中心、N>1 は開口と画素内をサンプリングし、線形値の平均から両方の出力を保存します。
 
+全景パッケージの一部だけを原寸で撮影する場合は、左上を原点として `x,y,幅,高さ` を指定します。次の草地の例では、元の4Kフィルム上で画素とレンズ位置をサンプリングし、いずれかのサンプルか有効な影カスケードに入る配置だけをGPUに登録します。
+
+```powershell
+target/release/scene-viewer.exe build/full-package view-0 --film-crop 8 930,1340,64,64 build/grass.exr build/grass.png
+target/release/scene-viewer.exe build/full-package view-0 --visibility
+```
+
+`--visibility` はカメラと方向光4カスケードの候補数・三角形数をJSONで出力します。方向光が0 luxのシーンでも、診断では同じ方向と距離で影の候補を数えます。実描画ではこの光の影パスを省きます。
+
 光量・反射方向と焦点面を独立に検査するには次を実行します。PBRT v4 の実行ファイルを `pbrt` として指定しています。
 
 ```powershell
