@@ -78,6 +78,7 @@ pub struct DisplayScene {
     environment: Option<Environment<BlobRef>>,
     environment_maps: Option<EnvironmentMaps>,
     environment_images: Vec<ManagedImage>,
+    filter_backdrop: bool,
     film: Option<(FilmProjection, InfiniteSky, glam::Mat3)>,
     sky_image: Option<ManagedImage>,
     pub settings: SceneSettings,
@@ -209,10 +210,12 @@ impl DisplayScene {
         };
         let pose = *scene.view(view)?;
         let camera = pose.camera(extent, [0.02, 1500.])?;
-        let film = scene
+        let physical_film = scene
             .physical
             .take()
-            .and_then(|mut p| p.cameras.remove(view).zip(p.sky))
+            .and_then(|mut p| p.cameras.remove(view).zip(p.sky));
+        let filter_backdrop = physical_film.is_none() && scene.backdrop.is_some();
+        let film = physical_film
             .or_else(|| {
                 scene.backdrop.take().map(|sky| {
                     (
@@ -326,6 +329,7 @@ impl DisplayScene {
             environment: scene.environment,
             environment_maps: None,
             environment_images: Vec::new(),
+            filter_backdrop,
             film,
             sky_image: None,
             settings,
@@ -438,7 +442,13 @@ impl DisplayScene {
         if let (Some((projection, sky, matrix)), Some(image)) = (&self.film, &self.sky_image) {
             frame.draw_film(
                 self.input(),
-                projection.output(image.snapshot(), *matrix, sky.scale, frame.scene_view()),
+                projection.output(
+                    image.snapshot(),
+                    *matrix,
+                    sky.scale,
+                    self.filter_backdrop,
+                    frame.scene_view(),
+                ),
             )?;
         } else {
             frame.draw_scene(self.input(), 1.)?;

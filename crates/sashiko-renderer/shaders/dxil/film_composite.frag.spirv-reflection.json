@@ -6,7 +6,7 @@
         }
     ],
     "types" : {
-        "_8" : {
+        "_10" : {
             "name" : "type.ConstantBuffer.FilmParameters",
             "members" : [
                 {
@@ -63,9 +63,17 @@
             "binding" : 1
         }
     ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "sky_linear",
+            "set" : 0,
+            "binding" : 2
+        }
+    ],
     "push_constants" : [
         {
-            "type" : "_8",
+            "type" : "_10",
             "name" : "film",
             "push_constant" : true
         }

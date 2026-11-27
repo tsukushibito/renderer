@@ -12,9 +12,13 @@ pub struct FilmOutput<'a> {
     pub ray_corner: [f32; 3],
     pub ray_step_x: [f32; 3],
     pub ray_step_y: [f32; 3],
+    /// Interpolate the visible backdrop; physical image lights use nearest texels.
+    pub filter_backdrop: bool,
     pub light_scale: f32,
     pub sensor: [[f32; 3]; 3],
 }
+
+pub(crate) const BACKDROP_SAMPLER: SamplerDescriptor = SamplerDescriptor::LinearClamp;
 
 pub(crate) fn film_composite(
     graph: &mut Graph,
@@ -36,6 +40,11 @@ pub(crate) fn film_composite(
             binding: 1,
             resource: BindingResource::ImageView(sky),
         },
+        Binding {
+            group: 0,
+            binding: 2,
+            resource: BindingResource::Sampler(BACKDROP_SAMPLER),
+        },
     ];
     let rows = [
         film.ray_corner,
@@ -50,6 +59,7 @@ pub(crate) fn film_composite(
         dst[..3].copy_from_slice(&src.map(f32::to_bits));
     }
     words[3] = film.light_scale.to_bits();
+    words[7] = f32::from(u8::from(film.filter_backdrop)).to_bits();
     let parameters = RasterConstants::new(&words)?;
     graph.raster(
         name,

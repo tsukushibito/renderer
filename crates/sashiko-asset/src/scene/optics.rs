@@ -164,6 +164,7 @@ impl FilmProjection {
         sky: &'a sashiko_renderer::core::graph::ImportImage,
         light_from_world: Mat3,
         scale: f32,
+        filter_backdrop: bool,
         view: &sashiko_renderer::pipeline::CameraView,
     ) -> sashiko_renderer::passes::output::FilmOutput<'a> {
         // Unproject the frame's actual projection, including a moved camera,
@@ -179,6 +180,7 @@ impl FilmProjection {
         sashiko_renderer::passes::output::FilmOutput {
             sky,
             light_scale: scale,
+            filter_backdrop,
             ray_corner: corner.into(),
             ray_step_x: dx.into(),
             ray_step_y: dy.into(),

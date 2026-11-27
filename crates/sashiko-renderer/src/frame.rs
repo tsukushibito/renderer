@@ -171,6 +171,9 @@ impl Renderer {
         };
         let prep = plan.preparation_mut();
         prep.reserve_sampler(canvas::IMAGE_SAMPLER);
+        if config.film_output {
+            prep.reserve_sampler(output::BACKDROP_SAMPLER);
+        }
         prep.reserve_sampler(output::TONE_MAP_SAMPLER);
         prep.reserve_sampler(destination.encoding().sampler());
         prep.reserve_transient_image(LINEAR, ImageDesc::rgba16_float(w, h))?;

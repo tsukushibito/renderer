@@ -12,7 +12,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: cb6d647f2ed4f11f1684642f09a27de5
+; shader hash: 3323c8032d596dd7787b1fcd0892f87c
 ;
 ; Pipeline Runtime Information:
 ;
@@ -77,6 +77,7 @@
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
 ; film                              cbuffer      NA          NA     CB0            cb7     1
+; sky_linear                        sampler      NA          NA      S0             s2     1
 ; scene                             texture     f32          2d      T0             t0     1
 ; sky                               texture     f32          2d      T1             t1     1
 ;

@@ -16,7 +16,7 @@ pub(super) const fn tone_map_neutral() -> ManagedRasterProgram {
 }
 
 pub(crate) const fn film_composite() -> ManagedRasterProgram {
-    // SAFETY: The reviewed fullscreen fragment loads two 2D color images
+    // SAFETY: The reviewed fullscreen fragment reads two 2D color images, one sky sampler
     // and six float4 constants; it writes a single display-linear HDR target.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&FILM_COMPOSITE) }
 }
@@ -127,10 +127,23 @@ static FILM_COMPOSITE: RasterProgramDescriptor = RasterProgramDescriptor {
             min_size: 0,
             stages: ShaderStages::FRAGMENT,
         },
+        BindingLayout {
+            group: 0,
+            binding: 2,
+            kind: BindingType::Sampler,
+            min_size: 0,
+            stages: ShaderStages::FRAGMENT,
+        },
     ],
-    sampling_pairs: &[],
+    binding_bytes: &[0, 0, 0],
+    sampling_pairs: &[SampledImageSamplerPair {
+        image_group: 0,
+        image_binding: 1,
+        sampler_group: 0,
+        sampler_binding: 2,
+    }],
     shaders: fullscreen_triangle_shaders(
-        packaged_shaders!(module:"film_composite.frag",folder:"",nonfiltering:&[(0,0),(0,1)]),
+        packaged_shaders!(module:"film_composite.frag",folder:"",nonfiltering:&[(0,0)]),
         Some(sashiko_renderer_core::program::D3D12InlineConstantBinding {
             register: 7,
             space: 0,
