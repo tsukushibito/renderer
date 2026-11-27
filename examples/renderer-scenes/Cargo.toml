@@ -48,7 +48,7 @@ wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", optional = true, features = ["Window", "Response", "Url", "Location", "HtmlCanvasElement"] }
 
 [dependencies]
-sashiko-asset = { path = "../../crates/sashiko-asset", optional = true }
+sashiko-asset = { version = "0.1.0", path = "../../crates/sashiko-asset", optional = true }
 gltf = { version = "1.4.1", default-features = false, features = ["utils"], optional = true }
 png = { version = "0.18", optional = true }
 half = { version = "2.7.1", optional = true }
