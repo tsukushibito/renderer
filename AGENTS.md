@@ -174,6 +174,9 @@ This repository uses **Beads (`bd`)** for issue tracking. Read
 
 # Documentation
 
+- Reserve `.tools/` for locally installed third-party tools and their bundled
+  dependencies. Put one-off scripts and captures alongside the task outputs.
+  Keep reusable project scripts in version control under `tools/`.
 - Put new task-specific generated files under `build/tasks/<beads-id>/` in
   the working checkout. Reuse `target/` for Cargo builds. Keep outputs for
   open or paused work, including background jobs that outlive a session.
