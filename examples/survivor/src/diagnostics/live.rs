@@ -1,10 +1,11 @@
 use super::{
     Evidence,
+    history::History,
     video::{self, Sample, Video},
 };
 use sashiko::inspect::{
     Event, EventSchema, Field, Journal, Kind, Object, Schema, Session, StdioPort, Value, World,
-    jobs::{Action, Capabilities, CaptureRequest, Jobs, RenderLayers, Status, Ticket},
+    jobs::{Action, Capabilities, CaptureRequest, Jobs, RenderLayers, Status, Ticket, Trigger},
     picking::{PickView, Pointer},
     report::Outcome,
 };
@@ -83,6 +84,8 @@ pub(crate) struct LiveWorld {
     next_input: Input,
     last_events: Events,
     velocity: sashiko::math::Vec2,
+    damage_trigger: Option<(u64, u64)>,
+    detect_damage: bool,
 }
 
 impl World for LiveWorld {
@@ -147,6 +150,12 @@ impl World for LiveWorld {
         self.evidence.observe(&self.game, input, events);
         let player = self.evidence.ids.player;
         if let Some(damage) = events.damage {
+            if self.detect_damage && self.damage_trigger.is_none() {
+                self.damage_trigger = Some((
+                    self.game.tick,
+                    self.evidence.origin.elapsed().as_nanos() as u64,
+                ));
+            }
             journal.emit(Event {
                 kind: "damage",
                 subject: player,
@@ -175,6 +184,7 @@ impl LiveWorld {
 /// The original game remains the owner of simulation state; all three controls
 /// advance this same Session and publish the same job status.
 pub(crate) struct Live {
+    history: Option<History>,
     layers: RenderLayers,
     pending_view: PickView,
     session: Session<LiveWorld>,
@@ -198,12 +208,19 @@ impl Live {
         mut evidence: Evidence,
         root: &Path,
         stdio: bool,
+        clip_history: bool,
     ) -> PipelineResult<Self> {
         std::fs::create_dir_all(root)?;
         let encoder = video::probe();
+        if clip_history && encoder.is_none() {
+            return Err("clip history needs a Python FFV1 encoder (SASHIKO_VIDEO_PYTHON)".into());
+        }
         let mut actions = vec![Action::Report, Action::SetLayers];
         if encoder.is_some() {
             actions.extend([Action::StartVideo, Action::StopVideo]);
+        }
+        if clip_history {
+            actions.push(Action::Clip);
         }
         let origin = evidence.origin;
         let capabilities = Capabilities {
@@ -226,6 +243,8 @@ impl Live {
             next_input: Input::default(),
             last_events: Events::default(),
             velocity: sashiko::math::Vec2::ZERO,
+            damage_trigger: None,
+            detect_damage: clip_history,
         })
         .with_jobs(Jobs::new(capabilities, 16.try_into()?));
         session.set_paused(false);
@@ -233,6 +252,7 @@ impl Live {
         let (send, done) = mpsc::channel();
         Ok(Self {
             layers: RenderLayers::default(),
+            history: clip_history.then(History::new),
             pending_view: PickView::new("main", survivor::MAX_ENEMIES + 1),
             session,
             port: stdio.then(StdioPort::open),
@@ -289,6 +309,7 @@ impl Live {
         &mut self,
         manual: bool,
         toggle_video: bool,
+        clip: bool,
         extent: [u32; 2],
     ) -> PipelineResult<()> {
         if self
@@ -300,7 +321,22 @@ impl Live {
             self.session.set_paused(false);
         }
         let tick = self.game().tick;
+        if self.capture.is_none() {
+            self.finish_clip(false)?;
+        }
+        if let Some((t, ns)) = self.session.world_mut().damage_trigger.take() {
+            self.enqueue_trigger(Trigger::Gameplay, t, ns);
+        }
+        if clip {
+            self.trigger_now(Trigger::Manual);
+        }
         while let Ok((id, status)) = self.done.try_recv() {
+            if matches!(status, Status::Failed { .. })
+                && self.session.jobs().unwrap().action(id) != Some(Action::Clip)
+                && self.history.is_some()
+            {
+                self.trigger_now(Trigger::Warning);
+            }
             if matches!(status, Status::Failed { .. })
                 && self.video.as_ref().is_some_and(|v| v.id == id)
             {
@@ -350,6 +386,22 @@ impl Live {
         {
             let id = ticket.id;
             let status = match ticket.request.action {
+                Action::Clip => {
+                    let ns = ticket
+                        .request
+                        .raised_ns
+                        .unwrap_or_else(|| self.origin.elapsed().as_nanos() as u64);
+                    self.history
+                        .as_mut()
+                        .ok_or("clip history disabled")?
+                        .trigger(
+                            id,
+                            ticket.request.trigger.unwrap_or(Trigger::Manual),
+                            ticket.requested_tick,
+                            ns,
+                            self.session.session_id(),
+                        )
+                }
                 Action::SetLayers => {
                     self.layers = ticket.request.layers.ok_or("missing requested layers")?;
                     Status::Applied
@@ -393,12 +445,44 @@ impl Live {
         }
         Ok(())
     }
+    fn enqueue_trigger(&mut self, cause: Trigger, tick: u64, ns: u64) {
+        let mut request = CaptureRequest::new(Action::Clip);
+        request.trigger = Some(cause);
+        request.raised_ns = Some(ns);
+        if let Err(reason) = self.session.jobs().unwrap().submit(tick, request) {
+            eprintln!("clip trigger {cause:?}: {reason}");
+        }
+    }
+    fn trigger_now(&mut self, cause: Trigger) {
+        self.enqueue_trigger(
+            cause,
+            self.game().tick,
+            self.origin.elapsed().as_nanos() as u64,
+        );
+    }
+    pub fn frame_time_trigger(&mut self) {
+        self.trigger_now(Trigger::FrameTime);
+    }
+    fn finish_clip(&mut self, closing: bool) -> PipelineResult<()> {
+        if let Some(history) = &mut self.history {
+            history.finish_due(
+                self.origin.elapsed().as_nanos().try_into()?,
+                closing,
+                &self.root,
+                &self.session.world().evidence,
+                self.encoder.as_ref().ok_or("clip encoder unavailable")?,
+                &self.send,
+            )?;
+        }
+        Ok(())
+    }
     pub(crate) fn draw(
         &mut self,
         renderer: &mut WindowRenderer,
         draw: impl FnOnce(&mut sashiko_renderer::Frame<'_>, &Game) -> PipelineResult<()>,
     ) -> PipelineResult<sashiko_renderer::core::PresentOutcome> {
         self.collect(renderer)?;
+        self.finish_clip(false)?;
         if self.stop_job.is_some() && self.capture.is_none() {
             self.finishing = Some(
                 self.video
@@ -419,7 +503,8 @@ impl Live {
         let ns = time.as_nanos().try_into()?;
         let for_video = self.stop_job.is_none() && self.video.as_ref().is_some_and(|v| v.due(ns));
         let still = self.waiting.is_some() && self.worker.is_none();
-        let capturing = (still || for_video) && renderer.capture_available();
+        let for_history = self.history.as_ref().is_some_and(|h| h.due(ns));
+        let capturing = (still || for_video || for_history) && renderer.capture_available();
         let plane = if still
             && self
                 .waiting
@@ -486,18 +571,21 @@ impl Live {
                     },
                     report,
                 ));
-            } else if for_video {
+            } else if for_video || for_history {
                 let tick = self.game().tick;
-                self.video.as_mut().unwrap().accept(
-                    Sample {
-                        frame: tag,
-                        layers: self.layers,
-                        tick,
-                        ns,
-                        source: [0, 0],
-                    },
-                    None,
-                );
+                let sample = Sample {
+                    frame: tag,
+                    layers: self.layers,
+                    tick,
+                    ns,
+                    source: [0, 0],
+                };
+                if for_video {
+                    self.video.as_mut().unwrap().accept(sample, None);
+                }
+                if for_history {
+                    self.history.as_mut().unwrap().accept(sample, None);
+                }
             }
         }
         if matches!(
@@ -523,6 +611,12 @@ impl Live {
             return Err("capture submission identity mismatch".into());
         }
         sample.source = image.extent;
+        if let Some(history) = &mut self.history {
+            history.accept(
+                sample,
+                (image.plane == CapturePlane::DisplayColor).then_some(image.bytes),
+            );
+        }
         if let Some(v) = &mut self.video {
             v.accept(
                 sample,
@@ -599,6 +693,41 @@ impl Live {
         if let Some(worker) = self.worker.take() {
             worker.join().map_err(|_| "report worker panicked")?;
         }
+        // A fixed update can raise a trigger just before the host stops drawing.
+        if let Some((t, ns)) = self.session.world_mut().damage_trigger.take() {
+            self.enqueue_trigger(Trigger::Gameplay, t, ns);
+        }
+        while let Some(ticket) = self.session.jobs().unwrap().take() {
+            let status = if ticket.request.action == Action::Clip {
+                self.history
+                    .as_mut()
+                    .ok_or("clip history disabled")?
+                    .trigger(
+                        ticket.id,
+                        ticket.request.trigger.unwrap_or(Trigger::Manual),
+                        ticket.requested_tick,
+                        ticket
+                            .request
+                            .raised_ns
+                            .unwrap_or_else(|| self.origin.elapsed().as_nanos() as u64),
+                        self.session.session_id(),
+                    )
+            } else {
+                Status::Failed {
+                    reason: "session ended before requested operation".into(),
+                }
+            };
+            self.session.jobs().unwrap().update(ticket.id, status)?;
+        }
+        if let Some(ticket) = self.waiting.take() {
+            self.session.jobs().unwrap().update(
+                ticket.id,
+                Status::Failed {
+                    reason: "session ended before next draw".into(),
+                },
+            )?;
+        }
+        self.finish_clip(true)?;
         if let Some(v) = self.video.take() {
             self.finishing =
                 Some(v.stop(self.session.world().evidence.clone(), self.stop_job.take()));

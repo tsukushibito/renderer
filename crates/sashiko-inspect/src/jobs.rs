@@ -12,6 +12,16 @@ pub enum Action {
     SetLayers,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Trigger {
+    Manual,
+    Gameplay,
+    Warning,
+    FrameTime,
+    TestFailure,
+}
+
 /// The host applies these switches to its displayed view at a frame boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -43,6 +53,10 @@ pub struct CaptureRequest {
     pub extent: Option<[u32; 2]>,
     pub fps: Option<u32>,
     pub layers: Option<RenderLayers>,
+    pub trigger: Option<Trigger>,
+    /// Host monotonic time for internally generated triggers.
+    #[serde(skip)]
+    pub raised_ns: Option<u64>,
 }
 
 fn main_view() -> String {
@@ -61,6 +75,8 @@ impl CaptureRequest {
             extent: None,
             fps: None,
             layers: None,
+            trigger: None,
+            raised_ns: None,
         }
     }
 }
@@ -81,6 +97,7 @@ pub enum Status {
     Running { phase: &'static str },
     Complete { artifact: String },
     Applied,
+    Linked { job: String },
     Partial { artifact: String, reason: String },
     Failed { reason: String },
 }
@@ -89,12 +106,17 @@ impl Status {
     fn terminal(&self) -> bool {
         matches!(
             self,
-            Self::Complete { .. } | Self::Partial { .. } | Self::Failed { .. } | Self::Applied
+            Self::Complete { .. }
+                | Self::Partial { .. }
+                | Self::Failed { .. }
+                | Self::Applied
+                | Self::Linked { .. }
         )
     }
 }
 
 struct Entry {
+    action: Action,
     id: u64,
     tick: u64,
     request: Option<CaptureRequest>,
@@ -141,6 +163,9 @@ impl Jobs {
         if (request.action == Action::SetLayers) != request.layers.is_some() {
             return Err("BAD_REQUEST");
         }
+        if request.trigger.is_some() && request.action != Action::Clip {
+            return Err("BAD_REQUEST");
+        }
         if request.stage == "scene_depth_d32" && request.action != Action::Report {
             return Err("UNSUPPORTED");
         }
@@ -160,6 +185,7 @@ impl Jobs {
             self.entries.remove(index);
         }
         self.entries.push_back(Entry {
+            action: request.action,
             id,
             tick,
             request: Some(request),
@@ -187,6 +213,9 @@ impl Jobs {
             .find(|e| e.id == id)
             .map(|e| &e.status)
             .ok_or("UNKNOWN_JOB")
+    }
+    pub fn action(&self, id: u64) -> Option<Action> {
+        self.entries.iter().find(|e| e.id == id).map(|e| e.action)
     }
 
     pub fn update(&mut self, id: u64, status: Status) -> Result<(), &'static str> {

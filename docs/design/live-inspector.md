@@ -189,6 +189,21 @@ Windows では `cargo run -p survivor --features diagnostics -- --debug-dir repo
 resize 時は次の表示成功まで選択範囲を失効させる。選択済み個体が消滅した後の
 `selected` は元の ID と `OBJECT_GONE` を返す。
 
+### 前後クリップ
+
+`--debug-dir reports --clip-history` で 160×90・10 fps の RGB 履歴を準備する。
+F10 または `{"action":"clip","trigger":"test_failure"}` の要求で、最初のトリガーを
+含む 100 ms 枠を中心に前 50 枠、後 20 枠を採る。プレイヤーへのダメージ、報告の
+書き込み失敗もトリガーになる。`--clip-frame-ms 50` を追加すると表示間隔が 50 ms
+を超えたときに採取する。同じ区間への要求は最初のジョブを指す `linked` を返し、
+終了時刻を延長せず、原因別の件数と最初・最後の tick と時刻を記録する。
+
+画素履歴は 71 枠（3,067,200 バイト）。書き出し時に対象枠を一度複製し、一つの
+ワーカーが FFV1 とフレーム対応表を保存する。その間も履歴を更新する。新たな
+書き出しを受け付けられない場合はジョブが失敗理由を返す。起動前、描画なし、
+読み戻し待ち、途中終了の不足は manifest の `clip_sample` の区間に残る。映像が
+一枚もなくてもトリガー・入力・イベントの報告を保存する。
+
 ### 表示レイヤーと深度
 
 Survivor の `--debug-dir` 実行で `hello.diagnostics` にビュー、採取段階、切替可能な

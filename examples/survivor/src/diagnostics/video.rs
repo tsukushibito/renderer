@@ -88,9 +88,9 @@ pub(super) fn sample_rgb(
     }
 }
 
-struct Encoder(Child);
+pub(super) struct Encoder(Child);
 impl Encoder {
-    fn open(python: &OsString, path: &Path, extent: [u32; 2], fps: u32) -> Result<Self> {
+    pub(super) fn open(python: &OsString, path: &Path, extent: [u32; 2], fps: u32) -> Result<Self> {
         Ok(Self(
             Command::new(python)
                 .args(["-c", SCRIPT])
@@ -105,13 +105,13 @@ impl Encoder {
                 .spawn()?,
         ))
     }
-    fn frame(&mut self, pts: u64, pixels: &[u8]) -> Result<()> {
+    pub(super) fn frame(&mut self, pts: u64, pixels: &[u8]) -> Result<()> {
         let input = self.0.stdin.as_mut().ok_or("encoder input closed")?;
         input.write_all(&pts.to_le_bytes())?;
         input.write_all(pixels)?;
         Ok(())
     }
-    fn finish(mut self) -> Result<()> {
+    pub(super) fn finish(mut self) -> Result<()> {
         drop(self.0.stdin.take());
         let status = self.0.wait()?;
         if !status.success() {

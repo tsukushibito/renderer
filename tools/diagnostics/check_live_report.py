@@ -9,7 +9,7 @@ import threading
 import time
 
 
-def resize_window(process_id):
+def window_action(process_id, close=False):
     import ctypes
     from ctypes import wintypes
     user = ctypes.windll.user32
@@ -27,7 +27,10 @@ def resize_window(process_id):
 
     user.EnumWindows(find, 0)
     assert len(found) == 1
-    assert user.SetWindowPos(wintypes.HWND(found[0]), 0, 0, 0, 480, 340, 0x0016)
+    if close:
+        assert user.PostMessageW(wintypes.HWND(found[0]), 0x0010, 0, 0)
+    else:
+        assert user.SetWindowPos(wintypes.HWND(found[0]), 0, 0, 0, 480, 340, 0x0016)
 
 
 def check_layers(request, original, video):
@@ -77,13 +80,69 @@ def check_layers(request, original, video):
     assert np.array_equal(image(restored), image(original)), "paused view did not restore"
 
 
-def check(executable, backend, directory, video=False, layers=False):
+def check_history(request, executable, directory, session):
+    import av
+    def wait(job, states):
+        deadline = time.monotonic() + 30
+        while True:
+            status = request("job", job=job)
+            if status["state"] in states:
+                return status
+            assert status["state"] in ("running", "queued") and time.monotonic() < deadline, status
+            time.sleep(.025)
+
+    # Normal drawing continues at a fixed simulation tick until a manual step.
+    time.sleep(5.25)
+    primary = request("capture", request={"action":"clip"})
+    request("step")
+    other = request("capture", request={"action":"clip", "trigger":"test_failure"})
+    assert wait(other["job"], ["linked"])["job"] == primary["job"]
+    next_id = int(other["job"].rsplit("/j",1)[1]) + 1
+    (directory / f"{session}-{next_id}").write_text("existing", encoding="utf8")
+    broken = request("capture", request={"action":"report"})
+    assert wait(broken["job"], ["failed"])["reason"]
+    request("step")
+    done = wait(primary["job"], ["partial", "complete"])
+    clip = Path(done["artifact"])
+    m = json.loads((clip / "manifest.json").read_bytes())
+    marks = {t["cause"]:t for t in m["settings"]["clip"]["triggers"]}
+    assert set(marks) >= {"manual", "test_failure", "warning"}, marks
+    assert (m["settings"]["clip"]["pre_ms"],m["settings"]["clip"]["post_ms"]) == (5000,2000)
+    rows = [json.loads(line) for line in (clip / m["files"]["frame_map"]).read_bytes().splitlines()]
+    ticks = {v["snapshot"]["tick"] for v in map(json.loads, (clip / m["files"]["ticks"]).read_bytes().splitlines())}
+    covered = {int(r["pts"]) for r in rows}
+    assert len(covered) == len(rows) and all(int(r["frame"]["tick"]) in ticks for r in rows)
+    assert min(covered) <= 2 and max(covered) >= 68, covered
+    assert int(rows[0]["frame"]["tick"]) < int(rows[-1]["frame"]["tick"])
+    for g in m["gaps"]:
+        if g["unit"] == "clip_sample":
+            missing = set(range(int(g["first"]),int(g["last"])+1))
+            assert missing.isdisjoint(covered)
+            covered |= missing
+    assert covered == set(range(71))
+    with av.open(str(clip / m["files"]["video"])) as movie:
+        frames = list(movie.decode(video=0))
+        assert len(frames) == len(rows)
+        for f,r in zip(frames,rows):
+            assert abs(float(f.time) - int(r["pts"])/10) < .0011
+    subprocess.run([str(executable),"--headless","--verify-report",str(clip)], check=True)
+    print(clip, flush=True)
+    closing = request("capture", request={"action":"clip","trigger":"test_failure"})
+    assert wait(closing["job"], ["running"])["phase"] == "post_trigger"
+    return directory / (session + "-" + closing["job"].rsplit("/j",1)[1])
+
+
+def check(executable, backend, directory, video=False, layers=False, history=False):
     directory.mkdir(parents=True, exist_ok=False)
     config = directory / "settings.json"
     config.write_text('{"jobs":{"parallelism":2}}', encoding="utf-8")
     command = [str(executable), "--backend", backend, "--debug-dir", str(directory),
-               "--inspect-stdio", "--frames", "500" if layers else "200", "--width", "320", "--height", "180",
+               "--inspect-stdio", "--width", "320", "--height", "180",
                "--config", str(config)]
+    if history:
+        command.append("--clip-history")
+    else:
+        command.extend(["--frames", "500" if layers else "200"])
     with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           encoding="utf-8", cwd=directory) as game:
         messages = queue.Queue()
@@ -97,6 +156,7 @@ def check(executable, backend, directory, video=False, layers=False):
 
         threading.Thread(target=receive, daemon=True).start()
         sequence = 0
+        closing_clip = None
 
         def request(op, **params):
             nonlocal sequence
@@ -112,6 +172,10 @@ def check(executable, backend, directory, video=False, layers=False):
             assert "report" in hello["diagnostics"]["actions"], hello
             request("pause")
             request("step")
+            if history:
+                assert "clip" in hello["diagnostics"]["actions"]
+                closing_clip = check_history(request, executable, directory, hello["session"])
+                return
             player = request("find", kind="Player")["objects"][0]
             subject = player["id"]
             center = player["display_center"]
@@ -168,7 +232,7 @@ def check(executable, backend, directory, video=False, layers=False):
                 while request("job", job=start["job"]).get("phase") != "recording":
                     assert time.monotonic() < deadline
                 time.sleep(0.6)
-                resize_window(game.pid)
+                window_action(game.pid)
                 resumed_at = int(request("hello")["state"]["tick"])
                 deadline = time.monotonic() + 45
                 while int(request("hello")["state"]["tick"]) < resumed_at + 12:
@@ -207,6 +271,8 @@ def check(executable, backend, directory, video=False, layers=False):
                 request("read", object=subject, fields=["hp"])
             print(report, flush=True)
         finally:
+            if history and game.poll() is None:
+                window_action(game.pid, close=True)
             game.stdin.close()
             try:
                 game.wait(timeout=120)
@@ -214,6 +280,11 @@ def check(executable, backend, directory, video=False, layers=False):
                 game.kill()
                 game.wait()
                 raise
+            if history and game.returncode:
+                raise subprocess.CalledProcessError(game.returncode, command)
+            if closing_clip is not None:
+                m = json.loads((closing_clip / "manifest.json").read_bytes())
+                assert m["outcome"]["state"] == "partial" and any(g["reason"]=="shutdown" for g in m["gaps"]), m
         if game.returncode:
             raise subprocess.CalledProcessError(game.returncode, command)
 
@@ -225,5 +296,6 @@ if __name__ == "__main__":
     parser.add_argument("output", type=Path)
     parser.add_argument("--video", action="store_true")
     parser.add_argument("--layers", action="store_true")
+    parser.add_argument("--history", action="store_true")
     args = parser.parse_args()
-    check(args.survivor.resolve(), args.backend, args.output.resolve(), args.video, args.layers)
+    check(args.survivor.resolve(), args.backend, args.output.resolve(), args.video, args.layers, args.history)

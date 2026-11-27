@@ -23,6 +23,12 @@ use survivor::{Events, Game, Input, Snapshot};
     feature = "presentation",
     any(feature = "vulkan", feature = "d3d12")
 ))]
+mod history;
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
 pub(super) mod live;
 #[cfg(all(
     windows,

@@ -36,6 +36,10 @@ pub struct Options {
     pub debug_dir: Option<PathBuf>,
     #[cfg(feature = "diagnostics")]
     pub inspect_stdio: bool,
+    #[cfg(feature = "diagnostics")]
+    pub clip_history: bool,
+    #[cfg(feature = "diagnostics")]
+    pub clip_frame_ms: Option<u64>,
     pub config: RuntimeConfig,
     pub parallelism: std::num::NonZeroUsize,
     pub extent: [u32; 2],
@@ -192,6 +196,7 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
             live.poll(
                 std::mem::take(&mut controls.report),
                 std::mem::take(&mut controls.video),
+                std::mem::take(&mut controls.clip),
                 self.extent,
             )?;
         }
@@ -295,6 +300,15 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
         })
     }
     fn presented(&mut self, interval: Duration) {
+        #[cfg(feature = "diagnostics")]
+        if self
+            .options
+            .clip_frame_ms
+            .is_some_and(|ms| interval > Duration::from_millis(ms))
+            && let PlayState::Observed(live) = &mut self.app.game
+        {
+            live.frame_time_trigger();
+        }
         if let Some(samples) = self.measured {
             let game = &self.app.game;
             #[cfg(feature = "memory-profiling")]
@@ -407,6 +421,7 @@ pub fn run(
                 evidence,
                 root,
                 o.inspect_stdio,
+                o.clip_history,
             )?))
         }
         None => PlayState::Normal(Box::new(game)),
@@ -434,12 +449,13 @@ pub fn run(
         update_time: Duration::ZERO,
         draw_time: Duration::ZERO,
     };
-    host.run(&mut client, limit, TIMEOUT)?;
+    let run_result = host.run(&mut client, limit, TIMEOUT);
     let last_extent = client.last_extent;
     #[cfg(feature = "diagnostics")]
     if let PlayState::Observed(live) = &mut app.game {
         live.finish(&mut renderer)?;
     }
+    run_result?;
     memory.observe("active", &mut renderer, &app.game)?;
     if let Some(mut measured) = measured {
         if !renderer.wait_idle(TIMEOUT)? {

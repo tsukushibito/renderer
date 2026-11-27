@@ -64,6 +64,8 @@ fn arguments() -> Command {
                 .requires("debug-dir")
                 .help("Accept live inspector requests on stdin"),
         )
+        .arg(flag("clip-history").requires("debug-dir").help("Keep a bounded 5 s before / 2 s after video history (F10 or a diagnostic trigger)"))
+        .arg(Arg::new("clip-frame-ms").long("clip-frame-ms").requires("clip-history").value_parser(value_parser!(u64).range(1..)).help("Trigger a history clip when a presented frame interval exceeds this many milliseconds"))
         .arg(
             path("record-report")
                 .requires("headless")
@@ -423,6 +425,10 @@ fn play(
             debug_dir: args.get_one::<PathBuf>("debug-dir").cloned(),
             #[cfg(feature = "diagnostics")]
             inspect_stdio: args.get_flag("inspect-stdio"),
+            #[cfg(feature = "diagnostics")]
+            clip_history: args.get_flag("clip-history"),
+            #[cfg(feature = "diagnostics")]
+            clip_frame_ms: args.get_one::<u64>("clip-frame-ms").copied(),
             config,
             parallelism,
             replay,

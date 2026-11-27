@@ -14,6 +14,8 @@ pub(super) struct Controls {
     report_held: bool,
     pub video: bool,
     video_held: bool,
+    pub clip: bool,
+    clip_held: bool,
     cursor: Option<[f64; 2]>,
     pub pick: Option<[f64; 2]>,
 }
@@ -42,6 +44,9 @@ impl sashiko::window::WindowControls for Controls {
         } else if key == KeyCode::F9 {
             self.video |= pressed && !self.video_held;
             self.video_held = pressed;
+        } else if key == KeyCode::F10 {
+            self.clip |= pressed && !self.clip_held;
+            self.clip_held = pressed;
         } else {
             self.inner.key(key, pressed);
         }
@@ -52,6 +57,7 @@ impl sashiko::window::WindowControls for Controls {
     fn focus_lost(&mut self) {
         self.report_held = false;
         self.video_held = false;
+        self.clip_held = false;
         self.cursor = None;
         self.pick = None;
         self.inner.focus_lost();
@@ -78,6 +84,8 @@ pub(super) fn controls() -> Controls {
         report_held: false,
         video: false,
         video_held: false,
+        clip: false,
+        clip_held: false,
         cursor: None,
         pick: None,
     };
