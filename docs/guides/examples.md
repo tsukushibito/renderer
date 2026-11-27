@@ -64,6 +64,29 @@ python tools/landscape/compare.py "$scene/reference/landscape/view-0.png" build/
 
 比較ツールは参照 PNG の SHA-256 を照合し、リサイズや位置合わせをせずに RGB の絶対差を PNG に保存します。全画面と前景の穂・二股の幹・林の暗部・空の固定矩形について、8 bit RGB のチャンネル別平均絶対差と、sRGB を線形化して求めた CIE L* の平均絶対差・平均符号付き差を出力します。正の符号は描画結果の方が明るいことを表します。
 
+#### PBRT で局所的な画質基準を再現する
+
+PBRT v4 のコミット `20e41fd83789f12550e2c31b2047898c9e20e46c` をサブモジュール付きでビルドし、生成した `pbrt.exe` を指定します。固定した4箇所で 64×64 画素ずつ、元のフィルム座標と 512 spp を保って seed 0 と 13 をレンダーします。スクリプトは両者と公開 PNG の差を測り、明度低下・ぼけ・位置ずれを加えた対照画像と区別できるか確認します。
+
+```powershell
+python -m pip install opencv-python==4.11.0.86
+python tools/landscape/calibrate.py $scene build/landscape --render-with path/to/pbrt.exe
+python tools/landscape/calibrate.py $scene build/landscape --capture build/cover-4k.png
+```
+
+`--capture` は固定した局所基準を1つでも超えたら終了コード1を返します。全画面の独立レンダーは `pbrt --seed 0 --spp 512 --outfile build/view-0.exr "$scene/view-0.pbrt"` で取得できます。投影の照合には `pbrt --pixelmaterial 962,1372 "$scene/view-0.pbrt"` と同様に、幹の `724,1222` と林の `1942,1036` でも最初の交点を取得します。表示 API の行列に3点を入力する回帰テストは次のコマンドで実行できます。
+
+```powershell
+cargo test --release --locked -p renderer-scenes --features scene-viewer --test landscape_projection
+```
+
+樹冠の抜きは、すべての表面を黒い拡散材にして空を一定輝度に置換し、元の形状・カメラ・アルファテクスチャを保った PBRT シーンで測ります。左上の樹冠の64×64画素と、遮蔽のない空を描画します。実装側の同条件の被覆画像は、線形グレースケール（黒が空、白が完全遮蔽）の PNG として評価します。
+
+```powershell
+python tools/landscape/coverage.py $scene build/landscape --render-with path/to/pbrt.exe
+python tools/landscape/coverage.py $scene build/landscape --candidate-mask build/canopy-mask.png
+```
+
 ## ゲーム更新を Rust で書く
 
 小さな入力・更新ループは `cargo run --locked -p sashiko --example fixed_game` で実行できます。[サンプル](../../crates/sashiko/examples/fixed_game.rs)は右移動を 3 更新続け、その間のジャンプ押下を 1 回消費します。ゲームはキーとアクションの対応を `ActionMap` に渡し、固定更新ごとに `sample` で押下・解放・軸値を読み取ります。Windows ホストでは `WindowInput` が同じマップに物理キーの変化を渡します。
