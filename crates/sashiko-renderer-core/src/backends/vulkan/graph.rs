@@ -661,8 +661,13 @@ impl VulkanRuntime {
         let descriptors = prepared.descriptors(self);
         let (raster, compute) = if let Some(working_set) = working_set {
             let depth_samples = Self::depth_sample_counts(descriptors);
-            let raster = self.stage_raster_programs(working_set.raster, depth_samples)?;
-            let compute = self.stage_compute_programs(working_set.compute)?;
+            let raster = self.stage_raster_programs(
+                working_set.raster,
+                depth_samples,
+                capacity.graph.bindings,
+            )?;
+            let compute =
+                self.stage_compute_programs(working_set.compute, capacity.graph.passes)?;
             self.prepare_samplers(working_set.samplers)?;
             (Some(raster), Some(compute))
         } else {
@@ -763,6 +768,7 @@ impl VulkanRuntime {
             Arc::clone(&self.owner),
             self.config.execution_slots,
             self.config.max_shader_bindings,
+            usize::MAX,
             true,
         )?;
         programs.prepare_implicit_raster()?;
@@ -785,11 +791,13 @@ impl VulkanRuntime {
         &self,
         programs: &[impl Clone + Into<crate::program::RasterPipelineRequest>],
         depth_samples: vk::SampleCountFlags,
+        max_operands: usize,
     ) -> Result<Arc<ShaderPrograms>, RuntimeError> {
         let replacement = ShaderPrograms::new(
             Arc::clone(&self.owner),
             self.config.execution_slots,
             self.config.max_shader_bindings,
+            max_operands,
             false,
         )?;
         replacement.prepare_rasters(programs, depth_samples)?;
@@ -840,8 +848,11 @@ impl VulkanRuntime {
             .entries
             .iter()
             .filter_map(|entry| entry.physical.as_ref().map(|physical| physical.desc));
-        let replacement =
-            self.stage_raster_programs(programs, Self::depth_sample_counts(descriptors))?;
+        let replacement = self.stage_raster_programs(
+            programs,
+            Self::depth_sample_counts(descriptors),
+            usize::MAX,
+        )?;
         self.programs = Some(replacement);
         Ok(())
     }
@@ -892,7 +903,7 @@ impl VulkanRuntime {
             ));
         }
         validate_compute_shader_formats(programs)?;
-        let prepared = self.stage_compute_programs(programs)?;
+        let prepared = self.stage_compute_programs(programs, usize::MAX)?;
         self.compute_programs = Some(prepared);
         Ok(())
     }
@@ -900,12 +911,16 @@ impl VulkanRuntime {
     fn stage_compute_programs(
         &self,
         programs: &[crate::program::ManagedProgram],
+        max_passes: usize,
     ) -> Result<Arc<compute::ComputePrograms>, RuntimeError> {
         compute::ComputePrograms::new(
             Arc::clone(&self.owner),
             programs,
             self.config.execution_slots,
-            self.config.max_shader_bindings,
+            // Each compute dispatch occupies a distinct Graph pass.
+            self.config
+                .max_shader_bindings
+                .min(u32::try_from(max_passes).unwrap_or(u32::MAX)),
         )
     }
 

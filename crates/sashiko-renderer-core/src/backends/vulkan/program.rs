@@ -48,6 +48,7 @@ struct RasterLayout {
     groups: usize,
     // Uniform, StorageRead, SampledImage, Sampler totals for this pipeline.
     descriptors: [u32; 4],
+    copies: u32,
 }
 
 fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeError {
@@ -92,13 +93,14 @@ impl ShaderPrograms {
         owner: Arc<MemoryOwner>,
         concurrent_slots: usize,
         max_bindings: u32,
+        max_operands: usize,
         implicit_raster: bool,
     ) -> Result<Arc<Self>, RuntimeError> {
         owner
             .device
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
-        let bindings = BindingPool::new(concurrent_slots, max_bindings)?;
+        let bindings = BindingPool::new(concurrent_slots, max_bindings, max_operands)?;
         Ok(Arc::new(Self {
             owner,
             raster: OnceLock::new(),
@@ -153,6 +155,7 @@ impl ShaderPrograms {
                     RasterLayout {
                         layouts: program.raster_layouts,
                         groups: program.raster_groups,
+                        copies: self.bindings.copies(program.raster_asset.bindings().len()),
                         descriptors,
                     }
                 })

@@ -35,7 +35,6 @@ struct DescriptorArena {
 impl DescriptorArena {
     fn new(
         owner: Arc<MemoryOwner>,
-        max_bindings: u32,
         raster: [Option<RasterLayout>; RASTER_VARIANT_COUNT],
         #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_variables))] ordinal: usize,
     ) -> Result<Self, RuntimeError> {
@@ -50,19 +49,19 @@ impl DescriptorArena {
             let count: u32 = raster
                 .iter()
                 .flatten()
-                .map(|layout| layout.descriptors[index])
+                .map(|layout| layout.descriptors[index] * layout.copies)
                 .sum();
             if count != 0 {
                 sizes.push(vk::DescriptorPoolSize {
                     ty,
-                    descriptor_count: count * max_bindings,
+                    descriptor_count: count,
                 });
             }
         }
         let raster_groups: u32 = raster
             .iter()
             .flatten()
-            .map(|layout| layout.groups as u32)
+            .map(|layout| layout.groups as u32 * layout.copies)
             .sum();
         if raster_groups == 0 {
             return Err(RuntimeError::invalid(
@@ -70,7 +69,7 @@ impl DescriptorArena {
             ));
         }
         let info = vk::DescriptorPoolCreateInfo::default()
-            .max_sets(max_bindings * raster_groups)
+            .max_sets(raster_groups)
             .pool_sizes(&sizes);
         #[cfg(feature = "memory-profiling")]
         crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
@@ -87,7 +86,7 @@ impl DescriptorArena {
             let Some(layouts) = layouts else {
                 continue;
             };
-            let prepared: Vec<_> = (0..max_bindings)
+            let prepared: Vec<_> = (0..layouts.copies)
                 .flat_map(|_| layouts.layouts[..layouts.groups].iter().copied())
                 .collect();
             let info = vk::DescriptorSetAllocateInfo::default()
@@ -96,7 +95,7 @@ impl DescriptorArena {
             #[cfg(feature = "memory-profiling")]
             crate::measurement::record_native(
                 crate::measurement::NativeEvent::DescriptorAllocate,
-                u64::from(max_bindings) * layouts.groups as u64,
+                u64::from(layouts.copies) * layouts.groups as u64,
             );
             // SAFETY: Fresh uniquely owned pool; sets survive through its exclusive lease.
             let sets = unsafe { result.owner.device.raw().allocate_descriptor_sets(&info) }
@@ -180,11 +179,16 @@ impl Default for DescriptorCache {
 pub(super) struct BindingPool {
     slots: usize,
     max_bindings: u32,
+    max_operands: usize,
     cache: Mutex<DescriptorCache>,
 }
 
 impl BindingPool {
-    pub(super) fn new(slots: usize, max_bindings: u32) -> Result<Self, RuntimeError> {
+    pub(super) fn new(
+        slots: usize,
+        max_bindings: u32,
+        max_operands: usize,
+    ) -> Result<Self, RuntimeError> {
         if slots == 0
             || max_bindings == 0
             || max_bindings
@@ -198,8 +202,16 @@ impl BindingPool {
         Ok(Self {
             slots,
             max_bindings,
+            max_operands,
             cache: Mutex::new(DescriptorCache::default()),
         })
+    }
+
+    // Each new operand range of this layout occupies its full width in the Graph.
+    // A depth variant has its own cache and therefore its own bound.
+    pub(super) fn copies(&self, width: usize) -> u32 {
+        let ranges = self.max_operands / width;
+        (self.max_bindings as usize).min(ranges.max(1)) as u32
     }
 
     pub(super) fn prepare(
@@ -240,7 +252,6 @@ impl BindingPool {
         for ordinal in 0..self.slots {
             prepared.push(DescriptorArena::new(
                 Arc::clone(owner),
-                self.max_bindings,
                 raster,
                 cache.stats.descriptor_arenas_created + ordinal,
             )?);
