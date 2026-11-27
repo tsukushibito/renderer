@@ -9,7 +9,28 @@ import threading
 import time
 
 
-def check(executable, backend, directory):
+def resize_window(process_id):
+    import ctypes
+    from ctypes import wintypes
+    user = ctypes.windll.user32
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    found = []
+
+    @callback_type
+    def find(hwnd, _):
+        pid = wintypes.DWORD()
+        user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == process_id and user.IsWindowVisible(hwnd):
+            found.append(hwnd)
+            return False
+        return True
+
+    user.EnumWindows(find, 0)
+    assert len(found) == 1
+    assert user.SetWindowPos(wintypes.HWND(found[0]), 0, 0, 0, 480, 340, 0x0016)
+
+
+def check(executable, backend, directory, video=False):
     directory.mkdir(parents=True, exist_ok=False)
     config = directory / "settings.json"
     config.write_text('{"jobs":{"parallelism":2}}', encoding="utf-8")
@@ -81,6 +102,50 @@ def check(executable, backend, directory):
             assert collision.read_bytes() == b"existing file"
             request("step")
             request("resume")
+            if video:
+                import av
+                assert "start_video" in hello["diagnostics"]["actions"], hello
+                start = request("capture", request={"action": "start_video", "extent": [160, 90], "fps": 15})
+                deadline = time.monotonic() + 20
+                while request("job", job=start["job"]).get("phase") != "recording":
+                    assert time.monotonic() < deadline
+                time.sleep(0.6)
+                resize_window(game.pid)
+                resumed_at = int(request("hello")["state"]["tick"])
+                deadline = time.monotonic() + 45
+                while int(request("hello")["state"]["tick"]) < resumed_at + 12:
+                    assert time.monotonic() < deadline, "simulation did not advance after resize"
+                    time.sleep(0.05)
+                stop = request("capture", request={"action": "stop_video"})
+                deadline = time.monotonic() + 90
+                while True:
+                    done = request("job", job=stop["job"])
+                    if done["state"] in ("complete", "partial"):
+                        break
+                    assert done["state"] in ("queued", "running") and time.monotonic() < deadline, done
+                clip = Path(done["artifact"])
+                index = json.loads((clip / "manifest.json").read_bytes())
+                rows = [json.loads(line) for line in (clip / index["files"]["frame_map"]).read_bytes().splitlines()]
+                assert len({tuple(row["frame"]["extent"]) for row in rows}) >= 2, rows
+                with av.open(str(clip / index["files"]["video"])) as movie:
+                    assert not movie.streams.audio
+                    decoded = list(movie.decode(video=0))
+                    assert len(decoded) == len(rows) > 1
+                    for frame, row in zip(decoded, rows):
+                        assert (frame.width, frame.height) == (160, 90)
+                        assert abs(float(frame.time) - int(row["pts"]) / 15) < 0.0011
+                print(clip, flush=True)
+                collision = directory / (hello["session"] + "-5")
+                collision.write_bytes(b"retain")
+                failed = request("capture", request={"action": "start_video", "extent": [160, 90], "fps": 15})
+                deadline = time.monotonic() + 15
+                while True:
+                    status = request("job", job=failed["job"])
+                    if status["state"] == "failed":
+                        assert status["reason"] and collision.read_bytes() == b"retain"
+                        break
+                    assert time.monotonic() < deadline, status
+                request("read", object=subject, fields=["hp"])
             print(report, flush=True)
         finally:
             game.stdin.close()
@@ -99,5 +164,6 @@ if __name__ == "__main__":
     parser.add_argument("survivor", type=Path)
     parser.add_argument("backend", choices=["vulkan", "d3d12"])
     parser.add_argument("output", type=Path)
+    parser.add_argument("--video", action="store_true")
     args = parser.parse_args()
-    check(args.survivor.resolve(), args.backend, args.output.resolve())
+    check(args.survivor.resolve(), args.backend, args.output.resolve(), args.video)

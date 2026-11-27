@@ -12,6 +12,8 @@ pub(super) struct Controls {
     inner: WindowInput<Action>,
     pub report: bool,
     report_held: bool,
+    pub video: bool,
+    video_held: bool,
 }
 #[cfg(feature = "diagnostics")]
 impl std::ops::Deref for Controls {
@@ -32,6 +34,9 @@ impl sashiko::window::WindowControls for Controls {
         if key == KeyCode::F8 {
             self.report |= pressed && !self.report_held;
             self.report_held = pressed;
+        } else if key == KeyCode::F9 {
+            self.video |= pressed && !self.video_held;
+            self.video_held = pressed;
         } else {
             self.inner.key(key, pressed);
         }
@@ -41,6 +46,7 @@ impl sashiko::window::WindowControls for Controls {
     }
     fn focus_lost(&mut self) {
         self.report_held = false;
+        self.video_held = false;
         self.inner.focus_lost();
     }
     fn mouse_button(&mut self, button: u16, pressed: bool) {
@@ -60,6 +66,8 @@ pub(super) fn controls() -> Controls {
         inner,
         report: false,
         report_held: false,
+        video: false,
+        video_held: false,
     };
     #[cfg(not(feature = "diagnostics"))]
     inner

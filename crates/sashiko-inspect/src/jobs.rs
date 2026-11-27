@@ -49,7 +49,7 @@ pub struct Capabilities {
     pub stages: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Status {
     Queued,

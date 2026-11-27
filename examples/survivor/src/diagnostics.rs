@@ -24,6 +24,12 @@ use survivor::{Events, Game, Input, Snapshot};
     any(feature = "vulkan", feature = "d3d12")
 ))]
 pub(super) mod live;
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+mod video;
 
 #[cfg(all(
     windows,
@@ -211,7 +217,13 @@ impl Evidence {
         extra: impl FnOnce(&mut Manifest) -> Result<()>,
     ) -> Result<()> {
         fs::create_dir(directory)?;
-        let mut m = Manifest {
+        let manifest = self.manifest(job);
+        manifest.publish(directory)?;
+        self.finish_report(directory, manifest, extra)
+    }
+
+    fn manifest(&self, job: &str) -> Manifest {
+        Manifest {
             version: Manifest::VERSION,
             session: self.session.clone(),
             world: "survivor".into(),
@@ -225,8 +237,15 @@ impl Evidence {
             gaps: vec![],
             files: BTreeMap::new(),
             outcome: Outcome::Recording,
-        };
-        m.publish(directory)?;
+        }
+    }
+
+    fn finish_report(
+        self,
+        directory: &Path,
+        mut m: Manifest,
+        extra: impl FnOnce(&mut Manifest) -> Result<()>,
+    ) -> Result<()> {
         let write = || -> Result<()> {
             let mut tape = BufWriter::new(File::create(directory.join("replay.json"))?);
             // Serialize the existing Replay wire format, including its immutable start.

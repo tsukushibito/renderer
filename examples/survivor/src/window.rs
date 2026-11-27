@@ -182,7 +182,11 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
     fn update(&mut self, controls: &mut Controls, elapsed: Duration) -> PipelineResult<()> {
         #[cfg(feature = "diagnostics")]
         if let PlayState::Observed(live) = &mut self.app.game {
-            live.poll(std::mem::take(&mut controls.report))?;
+            live.poll(
+                std::mem::take(&mut controls.report),
+                std::mem::take(&mut controls.video),
+                self.extent,
+            )?;
         }
         let start = Instant::now();
         #[cfg(feature = "memory-profiling")]

@@ -1,8 +1,11 @@
-use super::Evidence;
+use super::{
+    Evidence,
+    video::{self, Sample, Video},
+};
 use sashiko::inspect::{
     Event, EventSchema, Field, Journal, Kind, Object, Schema, Session, StdioPort, Value, World,
     jobs::{Action, Capabilities, CaptureRequest, Jobs, Status, Ticket},
-    report::{FrameStamp, Outcome},
+    report::Outcome,
 };
 use sashiko_renderer::{WindowRenderer, pipeline::PipelineResult};
 use std::{
@@ -146,7 +149,11 @@ pub(crate) struct Live {
     origin: Instant,
     next_frame: u64,
     waiting: Option<Ticket>,
-    capture: Option<(Ticket, FrameStamp, Evidence)>,
+    capture: Option<(Sample, Option<(Ticket, Evidence)>)>,
+    encoder: Option<std::ffi::OsString>,
+    video: Option<Video>,
+    stop_job: Option<u64>,
+    finishing: Option<thread::JoinHandle<()>>,
     worker: Option<thread::JoinHandle<()>>,
     done: mpsc::Receiver<(u64, Status)>,
     send: mpsc::Sender<(u64, Status)>,
@@ -159,8 +166,14 @@ impl Live {
         stdio: bool,
     ) -> PipelineResult<Self> {
         std::fs::create_dir_all(root)?;
+        let encoder = video::probe();
+        let mut actions = vec![Action::Report];
+        if encoder.is_some() {
+            actions.extend([Action::StartVideo, Action::StopVideo]);
+        }
+        let origin = evidence.origin;
         let capabilities = Capabilities {
-            actions: vec![Action::Report],
+            actions,
             views: vec!["main".into()],
             stages: vec!["final_srgb_ui".into()],
         };
@@ -182,7 +195,11 @@ impl Live {
             session,
             port: stdio.then(StdioPort::open),
             root: root.into(),
-            origin: Instant::now(),
+            origin,
+            encoder,
+            video: None,
+            stop_job: None,
+            finishing: None,
             next_frame: 0,
             waiting: None,
             capture: None,
@@ -208,7 +225,12 @@ impl Live {
         self.session.step();
         self.session.world().last_events
     }
-    pub(crate) fn poll(&mut self, manual: bool) -> PipelineResult<()> {
+    pub(crate) fn poll(
+        &mut self,
+        manual: bool,
+        toggle_video: bool,
+        extent: [u32; 2],
+    ) -> PipelineResult<()> {
         if self
             .port
             .as_mut()
@@ -218,9 +240,30 @@ impl Live {
             self.session.set_paused(false);
         }
         let tick = self.game().tick;
-        let jobs = self.session.jobs().unwrap();
         while let Ok((id, status)) = self.done.try_recv() {
-            jobs.update(id, status)?;
+            if matches!(status, Status::Failed { .. })
+                && self.video.as_ref().is_some_and(|v| v.id == id)
+            {
+                self.finishing = Some(
+                    self.video
+                        .take()
+                        .unwrap()
+                        .stop(self.session.world().evidence.clone(), self.stop_job.take()),
+                );
+            }
+            self.session.jobs().unwrap().update(id, status)?;
+        }
+        let jobs = self.session.jobs().unwrap();
+        if self
+            .finishing
+            .as_ref()
+            .is_some_and(|task| task.is_finished())
+        {
+            self.finishing
+                .take()
+                .unwrap()
+                .join()
+                .map_err(|_| "video worker panicked")?;
         }
         if self.worker.as_ref().is_some_and(|w| w.is_finished()) {
             self.worker
@@ -232,8 +275,57 @@ impl Live {
         if manual && let Err(reason) = jobs.submit(tick, CaptureRequest::new(Action::Report)) {
             eprintln!("report request: {reason}");
         }
-        if self.waiting.is_none() && self.capture.is_none() && self.worker.is_none() {
-            self.waiting = jobs.take();
+        if toggle_video {
+            let action = if self.video.is_some() {
+                Action::StopVideo
+            } else {
+                Action::StartVideo
+            };
+            if let Err(reason) = jobs.submit(tick, CaptureRequest::new(action)) {
+                eprintln!("video request: {reason}");
+            }
+        }
+        if self.waiting.is_none()
+            && let Some(ticket) = jobs.take()
+        {
+            let id = ticket.id;
+            let status = match ticket.request.action {
+                Action::StartVideo if self.video.is_none() && self.finishing.is_none() => {
+                    let dir = self
+                        .root
+                        .join(format!("{}-{id}", self.session.session_id()));
+                    let opened = Video::start(
+                        id,
+                        dir,
+                        &self.session.world().evidence,
+                        ticket.request.extent.unwrap_or(extent),
+                        ticket.request.fps.unwrap_or(30),
+                        self.encoder.clone().ok_or("encoder unavailable")?,
+                        self.send.clone(),
+                    );
+                    match opened {
+                        Ok(v) => {
+                            self.video = Some(v);
+                            Status::Running { phase: "recording" }
+                        }
+                        Err(e) => Status::Failed {
+                            reason: e.to_string(),
+                        },
+                    }
+                }
+                Action::StopVideo if self.video.is_some() && self.stop_job.is_none() => {
+                    self.stop_job = Some(id);
+                    Status::Running { phase: "draining" }
+                }
+                Action::Report => {
+                    self.waiting = Some(ticket);
+                    return Ok(());
+                }
+                _ => Status::Failed {
+                    reason: "recording state does not support this request".into(),
+                },
+            };
+            self.session.jobs().unwrap().update(id, status)?;
         }
         Ok(())
     }
@@ -243,6 +335,14 @@ impl Live {
         draw: impl FnOnce(&mut sashiko_renderer::Frame<'_>, &Game) -> PipelineResult<()>,
     ) -> PipelineResult<sashiko_renderer::core::PresentOutcome> {
         self.collect(renderer)?;
+        if self.stop_job.is_some() && self.capture.is_none() {
+            self.finishing = Some(
+                self.video
+                    .take()
+                    .unwrap()
+                    .stop(self.session.world().evidence.clone(), self.stop_job.take()),
+            );
+        }
         let mut submitted = false;
         let game = self.game();
         let render = |frame: &mut sashiko_renderer::Frame<'_>| {
@@ -251,8 +351,11 @@ impl Live {
             Ok(())
         };
         let tag = self.next_frame;
-        let capturing = self.waiting.is_some() && renderer.capture_available();
         let time = self.origin.elapsed();
+        let ns = time.as_nanos().try_into()?;
+        let for_video = self.stop_job.is_none() && self.video.as_ref().is_some_and(|v| v.due(ns));
+        let still = self.waiting.is_some() && self.worker.is_none();
+        let capturing = (still || for_video) && renderer.capture_available();
         let outcome = if capturing {
             renderer.draw_with_capture(tag, render)?
         } else {
@@ -261,21 +364,36 @@ impl Live {
         if submitted {
             self.next_frame = tag.checked_add(1).ok_or("diagnostic frame overflow")?;
             if capturing {
-                let ticket = self.waiting.take().unwrap();
-                let stamp = FrameStamp {
-                    frame: tag,
-                    tick: self.game().tick,
-                    elapsed_ns: time.as_nanos().try_into()?,
-                    interpolation: None,
-                    view: ticket.request.view.clone(),
-                    stage: ticket.request.stage.clone(),
-                    extent: [0, 0],
+                let report = if still {
+                    let ticket = self.waiting.take().unwrap();
+                    self.session
+                        .jobs()
+                        .unwrap()
+                        .update(ticket.id, Status::Running { phase: "gpu" })?;
+                    Some((ticket, self.session.world().evidence.clone()))
+                } else {
+                    None
                 };
-                self.session
-                    .jobs()
-                    .unwrap()
-                    .update(ticket.id, Status::Running { phase: "gpu" })?;
-                self.capture = Some((ticket, stamp, self.session.world().evidence.clone()));
+                self.capture = Some((
+                    Sample {
+                        frame: tag,
+                        tick: self.game().tick,
+                        ns,
+                        source: [0, 0],
+                    },
+                    report,
+                ));
+            } else if for_video {
+                let tick = self.game().tick;
+                self.video.as_mut().unwrap().accept(
+                    Sample {
+                        frame: tag,
+                        tick,
+                        ns,
+                        source: [0, 0],
+                    },
+                    None,
+                );
             }
         }
         Ok(outcome)
@@ -287,11 +405,18 @@ impl Live {
         let Some(image) = renderer.take_capture()? else {
             return Ok(());
         };
-        let (ticket, mut stamp, evidence) = self.capture.take().unwrap();
-        if image.tag != stamp.frame {
+        let (mut sample, report) = self.capture.take().unwrap();
+        if image.tag != sample.frame {
             return Err("capture submission identity mismatch".into());
         }
-        stamp.extent = image.extent;
+        sample.source = image.extent;
+        if let Some(v) = &mut self.video {
+            v.accept(sample, Some(image.linear_rgba));
+        }
+        let Some((ticket, evidence)) = report else {
+            return Ok(());
+        };
+        let stamp = sample.stamp();
         let mut pixels = image.linear_rgba.to_vec();
         let id = ticket.id;
         self.session
@@ -303,15 +428,7 @@ impl Live {
             .join(format!("{}-{id}", self.session.session_id()));
         let send = self.send.clone();
         self.worker = Some(thread::spawn(move || {
-            let lut: [u8; 256] = std::array::from_fn(|i| {
-                let linear = i as f64 / 255.;
-                ((if linear <= 0.0031308 {
-                    12.92 * linear
-                } else {
-                    1.055 * linear.powf(1. / 2.4) - 0.055
-                }) * 255.)
-                    .round() as u8
-            });
+            let lut = video::srgb_table();
             for pixel in pixels.as_chunks_mut::<4>().0 {
                 for c in &mut pixel[..3] {
                     *c = lut[*c as usize];
@@ -352,6 +469,16 @@ impl Live {
         if let Some(worker) = self.worker.take() {
             worker.join().map_err(|_| "report worker panicked")?;
         }
-        self.poll(false)
+        if let Some(v) = self.video.take() {
+            self.finishing =
+                Some(v.stop(self.session.world().evidence.clone(), self.stop_job.take()));
+        }
+        if let Some(w) = self.finishing.take() {
+            w.join().map_err(|_| "video worker panicked")?;
+        }
+        while let Ok((id, status)) = self.done.try_recv() {
+            self.session.jobs().unwrap().update(id, status)?;
+        }
+        Ok(())
     }
 }

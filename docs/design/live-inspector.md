@@ -154,6 +154,19 @@ Windows では `cargo run -p survivor --features diagnostics -- --debug-dir repo
 できなければ欠落を記録する。画面なしで PNG も生成する場合は `--headless --ticks 120
 --backend vulkan --width 640 --height 360 --record-report report-120` を指定する。
 
+**F9** で無音録画を開始・停止する。NDJSON では `capture` の request に
+`{"action":"start_video","extent":[640,360],"fps":30}` または `{"action":"stop_video"}` を
+渡す。停止ジョブの結果に報告ディレクトリが入る。Matroska の FFV1 動画と
+`frames.ndjson` でデコード順、PTS、採取元 frame、tick、時刻、リサイズ前後の寸法を追える。
+表示を出力寸法へ最近傍で縮尺変換する。PTS の単位は指定 fps の逆数で、欠落の理由と
+区間を manifest に記録する。符号化が遅い場合も準備した RGB バッファ三枠の範囲で続行する。
+
+符号化は開発者の Python、PyAV、NumPy を子プロセスとして利用する。
+`SASHIKO_VIDEO_PYTHON` で Python の場所を指定できる。診断起動時の FFV1 能力照会に
+失敗すると、hello は静止画の操作を提供し、動画の要求は `UNSUPPORTED` を返す。
+ゲームの出荷物に Python・PyAV・FFmpeg バイナリを同梱しない。
+[PyAV の符号化 API](https://pyav.org/docs/stable/cookbook/numpy.html)・[FFmpeg の配布条件](https://ffmpeg.org/legal.html)
+
 ## 実行中の編集と制作元への保存
 
 実行値は既定で読み取り専用とし、ゲームが編集可能と宣言した項目にだけ変更要求を送れる。たとえば「最大 HP を変更する」には、現在 HP の再計算も含めた操作をゲーム側で定義する。表示用の反射情報は変更権限を与えない。
