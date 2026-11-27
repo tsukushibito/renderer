@@ -6,7 +6,8 @@
 
 Rust ホストは `Session::watch` で購読し、`Session::cancel` で終了を要求する。`Session::poll` がその購読の終了通知を返すと、同じ ID と購読枠を再利用できる。NDJSON の `cancel` も同じ終了処理を通る。解除後もワールド・tick・ジャーナルの保持期間は引き継がれる。
 
-本書の画面ピック、別プロセスからの後付け接続、実行値の編集・保存は後続の設計である。将来のクライアントもゲーム内の観測 API を共有する。
+Survivor の開発構成では、表示済みフレームを右クリックするとプレイヤーまたは敵の ID が標準エラーに出る。
+NDJSON の `selected` から同じ選択を読み取れる。別プロセスからの後付け接続、実行値の編集・保存は後続の設計である。
 
 ## 先行エンジンから採る判断
 
@@ -179,6 +180,14 @@ Windows では `cargo run -p survivor --features diagnostics -- --debug-dir repo
 `frame N` → `read actor` でその実行中の個体を調べる。`find`、`wait`、`watch`、
 `pause`、`step`、`resume` と生の NDJSON 要求にも対応する。異なる session や world で
 過去のハンドルを再利用しない。
+
+画面ピックは表示成功時の view、フレーム番号、元 tick と、ゲームが提供する個体の選択範囲を
+一緒に公開する。Survivor は身体の投影楕円を使い、重なりはカメラに近い個体を選ぶ。
+選択範囲はモデルの輪郭や背景とのピクセル単位の遮蔽を表すものではない。
+`pick` の `pointer` に view、point、viewport（表示領域の左・上・幅・高さ）を指定する。
+`frame` を指定した過去フレームの期限切れは `FRAME_EXPIRED`、空背景は `empty`。
+resize 時は次の表示成功まで選択範囲を失効させる。選択済み個体が消滅した後の
+`selected` は元の ID と `OBJECT_GONE` を返す。
 
 ## 実行中の編集と制作元への保存
 

@@ -23,6 +23,8 @@ mod gamepad;
 pub use gamepad::poll_gamepad;
 
 pub trait WindowControls {
+    #[cfg(feature = "live-inspector")]
+    fn cursor_moved(&mut self, _point: [f64; 2]) {}
     fn focus_gained(&mut self) {}
     fn mouse_button(&mut self, _button: u16, _pressed: bool) {}
     fn poll_devices(&mut self) {}
@@ -67,6 +69,10 @@ impl<A: WindowControls> ApplicationHandler for State<A> {
             WindowEvent::CloseRequested => self.closed = true,
             WindowEvent::Resized(size) => self.resized = Some([size.width, size.height]),
             WindowEvent::Focused(true) => self.controls.focus_gained(),
+            #[cfg(feature = "live-inspector")]
+            WindowEvent::CursorMoved { position, .. } => {
+                self.controls.cursor_moved([position.x, position.y])
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 use winit::event::MouseButton::*;
                 let button = match button {

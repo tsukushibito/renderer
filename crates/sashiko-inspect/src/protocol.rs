@@ -16,6 +16,10 @@ pub(crate) struct Request {
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Operation {
     Hello,
+    Pick {
+        pointer: crate::picking::Pointer,
+    },
+    Selected,
     Capture {
         request: crate::jobs::CaptureRequest,
     },

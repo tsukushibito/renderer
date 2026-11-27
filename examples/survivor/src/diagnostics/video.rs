@@ -170,10 +170,10 @@ impl Video {
         manifest.world = "game".into();
         manifest.settings["video"] = serde_json::json!({"encoder":"ffv1","container":"matroska","audio":false,"extent":extent,"fps":fps});
         let worker = thread::spawn(move || {
-            let mut owned=false;
+            let mut owned = false;
             let encode = || -> Result<()> {
                 std::fs::create_dir(&dir)?;
-                owned=true;
+                owned = true;
                 manifest.publish(&dir)?;
                 let mut encoder = Encoder::open(&python, &dir.join("video.mkv"), extent, fps)?;
                 let mut map = BufWriter::new(File::create(dir.join("frames.ndjson"))?);
@@ -203,7 +203,9 @@ impl Video {
                 manifest.outcome = Outcome::Failed {
                     reason: reason.clone(),
                 };
-                if owned {let _ = manifest.publish(&dir);}
+                if owned {
+                    let _ = manifest.publish(&dir);
+                }
                 let _ = done.send((
                     id,
                     Status::Failed {

@@ -133,7 +133,10 @@ fn check_storage<S: Storage>() {
             false,
         )
         .unwrap();
+    session.selected = Some((1, json!({"frame":"1","tick":"0"})));
     session.step();
+    assert_eq!(session.selection()["state"], "OBJECT_GONE");
+    assert_eq!(session.selection()["object"], first);
     assert_eq!(session.read(&first, &hp, None, start), Err("OBJECT_GONE"));
     assert_eq!(
         session.read(&second, &hp, None, start).unwrap()["values"]["hp"],

@@ -65,7 +65,15 @@ def check(executable, backend, directory, video=False):
             assert "report" in hello["diagnostics"]["actions"], hello
             request("pause")
             request("step")
-            subject = request("find", kind="Player")["objects"][0]["id"]
+            player = request("find", kind="Player")["objects"][0]
+            subject = player["id"]
+            center = player["display_center"]
+            pointer = {"view": "main", "viewport": [15, 20, 640, 360],
+                       "point": [15 + center[0] * 640, 20 + center[1] * 360]}
+            assert request("pick", pointer=pointer)["object"] == subject
+            assert request("selected")["object"] == subject
+            pointer["point"] = [15, 20]
+            assert request("pick", pointer=pointer)["state"] == "empty"
             requested = request("capture", request={"action": "report"})
             request("read", object=subject, fields=["hp"])
             deadline = time.monotonic() + 90

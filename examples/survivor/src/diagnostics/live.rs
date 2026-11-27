@@ -5,6 +5,7 @@ use super::{
 use sashiko::inspect::{
     Event, EventSchema, Field, Journal, Kind, Object, Schema, Session, StdioPort, Value, World,
     jobs::{Action, Capabilities, CaptureRequest, Jobs, Status, Ticket},
+    picking::{PickView, Pointer},
     report::Outcome,
 };
 use sashiko_renderer::{WindowRenderer, pipeline::PipelineResult};
@@ -76,6 +77,7 @@ const SCHEMAS: &[Schema] = &[
 ];
 
 pub(crate) struct LiveWorld {
+    displayed: PickView,
     pub game: Game,
     evidence: Evidence,
     next_input: Input,
@@ -84,6 +86,9 @@ pub(crate) struct LiveWorld {
 
 impl World for LiveWorld {
     type Facts = Facts;
+    fn displayed(&self) -> Option<&PickView> {
+        Some(&self.displayed)
+    }
     fn schemas(&self) -> &'static [Schema] {
         SCHEMAS
     }
@@ -167,6 +172,7 @@ impl LiveWorld {
 /// The original game remains the owner of simulation state; all three controls
 /// advance this same Session and publish the same job status.
 pub(crate) struct Live {
+    pending_view: PickView,
     session: Session<LiveWorld>,
     port: Option<StdioPort<Facts>>,
     root: PathBuf,
@@ -204,6 +210,7 @@ impl Live {
 
         evidence.last_tick = game.tick;
         let mut session = Session::new(LiveWorld {
+            displayed: PickView::new("main", survivor::MAX_ENEMIES + 1),
             game,
             evidence,
             next_input: Input::default(),
@@ -214,6 +221,7 @@ impl Live {
         session.world_mut().evidence.session = session.session_id().to_owned();
         let (send, done) = mpsc::channel();
         Ok(Self {
+            pending_view: PickView::new("main", survivor::MAX_ENEMIES + 1),
             session,
             port: stdio.then(StdioPort::open),
             root: root.into(),
@@ -235,6 +243,21 @@ impl Live {
     }
     pub(crate) fn paused(&self) -> bool {
         self.session.is_paused()
+    }
+    pub(crate) fn invalidate_view(&mut self) {
+        self.pending_view.invalidate();
+        self.session.world_mut().displayed.invalidate();
+    }
+    pub(crate) fn click(&mut self, point: [f64; 2], extent: [u32; 2]) {
+        match self.session.pick(&Pointer {
+            view: "main".into(),
+            frame: None,
+            point,
+            viewport: [0., 0., extent[0].into(), extent[1].into()],
+        }) {
+            Ok(result) => eprintln!("Survivor selection: {result}"),
+            Err(reason) => eprintln!("Survivor selection: {reason}"),
+        }
     }
     pub(crate) fn into_game(self) -> Game {
         self.session.into_world().game
@@ -365,11 +388,11 @@ impl Live {
                     .stop(self.session.world().evidence.clone(), self.stop_job.take()),
             );
         }
-        let mut submitted = false;
+        let mut submitted = None;
         let game = self.game();
         let render = |frame: &mut sashiko_renderer::Frame<'_>| {
             draw(frame, game)?;
-            submitted = true;
+            submitted = Some(*frame.scene_view());
             Ok(())
         };
         let tag = self.next_frame;
@@ -383,7 +406,35 @@ impl Live {
         } else {
             renderer.draw(render)?
         };
-        if submitted {
+        if let Some(view) = submitted {
+            let world = self.session.world();
+            self.pending_view.begin(tag, world.game.tick, view.extent);
+            let matrix = view.camera.clip_from_world();
+            let mut project =
+                |id, pos: sashiko::math::Vec2, height: f32, radius: f32| -> PipelineResult<()> {
+                    if !sashiko::view::on_screen(&view, pos, height, radius) {
+                        return Ok(());
+                    }
+                    let x = matrix[0][0] * pos.x() + matrix[3][0];
+                    let y = matrix[2][1] * pos.y() + matrix[1][1] * height * 0.5 + matrix[3][1];
+                    let z = matrix[2][2] * pos.y() + matrix[1][2] * height * 0.5 + matrix[3][2];
+                    self.pending_view.ellipse(
+                        id,
+                        [f64::from(x + 1.) / 2., f64::from(y + 1.) / 2.],
+                        [
+                            f64::from(matrix[0][0].abs() * radius) / 2.,
+                            f64::from(matrix[1][1].abs() * height + matrix[2][1].abs() * radius)
+                                / 4.,
+                        ],
+                        z,
+                    )?;
+                    Ok(())
+                };
+            let player = world.evidence.ids.player;
+            project(player, world.game.player, 1.8, 0.35)?;
+            for enemy in &world.game.enemies {
+                project(player + 1 + enemy.id, enemy.pos, 1.9, 0.35)?;
+            }
             self.next_frame = tag.checked_add(1).ok_or("diagnostic frame overflow")?;
             if capturing {
                 let report = if still {
@@ -417,6 +468,15 @@ impl Live {
                     None,
                 );
             }
+        }
+        if matches!(
+            outcome,
+            sashiko_renderer::core::PresentOutcome::Presented { .. }
+        ) {
+            std::mem::swap(
+                &mut self.pending_view,
+                &mut self.session.world_mut().displayed,
+            );
         }
         Ok(outcome)
     }

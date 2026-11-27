@@ -110,6 +110,10 @@ FFV1/Matroska を PyAV 14.4.0 で全フレームデコードした。音声ト�
 `timeline.py show REPORT --frame 0` から当事者 o0／o349、突進による HP 100 → 84、
 終了時の加害個体の座標を確認した。保存済み入力からの再生も tick 79 まで一致した。
 
+Vulkan のプレイ画面を停止して表示済みのプレイヤーを 2 倍の viewport 座標で選び、
+`selected` と `find` の個体 ID の一致と空背景の選択解除を確認した。選択範囲が重なる
+場合の前後、移動後の旧 frame の拒否、resize、消滅後の ID 保持は CPU 試験で確認した。
+
 Windows x64 の Rust 1.99.0 release で、通常版と検査版の同じ 69 tick の結果、NDJSON の実プロセス、確定時点の投影、低速な読み手、標準入力の EOF を照合した。tick 1 の拒否時に提示した鍵は `garden`、同じ tick の終了時に持つ鍵は `basement`。配列とコンポーネント別ストレージの試験で、個体消滅と保存した投影の寿命を照合した。通常構成の依存木から `sashiko-inspect` が外れ、通常版 EXE は検査オプションを拒否した。診断専用の代表文字列も通常版 EXE に含まれなかった。
 
 Windows Server 2022 と Ubuntu 24.04 の CPU ジョブでも、通常版・検査版のビルドと標準入出力を使う同じ受け入れ試験が通った。追加ステップはそれぞれ 11 秒、7 秒だった。[実プロセス試験を実行した CI](https://github.com/tsukushibito/sashiko/actions/runs/45751885010)

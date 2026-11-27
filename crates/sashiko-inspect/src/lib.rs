@@ -1,5 +1,6 @@
 //! Optional, storage-independent inspection at completed simulation ticks.
 pub mod jobs;
+pub mod picking;
 mod protocol;
 pub mod report;
 mod session;
@@ -74,6 +75,10 @@ impl Value<'_> {
 pub trait World {
     /// Payload copied at the decision point. Its serialized fields follow EventSchema.
     type Facts: Copy + Serialize;
+    /// The selection shapes from the frame most recently presented to the user.
+    fn displayed(&self) -> Option<&picking::PickView> {
+        None
+    }
     fn schemas(&self) -> &'static [Schema];
     /// Visit at most limit matching objects starting at offset, in repeatable order.
     fn find(

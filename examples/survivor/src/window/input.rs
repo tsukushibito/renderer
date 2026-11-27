@@ -14,6 +14,8 @@ pub(super) struct Controls {
     report_held: bool,
     pub video: bool,
     video_held: bool,
+    cursor: Option<[f64; 2]>,
+    pub pick: Option<[f64; 2]>,
 }
 #[cfg(feature = "diagnostics")]
 impl std::ops::Deref for Controls {
@@ -30,6 +32,9 @@ impl std::ops::DerefMut for Controls {
 }
 #[cfg(feature = "diagnostics")]
 impl sashiko::window::WindowControls for Controls {
+    fn cursor_moved(&mut self, point: [f64; 2]) {
+        self.cursor = Some(point);
+    }
     fn key(&mut self, key: KeyCode, pressed: bool) {
         if key == KeyCode::F8 {
             self.report |= pressed && !self.report_held;
@@ -47,9 +52,14 @@ impl sashiko::window::WindowControls for Controls {
     fn focus_lost(&mut self) {
         self.report_held = false;
         self.video_held = false;
+        self.cursor = None;
+        self.pick = None;
         self.inner.focus_lost();
     }
     fn mouse_button(&mut self, button: u16, pressed: bool) {
+        if button == 2 && pressed {
+            self.pick = self.cursor;
+        }
         self.inner.mouse_button(button, pressed);
     }
     fn poll_devices(&mut self) {
@@ -68,6 +78,8 @@ pub(super) fn controls() -> Controls {
         report_held: false,
         video: false,
         video_held: false,
+        cursor: None,
+        pick: None,
     };
     #[cfg(not(feature = "diagnostics"))]
     inner

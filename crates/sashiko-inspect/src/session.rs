@@ -91,6 +91,7 @@ struct Wait {
 
 /// One local process session for one independently stepped world.
 pub struct Session<W: World> {
+    selected: Option<(ObjectId, Value)>,
     jobs: Option<crate::jobs::Jobs>,
     world: W,
     name: Arc<str>,
@@ -115,6 +116,7 @@ impl<W: World> Session<W> {
         Self {
             world,
             jobs: None,
+            selected: None,
             name: name.into(),
             paused: true,
             journal: History {
@@ -130,6 +132,20 @@ impl<W: World> Session<W> {
 
     pub fn world(&self) -> &W {
         &self.world
+    }
+    pub fn pick(&mut self, pointer: &crate::picking::Pointer) -> Result<Value> {
+        let view = self.world.displayed().ok_or("UNSUPPORTED")?;
+        self.selected = view.pick(pointer)?.map(|id| (id, view.descriptor()));
+        Ok(self.selection())
+    }
+
+    fn selection(&self) -> Value {
+        match &self.selected {
+            None => json!({"state":"empty"}),
+            Some((id, view)) => {
+                json!({"view":view,"object":self.key(*id),"state":if self.world.object_type(*id).is_some() {"selected"} else {"OBJECT_GONE"}})
+            }
+        }
     }
 
     pub fn world_mut(&mut self) -> &mut W {
@@ -423,11 +439,16 @@ impl<W: World> Session<W> {
                 if self.jobs.is_some() {
                     operations.extend(["capture", "job"]);
                 }
+                if self.world.displayed().is_some() {
+                    operations.extend(["pick", "selected"]);
+                }
                 Ok(
                     json!({"protocol":1,"session":&*self.name,"world":"game","state":self.status(),
-                    "operations":operations,"diagnostics":self.jobs.as_ref().map(|j| j.capabilities())}),
+                    "operations":operations,"displayed":self.world.displayed().map(|v|v.descriptor()),"diagnostics":self.jobs.as_ref().map(|j| j.capabilities())}),
                 )
             }
+            Operation::Pick { pointer } => self.pick(&pointer),
+            Operation::Selected => Ok(self.selection()),
             Operation::Capture { request } => {
                 let tick = self.tick();
                 let id = self
@@ -470,7 +491,8 @@ impl<W: World> Session<W> {
                 let mut objects = Vec::new();
                 self.world
                     .find(kind.as_deref(), offset, limit + 1, &mut |o| {
-                        objects.push(json!({"id":self.key(o.id),"kind":o.kind,"name":o.name}))
+                        objects.push(json!({"id":self.key(o.id),"kind":o.kind,"name":o.name,
+                            "display_center":self.world.displayed().and_then(|v|v.center(o.id))}))
                     });
                 let next = if objects.len() > limit {
                     objects.truncate(limit);

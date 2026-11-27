@@ -170,6 +170,10 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
             return Err("benchmark presentation invalidated".into());
         }
         self.renderer.resize(size, self.visual.assets())?;
+        #[cfg(feature = "diagnostics")]
+        if let PlayState::Observed(live) = &mut self.app.game {
+            live.invalidate_view();
+        }
         self.extent = size;
         if !size.contains(&0) {
             self.last_extent = size;
@@ -182,6 +186,9 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
     fn update(&mut self, controls: &mut Controls, elapsed: Duration) -> PipelineResult<()> {
         #[cfg(feature = "diagnostics")]
         if let PlayState::Observed(live) = &mut self.app.game {
+            if let Some(point) = controls.pick.take() {
+                live.click(point, self.extent);
+            }
             live.poll(
                 std::mem::take(&mut controls.report),
                 std::mem::take(&mut controls.video),
