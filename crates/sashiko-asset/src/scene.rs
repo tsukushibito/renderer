@@ -8,6 +8,10 @@ use std::{collections::BTreeMap, fs, io, path::Path};
 mod display;
 #[cfg(feature = "renderer")]
 pub use display::DisplayScene;
+#[cfg(feature = "renderer")]
+mod optics;
+#[cfg(feature = "renderer")]
+pub use optics::{FilmProjection, FilmRay, SkyRadiance};
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

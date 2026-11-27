@@ -73,6 +73,13 @@ target/release/sashiko-asset-cook.exe scene tools/sashiko-asset-cook/tests/fixtu
 target/release/scene-viewer.exe build/cards postcards
 ```
 
+等面積 HDR を使う PBRT 入力では、cook 時に同じ光源から拡散照度マップ・GGX反射マップ・BRDF LUT を作ります。Landscape では空に太陽円盤が含まれるため、この段階のレシピでは追加の方向光を0 luxとしています。空とフィルムだけを切り分けるには次を実行します。EXR は ISO と白色点を反映した線形 RGB、PNG は同じ値から sRGB 変換した結果です。撮影条件はパッケージから読みます。
+
+```powershell
+target/release/scene-viewer.exe build/full-package view-0 --sky build/sky-linear.exr build/sky-display.png
+python tools/landscape/check_ibl.py build/full-package
+```
+
 ### Landscape の原画と比較する
 
 評価用素材を取得するには、上記の Python 環境で次を実行します。取得ツールは固定版の Git blob とローカルの内容を照合し、既にあるジオメトリやテクスチャを再利用します。評価用画像はランタイムの入力から独立しています。

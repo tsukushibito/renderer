@@ -6,7 +6,7 @@
   },
   "sun_direction": [-0.55, 0.78, 0.30],
   "sun_color": [1, 0.96, 0.87],
-  "sun_lux": 6,
+  "sun_lux": 0,
   "sky_color": [0.43, 0.61, 0.85],
   "shadow_resolution": 1024,
   "shadow_distance": 80,
@@ -16,14 +16,5 @@
     "source": "https://github.com/mmp/pbrt-v4-scenes/tree/30cf4a0346ae5a80a2d7a530a3ef7d0fa4f70572/landscape",
     "license": "Creative Commons Attribution 4.0 International (https://creativecommons.org/licenses/by/4.0/)",
     "changes": "Converted PBRT triangle meshes, images, physical materials, light and camera to a Sashiko scene package. Converted centimetres to metres about a local origin and reflected world X, with corresponding mesh winding and tangent handedness. Flipped image V coordinates and generated tangents and texture mipmaps. The interactive preview maps materials to metallic-roughness shading and thresholds opacity."
-  },
-  "environment": {
-    "nits_per_unit": 30,
-    "yaw_radians": 0,
-    "maps": [
-      {"width": 1, "height": 1, "mip_levels": 1, "data": "overview-irradiance.rgba16f"},
-      {"width": 1, "height": 1, "mip_levels": 1, "data": "overview-reflection.rgba16f"},
-      {"width": 16, "height": 16, "mip_levels": 1, "data": "../../examples/renderer-scenes/src/shared/ibl-fixture-brdf.rgba16f"}
-    ]
   }
 }

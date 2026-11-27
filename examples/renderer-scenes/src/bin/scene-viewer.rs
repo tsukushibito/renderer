@@ -12,6 +12,9 @@ use std::{fs::File, io::BufWriter, path::Path, time::Duration};
 #[path = "scene_viewer/window.rs"]
 mod window;
 
+#[path = "scene_viewer/film.rs"]
+mod film;
+
 fn backend() -> RuntimeConfig {
     RuntimeConfig::Vulkan(VulkanConfig {
         validation: if cfg!(feature = "development-validation") {
@@ -66,6 +69,7 @@ fn capture(package: &Path, view: &str, output: &Path) -> PipelineResult<()> {
 fn main() -> PipelineResult<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
+        [package, view, flag, exr, png] if flag == "--sky" => film::sky(Path::new(package),view.to_str().ok_or("invalid view name")?,Path::new(exr),Path::new(png)),
         [package, view, flag, png] if flag == "--capture" => capture(
             Path::new(package),
             view.to_str().ok_or("invalid view name")?,
@@ -89,7 +93,7 @@ fn main() -> PipelineResult<()> {
             None,
         ),
         _ => Err(
-            "usage: scene-viewer <package> <view> [--capture output.png | --present-frames N]"
+            "usage: scene-viewer <package> <view> [--capture output.png | --sky linear.exr display.png | --present-frames N]"
                 .into(),
         ),
     }

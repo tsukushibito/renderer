@@ -1,5 +1,6 @@
 //! Static PBRT v4 import. Resolve source files relative to the scene root,
 //! preserve graphics state across includes, and keep object definitions local.
+mod lighting;
 mod ply;
 mod surface;
 mod syntax;
@@ -344,7 +345,7 @@ impl Import {
                     self.state.matrix,
                     cmd.param("float scale")?.unwrap_or("1").parse()?,
                 ));
-                self.notes.push(format!("{loc} infinite light {} {:?} matrix {:?}: interactive preview uses recipe environment",
+                self.notes.push(format!("{loc} infinite light {} {:?} matrix {:?}: retained equal-area radiance and convolved diffuse/reflection maps",
                     path.strip_prefix(&self.root)?.display(),cmd.params,self.state.matrix.to_cols_array()));
             }
             _ => return Err(format!("unsupported PBRT directive {}", cmd.name).into()),
@@ -569,6 +570,9 @@ pub(super) fn cook(
         .map(|(name, _)| name)
         .collect();
     empty.sort();
+    if let Some(sky) = &physical.sky {
+        scene.environment = Some(lighting::cook(directory, sky)?);
+    }
     scene.physical = Some(physical);
     println!(
         "{} source instances, {} placed primitives, {unique_triangles} unique / {placed_triangles} placed triangles; empty definitions: {empty:?}",
