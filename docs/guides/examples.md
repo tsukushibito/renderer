@@ -94,6 +94,14 @@ target/release/scene-viewer.exe build/full-package view-0 --visibility
 
 `--visibility` はカメラと方向光4カスケードの候補数・三角形数をJSONで出力します。方向光が0 luxのシーンでも、診断では同じ方向と距離で影の候補を数えます。実描画ではこの光の影パスを省きます。
 
+Windows で実際の描画命令を数える場合は、Vulkan SDK の API dump と Python の `psutil` を準備し、製品構成の実行ファイルを次のように起動します。1回目で所要時間とプロセスのメモリを測り、2回目で各キュー送信の直接描画命令とヒープの確保・解放を記録します。トレースには新しいファイル名を指定します。
+
+```powershell
+python tools/landscape/measure_capture.py build/grass-trace.txt target/release/scene-viewer.exe build/full-package view-0 --film-crop 1 930,1340,64,64 build/grass.exr build/grass.png
+$env:SASHIKO_VISIBILITY_PACKAGE=(Resolve-Path build/overview-package).Path
+cargo test --release -p sashiko-asset --features vulkan-presentation,sashiko-renderer/development-validation --lib fixed_selection_preserves -- --ignored --nocapture
+```
+
 光量・反射方向と焦点面を独立に検査するには次を実行します。PBRT v4 の実行ファイルを `pbrt` として指定しています。
 
 ```powershell

@@ -392,3 +392,6 @@ fn upload(
     }
     Ok(owner)
 }
+
+#[cfg(all(test, feature = "vulkan-presentation"))]
+mod visibility_tests;
