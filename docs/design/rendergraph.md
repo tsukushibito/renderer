@@ -307,7 +307,7 @@ native作成・破棄や表示・結果消費を含む全体のゼロ達成を�
 
 ### 画像subresourceとowned attachment配列
 
-`renderer-7ft.2.2.3`。`ImageDesc`は`mip_levels`と`array_layers`を持ち、
+`sashiko-7ft.2.2.3`。`ImageDesc`は`mip_levels`と`array_layers`を持ち、
 `rgba8`/`rgba8_srgb`/`rgba16_float`/`depth32` constructorは各1を設定する。mip数は最大extentから許される段数まで、
 layer数は非ゼロとし、全mipの縮小extentとlayer数のpacked byte合計をchecked演算で検査する。
 これはnative allocation sizeやVRAM使用量の見積もりではない。
@@ -483,7 +483,7 @@ Programバッチの開始位置とProgram ABIの固定幅で定数を参照す�
 前後比較は[現行検証](../verification/current.md#raster-constant-storage)を参照する。
 公開iteratorのsize_hintやExactSizeIteratorの長さを容量の保証には使わず、実際の要素ごとに準備済みdraw容量を確認する。
 
-`renderer-7ft.2.2.4`で公開の単一drawとEngine専用batchを同じowned命令列へ統合した。
+`sashiko-7ft.2.2.4`で公開の単一drawとEngine専用batchを同じowned命令列へ統合した。
 `ManagedRasterProgram::mesh()`はビルドに含まれるAPIのmesh VS/FSに結び付き、static descriptorが
 頂点stride 28、vertex段のcolumn-major行列＋tint 80 byte、fragment出力location 0を定める。
 Device能力はnative PSO作成時に確認する。独自shaderは
@@ -630,7 +630,7 @@ passのhead/tailを保持する分、旧flat配列より予約metadataが増え�
 read/exportのproducerは最終的な依存集合へ直接追加し、readごとの一時集合を作って取り込み直さない。
 途中に未初期化の穴があれば解析全体を失敗にし、追加済みprefixの依存を含む不完全な計画を公開しない。
 producerの重複排除、内容の有効性、実行されるwriteに対応した最終内容の確定は維持する。
-`renderer-7ft.2.2.1`で全accessの一時Vec射影を除去し、予約済み配列のindexを直接使う。
+`sashiko-7ft.2.2.1`で全accessの一時Vec射影を除去し、予約済み配列のindexを直接使う。
 
 内容のproducerを特定するdataflowと、同じ物理資源のRAW・WAR・WAWによる順序制約は区別する。
 不要パス除去はexport・readback・外部に観測される書き込み・明示的な副作用から
@@ -858,7 +858,7 @@ Device removalや投入後のsignal失敗を有効な内容として返さない
 Drop時の対象Fence待機と保持の規則は[D3D12 runtimeの設計](implementation-policy.md#d3d12-runtime)を参照する。
 実行・資源・CPU結果は準備済みpoolへ分け、未完了submissionの通常Dropは上限付きpendingへ引き継ぐ。
 
-`renderer-7ft.2.5`でbuffer／画像をslot内の専用品から共有物理registryへ移した。
+`sashiko-7ft.2.5`でbuffer／画像をslot内の専用品から共有物理registryへ移した。
 `D3D12Submission::export_buffer`／`export_image`で受理済み内容のsnapshotを取得し、
 通常の`Graph::import_buffer`／`import_image`から次のGraphへ接続できる。
 同じkeyの重複importは論理資源を増やさず、writer／readerの依存と初期化情報を共有する。

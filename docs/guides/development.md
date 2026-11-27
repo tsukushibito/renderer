@@ -418,7 +418,7 @@ Renderer追加検証・専用診断をコンパイル除外しnative検証を無
 
 ## Bistroのruntime cook・Forward PBR・計測
 
-`renderer-7ft.3.1`／`.3.2`は、利用側で素材をcookして読み込み、同じ公開Graphとtrusted Rasterを
+`sashiko-7ft.3.1`／`.3.2`は、利用側で素材をcookして読み込み、同じ公開Graphとtrusted Rasterを
 Vulkan/D3D12へ接続する。Renderer本体へModelの読込やPBR固有のeffect列挙を追加しない。
 [形式・保証・対応範囲](../design/implementation-policy.md#bistro-runtime-cook)、
 [実行済みの検証と計測](../verification/current.md#bistro-pbr)も参照する。

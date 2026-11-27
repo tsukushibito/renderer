@@ -1,7 +1,7 @@
 # Beads の利用手順
 
 このリポジトリは **Beads v1.3.4** を使って課題を管理します。
-課題 ID の接頭辞は `renderer`、保存先は組み込み Dolt DB です。
+課題 ID の接頭辞は `sashiko`、保存先は組み込み Dolt DB です。
 別途 Dolt サーバーや Go をインストールする必要はありません。
 
 ## CLI のインストール
@@ -32,12 +32,12 @@ bd version
 bd prime
 bd ready
 bd create "課題のタイトル" -t task -p 2 -d "目的と完了条件"
-bd show renderer-xxxxx
-bd update renderer-xxxxx --claim
-bd close renderer-xxxxx
+bd show sashiko-xxxxx
+bd update sashiko-xxxxx --claim
+bd close sashiko-xxxxx
 ```
 
-`renderer-xxxxx` は実際に作成された課題 ID に置き換えてください。
+`sashiko-xxxxx` は実際に作成された課題 ID に置き換えてください。
 依存関係は `bd dep add <依存する課題ID> <先に完了すべき課題ID>` で記録します。
 
 ## 同期と別の clone のセットアップ
@@ -48,7 +48,8 @@ Dolt の履歴として別途同期します。JSONL の手動コピーを共有
 
 同期先は `git+ssh://git@github.com/tsukushibito/sashiko.git` です。
 SSH 認証とリポジトリへのアクセス権が必要です。
-既存課題への参照を保つため、課題 ID の接頭辞には引き続き `renderer` を使います。
+移行前のコミットや記録にある `renderer-` で始まる課題 ID は、
+接尾部を保って `sashiko-` に読み替えます。子課題の番号もそのまま使えます。
 課題データは Git リモートの `refs/dolt/data` に保存されます。
 
 その後、別の clone では CLI のインストール後に次を実行します。
@@ -73,6 +74,7 @@ Beadsマーカー外にあるLFS処理を保持します。`git lfs install --fo
 ## 動作確認
 
 ```powershell
+bd config get issue_prefix
 bd ready --json
 bd hooks list
 bd dolt status

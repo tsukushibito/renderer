@@ -53,7 +53,7 @@ Cargo の通常依存・機能グラフから inspect、window-capture、PNG、T
 同じ実行ファイルを隔離した設定で900フレーム動かし、731回の観測で待受ソケットは0個だった。
 Vulkan の既存の出荷相当 WSI 試験は、1回目は性能計測付き表示で停止し、スタック採取を
 試みた後に終了した。同じ試験バイナリの独立した再実行では、通常区間と終了処理まで
-1.28秒で成功した。最初の停止原因は引き続き `renderer-1ji` で追跡する。
+1.28秒で成功した。最初の停止原因は引き続き `sashiko-1ji` で追跡する。
 
 <a id="landscape"></a>
 
@@ -75,7 +75,7 @@ Vulkan の既存の出荷相当 WSI 試験は、1回目は性能計測付き表�
 
 ![上段は公開原画、Sashiko、4倍強調した絶対差。下段は草穂、幹、林、空の原寸切り出しを同じ順で縦に比較したもの](landscape-film-comparison.jpg)
 
-原寸では、手前でぼけた草穂の輪郭、幹の分岐、空の勾配が揃う。草と樹皮の細かい明暗には粒状の差があり、幹の周囲の葉や林の一部にも差が見える。同じパッケージの `view-4` では水面と岸を各64×64画素で撮影した。公開 EXR を sRGB に変換した値との L* 平均絶対差は順に2.803、2.491。1−SSIM は0.604、0.522で、特に水面の反射には原画より目立つ輝点が残る。別視点の比較範囲はこの2領域。自由移動中の画質・性能と配布検証は Beads `renderer-ya35` で追跡する。
+原寸では、手前でぼけた草穂の輪郭、幹の分岐、空の勾配が揃う。草と樹皮の細かい明暗には粒状の差があり、幹の周囲の葉や林の一部にも差が見える。同じパッケージの `view-4` では水面と岸を各64×64画素で撮影した。公開 EXR を sRGB に変換した値との L* 平均絶対差は順に2.803、2.491。1−SSIM は0.604、0.522で、特に水面の反射には原画より目立つ輝点が残る。別視点の比較範囲はこの2領域。自由移動中の画質・性能と配布検証は Beads `sashiko-ya35` で追跡する。
 
 4Kの公開原画、Sashiko の PNG と線形 EXR、画素ごとの絶対差、別視点の比較画像、領域座標・全測定値・閾値・SHA-256 を同梱した。画像の出典は Laubwerk の Landscape（Jan-Walter Schliep、Burak Kahraman、Timm Dapper、CC BY 4.0）。改変内容と固定リビジョンは同梱の `measurement.json` に記載した。[検証一式（Git LFS）](../../assets/verification/landscape-film-evidence.zip)
 
@@ -210,7 +210,7 @@ Vulkan 1080p の Full の CPU 時間は、人物＋小物 6.0 µs、画面外多
 
 フレーム計測中は両ネイティブ API の全 180 試行で Rust の確保・再確保・解放が 0 回、ネイティブ資源・メモリ・記述子の作成・破棄も 0 回。事前予約には 1080p、1 スロット当たり半解像度の RGBA16F と D32 で約 5.93 MiB を使う（画像本体の論理サイズ）。候補表は 16 個で 32 KiB、256 個で 288 KiB。CPU 作業領域と Graph のステージング、ドライバー固有のアラインメントは別に必要となる。
 
-Chrome 158 と Edge 158 の実機 WebGPU で 320 × 180 の Half と Vulkan Forward の SDR 平均絶対差はともに 0.000052 階調。321 × 181 の Forward+・Deferred では密集 256 カプセルで Half → Off → Full を切り替えた。SwiftShader は 16 枚のテクスチャ上限内で 3 描画経路を通過した。60 フレームで Off と Full はそれぞれ Rust の確保と解放が 1,320 回ずつ、Half は 1,380 回ずつ。再確保と測定対象の GPU 資源作成・破棄は全モードで 0 回だった。Half では固定版 wgpu 30.0.2 のブラウザ実装が追加ラスターパスのカラーアタッチメント配列を確保する。残るホスト確保は Beads の `renderer-v8bk` で追跡する。ブラウザで GPU timestamp は計測していない。
+Chrome 158 と Edge 158 の実機 WebGPU で 320 × 180 の Half と Vulkan Forward の SDR 平均絶対差はともに 0.000052 階調。321 × 181 の Forward+・Deferred では密集 256 カプセルで Half → Off → Full を切り替えた。SwiftShader は 16 枚のテクスチャ上限内で 3 描画経路を通過した。60 フレームで Off と Full はそれぞれ Rust の確保と解放が 1,320 回ずつ、Half は 1,380 回ずつ。再確保と測定対象の GPU 資源作成・破棄は全モードで 0 回だった。Half では固定版 wgpu 30.0.2 のブラウザ実装が追加ラスターパスのカラーアタッチメント配列を確保する。残るホスト確保は Beads の `sashiko-v8bk` で追跡する。ブラウザで GPU timestamp は計測していない。
 
 独立した半球積分と近似を `python tools/renderer-scenes/indirect_shadow_reference.py build/shadow-reference` で比較できる。黒球と明るい開口のケースで 16,384 方向を積分し、参照照度の低下が 2% を超える領域の平均絶対誤差を測った。広い開口で無効時 0.04645 → 有効時 0.01466、狭い開口で 0.00941 → 0.00501、左右二つの開口で 0.04097 → 0.02873。広い開口を左右反転すると影の重心の符号も反転した。絶対位置は参照 0.378、近似 0.518。薄壁の反対側で参照上の変化が 0 の領域にも、近似は最大 0.02476 の暗化を生じた。[デモの実行方法](../guides/examples.md#動く物体でベイク済みの間接光を遮る)
 
@@ -226,7 +226,7 @@ Rapier 0.36.1。公開 API で重力による着地・静止、薄い壁への�
 
 RTX 3060、Windows、Vulkan、1920×1080、seed 506、終盤500体、120フレーム予熱後600フレームの1回比較。ゲーム更新時間の中央値は移行前 0.117 ms、Rapier で各軸を毎回掃引すると 0.941 ms、移動範囲の候補が空なら掃引を省くと 0.459 ms。提示間隔の中央値は移行前 9.641 ms、最終構成 11.660 ms。入力は共通のベンチマーク手順から生成し、物理導入で個体の軌跡は変わる。この比較は固定更新全体の時間を含む。
 
-既存の実画面メモリ検査は Vulkan・D3D12 の CPU / Compute スキニングと GPU タイムスタンプの各組合せで通過。箱を床に置いた単独ワールドの90回更新は静止時 17.5 µs・確保0回、毎回インパルスを与えた場合 270.9 µs・確保221回・再確保0回・解放221回だった。Survivor で箱を静止状態から押す90更新ではゲーム全体で通常確保172回、再確保2回、解放143回を観測した。`physics_memory` を release・`memory-profiling` で単独実行すると再測定できる。動く剛体の定常メモリは `renderer-kb1x` で追跡する。
+既存の実画面メモリ検査は Vulkan・D3D12 の CPU / Compute スキニングと GPU タイムスタンプの各組合せで通過。箱を床に置いた単独ワールドの90回更新は静止時 17.5 µs・確保0回、毎回インパルスを与えた場合 270.9 µs・確保221回・再確保0回・解放221回だった。Survivor で箱を静止状態から押す90更新ではゲーム全体で通常確保172回、再確保2回、解放143回を観測した。`physics_memory` を release・`memory-profiling` で単独実行すると再測定できる。動く剛体の定常メモリは `sashiko-kb1x` で追跡する。
 <a id="live-inspector"></a>
 
 ## ライブインスペクタ初版
@@ -315,7 +315,7 @@ D3D12の50%だけを同じ実行物で追加3反復し、最初と合わせた6�
 
 同じ入力の別走で、カメラと影の分類は Vulkan 2.10→0.65 ms、D3D12 2.10→0.75 ms、ネイティブ記録はそれぞれ1.11→0.48 ms、1.25→0.86 msだった。GPU時間はVulkanで約0.45 ms、D3D12で約0.24 ms。ワーカー合流でホストが待機した時間は、全段階を強制したとき1フレーム平均で0.52 msと0.32 msだった。この時点では物体とメッシュ・ポーズ・ライトマップをGraph資源へ接続する処理に約3.0 ms、シーン登録の照合に約1.5 msかかった。この計測をもとに、同じメッシュや材質が続く区間のインポートと照合をまとめた。[各段階の計時と全反復](standard-renderer-jobs.json)
 
-不透明・テクスチャ・半透明・静止／動的な影の各条件で、SDR・HDR・深度と有効な4枚の影マップを2フレームずつ照合した。開発検証とメモリ計測の別ビルドを合わせて142走・1,172画像面で一致し、うち110走は変更前のシーン処理から得た画像とも一致した。メモリ計測の対象フレームでは、Rustの確保・再確保・解放、VMAホストアロケータ、Renderer発行のネイティブ作成・破棄はすべて0。影ありの比較は両APIで5万物体中5千物体が影を落とす。D3D12で全5万物体をキャスターとして準備すると現行のdescriptor予約がヒープ上限を超えるため、この条件は未測定（Beads `renderer-ghys`）。[構成・照合件数・画像ハッシュ・メモリ検証](standard-renderer-job-checks.json)
+不透明・テクスチャ・半透明・静止／動的な影の各条件で、SDR・HDR・深度と有効な4枚の影マップを2フレームずつ照合した。開発検証とメモリ計測の別ビルドを合わせて142走・1,172画像面で一致し、うち110走は変更前のシーン処理から得た画像とも一致した。メモリ計測の対象フレームでは、Rustの確保・再確保・解放、VMAホストアロケータ、Renderer発行のネイティブ作成・破棄はすべて0。影ありの比較は両APIで5万物体中5千物体が影を落とす。D3D12で全5万物体をキャスターとして準備すると現行のdescriptor予約がヒープ上限を超えるため、この条件は未測定（Beads `sashiko-ghys`）。[構成・照合件数・画像ハッシュ・メモリ検証](standard-renderer-job-checks.json)
 
 別途、VulkanとD3D12の開発検証付きReleaseで、スキニングしたメッシュのカメラ・影別の可視性、混在材質、矩形光源の遮蔽物の移動、影履歴とブルーム、変換したキャスターとインスタンシングの一致を確認した。既存の実GPUテスト10件がすべて成功した。
 
@@ -454,7 +454,7 @@ RTX 3060 の製品構成で 1,483 頂点の同一モデルを使用。フレー�
 | D3D12 | 16 / 16 / 4 | 38.9 / 35.8 | 108.5 / 46.9 | 1699.3 / 1873.8 |
 | D3D12 | 16 / 16 / 16 | 128.0 / 121.9 | 399.4 / 163.8 | 1814.8 / 1762.5 |
 
-Compute の使用出力は可視ポーズ 1 / 4 / 16 個で 73,728 / 294,912 / 1,179,648 B、頂点経路は 0 B。どちらも可視ポーズごとにパレット 12,288 B を転送する。再現には上記の `skin_compare` を使う。統合 GPU の実機比較と端末別の採用判定は Beads `renderer-8d7g`。
+Compute の使用出力は可視ポーズ 1 / 4 / 16 個で 73,728 / 294,912 / 1,179,648 B、頂点経路は 0 B。どちらも可視ポーズごとにパレット 12,288 B を転送する。再現には上記の `skin_compare` を使う。統合 GPU の実機比較と端末別の採用判定は Beads `sashiko-8d7g`。
 
 標準描画の実機試験は同じ Graph に 2 ビューを記録し、変形後に画面外へ出たポーズ、共有ポーズ、独立した影専用 LOD を使った。両ビューで不要なフレームは dispatch 0 回、両 LOD を使うフレームは 2 回、影履歴を再利用するフレームは 1 回。各ビューで記録した転送量とコンパイル後の dispatch 数を照合した。再現は `cargo test --release --locked -p sashiko-renderer --features vulkan,d3d12,memory-profiling --test view_pipelines skin_visibility -- --ignored --test-threads=1`。Vulkan・D3D12 の製品構成と `development-validation` 付き release で警告・エラー 0 件。
 
@@ -494,7 +494,7 @@ release の契約試験と Miri（seed 0〜3）で借用、子孫の完了、キ
 | 休止後、均一 | 294.9 / 386.6 | 310.6 / 393.9 | 241.0 / 352.6 | 244.2 / 362.6 |
 | 休止後、先頭 1/4 をブレンド | 572.0 / 769.2 | 410.2 / 747.4 | 353.4 / 525.1 | 402.8 / 547.2 |
 
-8 範囲の連続・ブレンドでは 12 組すべてで順番配布の p50 と p95 が増加した。カウンタを有効にした別計測では、同条件の評価 1 回あたりの steal 成功数は 5.28 回から 3.09 回に減った（12 プロセスの中央値）。4 範囲の休止後・ブレンドでは順番配布の p50 が 8 組中 7 組で改善した。今回は順番配布を標準化せず、初期範囲数の効果と区別して記録した。各プロセスで全姿勢の全関節行列が逐次 SIMD の出力と一致し、計測窓内の Rust ヒープ 4 指標はすべて 0 回。実験コード・実行順・生の時間標本は Beads `renderer-jfd9.3` に記載したローカルアーカイブに保存した。
+8 範囲の連続・ブレンドでは 12 組すべてで順番配布の p50 と p95 が増加した。カウンタを有効にした別計測では、同条件の評価 1 回あたりの steal 成功数は 5.28 回から 3.09 回に減った（12 プロセスの中央値）。4 範囲の休止後・ブレンドでは順番配布の p50 が 8 組中 7 組で改善した。今回は順番配布を標準化せず、初期範囲数の効果と区別して記録した。各プロセスで全姿勢の全関節行列が逐次 SIMD の出力と一致し、計測窓内の Rust ヒープ 4 指標はすべて 0 回。実験コード・実行順・生の時間標本は Beads `sashiko-jfd9.3` に記載したローカルアーカイブに保存した。
 
 <a id="job-backends"></a>
 
@@ -528,7 +528,7 @@ Rayon のホスト込み 4 並列はプールに補助 3 人を持つ。Windows 
 
 軽い計算の p95 差を調べるため、両版のプロセスを同じ 4 論理 CPU（affinity mask `0x55`）に固定し、順序を反転してさらに 8 組を測定した。32 要素の p95 中央値は双方 5.2 µs、65,536 要素は 804.5 → 650.6 µs、休止後の小さい範囲分割は 304.6 → 312.8 µs だった。休止後に遅くなったのは 8 組中 4 組。姿勢評価の均一負荷は 39.0 → 44.8 µs（4 組で増加）、先頭ブレンドは 61.2 → 57.4 µs（2 組で増加）。32 要素の最初の差は再現しなかった。
 
-追加の Miri 検査では、既定構成の公開スコープテスト 6 件が通った。Rayon 構成の固定 nightly の Stacked Borrows は既知の `crossbeam-epoch 0.9.21` の診断（`internal.rs:567`）で停止した。Tree Borrows で借用した子スコープのテスト本体は通り、終了時のリーク検査が 5 件を報告した。Rayon の Miri 全体の成功は未確認。依存側の調査は Beads `renderer-adv8` で追跡する。
+追加の Miri 検査では、既定構成の公開スコープテスト 6 件が通った。Rayon 構成の固定 nightly の Stacked Borrows は既知の `crossbeam-epoch 0.9.21` の診断（`internal.rs:567`）で停止した。Tree Borrows で借用した子スコープのテスト本体は通り、終了時のリーク検査が 5 件を報告した。Rayon の Miri 全体の成功は未確認。依存側の調査は Beads `sashiko-adv8` で追跡する。
 
 <a id="shared-worker-budget"></a>
 
@@ -554,7 +554,7 @@ Windows / Core i5-14600KF と同機の Chrome 158 で、ゲームと Rapier に�
 
 両環境の並列度 4 で、物理を外した姿勢評価＋可視判定の 96 フレームは、現行がヒープ 4 指標とも 0。共有の `install`・`join`・並列イテレータを使う経路では、通常確保 0、ゼロ初期化確保 2、再確保 0、解放 2 だった。別窓で 1 フレームにつき汎用 `scope` に 2 ジョブ投入すると、共有構成は 192 / 2 / 0 / 194 回。どちらも物理単体のヒープ費用から独立した差であり、Windows・Web とも製品への移行は見送った。
 
-試作ではプール外から呼んだ物理ステップの接触フックと入れ子のゲーム処理が、ホストの指定したプールのスレッド ID 集合内で動くことを確認した。Web では子 Worker の起動失敗を注入し、初期化済みの子の終了応答後、同じ共有メモリでプールを生成して処理を完了した。別試行で、現行の Web ジョブへ物理ステップ自体を委譲するとタイムアウトしたため、原因調査を Beads `renderer-6hwe` に記録した。[再現手順](../guides/development.md#cpu-jobs)
+試作ではプール外から呼んだ物理ステップの接触フックと入れ子のゲーム処理が、ホストの指定したプールのスレッド ID 集合内で動くことを確認した。Web では子 Worker の起動失敗を注入し、初期化済みの子の終了応答後、同じ共有メモリでプールを生成して処理を完了した。別試行で、現行の Web ジョブへ物理ステップ自体を委譲するとタイムアウトしたため、原因調査を Beads `sashiko-6hwe` に記録した。[再現手順](../guides/development.md#cpu-jobs)
 
 <a id="job-range-profile"></a>
 
@@ -583,7 +583,7 @@ Windows / Core i5-14600KF と同機の Chrome 158 で、ゲームと Rapier に�
 
 独立した 2 配列を 4 並列で同時に更新する別の release 試験（各版 10 組 × 512 回）では、計 128 要素の加算が 3.6 / 6.8 → 2.8 / 4.9 µs、計 65,536 要素を各 64 回演算する負荷が 527.9 / 660.0 → 527.4 / 588.7 µs だった。各範囲を個別にキューへ投入した試作では軽い加算が 4.7 / 13.5 → 6.4 / 20.6 µs に悪化したため、範囲はバッチ内で取得する。
 
-Edge の共有メモリ版では 4 スレッドすべてが参加し、逐次版・2 並列版と同じチェックサム 3771654336 を返した。256 フレームの Rust ヒープ 4 指標は各 0 回。CPU 周波数とコア割り当ては固定しておらず、ゲーム全体のフレーム時間は未計測。生のトレースと時間標本は Beads `renderer-jfd9` に記載したローカルアーカイブに収録した。
+Edge の共有メモリ版では 4 スレッドすべてが参加し、逐次版・2 並列版と同じチェックサム 3771654336 を返した。256 フレームの Rust ヒープ 4 指標は各 0 回。CPU 周波数とコア割り当ては固定しておらず、ゲーム全体のフレーム時間は未計測。生のトレースと時間標本は Beads `sashiko-jfd9` に記載したローカルアーカイブに収録した。
 
 <a id="webgpu-scenes"></a>
 
@@ -603,7 +603,7 @@ Sponza の矩形光を消灯・影なし・影ありと切り替え、側方の�
 
 Edge のローカル配信で読み込み開始から最初の 2 回のフレーム呼び出しまで、表の順に 48.1 秒、5.6 秒、4.8 秒。続く各 24 回の更新で描画を投入した回数は 8、18、18 回、投入間隔の中央値は 17.0、18.3、18.1 ms だった。読み込みと表示を含むブラウザプロセスツリーのピーク RSS は 3.53 GiB（100 ms 間隔の標本）だった。Chrome では同順に 43.2 秒、6.9 秒、4.4 秒、各 24 回中の投入は 6、14、18 回、投入間隔の中央値は 35.6、35.2、18.4 ms、ピーク RSS は 3.71 GiB。これらはこの PC と表示寸法における短時間測定。
 
-製品構成の Chrome で 320 × 180 の fixture を 24 フレーム予熱し、固定・移動視点で各 60 回提示した。Rust アロケータでは 1 フレームあたり 23 回の確保と解放（各 448 バイト）、再確保は 0 回だった。いずれも GPU バッファ、テクスチャ、パイプライン、サンプラー、バインドグループの作成と明示的なリソース破棄は 0 回。Canvas のテクスチャ取得とビュー作成は各 1 回、Graph と表示用のコマンドエンコーダー作成・キュー投入は各 2 回だった。JS の GC とドライバー内部の割当は計測範囲外。CPU 確保を減らす作業とフルシーンでの割当内訳は Beads `renderer-v8bk` で追跡する。
+製品構成の Chrome で 320 × 180 の fixture を 24 フレーム予熱し、固定・移動視点で各 60 回提示した。Rust アロケータでは 1 フレームあたり 23 回の確保と解放（各 448 バイト）、再確保は 0 回だった。いずれも GPU バッファ、テクスチャ、パイプライン、サンプラー、バインドグループの作成と明示的なリソース破棄は 0 回。Canvas のテクスチャ取得とビュー作成は各 1 回、Graph と表示用のコマンドエンコーダー作成・キュー投入は各 2 回だった。JS の GC とドライバー内部の割当は計測範囲外。CPU 確保を減らす作業とフルシーンでの割当内訳は Beads `sashiko-v8bk` で追跡する。
 
 <a id="character-actions"></a>
 
@@ -617,7 +617,7 @@ Edge のローカル配信で読み込み開始から最初の 2 回のフレー
 
 Windows の GeForce RTX 3060 で、16 体を別々の位置に置き、同一 Graph の 2 ビューで個別描画とインスタンス描画を比較した。両ビューとも影を描く。1 位相では 16 インスタンスの 1 draw、4 位相では各 4 インスタンスの 4 draw を各描画先に渡した。両ビューの画像は全 10 フレームでバイト単位に一致した。CPU・Compute 間の画像差は各成分 1/255 以内。Compute の dispatch は両ビューと影を合わせてそれぞれ 1 回・4 回。Vulkan・D3D12 の製品構成と開発検証付き release が警告・エラー 0 件で通過した。これは専用シナリオの明示的な instanced draw の検証である。
 
-Survivor 本編は終盤 500 体、影あり、seed 506、640 × 360、12 フレーム予熱後に 40 フレームを提示した。表は提示間隔の p50 / p95（ms）。転送量は主役と敵の 4 位相を合わせた値。8 条件すべてで定常時の Rust ヒープ操作、Renderer のネイティブ資源作成・破棄、メモリ・記述子の確保・解放、VMA ホストメモリ操作は各 0 回。統合 GPU の比較は `renderer-8d7g` で追跡する。
+Survivor 本編は終盤 500 体、影あり、seed 506、640 × 360、12 フレーム予熱後に 40 フレームを提示した。表は提示間隔の p50 / p95（ms）。転送量は主役と敵の 4 位相を合わせた値。8 条件すべてで定常時の Rust ヒープ操作、Renderer のネイティブ資源作成・破棄、メモリ・記述子の確保・解放、VMA ホストメモリ操作は各 0 回。統合 GPU の比較は `sashiko-8d7g` で追跡する。
 
 | API | 経路 | GPU 計時なし | GPU 計時あり | ポーズ転送 B/frame |
 |---|---|---:|---:|---:|
@@ -1217,7 +1217,7 @@ RGB は表示画像の領域平均（0–255）。日陰の床では、矩形な
 
 ### Sponza の拡散プローブを一次・二次 SH で比較
 
-実験コミット `ce8d4420`、課題 `renderer-eszs`。中庭の可視プローブ面では、二次 SH にすると受光点の参照照度に対する平均絶対誤差が **7.59%** 減った。実際に暗く見える3領域では平均 **2.21%** の改善だった。以下の誤差はすべて線形 RGB の拡散間接照度を π で割り、各画素の3成分を等しく平均した値。
+実験コミット `ce8d4420`、課題 `sashiko-eszs`。中庭の可視プローブ面では、二次 SH にすると受光点の参照照度に対する平均絶対誤差が **7.59%** 減った。実際に暗く見える3領域では平均 **2.21%** の改善だった。以下の誤差はすべて線形 RGB の拡散間接照度を π で割り、各画素の3成分を等しく平均した値。
 
 | 受光点の選択 | プローブあたりの光線 | 受光点あたりの参照光線 | 一次 MAE | 二次 MAE | 誤差の減少 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -1517,7 +1517,7 @@ Vulkan・D3D12 のホスト再生で、左の鎧とその先端、右の胴、�
 
 二クレート再配置後の Windows 実機で Bistro の標準レシピと直接 Graph を Vulkan・D3D12 で実行した。小シーンを各 24 フレーム予熱し、120 フレーム描画後に取得した HDR・深度・SDR は四経路の間で全バイトが一致した。各 API の移行前の `fixture-forward-tent` のキャプチャとも一致し、厳格構成の報告は全四件とも警告・エラー 0 件だった。小規模な回帰試験にはこの 128 × 96 の fixture を使う。
 
-`renderer-8po`。シーンからの初期化を Windows の Vulkan と D3D12 で検証した。release の開発検証あり・なしで
+`sashiko-8po`。シーンからの初期化を Windows の Vulkan と D3D12 で検証した。release の開発検証あり・なしで
 `view_pipelines` の実機試験が各 6 件通過した。標準カメラ（8×8）と独自 Toon（4×4）を同じ Graph に記録し、
 各画像の全 RGBA バイトが低水準 API で組み立てた参照描画と一致した。テクスチャ付き材質、混在材質と Bloom、
 複数ビュー、リサイズを含む公開例では、準備済みフレームの記録から結果返却まで CPU／native の計測対象メモリ操作は各 0 件だった。
@@ -1529,7 +1529,7 @@ Core／SyncVal と Debug Layer／GBV を有効にした実機試験で、破棄�
 Vulkan の descriptor 予約では、同じバインディングを深度付き・深度なしの両方のパスで使う場合の必要数も検査した。
 この初期化経路ではウィンドウ表示と Bistro 全量シーンの比較は実行していない。
 
-`renderer-yp5`。ホストのウィンドウ、GPU 資源、アセット管理、複数のカメラを組み合わせる経路を対象にした。
+`sashiko-yp5`。ホストのウィンドウ、GPU 資源、アセット管理、複数のカメラを組み合わせる経路を対象にした。
 
 | 確認した契約 | 比較条件と観測結果 |
 |---|---|
@@ -1539,7 +1539,7 @@ Vulkan の descriptor 予約では、同じバインディングを深度付き�
 | ウィンドウと外部画像 | Windows の二つのホスト所有ウィンドウで同じ Runtime の画像を表示した。片方を閉じている間も他方で表示できた。ホスト所有テクスチャを Graph で更新し、使用中の返却拒否、退役後の返却と再登録、返却した画像の値を確認した。 |
 | 照明と合成 | Forward、Forward+、Deferred の不透明・半透明で 257 番目の点光源による画素を単灯の参照と比較した。Forward+ の 129 灯ではタイルごとのマスクも照合した。標準出力のシェーダーは `renderer` への移動前後で同じ生成物を使う。 |
 
-Windows の RTX 3060 で統合版 `7a5d119` と `renderer-jw0` の Bistro 小規模 fixture を比較した。
+Windows の RTX 3060 で統合版 `7a5d119` と `sashiko-jw0` の Bistro 小規模 fixture を比較した。
 Vulkan／D3D12、それぞれ開発検証あり／なしで 6 ケースずつ、計 24 ケースの HDR・SDR・深度・影など 236 キャプチャ
 （1,620,422,928 バイト）が一致した。各ケースで 3 フレームの warm-up 後に 5 フレームを計測し、
 Rust と VMA ホストの確保・再確保・解放、および Renderer による native 資源・メモリの作成・破棄が各 0 件だった。
@@ -1566,19 +1566,19 @@ private 項目を含む rustdoc、HTML ドキュメントのリンク検査も�
 
 ## ビューパイプラインの差し替え
 
-`renderer-jw0`。RTX 3060 の Vulkan と D3D12 で、同一 Runtime に準備した標準描画と外部実装の
+`sashiko-jw0`。RTX 3060 の Vulkan と D3D12 で、同一 Runtime に準備した標準描画と外部実装の
 Toon 描画が、同じメッシュ・材質・カメラから異なる中心画素を出力した。両実装を同じアプリループで
 2 カメラ、材質とメッシュの更新、出力のリサイズまで実行した。準備済みの通常フレームで計測した
 CPU 確保・再確保・解放と Renderer による native 資源生成・破棄は各 0 件だった。
 
 未投入フレームの破棄と投入拒否では履歴が進まないこと、投入が受理された後に 2 ビュー目の確定が
 失敗しても同じ投入の残りを再試行でき、1 ビュー目を二重に確定しないことを確認した。
-Bistro の小規模 fixture は `renderer-bzs` の記録と比較し、2 API × 2 検証構成 × 6 ケースで
+Bistro の小規模 fixture は `sashiko-bzs` の記録と比較し、2 API × 2 検証構成 × 6 ケースで
 236 キャプチャのバイト列と準備済み資源量が一致した。
 
 ## ビュー API・常駐アセット・混在 Deferred
 
-`renderer-bzs`。RTX 3060 の Vulkan と D3D12 で、変換済み半透明メッシュを逆順に登録しても
+`sashiko-bzs`。RTX 3060 の Vulkan と D3D12 で、変換済み半透明メッシュを逆順に登録しても
 同じ期待色になることを確認した。Deferred の材質面を読む段階の深度 0.5 と、Forward 不透明物の
 合成後の深度 0.4 を読み戻して区別した。静止した影の再利用と通常フレームのメモリ検査も通過した。
 100 種の PBR 材質をまとめて準備し、静止時には転送投入がなく、1 件の変更がバッファ 1 個・アップロード
@@ -1592,7 +1592,7 @@ native 資源生成・破棄は 0 件。全 Bistro 素材を使った速度比�
 
 ## 共通マテリアルと混在描画
 
-`renderer-y9p`。RTX 3060 の Vulkan と D3D12 を使い、Forward と Deferred それぞれで
+`sashiko-y9p`。RTX 3060 の Vulkan と D3D12 を使い、Forward と Deferred それぞれで
 PBR・頂点色 Unlit・独自 Toon・半透明を一つのリストに投入した。HDR 読み戻しを期待値と照合し、
 深度による遮蔽、種類をまたぐ半透明合成、独自マテリアルのテクスチャ・係数更新前後の色と uniform buffer の参照を確認した。
 Deferred では Toon だけをキャスターにしてカスケードの深度書き込みも確認した。
@@ -1604,11 +1604,11 @@ Bistro の小規模 fixture を `cf95cd5` の保存済み出力と比較した�
 比較対象は Forward、影無効、Forward+ 4× と Deferred 1× の個別・インスタンス描画。全 Bistro 素材を使う性能計測は今回の比較対象外。
 
 Bistro の shipping 構成で Vulkan のアルファ描画試験が一度アクセス違反で終了した。
-同試験の単独再実行と、同じ順序での全 5 試験の再実行 2 回は通過した。原因は `renderer-kvs` で追跡する。
+同試験の単独再実行と、同じ順序での全 5 試験の再実行 2 回は通過した。原因は `sashiko-kvs` で追跡する。
 
 ## メッシュの寿命と標準 PBR の公開 API
 
-`renderer-lfs`。メッシュ更新後も、取得済みスナップショットは取得時のメッシュ版、Unlit の色と変換を保持する。
+`sashiko-lfs`。メッシュ更新後も、取得済みスナップショットは取得時のメッシュ版、Unlit の色と変換を保持する。
 頂点ストライドの異なる版に更新した場合、新しい Unlit 入力は取得時に拒否される。
 PBR はモデル空間の単体描画、ビューに応じた影の選択、HDR から SDR までの一括・分割出力を検証した。
 ワークスペースの CPU テスト、4 通りの feature 構成の Clippy、非公開項目を含む rustdoc が通過した。
@@ -1625,7 +1625,7 @@ HDR・SDR・深度・影など計 236 キャプチャのバイト列と、転送
 
 ## PBR レシピと再利用できる描画部品
 
-`renderer-cc2`。標準のForward／Forward+／Deferredを `pipeline::GeometryPipeline` から選択できる。
+`sashiko-cc2`。標準のForward／Forward+／Deferredを `pipeline::GeometryPipeline` から選択できる。
 ベースカラー・法線・ORM・発光はマップごとにサンプラーと常駐 mip 範囲を指定できる。影のアルファ参照にはベースカラーと同じ設定を使う。
 材質・IBLの既定画像と影なし用のD32は一度に準備できる。Deferredの公開パスは既存バックエンドが扱う
 単一mip・layer・sampleのアタッチメントを要求し、形式や寸法をGraph追記前に検証する。
@@ -1683,11 +1683,11 @@ Rust／VMA hostの確保・再確保・解放と、Renderer発行のネイティ
 揃え、前後を交互に3組ずつ測り直した。対応する測定の差の中央値はVulkanで+0.0294 ms、
 D3D12で+0.0008 msだった。初回の差は再現せず、Vulkanの差の符号も組により変わった。
 全6組の画像と予約容量は一致した。初回差の原因を特定できるCPUクロックの記録は得られていない。
-実行引数・GPUの生時刻・画像ハッシュは `.tools/renderer-cc2/benchmark/results/` に保存した。
+実行引数・GPUの生時刻・画像ハッシュは `.tools/sashiko-cc2/benchmark/results/` に保存した。
 
 ### 変更前の比較
 
-`renderer-mmn`。アプリのビュー投影行列を、描画・可視判定・カスケード・Deferredの再構成で共有する。
+`sashiko-mmn`。アプリのビュー投影行列を、描画・可視判定・カスケード・Deferredの再構成で共有する。
 CPUで誤った材質分類の事前拒否、HDR専用構成と影なし構成の予約、露出エラー後の再試行を確認した。
 実GPUで正投影・非対称透視の画素と深度を既知の値と照合し、極端なモデル変換、
 既定画像・材質・シャドウ履歴の投入後の保持を確認した。
@@ -1723,11 +1723,11 @@ Renderer発行の資源・メモリ作成・破棄およびdescriptorの確保�
 計測時のキャプチャはD3D12の影なしHDRを除いてバイト一致した。この1構成では2,073,600画素中22画素の各1色成分が
 FP16の隣接値になり、SDR・深度・アルファは一致した。現在の実装でForwardのDXILだけを旧版に差し替えるとHDRも一致した。
 差分は正投影対応を含む新しい照明シェーダーのD3D12バイナリに由来する。差し替えは調査用の別ビルドで行った。
-合成・実行条件とログは`.tools/renderer-mmn/`、APIの使い方は[小さなPBRシーン](../guides/examples.md#pbr-forward-example)に記す。
+合成・実行条件とログは`.tools/sashiko-mmn/`、APIの使い方は[小さなPBRシーン](../guides/examples.md#pbr-forward-example)に記す。
 
 ## 公開 Bloom とカスケードのシャドウ履歴
 
-`renderer-2l7`。公開時の `passes::bloom` は同寸の線形HDRを返す5 dispatch分のProgram・画像・Graph宣言を登録していた。
+`sashiko-2l7`。公開時の `passes::bloom` は同寸の線形HDRを返す5 dispatch分のProgram・画像・Graph宣言を登録していた。
 固定のシェーダー資産を使い、Graphが各dispatchの書き込みと後段の読み込みを同期する。
 CPUでは形式・所有元・初期化の拒否と不要パスの除去を確認した。Vulkan／D3D12の最適化製品・厳格構成では、
 9×5 RGBA16Fのアップロード・Raster入力をそれぞれ使い、無効／テント／ボックスの全画素とアルファを照合した。
@@ -1752,11 +1752,11 @@ Vulkan Core／SyncValとD3D12 Debug Layer／GBVを有効にした構成で、警
 Vulkanは128×96のfixture、D3D12厳格は801×601のfixture、D3D12製品は801×601の全量シーンでシャドウを毎フレーム描画する設定を使った。
 単体`renderer-core`のBistroも、4構成のfixtureで出力48枚が移行前と一致した。
 手順は[小さなPBRシーン](../guides/examples.md#pbr-forward-example)と[Bloomの受入](../guides/development.md#bistro-bloom-fixture)を参照する。
-画像照合と計測のログは`.tools/renderer-2l7/`に保存した。
+画像照合と計測のログは`.tools/sashiko-2l7/`に保存した。
 
 ## 標準 PBR Forward の公開レシピ
 
-`renderer-aqe`。容量集約は`sashiko_renderer_core::capacity`で行い、`sashiko-renderer`の`pbr_forward`が
+`sashiko-aqe`。容量集約は`sashiko_renderer_core::capacity`で行い、`sashiko-renderer`の`pbr_forward`が
 1×のPBR・4カスケード・HDR／SDR出力を公開Graph APIで構成する。
 CPUテストで予約登録の原子性、最大描画数と容量超過後の再試行、既存の影画像の再利用、既存ターゲットへの描画、
 書き込み先の重複拒否を確認した。影の依存・資源の版・GPU完了までの所有は既存のGraphとRuntimeの契約を使う。
@@ -1780,12 +1780,12 @@ Rust／VMA hostの確保・再確保・解放、Rendererによるネイティブ
 表示では24フレームとリサイズ、最小化、復帰、カメラ操作、未退役フレームを残した終了を確認した。
 Vulkanは128×96のfixture、D3D12厳格は801×601のfixture、D3D12製品は801×601の全量シーンで影を毎frame再描画する設定を使った。
 
-画像のチェックサムと計測ログを`.tools/renderer-aqe/`に保存した。
+画像のチェックサムと計測ログを`.tools/sashiko-aqe/`に保存した。
 [標準 PBR Forward の起動と使い方](../guides/tooling.md#pbr-forward-recipe)を参照する。
 
 ## Rustレシピの合成とBistroの移行
 
-`renderer-32c`。`Preparation`がパスの宣言上限、同時frameを含む一時資源、Programを準備時に集計する。
+`sashiko-32c`。`Preparation`がパスの宣言上限、同時frameを含む一時資源、Programを準備時に集計する。
 標準Forwardと出力レシピの間に自作copyを挟むCPUサンプルで、同じGraphへの合成と入力切替を確認した。
 CPUテストでは予約の重複・容量不足からの再試行、Bistroの126構成と、透明描画の有無による4× MSAAのresolveを確認した。
 シャドウ画像のimport、書き込み、投入受理後の版の公開は既存のGraphとRuntimeの同期・寿命契約を使う。
@@ -1808,7 +1808,7 @@ JSONの外部シェーダーバンドルと組み込みProgramの出力も一致
 D3D12製品版のfixtureは801×601と1601×901で24フレームを表示し、終了時までに全フレームが退役した。
 未退役時の終了は801×601の全量シーンで、シャドウを毎frame再描画して確認した。
 
-画像のSHA再計算、計測と実行ログは`.tools/renderer-32c/`に保存した。
+画像のSHA再計算、計測と実行ログは`.tools/sashiko-32c/`に保存した。
 [Rustレシピの利用手順](../guides/tooling.md#rust-pipeline)と[サンプルの起動方法](../guides/examples.md)を参照する。
 
 <a id="bistro-scene-pipeline-verification"></a>
@@ -1817,7 +1817,7 @@ D3D12製品版のfixtureは801×601と1601×901で24フレームを表示し、�
 
 ## 移行前のBistroパイプラインの比較基準
 
-`renderer-12t`の`renderer`サンプルは、4カスケード、シーン描画、Bloom、トーンマッピング、SDR出力を
+`sashiko-12t`の`renderer`サンプルは、4カスケード、シーン描画、Bloom、トーンマッピング、SDR出力を
 一つの準備済みYAMLパイプラインで構築する。キャッシュが有効なカスケードでは、Graphに取り込んだ既存のD32画像を読み、
 生成パスとその描画リストを省く。更新時は永続画像をclearして描画し、投入受理後にその版を次フレームへ渡す。
 この選択はGraph構築時に確定し、既存のGraphによる同期と寿命管理を使用する。
@@ -1853,9 +1853,9 @@ Renderer発行のネイティブ資源・メモリの作成・破棄、descripto
 および構成ごとの両APIの画像比較が受入基準内に収まり、厳格検証は警告・エラー0件だった。
 
 移行前の実行手順と構成は[検証時点のガイド](https://github.com/tsukushibito/sashiko/blob/56178090ad441dd03cfac009453e772f13ea0fa9/docs/guides/tooling.md#bistro-scene-pipeline)を参照する。
-ログとキャプチャは`.tools/renderer-12t/`に保存した。
+ログとキャプチャは`.tools/sashiko-12t/`に保存した。
 
-`renderer-d72`ではYAMLの回帰テストを小さなCPU fixtureで行い、releaseのフレーム構築テスト11件を追加のCIゲートにした。
+`sashiko-d72`ではYAMLの回帰テストを小さなCPU fixtureで行い、releaseのフレーム構築テスト11件を追加のCIゲートにした。
 Windowsの二API・表示構成で両BistroのClippyが通り、Tracyと開発診断を有効にしたサンプルのCPUテストはRust版75件、YAML版79件が通った。
 workspaceのテストは`--tests`と`--doc`を個別に実行し、同名のBistroバイナリを生成するサンプルは個別にビルドする。
 今回の変更はCIの実行範囲に限り、実GPUの受入は上記の検証記録に従う。
@@ -1864,7 +1864,7 @@ workspaceのテストは`--tests`と`--doc`を個別に実行し、同名のBist
 
 ## 材質テンプレートとBistroのForward・シャドウ
 
-`renderer-6sm`。固定版DXCを使ったアセットビルドで、BistroのForwardとシャドウの頂点・fragmentを各API向けに生成した。
+`sashiko-6sm`。固定版DXCを使ったアセットビルドで、BistroのForwardとシャドウの頂点・fragmentを各API向けに生成した。
 SPIR-V／DXILの全8バイナリは既存のレビュー済みバイナリと一致し、既存17バリアントの`regenerate.ps1 -Verify`も成功した。
 別のユーザー定義テンプレートと2つの材質入力では、両APIで異なるfragmentバイナリを生成し、再ビルドの一致を確認した。
 
@@ -1887,7 +1887,7 @@ Rustの確保・再確保・解放、VMAのhostイベント、nativeの作成・
 
 ## YAMLによるRaster／Computeの合成
 
-`renderer-eek`。Windowsの同一RTX 3060（610.88）で、`yaml_pipeline`がYAMLと選択APIのシェーダーを実ファイルから読み込んだ。
+`sashiko-eek`。Windowsの同一RTX 3060（610.88）で、`yaml_pipeline`がYAMLと選択APIのシェーダーを実ファイルから読み込んだ。
 同じアプリとRuntimeで、深度プリパスと本描画で不透明リストを共有する構成、Compute反転から全画面Rasterへつなぐ構成、
 同じCompute接続でシェーダーを赤青交換に替えた構成を順に準備した。各構成は外部から渡した9×7の出力画像を使い、
 opaqueの候補数を0／1／2件に変え、別queueの候補を除外した。Vulkan／D3D12の全出力画素を参照値と照合した。
@@ -1904,7 +1904,7 @@ VMA host callbackの確保・再確保・解放、Renderer発行のnative資源�
 
 ## 実行時に読み込んだRaster・Compute
 
-`renderer-6yv`。Windowsの同一RTX 3060（610.88）で、Vulkan／D3D12を含む最適化済みの製品構成と
+`sashiko-6yv`。Windowsの同一RTX 3060（610.88）で、Vulkan／D3D12を含む最適化済みの製品構成と
 厳格構成で実GPU回帰を各9件実行した。GPU試験は対象APIのSPIR-VまたはDXILだけを実ファイルから読み込んだ。
 外部Rasterと埋め込みindexed描画を同じ区間に混ぜた全画素を照合した。Computeは同じABIで出力の異なる2版を
 識別し、反転・色チャンネル交換の全画素を両APIで確認した。呼出元のロード時メタデータとProgramを解放した後も
@@ -1920,14 +1920,14 @@ CPU試験で形式・ステージ・境界が不正なバイナリの拒否と�
 
 ## BistroのHLSL正本
 
-標準表示パス（`renderer-y1ik`）は Neutral・SDR・FXAA の HLSL 3本から5種の
+標準表示パス（`sashiko-y1ik`）は Neutral・SDR・FXAA の HLSL 3本から5種の
 SPIR-V／DXIL を直接生成し、固定 SDK で再生成一致と既存の標準出力 ABI を確認した。
 WGSL は Naga で全67モジュールの再生成とインターフェース照合を確認した。
 Windows では、最適化済みの Vulkan／D3D12 で B3 の描画試験が開発検証あり・なしで各4件成功した。
 対象には Neutral・露出・sRGB の画素照合と、均一画像・斜め輪郭の FXAA 試験を含む。
 この検証ではブラウザでの表示結果と、移行前後の全画素の一致は測定していない。
 
-`renderer-w6d`。移行前の比較元は`44451a4`。固定SDKのDXCで17バリアントをSPIR-V 1.3／DXILへ
+`sashiko-w6d`。移行前の比較元は`44451a4`。固定SDKのDXCで17バリアントをSPIR-V 1.3／DXILへ
 直接生成し、`-Verify`で全バイナリ・reflection・manifestの再生成一致を確認した。
 Vulkan 1.3の`spirv-val`、既存のbuffer範囲・定数配置・shader入出力の照合、PBR／GBuffer頂点の
 非縮約FP32演算を確認した。生成手順は[ツールガイド](../guides/tooling.md#bistro-tools)に記録した。
@@ -1950,7 +1950,7 @@ Vulkan Core／SyncVal、D3D12 Debug Layer／GBVのwarningとerrorは全12 runで
 
 ## 配布ビルドと起動時のバックエンド選択
 
-`renderer-6yh`。WindowsのRTX 3060（610.88）で`windowed`と`bistro`のreleaseビルドを
+`sashiko-6yh`。WindowsのRTX 3060（610.88）で`windowed`と`bistro`のreleaseビルドを
 Vulkan専用、D3D12専用、両対応で作成した。EXE中の既知のSPIR-V／DXILを元ファイルの全byte列と照合した。
 
 | releaseビルド | `windowed`のSPIR-V／DXIL | `bistro`のSPIR-V／DXIL |
@@ -1978,7 +1978,7 @@ D3D12専用の`bistro --fixture`は`--api`なしでD3D12を選び、64×48の描
 
 ## 共通Runtimeと標準HDR出力
 
-`renderer-qen`。修正前の比較元は`5c81454`。Windowsの同一RTX 3060（610.88）で、製品構成とCore＋SyncVal／Debug Layer＋GBVの厳格構成を別processで逐次実行した。
+`sashiko-qen`。修正前の比較元は`5c81454`。Windowsの同一RTX 3060（610.88）で、製品構成とCore＋SyncVal／Debug Layer＋GBVの厳格構成を別processで逐次実行した。
 受理情報とGPU作業を分離し、受理情報を破棄した後の実行、GPU完了後のCPU結果保持、登録済み資源を保持した作業セットの交換を確認した。
 Vulkanの作業セットは資源とProgramを一括で確定する。成功時は旧構成のうち再利用しない未登録資源を返し、準備中に失敗した場合は旧構成が使える。
 転送時のアラインメントと可視性は各バックエンドの既存経路で扱い、物理転送容量は初期化で個別に設定する。
@@ -2000,7 +2000,7 @@ Vulkanの作業セットは資源とProgramを一括で確定する。成功時�
 
 ## Rasterの定数分離と大量描画
 
-`renderer-7ft.14`。Rendererの比較元は`2d71116`、定数分離は`b9e75069`、計測用exampleを含む比較先は`0689ae2`。
+`sashiko-7ft.14`。Rendererの比較元は`2d71116`、定数分離は`b9e75069`、計測用exampleを含む比較先は`0689ae2`。
 大量シーンの比較元にも、`0689ae2`の計測用exampleだけを追加した。
 Windows 11／Core i5-14600KF／RTX 3060（610.88）で、PコアとHighQoSを実行前に読戻した。
 同じ設定の独立processを6組、変更前後の順を交互にして逐次実行した。各runは120 warmup＋600測定frame、2 in-flight。
@@ -2056,11 +2056,11 @@ Rust・VMAホストの確保／再確保／解放とRenderer発行のnative作�
 
 ## 現行RenderGraphの構築hotspotと削減
 
-`renderer-7ft.9`。比較元は`5da64b2079d65db4d2b87a2674e81f5e20c67e7d`、
+`sashiko-7ft.9`。比較元は`5da64b2079d65db4d2b87a2674e81f5e20c67e7d`、
 実装は`55744b5f5b4a5dcd93f2b3a28f447ccdd8a02127`。
 Windows 11／Core i5-14600KF／RTX 3060・driver 610.88／Rust 1.99.0で確認した。
 過去のB3値を現在のhotspotの根拠にせず、同じ利用側測定コード・画質・phase境界で取り直した。
-CPU範囲を校正する`renderer-7ft.10`のGodot比較とは独立した変更前後比較である。
+CPU範囲を校正する`sashiko-7ft.10`のGodot比較とは独立した変更前後比較である。
 
 通常releaseは`vulkan,d3d12`だけを有効にし、Tracy・追加検証・memory計装を除外した。
 全量`full-a3`と`ibl-final`、1920×1080、route、2 in-flight、1,440 warmup＋720測定frame、
@@ -2129,13 +2129,13 @@ raw path・内容・report hashを保った。省容量化は全process/比較�
 条件・source/EXE/PDB identity、全runの平均/p95、生counter、コマンドと原本のhashは
 [ソースレビューの証拠](source-review.json)の`rendergraph_hotspot_optimization`へ記録した。
 driver/OS内の未観測allocation、他機材、長時間soakと実OOM/Device loss注入は実行していない。
-main統合・push・CIと課題の最終closeは`renderer-7ft.10`が担当する。
+main統合・push・CIと課題の最終closeは`sashiko-7ft.10`が担当する。
 
 <a id="rendergraph-review-fixes"></a>
 
 ## RenderGraphの保証再利用・容量・公開APIのレビュー修正
 
-`renderer-kkv`／`.1`〜`.5`。比較元`30eb807`、統合受入ソース
+`sashiko-kkv`／`.1`〜`.5`。比較元`30eb807`、統合受入ソース
 `66765be2a1a5ce691fc7c91379f73ca640ad0425`、Windows x64／Rust 1.99.0／RTX 3060・driver 610.88。
 [現在の契約](../design/rendergraph.md)、[容量の数え方](../design/rendergraph.md#capacity-planning)、
 [再実行手順](../guides/development.md#graph-review-gates)を更新した。
@@ -2183,7 +2183,7 @@ driver/OS内部の未観測allocation、別機材、長時間soak、実OOM/Devic
 
 ## BistroのIBL・影・HDRとGodot比較（B3）
 
-`renderer-7ft.4`／`.4.1`〜`.4.4`。共通の公開Graphへ、利用側で静的IBL、4分割CSM/PCF、
+`sashiko-7ft.4`／`.4.1`〜`.4.4`。共通の公開Graphへ、利用側で静的IBL、4分割CSM/PCF、
 RGBA16F、EV+1、PBR Neutral、FXAAを接続した。効果名によるbackend専用命令は追加していない。
 [再現手順](../guides/development.md#bistro-b3)、[設計と採用理由](../design/implementation-policy.md#bistro-b3)、
 [共有データ](bistro-lighting.json)、[同じ視点の比較画像](bistro-lighting-preview.png)を参照する。
@@ -2286,7 +2286,7 @@ Native BRDF・IBL・影のfilter／絞り込み・depth prepass・batching、AgX
 
 ### CPU条件を揃えた正式比較と性能目標
 
-`renderer-7ft.10`の固定ソース監査では、Godot 4.7.2
+`sashiko-7ft.10`の固定ソース監査では、Godot 4.7.2
 `ed1daf0bf001b61586d9930840f2f1394092c079`の旧CPU timerがnative記録・submit・回収を除外することを確認した。
 主thread描画ではpost-draw signal後にtimestamp結果をviewportへ反映するため、既存sampleのsetupは現在draw、
 viewport CPU/GPUは以前の結果である。producer frame IDはscriptへ公開されず、その和を同一frameのCPUとみなさない。
@@ -2408,7 +2408,7 @@ Graph build短縮に対してpoll/yieldが増え、全CPU改善は小さい。�
 A/B交互収集や統計的信頼区間ではないため、この小差を保証率や一意な最適化寄与とはしない。
 別の同一旧境界による局所改善比較と、一般Graph入力での代償は[Graphの記録](#rendergraph-hotspot-optimization)へ分けた。
 
-この比較後のD3D12 record（`renderer-c4y`）、影・PBR（`renderer-7ft.8`）、poll/retireの候補は
+この比較後のD3D12 record（`sashiko-c4y`）、影・PBR（`sashiko-7ft.8`）、poll/retireの候補は
 [120 FPSに向けた追加計測](#bistro-120-performance)に記録する。
 比較値だけからaliasing、複数queue、vendor固有方式の利益を結論づけない。
 Renderer Neutral／post-tonemap FXAA／consumer IBLと、Godot AgX／pre-tonemap FXAA／native IBL・BRDF・
@@ -2420,7 +2420,7 @@ AgX追加、Lumberyardの見え方変更、Bloom/B4、B5の表示・操作・tem
 
 ## 外部Bloomの小HDR入力（B4）
 
-`renderer-7ft.5.1`。標準forward recipeのscene-linear callbackと利用側が直接構築するGraphで、
+`sashiko-7ft.5.1`。標準forward recipeのscene-linear callbackと利用側が直接構築するGraphで、
 同じ外部Bloomの無効・テント・ボックスをそれぞれ確認した。RTX 3060でstrict／shippingを
 最適化済みの別processとして実行し、9×5 RGBA16Fの6出力（各360 byte）を各APIで独立期待値に照合した。
 Vulkan/D3D12は全出力でbyte一致。一定色は厳密一致、端に明部を持つ入力では交換による出力差とalphaの保持を確認した。
@@ -2430,7 +2430,7 @@ CPU契約試験2件でculling、不適合format、未初期化read、Graph slot�
 
 ### 全Bistroへの露出前統合
 
-`renderer-7ft.5.2`。Windows／RTX 3060で全素材`full-a3`と`ibl-final`、1080p、2 in-flight、
+`sashiko-7ft.5.2`。Windows／RTX 3060で全素材`full-a3`と`ibl-final`、1080p、2 in-flight、
 8 warmup＋24定常frame、両API×strict／shipping×Bloom 3設定の12 processを逐次実行した。
 7固定視点と巡回7サンプルで、API間のHDR・depth・SDR各42件、Bloom後HDR 28件の比較が通過した。
 同APIのstrict／shippingはbyte一致し、Bloom設定間で前段HDR・depth・HDRのalphaを保持した。
@@ -2603,7 +2603,7 @@ Graph GPU p95には固定スロットの実行も含まれる。Bistroではこ�
 
 ## Bistro B3の120 FPS目標と高速化
 
-`renderer-7ft.12`。固定B3の全Bistro、1920×1080、巡回route、2 in-flight、Core i5-14600KF／RTX 3060
+`sashiko-7ft.12`。固定B3の全Bistro、1920×1080、巡回route、2 in-flight、Core i5-14600KF／RTX 3060
 （driver 610.88）で、各通常release runのフレーム間隔p99が8.33 ms以下を目標とする。
 素材cook、IBL、影、FXAA、定常CPU測定境界を[正式比較](#bistro-b3-performance)から引き継ぐ。
 通常性能では詳細timer/queryと追加検証、memory計装を無効にし、Pコア論理CPU 0〜11とHighQoSの
@@ -2726,7 +2726,7 @@ D3D12ウィンドウ・resize・pending終了、fmtとall-target Clippyを実行
 
 ## Bistro全素材のメモリ・差し替え受入（B2）
 
-`renderer-7ft.3.3`。source `b5480f60b4fe1b26b38f404087b3e3d3801c70b7`の最適化releaseで、
+`sashiko-7ft.3.3`。source `b5480f60b4fe1b26b38f404087b3e3d3801c70b7`の最適化releaseで、
 Vulkan／D3D12へ同じ全Bistroを載せ、メモリ観測と変更境界の検査を追加した。
 [共有データ](bistro-residency.json)はsource／EXE／cook hash、全report、固定profileによる全比較を保持する。
 [再現手順](../guides/development.md#bistro-residency)と[観測の意味・保証境界](../design/implementation-policy.md#bistro-residency)を参照する。
@@ -2802,7 +2802,7 @@ Disabledのメモリ照会・資源変更は、上記の独立したBistro受入
 
 ## GodotによるBistroの性能目標の校正
 
-`renderer-yxz`。Godot 4.7.2 Standardの公式Windows x86_64 release templateを用い、
+`sashiko-yxz`。Godot 4.7.2 Standardの公式Windows x86_64 release templateを用い、
 既存の全量Bistroと固定camera routeを描画する比較用プロジェクトを追加した。
 Windows 11 Home 10.0.26200、Core i5-14600KF、RTX 3060 12 GiB、driver 610.88。
 Godotの実行version/hashは`4.7.2.stable.official.ed1daf0bf`、実Vulkan APIは1.4.341である。
@@ -2897,7 +2897,7 @@ Godotのallocation event観測、B4相当の描画と最終表示の受入は未
 
 ## Bistroの実行用cookと二APIのForward PBR
 
-`renderer-7ft.3.1`／`.3.2`と、実装後レビュー・計測の`renderer-bj6`。
+`sashiko-7ft.3.1`／`.3.2`と、実装後レビュー・計測の`sashiko-bj6`。
 利用側の`tools/bistro/cook.py`と`bistro` exampleを公開Graphへ接続した。
 Model／scene／材質recipeをRenderer本体へ追加せず、同じcook・camera・shader契約をVulkanとD3D12で実行する。
 実行方法は[開発ガイド](../guides/development.md#bistro-pbr)、
@@ -3018,7 +3018,7 @@ driver内部の原因や全workloadでのAPI優劣をこの区間計測だけか
 D3D12の計測有効runではnative `record`が18.064〜19.018ms/frame、中央値18.068msだった。
 これは命令記録、descriptor設定、barrier、export取得、query終了、Closeまでのhost経過区間である。
 Vulkanはdescriptor準備の一部を`prepare`へ計上するため、同名phaseを同じ仕事内容として単純比較しない。
-後続の`renderer-4wl`では、以下のTracy計装でソース区間を調べた。sampled stackの取得や最適化実装は行っていない。
+後続の`sashiko-4wl`では、以下のTracy計装でソース区間を調べた。sampled stackの取得や最適化実装は行っていない。
 
 内部CPUタイマーとGPU timestampをまとめて有効にしたprocess CPU中央値はVulkan 20.139ms、D3D12 33.568msだった。
 無効時に対する観測差は+2.84%／+2.74%、wallは+5.87%／+2.16%。
@@ -3039,7 +3039,7 @@ Vulkanはdescriptor準備の一部を`prepare`へ計上するため、同名phas
 以下は最適化前の導入・hotspot調査である。削減実装後の同条件比較と現在の受入は
 [Graph・D3D12のCPU処理削減](#bistro-cpu-optimization)を参照する。
 
-`renderer-4wl`で任意の`tracy` featureを追加し、Graph構築・Bistro利用側・二backendのhost処理を計装した。
+`sashiko-4wl`で任意の`tracy` featureを追加し、Graph構築・Bistro利用側・二backendのhost処理を計装した。
 通常構成は依存・区間名・計装処理をコンパイル除外する。最適化と追加検証の選択は独立のままである。
 `tracy-client 0.19.0`／`tracy-client-sys 0.30.1`に同梱されたTracyは0.14.1で、portableの収集・exportも同版へ固定した。
 有効にしたnative機能は`enable,ondemand,only-localhost`だけで、system tracing・sampling・context switch収集は使わない。
@@ -3103,12 +3103,12 @@ selfは直接の子zoneを引いたhost経過時間で、待機・descheduling�
 
 共通側のアクセス区間は、使用bufferのソート、attachment登録、全drawのbindingを含むaccess競合整理を含む。
 importは常駐vertex／index／材質／画像の登録、検索・ソート済み配列への挿入・metadataコピーとcamera更新である。
-これらを再利用・失効の保証とともに減らす調査を`renderer-ic1`へ登録した。
+これらを再利用・失効の保証とともに減らす調査を`sashiko-ic1`へ登録した。
 
 D3D12の`raster.record` selfはdraw childを除いた4 call/frameで、pass access集約・transition・clear・PSO/state設定を含む。
 descriptor区間は1,592 call/frameで、buffer GPUVA／root descriptor・image SRV構築／CreateSRV・table設定をまとめて含む。
 COMMON区間はbuffer／scratch／imageの走査と必要なtransitionの記録で、GPUでのbarrier実行時間ではない。
-個別native callやdriver内部のCPU費用は未分離であり、細分化・発行数の観測と削減候補の検証を`renderer-9v5`へ登録した。
+個別native callやdriver内部のCPU費用は未分離であり、細分化・発行数の観測と削減候補の検証を`sashiko-9v5`へ登録した。
 この導入時の計測は共通Graph構築とD3D12のhost記録を先に調べる根拠であり、削減実装の速度比較とは分ける。
 
 CPU workspaceは`--all-features`計396 testと`--no-default-features --features vulkan,d3d12`計366 testが成功した。
@@ -3128,7 +3128,7 @@ GPU timestamp・sampled stack・scheduler／driver内部の原因・他機材・
 
 ### Graph・D3D12のCPU処理削減
 
-`renderer-ic1`／`renderer-9v5`で、Tracy調査から指摘した六点を改善した。
+`sashiko-ic1`／`sashiko-9v5`で、Tracy調査から指摘した六点を改善した。
 `Graph::raster_bindings`がGraph・Programごとの不変bindingを一度検査・所有し、複数drawで再利用する。
 同じpassの完全に同一なreadonly footprintだけを集約し、attachmentの競合検査も全体検査で覆う経路では一回にした。
 空draw・bindingなし・attachment専用の必要な検査、write hazard、draw順と失敗時rollbackは保つ。
@@ -3219,7 +3219,7 @@ COMMONのnative子区間は1,800回、**1回/frame**。
 必要なtransition数の削減やGPU上のbarrier時間の計測ではない。
 改善後にもD3D12のpass記録selfが2.837 ms/frame、COMMONのnative呼出しを囲む子区間が1.598 ms/frame残る。
 前者はpass開始時のtransition・clear・PSO/state設定などを含み、後者にもdeschedulingや待機が入り得る。
-各一traceのhost経過時間として、Native呼出し回数と細分化、COMMON方針を保つ追加batchの検討を`renderer-c4y`へ記録した。
+各一traceのhost経過時間として、Native呼出し回数と細分化、COMMON方針を保つ追加batchの検討を`sashiko-c4y`へ記録した。
 pureなdriver CPU時間や原因を確定した値とは扱わない。
 
 #### 回帰・メモリ・描画の受入
@@ -3257,7 +3257,7 @@ Vulkan／検証／frame memory方針を適用し、vendor依存最適化やAPI�
 
 ## 最適化済みCPUスタック・schedulerの調査環境
 
-`renderer-jat`。容量エラー・資源探索・共通形式の改善を公開した`607bdf9`を基準に、
+`sashiko-jat`。容量エラー・資源探索・共通形式の改善を公開した`607bdf9`を基準に、
 [CPU調査CLI](../guides/tooling.md#cpu-profiling)と、二API共通の`profile_workload`を追加した。
 `profiling`はreleaseを継承し、full debug情報とstripなしだけを変更する。
 最適化・assert・overflow・LTO・codegen設定を調査用に変えず、追加検証とnative metricsも独立させた。
@@ -3382,7 +3382,7 @@ build manifest、各run、counterの全値、受理／拒否したtrace、実IP�
 
 ## 容量エラー・資源探索・共通画像形式の改善
 
-`renderer-5xv`と子課題。比較元は`483e304`。
+`sashiko-5xv`と子課題。比較元は`483e304`。
 両Runtimeの`capacity()`が不足資源・回復操作・判明した上限と必要数を返す。
 未準備や固定上限超過を通常backpressureと分け、同Graph内の累積staging／range／資源不足も
 失敗時に判定する。追加の診断走査を通常成功経路へ持ち込まない。
@@ -3439,7 +3439,7 @@ helperへ呼出元と同じWindows／presentation条件を付け、表示なしV
 
 ## 二APIのWindows表示・自由カメラ・通常frame計測
 
-`renderer-7ft.2.6`。共通の`PresentationConfig`／`PresentOutcome`とアプリ所有のevent loopを使い、
+`sashiko-7ft.2.6`。共通の`PresentationConfig`／`PresentOutcome`とアプリ所有のevent loopを使い、
 同じ公開標準forwardまたは独自GraphをVulkan WSI／D3D12 DXGIへ接続した。
 `presentation`はAPI選択と独立し、D3D12単独の表示にもVulkanを要求しない。
 契約と選択理由は[表示の独立性](../design/implementation-policy.md#122-presentationの独立性)、
@@ -3486,7 +3486,7 @@ Window受入はwinitの一process一event loop制約に従い、APIごとの独�
 一回のVulkan shipping WSI試験は3分以上停滞して停止した。段階ログを加えた直後の試験と、
 最終の独立3 processは各約1秒で成功し、原因と停滞箇所は特定できていない。
 追加した計測の有限性・lock範囲は監査したが、native／winit内部の停止かどうかも未確定である。
-未再現の留保として`renderer-1ji`に記録し、既存のstartup crash課題と同一原因とは扱わない。
+未再現の留保として`sashiko-1ji`に記録し、既存のstartup crash課題と同一原因とは扱わない。
 
 OSからwinitへの実キー／マウス配送は未検証で、Computer Useによる追加確認はツールのアプリ利用が未承認のため未実施。
 present受理・maintenance fence・D3D12 queue markerを実画面の表示完了とせず、PresentMon等のscanout測定も行っていない。
@@ -3496,7 +3496,7 @@ present受理・maintenance fence・D3D12 queue markerを実画面の表示完�
 
 ## 利用側Raster shaderとblend・depthの二API実行
 
-`renderer-7ft.2.8`。staticなtrusted Raster descriptorから頂点属性・inline定数・
+`sashiko-7ft.2.8`。staticなtrusted Raster descriptorから頂点属性・inline定数・
 読み取りbinding・blend／depthを具体化し、標準Programと利用側Programを同じGraph経路へ接続した。
 契約と選択理由は[RenderGraph](../design/rendergraph.md#program由来bindingとshader-stageのowned計画)、
 再実行は[開発手順](../guides/development.md#owned-raster-acceptance)、source hashと生reportは
@@ -3530,11 +3530,11 @@ shader／descriptor／資源の所有、GPU完了、native失敗処理を検証c
 Bistro PBR／影／tone mapping／Bloomは、このRaster単体の受入では未実行である。
 Vulkanの一般推奨に沿ってpipeline／descriptorを明示準備し、通常frameのnative作成を避けた。
 新たなvendor最適化や測定なしの性能優位は主張せず、必須の実GPU CIや時間閾値も追加していない。
-表示・自由camera・通常frame時間計測の現在の結果は、冒頭の`renderer-7ft.2.6`を参照する。
+表示・自由camera・通常frame時間計測の現在の結果は、冒頭の`sashiko-7ft.2.6`を参照する。
 
 ## 一般資源のimport・更新・履歴と退役
 
-`renderer-7ft.2.5`。D3D12のbuffer／画像を共有物理registryへ移し、一般Graphのimport/export、
+`sashiko-7ft.2.5`。D3D12のbuffer／画像を共有物理registryへ移し、一般Graphのimport/export、
 owner・世代・内容revision、refresh/deleteと実GPU完了までの保持を接続した。
 Vulkanの既存canonical状態・一般binding・provenanceを同じ利用側fixtureで受け入れた。
 二APIのkeyが偶然一致しないよう、runtime ownerはGraphと共通のprocess内採番を使う。
@@ -3564,7 +3564,7 @@ shippingのゼロ時間Fence待機はVulkan各57回、D3D12各55〜57回のtimeo
 D3D12は既存COMMON復帰を維持し、新たなvendor最適化・未計測の性能効果やVulkan/VMA推奨の例外は設けていない。
 一般Raster shader・blend/depthの`.2.8`と二API表示・通常frame時間の`.2.6`は、それぞれの現在の受入記録を参照する。
 
-レビュー修正`renderer-7ft.2.5.1`で、D3D12も登録資源をdeleteせずworking setを変更できるようにした。
+レビュー修正`sashiko-7ft.2.5.1`で、D3D12も登録資源をdeleteせずworking setを変更できるようにした。
 現行の変更境界では全実行・結果・export付きsubmissionの返却を確認し、新poolの準備成功後に
 canonical registryを移す。登録buffer／画像のkey・内容・provenanceを維持し、新classにない登録画像のview枠も補う。
 Graph color画像は初回からRT／UAV対応とし、後から追加したStorage Programも同じ画像を使える。
@@ -3580,7 +3580,7 @@ Graph color画像は初回からRT／UAV対応とし、後から追加したStor
 alloc／alloc_zeroed／realloc／dealloc・VMA host・native作成破棄の全イベントが0だった。
 通常履歴の24測定frameも両APIで確保／解放0を維持した。resize／Program準備自体は明示変更境界であり、このゼロ計測に含めない。
 
-`renderer-yp5`では、Vulkan／D3D12の最適化済みstrict・shipping構成で
+`sashiko-yp5`では、Vulkan／D3D12の最適化済みstrict・shipping構成で
 `shared_runtime`、`general_resources`、`pbr_gpu`の`mixed_materials`を実行した。
 登録bufferの同じsnapshotで13×7の画像class追加と準備失敗をまたぐreadbackが一致し、1枠のrange poolが増設されないことを確認した。
 Bistroと同じ常駐資源の利用契約で、32×16から未予約の23×13へ変更して元のmeshとPBR材質を再利用し、中央のHDR値と背景を照合した。
@@ -3597,7 +3597,7 @@ release CPUは全feature325件、二API製品301件、D3D12単独の製品188件
 
 ## 公開三経路のconsumer移行と混合Compute受入
 
-`renderer-7ft.2.7.4`。`frame_loop`と`engine_workloads`の代表構築を
+`sashiko-7ft.2.7.4`。`frame_loop`と`engine_workloads`の代表構築を
 `begin_graph`／`connect_snapshot`→公開`graphs::forward`→利用側post→`select_output`へ移行した。
 既存Engine便利APIも同じ公開recipeを使うため、用途のある便利入口は維持する。
 `frame_scaling`の古いexample CPU試験も現行の容量・pool・公開構成へ更新した。
@@ -3638,7 +3638,7 @@ Vulkan／VMA一般推奨からの新たな例外は設けていない。
 
 ## 公開標準パスと標準グラフ
 
-`renderer-abr`で標準パス、Forwardレシピ、snapshotの標準描画ヘルパーを`sashiko_renderer::standard`へ移した。
+`sashiko-abr`で標準パス、Forwardレシピ、snapshotの標準描画ヘルパーを`sashiko_renderer::standard`へ移した。
 組み込みProgramの信頼境界とバイナリ、資源の所有、Graphの解析とnative実行は`renderer-core`が担う。
 CPUとVulkanは出力確定を共有し、Graphの置換、互換性のない出力と未初期化の読み取りを引き続き拒否する。
 入力接続のscratchは拡張callbackの前に返し、Vulkanの常駐入力pinは従来どおり投入または取消まで保持する。
@@ -3657,11 +3657,11 @@ Vulkanの常駐入力・画像出力を厳格・製品で各48フレーム実行
 VMAのhost確保・再確保・解放、Renderer発行のnative資源・メモリの作成・破棄はすべて0件だった。
 枠のresetは別に計上した。YAML featureの有効時には付属例で両APIの出力も照合した。
 実GPUの範囲はオフスクリーンで、driver内部の確保は計測対象外とした。Vulkan／VMA一般推奨からの例外はない。
-ログは`.tools/renderer-abr/`と`.tools/renderer-abr-gpu/`に保存した。
+ログは`.tools/sashiko-abr/`と`.tools/renderer-abr-gpu/`に保存した。
 
 以下は移動前の公開標準部品の受入結果である。
 
-`renderer-7ft.2.7.3`。公開`standard::passes::{opaque, depth_prepass, output}`と
+`sashiko-7ft.2.7.3`。公開`standard::passes::{opaque, depth_prepass, output}`と
 `standard::graphs::{forward, forward_with_post}`を追加した。標準層は公開Graph／Program／copy APIだけを使い、
 Engineの便利経路も公開forwardを呼ぶ。任意depthとcaller指定attachment・Clear／Load／Store、
 unlit scene-linear colorのpost境界を公開し、export／readback／submit／presentは部品から分離する。
@@ -3691,7 +3691,7 @@ prepassedもGraphでは保守的depth read/writeを維持し、Vulkan／VMA一�
 
 ## 利用側Graphへの入力接続と出力選択
 
-`renderer-7ft.2.7.2`。`FrameSnapshot::connect_graph`と、Vulkan常駐入力向けの
+`sashiko-7ft.2.7.2`。`FrameSnapshot::connect_graph`と、Vulkan常駐入力向けの
 `begin_graph`／`connect_snapshot`／`submit_graph`を追加した。接続だけではRaster・画像・export・readbackを追加しない。
 複数snapshot/View、同mesh旧新版、任意の画像/buffer出力を扱い、一画像の便利経路も構成後に`select_output`する。
 `prepare_snapshot`の非mesh登録余裕も利用側指定とし、標準color/depth用の二枠を一律に要求しない。
@@ -3725,7 +3725,7 @@ Vulkan Core/SyncValとD3D12 Debug Layer/GBVのstrict回帰は最終native破棄�
 
 ## 公開APIの三層方針と移行計画
 
-`renderer-7ft.2.7.1`。[公開API方針](../design/implementation-policy.md#public-api-layers)として、
+`sashiko-7ft.2.7.1`。[公開API方針](../design/implementation-policy.md#public-api-layers)として、
 汎用Graph API、同じ公開APIで定義する標準パス、それらから構成する標準グラフを採用した。
 Engineによる現行固定構成と移行後の契約を区別し、入力接続・出力所有・標準部品・consumer受入を`.2.7`、
 一般import/履歴/退役を既存`.2.5`、独自Raster/blend/depthを新`.2.8`、表示と時間計測を既存`.2.6`へ分けた。
@@ -3740,7 +3740,7 @@ Rust試験・実GPU受入・時間/メモリの再計測は今回実行してい
 
 ## 利用側Compute・多段HDRと画像copyの二API実行
 
-`renderer-7ft.2.4`、統合実装確認点`adb51d1`。利用側の静的なtrusted Compute descriptorを
+`sashiko-7ft.2.4`、統合実装確認点`adb51d1`。利用側の静的なtrusted Compute descriptorを
 明示したunsafe境界で取り込み、owned dispatchをVulkan/D3D12の通常実行へ接続した。
 Uniform/Storage buffer、sampled画像/sampler、typed storage画像のbindingからアクセスを導出する。
 固定dispatchと出力extent由来の2D dispatch、buffer実byte footprintと全域画像writeの保証を分ける。
@@ -3798,7 +3798,7 @@ Linux実GPU、D3D12 import/export、二API表示、Bistro/Bloomアルゴリズ�
 
 ## D3D12 Rasterの用途集約と追跡容量
 
-`renderer-68c`、実装確認点`33587ca`。`.2.3`レビューの3件を改善した。
+`sashiko-68c`、実装確認点`33587ca`。`.2.3`レビューの3件を改善した。
 各Raster/AttachmentPassのbuffer用途は該当passのaccess列だけで合成・消去し、全Graph bufferの初期化・走査を除去した。
 index provenanceは`provenance_segments_per_resource`（既定64）で操作数から独立して予約し、
 既定のsegment枠は208,896→3,264となった。buffer-onlyと完全な不変mesh要約は0を指定できる。
@@ -3835,7 +3835,7 @@ Vulkan実装は変更せず、共通Raster/buffer受入を再実行した。以�
 
 ## owned Raster・画像転送の二API実行
 
-`renderer-7ft.2.3`、統合ソース確認点`ccd838e`。共通owned Graphから、複数draw順、color-only、
+`sashiko-7ft.2.3`、統合ソース確認点`ccd838e`。共通owned Graphから、複数draw順、color-only、
 depth付きcolor、depth-only、RGBA16Fとdraw別Uniform/画像/samplerをVulkan/D3D12へ実行する。
 レビュー済みProgramとattachment構成のPSO、画像/View、descriptorを明示準備し、通常frameでは保持・再利用する。
 一般dispatch/画像copy、MRT、native複数mip/layer、D3D12 import/exportと表示はこの受入に含めない。
@@ -3880,14 +3880,14 @@ startup/shutdownの正の対照と全Graph slot返却を確認した。driver/OS
 
 ## RenderGraph設計ガイドのHTMLとMermaid図
 
-`renderer-chk`。mdBook 0.5.4 / mdbook-mermaid 0.17.1 / Mermaid 12.3.0で、
+`sashiko-chk`。mdBook 0.5.4 / mdbook-mermaid 0.17.1 / Mermaid 12.3.0で、
 既存文書と[導入](../design/rendergraph-overview.md)、[設計図集](../design/rendergraph-diagrams.md)をHTMLへ生成した。
 現在の実装確認点は`ccd838e`。主要Rust型の共有所有、flat arenaとowned命令、compile、
 producer/culling、live hazard、範囲/subresource、native投入、別々の寿命、work/result状態、
 importのrevision、binding/stage導出、容量の13図をMermaid原本へまとめた。導入の3図も同じ原本をincludeする。
 生成・配布・固定版・ライセンスと更新方法は[文書ガイド](../guides/html-docs.md)を参照する。
 
-`renderer-6vt`で生成HTMLを`build/docs/`、配布ZIPを`build/rendergraph-html.zip`へ分離した。
+`sashiko-6vt`で生成HTMLを`build/docs/`、配布ZIPを`build/rendergraph-html.zip`へ分離した。
 mdBook設定、検査の既定値、CIの検査・artifact保存先、利用文書とGit ignoreを同じ配置へ更新した。
 新しい配置で17ページのローカル参照検査と全32箇所のMermaid実描画検査、ZIPの完全性確認が成功した。
 旧配置の文書生成物だけを除去し、Cargoの出力は保持した。
@@ -3910,7 +3910,7 @@ Rendererの実装・validation配置・同期・GPU寿命・メモリ方針は�
 
 ## Program由来bindingとshader stageのowned計画
 
-`renderer-7ft.2.2.5`、実装・統合確認点`52a5d74`。
+`sashiko-7ft.2.2.5`、実装・統合確認点`52a5d74`。
 buffer/ImageView/samplerの型付きbindingをComputeと各drawで共用し、Programから用途・
 Vertex/Fragment/Compute stageと実footprintを導く。descriptor全範囲と実アクセスを分け、
 命令・binding・定数・View/samplerを準備済みarenaへ所有する。
@@ -3948,7 +3948,7 @@ Linux/別GPU・driver実GPU、長時間耐久、実native OOM/loss、時間性�
 
 ## 明示Programとowned Raster列
 
-`renderer-7ft.2.2.4`、実装・統合確認点`5d7fb6b`。
+`sashiko-7ft.2.2.4`、実装・統合確認点`5d7fb6b`。
 実在する両APIのmesh資産へ結び付いた`ManagedRasterProgram::mesh()`と借用draw sliceを公開Rasterへ接続し、
 従来のsingle-draw操作とEngine内部batchを同じprepared owned coreへ統合した。
 Program identity、順序、各80-byte定数とbuffer/attachment参照を保持し、Engineの有限値保証は再走査しない。
@@ -3986,7 +3986,7 @@ shader/bindingsは無変更で再生成Verifyは未実行。コマンド・生co
 
 ## attachment配列と画像subresourceのCPU計画
 
-`renderer-7ft.2.2.3`、実装・統合確認点`f290cef`。
+`sashiko-7ft.2.2.3`、実装・統合確認点`f290cef`。
 `ImageDesc`のmip/layer数と同じ論理画像に属する単一subresource View、
 描画命令なしの`attachment_pass`のcolor配列/optional depthを追加した。
 短命sliceの所有、各mip/layerの初期化・producer・RAW/WAR/WAW・culling・全域export、
@@ -4021,7 +4021,7 @@ strictはCore/SyncValまたはDebug Layer/GBVの実効と、最終native所有�
 
 ## 管理下buffer Computeのowned計画
 
-`renderer-7ft.2.2.2`、実装・統合確認点`65893fa`。
+`sashiko-7ft.2.2.2`、実装・統合確認点`65893fa`。
 `Graph::dispatch`は管理下uniform/storage readbackのProgram identity・workgroup数と、
 manifest順の論理buffer descriptorを準備済み領域へ所有する。
 shader実footprintを別契約として保持し、32-byte descriptorでも読書き・初期化は先頭16 byteだけに限定した。
@@ -4058,7 +4058,7 @@ strictはCore/SyncValとD3D12 Debug Layer/GBVの実効、最終native所有者�
 
 ## 通常フレームのメモリ規約と実装
 
-`renderer-dzz` / `renderer-7ft.2.2.1`。従来の実装確認点は`43ef7e9`。
+`sashiko-dzz` / `sashiko-7ft.2.2.1`。従来の実装確認点は`43ef7e9`。
 追加compile改善の`d633021`でも下表の5経路を製品releaseで再受入し、全ての通常窓でゼロを維持した。
 最新の容量・counter・実行コマンドは[ソースレビューの証拠](source-review.json)の
 `rendergraph_efficiency_improvements.compile_time_reduction.current_memory_reports`、旧基準と負の対照は[従来の計測](frame-memory.json)にある。
@@ -4121,7 +4121,7 @@ CPUの移行前基準値`117ae5b`は同じ24変動frameで2,502/24/62/2,526回�
 
 ## Graph・表示・descriptorの効率整理
 
-`renderer-0dm`の2.2レビュー修正は`9f65b97`で統合確認した。
+`sashiko-0dm`の2.2レビュー修正は`9f65b97`で統合確認した。
 Rasterのvertex/index集約は使用resource列だけを初期化・sort・列挙し、各passでの全resource走査を除去した。
 同一bufferの両用途、最大index範囲、従来のaccess順を保ち、後半draw/attachment/access容量失敗後の
 別meshによる再試行と、pass間・slot再利用の回帰を確認した。追加準備領域はresource上限×usize、
@@ -4145,7 +4145,7 @@ strictは最終native解放後まで警告/error・callback失敗ゼロ、製品
 shader/生成bindingsは無変更で再生成Verifyは実行していない。コマンド・counter・確認点は
 [機械可読記録](frame-memory.json)の`graph_review_cleanup`に記録した。
 
-`renderer-l3g`と、`renderer-6de` / `renderer-ygu` / `renderer-xqo` / `renderer-0g6` / `renderer-9nb` / `renderer-agu`。
+`sashiko-l3g`と、`sashiko-6de` / `sashiko-ygu` / `sashiko-xqo` / `sashiko-0g6` / `sashiko-9nb` / `sashiko-agu`。
 追加compile改善は`2b392d3`との比較で、統合実装は`d633021`。配列実装`1fbe51c`も同じharnessで再測定した。
 [生sample・public API/Engine harness・実行コマンド](source-review.json)の
 `rendergraph_efficiency_improvements.compile_time_reduction`へ記録した。途中のpipeline単体と初回計測も残す。
@@ -4201,9 +4201,9 @@ RTX 3060 / driver 610.88でstrict Vulkan52件（WSI込み）、D3D12寿命1件�
 製品の同一reader、並べ替えreadback、mesh描画、旧mesh退役、5経路のメモリ・表示受入も成功した。
 適用した同期・所有・入力保証の一般推奨からの新しい例外やpolicy変更はない。
 この受入では、Linux/別GPU・driver、Bistro全体、実OOM/loss、長時間耐久、GPU性能・物理VRAM改善は未確認である。
-shader/生成bindingsは無変更で再生成Verifyは今回未実行。既知の未再現起動異常`renderer-0pb`の解決も主張しない。
+shader/生成bindingsは無変更で再生成Verifyは今回未実行。既知の未再現起動異常`sashiko-0pb`の解決も主張しない。
 
-`renderer-agv`、比較元`413ff7d`。read/exportのproducerを最終依存集合へ直接追加し、
+`sashiko-agv`、比較元`413ff7d`。read/exportのproducerを最終依存集合へ直接追加し、
 readごとの一時BTreeSetと取り込み直しを除去した。途中に未初期化の穴があれば解析全体を失敗にし、
 producer/culling/hazard/live cycleと最終内容再計算は維持する。
 この比較点では全accessの解析用一時Vecは未変更だった。現行では上記`.2.2.1`の準備済みworkspaceへ移行済みである。
@@ -4236,17 +4236,17 @@ strictはCore/SyncValまたはDebug Layer/GBVの実効と最終native解放後�
 正式ログは`.tools/agv/gates/`。実行filterは[開発ガイド](../guides/development.md)と機械可読の結果を参照する。
 shader/生成bindingsは無変更で今回再生成Verifyは実行していない。
 この再編受入では、全Graph/transfer実GPUの再受入、Linux/別GPU/driver、Bistro全体、時間性能/長時間耐久、実native OOM/lossは未実行。
-既知の未再現native起動crash `renderer-0pb`の解決も主張しない。
+既知の未再現native起動crash `sashiko-0pb`の解決も主張しない。
 
 <a id="managed-uniform"></a>
 
 ## 管理下Programと資源bindingの二API実装
 
-`renderer-7ft.2.1.7`。Uniform/StorageとRGBA8/RGBA16F/D32画像/View/samplerの契約を維持し、
+`sashiko-7ft.2.1.7`。Uniform/StorageとRGBA8/RGBA16F/D32画像/View/samplerの契約を維持し、
 StorageRead bindingとreadonly storageの16-byte copyを両APIへ追加した。
 `Binding`/`BindingResource`がbuffer/View/samplerを一つのcomplete collectionで扱い、
 旧buffer専用binding APIを置換した。既存の固定ProgramKindは増やしていない。
-この作成契約受入点では、親`renderer-7ft.2.1`の作成契約はこの範囲で実証した。owned命令・初期化/hazard/subresource計画は
+この作成契約受入点では、親`sashiko-7ft.2.1`の作成契約はこの範囲で実証した。owned命令・初期化/hazard/subresource計画は
 `.2.2`、graphicsのstage/vertex/attachment/PSOとRaster実行は`.2.3`へ残す。
 [作成保証とVulkan所有](../design/vulkan.md#managed-uniform)、
 [D3D12のroot/tableと保証](../design/implementation-policy.md#d3d12の管理下programとuniform)、
@@ -4350,7 +4350,7 @@ workerではGPUを実行せず、rootが統合結果を逐次実行した。正�
 
 この管理下Program受入では、Linux実GPU、別GPU/driver、一般shader/owned Graph画像実行、comparison sampler/PCF、
 性能・長時間耐久、実native OOM/Device lossは未実行である。性能優位や計算量の改善は主張しない。
-既知の未再現起動crash `renderer-0pb`の原因確定や解決も主張しない。
+既知の未再現起動crash `sashiko-0pb`の原因確定や解決も主張しない。
 
 <a id="repository-review"></a>
 
@@ -4362,13 +4362,13 @@ workerではGPUを実行せず、rootが統合結果を逐次実行した。正�
 
 | 課題 | 確認した境界 |
 |---|---|
-| `renderer-80w` | `syncval_shader_accesses_heuristic=true` の Core/SyncVal で、同一Graphと連続submitのfragment→Computeサンプルを実行。依存stageと取得byteを照合し、解放後まで診断ゼロ |
-| `renderer-ywn` | 間接引数の予約失敗を64回繰り返し、同じGraphで正常な資源作成、compile、返却に成功。最適化したCPUメモリ窓の確保・再確保・解放は各ゼロ |
-| `renderer-9o5` | 作業セットの不正descriptor、縮小した範囲容量、先行資源作成後の故障注入に対して、旧クラスと登録済みの二つの区間を取得でき、正常な再準備にも成功。厳格構成でcache回帰4件も通過 |
-| `renderer-6vg` | Vulkan Win32の厳格・製品構成で表示slot準備失敗、native作成後の画像準備失敗、退役待ちと再試行を確認。各36 present・18 readbackで通常フレームのCPU／native確保・解放はゼロ |
-| `renderer-kvr`、`renderer-fdx` | 二APIの厳格・製品構成で、Graph経由の非ゼロoffset、RGBA8・RGBA16F・D32、二版の保持と再利用、9×3画像の反転と赤青入れ替えを期待値と照合 |
+| `sashiko-80w` | `syncval_shader_accesses_heuristic=true` の Core/SyncVal で、同一Graphと連続submitのfragment→Computeサンプルを実行。依存stageと取得byteを照合し、解放後まで診断ゼロ |
+| `sashiko-ywn` | 間接引数の予約失敗を64回繰り返し、同じGraphで正常な資源作成、compile、返却に成功。最適化したCPUメモリ窓の確保・再確保・解放は各ゼロ |
+| `sashiko-9o5` | 作業セットの不正descriptor、縮小した範囲容量、先行資源作成後の故障注入に対して、旧クラスと登録済みの二つの区間を取得でき、正常な再準備にも成功。厳格構成でcache回帰4件も通過 |
+| `sashiko-6vg` | Vulkan Win32の厳格・製品構成で表示slot準備失敗、native作成後の画像準備失敗、退役待ちと再試行を確認。各36 present・18 readbackで通常フレームのCPU／native確保・解放はゼロ |
+| `sashiko-kvr`、`sashiko-fdx` | 二APIの厳格・製品構成で、Graph経由の非ゼロoffset、RGBA8・RGBA16F・D32、二版の保持と再利用、9×3画像の反転と赤青入れ替えを期待値と照合 |
 
-`renderer-9o5` の小規模な故障注入では、VMA allocationの個数とbyteが再準備前の5件・8,384 byteから
+`sashiko-9o5` の小規模な故障注入では、VMA allocationの個数とbyteが再準備前の5件・8,384 byteから
 旧資源と新資源の併存時に6件・8,448 byteへ増え、失敗後は5件・8,384 byteへ戻った。
 この値はVMAのallocation統計であり、VMA blockやプロセスのVRAM使用量は別の指標である。
 WSIでは実際に旧Swapchainを退役させた後にエラーを注入した。ドライバーOOM自体の再現は未実施。
@@ -4378,20 +4378,20 @@ MRT・4× MSAA・間接描画・インスタンシング・Bloomの実GPU試験�
 CPU専用、全feature、最適化した二API製品構成のworkspace試験と、CPU／Vulkan単独／D3D12単独／全featureのClippyも通過した。
 シェーダーABIと固定ツールでの再生成、BistroのPython試験、HTML 18ページのリンクとMermaid 32描画を確認した。
 
-`renderer-jgs` の画像受入は、全Bistroの1080p、Forward 1×、直接描画、Bloom tentで実行した。
+`sashiko-jgs` の画像受入は、全Bistroの1080p、Forward 1×、直接描画、Bloom tentで実行した。
 両APIの厳格・製品構成を3回ずつ実行し、同一APIの反復一致、二APIの126画像面と15 ROIの比較、通常フレームのメモリ条件を通過した。
 先行pilotで材質欠落、shadow receiverのずれ、二重sRGB変換、alpha強制不透明化の検出も確認した。
 画像要約のSHA-256は`28cd3786debc9af368c1dfc8d984338730fa2b648c8d30bd2abcf569ca2f54f6`。
 生のレポートと比較画像はローカルの`E:/renderer-review-20261118-3fee629`に保存した。
 
 最初の製品Vulkanスモークは24 presentとresize／最小化／復帰まで通過し、カメラ再生の画像判定で失敗した。
-`renderer-bmq`で受理されなかった提出のキャプチャを破棄し、スモーク中の入力をスクリプトに限定した。
+`sashiko-bmq`で受理されなかった提出のキャプチャを破棄し、スモーク中の入力をスクリプトに限定した。
 再試験では両APIの厳格・製品計4条件で24 present、カメラ再生、復帰、pending終了と最初の表示画像を照合した。
 巡回は4条件で24 warmup＋1,800 frameを完走し、通常フレームの確保・解放・native作成／破棄はゼロだった。
 厳格構成の巡回は、スモーク専用修正前に採取した同一の通常巡回経路の結果を使用した。
 結合した表示要約のSHA-256は`3be379043f343e27ab6ff56d85a1ac9927f95565fe9f3a2830341c5cace8e0bc`。
 
-`renderer-420`、比較元`f649bcf`。第一者のRenderer Rust 64ファイル、example 11、
+`sashiko-420`、比較元`f649bcf`。第一者のRenderer Rust 64ファイル、example 11、
 integration test 4、Bistro Python 28、validator 2、PowerShell 6と、benchmark、
 独立試作、生成・依存設定、CI、文書構成を分担レビューし、主要な修正を別担当が再レビューした。
 生成bindingsとshader成果物はFFI・ABI・所有・固定入力による再生成の境界で確認した。
@@ -4399,7 +4399,7 @@ integration test 4、Bistro Python 28、validator 2、PowerShell 6と、benchmar
 
 | 課題 | 確認した問題と修正 |
 |---|---|
-| `renderer-420.1` | compile解析用の名前・初期範囲・依存の複製を借用へ変更。drawの中間配列を除去し、不変snapshotのパラメーター保証をprivateな値で引き継ぐ |
+| `sashiko-420.1` | compile解析用の名前・初期範囲・依存の複製を借用へ変更。drawの中間配列を除去し、不変snapshotのパラメーター保証をprivateな値で引き継ぐ |
 | `.2` | mesh uploadの完了prefix・残byte・全resident退役走査をcursor、残量、retiring索引へ変更。不要なLRU sortと重複Arc cloneを除去。readbackは退役後に一度sortして検索。importはowner/generation/revisionを維持し、深い不変metadata再比較だけ開発診断へ移す |
 | `.3` | resize時とsampleの重複Fence pollを除去。再描画の期限を固定し、ゼロ寸法で待機する。非ゼロ寸法への復帰はSwapchain作成済みかどうかに依存しない |
 | `.4` | 同一file/archive/FBXの重複hash、画像sourceの全量保持、Node Bufferの複製、出力されないtangent計算を除去。validatorによる入力上書きと、失敗した比較結果をsummaryが成功として公開する不具合も修正 |
@@ -4421,12 +4421,12 @@ shaderは最後のcompileを故障させても全5個の既存SPIR-Vを保持し
 `core.autocrlf=true`のcheckout相当で13個のtextがLFとなって再生成照合に成功した。
 
 構成上のGraphとengineの相互依存、Program/bindingと記録、物理資源とGraph、
-WSIの複数所有境界の同居は、下記`renderer-hyf`で機能追加前に整理した。
+WSIの複数所有境界の同居は、下記`sashiko-hyf`で機能追加前に整理した。
 [現在の境界](../design/implementation-policy.md#source-boundaries)を既存B1課題へ反映する。backendのprivate分離、生成bindingsの隔離、
 `foo.rs`と`foo/`、integration test/実GPUignoredの区分は維持する。
 現在のraw Graph作成境界のextent/clear検査、動的なowner/revision、同期・寿命・容量・native失敗は保持する。
 一般Programをさらに拡張する場合も、read scope省略の成立条件を再確認する。
-既知の未再現native起動crash `renderer-0pb`は未解決で、このレビューで解決したとは扱わない。
+既知の未再現native起動crash `sashiko-0pb`は未解決で、このレビューで解決したとは扱わない。
 
 統合したRustソースでfmt、製品/開発の全target Clippy（`-D warnings`）、CPU通常66件、
 `presentation,d3d12`のrelease通常180件、追加検証/Graph診断ありのrelease通常191件が成功した。
@@ -4443,7 +4443,7 @@ nativeの診断ゼロと区別する。Linuxは実GPU未実行で、CIのCPU/bui
 
 ### B1実装前の4つの責務境界の整理
 
-`renderer-hyf`、整理前`9f6b3a4`。`renderer-7ft.2.1`の一般Program機能を始める前に、
+`sashiko-hyf`、整理前`9f6b3a4`。`sashiko-7ft.2.1`の一般Program機能を始める前に、
 4点を実装・統合した。[設計](../design/implementation-policy.md#source-boundaries)と
 [機械可読の検証記録](source-review.json)の`source_reorganization`に対応する。
 
@@ -4470,12 +4470,12 @@ WSIは53→52件で、唯一の差は不変limitsの再照会を既存Device cac
 同じrelease CPU harnessで、compileのallocation 40,001回/7,125,062要求byteと、
 frame構築18回/1,706,449要求byteが整理前後で一致した。
 これは合成入力のallocation要求の確認で、実時間・GPU速度・Bistro性能の測定ではない。
-Linux実GPU、別GPU/driver、Bistro全体、既知`renderer-0pb`の再現・解決は今回未実行である。
+Linux実GPU、別GPU/driver、Bistro全体、既知`sashiko-0pb`の再現・解決は今回未実行である。
 
 ## Bistro計画と現行実装の区別
 
 開発計画を[実装方針のB0〜B5](../design/implementation-policy.md#bistro-roadmap)へ改訂した。
-追跡は`renderer-7ft`。`renderer-7ft.1.1`では利用者要件を合意し、
+追跡は`sashiko-7ft`。`sashiko-7ft.1.1`では利用者要件を合意し、
 [確定要件と素材検証](../design/implementation-policy.md#bistro-requirements)を記録した。
 対象は屋外全体、太陽光＋IBL＋影、PBR/HDR/tone mappingと利用側Bloom、基準1920×1080、
 自由カメラと固定視点・自動巡回、両APIのWindows表示・操作、初回受入は既存RTX 3060である。
@@ -4484,7 +4484,7 @@ B0で維持・改修・置換・外部基盤を比較し、[native上位置換�
 旧M4の6/22完了は準備・Device・buffer実行の実績であり、新計画の進捗率へ流用しない。
 旧M4の未着手分は後継課題を示して置換し、実装完了とは扱わない。
 
-素材の取得・棚卸し・変換とCPU検証を下記へ記録した。`renderer-7ft.1.1.1`がこの作業の追跡先である。
+素材の取得・棚卸し・変換とCPU検証を下記へ記録した。`sashiko-7ft.1.1.1`がこの作業の追跡先である。
 全ゼロalphaに加え、最終camera/path/light/IBL/露出と再現・比較手順を下記のとおり固定した。
 要求・比較入力の固定に続き、公開APIの利用例と基盤比較・採用・移行範囲を設計し、B0の設計を完了した。
 B0の設計確認ではRenderer本体・管理下shader・native経路を変更せず、offline素材検証と実GPU受入を分けた。
@@ -4497,7 +4497,7 @@ B0の設計確認ではRenderer本体・管理下shader・native経路を変更�
 
 ### 公開APIのUXと拡張契約の比較
 
-`renderer-7ft.1.2`の[比較と第一案](../design/implementation-policy.md#public-api-comparison)を記録した。
+`sashiko-7ft.1.2`の[比較と第一案](../design/implementation-policy.md#public-api-comparison)を記録した。
 構築時owned命令案Aとframe内借用callback案Bに同じ型付きpass dataを使い、記録時期と依存宣言の軸を分けた。
 第一案はA＋binding／attachment由来のアクセスである。理由は実命令の確定境界と所有契約の単純さで、
 CPU／GPU速度の優位を実測した判断ではない。基盤選定の`.1.3`でもAを維持した。
@@ -4537,7 +4537,7 @@ Vulkan指針の用途由来同期・記録から完了までの寿命と検証�
 
 ### 基盤の比較・採用と小試作
 
-`renderer-7ft.1.3`の[採用理由・代案・工数・移行範囲](../design/implementation-policy.md#foundation-selection)を記録した。
+`sashiko-7ft.1.3`の[採用理由・代案・工数・移行範囲](../design/implementation-policy.md#foundation-selection)を記録した。
 固定操作の維持は独自パス要件を満たさず、全面native置換、safe wgpu、wgpu-hal直接利用と比較した。
 採用はnativeの低レベル所有・同期・退役・WSIの再利用と、上位の一般owned命令／Program/bindingへの置換である。
 safe wgpuのnative実装負担の小ささとRenderBundleによる事前検査を認めたうえで、
@@ -4617,7 +4617,7 @@ CPU previewにはBlenderの再符号化・sample noise等の差が残り、屋�
 glTF再import後のBlender終了ログには24 byteの未解放block報告が1件あり、tool診断として保持する。
 Rendererのnative所有・GPU完了の受入を行った結果ではない。
 
-**確定した素材解釈（`renderer-7ft.1.1.2`）:** `MASTER_Glass_Dirty_MASKED`は68面/13mesh、
+**確定した素材解釈（`sashiko-7ft.1.1.2`）:** `MASTER_Glass_Dirty_MASKED`は68面/13mesh、
 `Paris_LiquorBottle_01_Labels`は154面/11meshで使われる。元alphaを保持し、不透明overrideは加えない。
 両材質の面はopacity 0によって不可視で、shadowにも被覆を作らないことを後続実装の受入条件とする。
 いずれも非退化面であり、mesh/materialを削除する決定ではない。
@@ -4662,7 +4662,7 @@ pushした組合せのbuild/testはCIで別に確認する。
 
 ### Bistroの描画・比較条件
 
-`renderer-7ft.1.1`の固定入力は[conditions.json](../../tools/bistro/conditions.json)、
+`sashiko-7ft.1.1`の固定入力は[conditions.json](../../tools/bistro/conditions.json)、
 判断と再現条件は[実装方針](../design/implementation-policy.md#bistro-conditions)、
 手順は[開発ガイド](../guides/development.md#bistro-conditions)にまとめた。
 [機械可読の実行記録](bistro-conditions.json)と[CPUプレビュー](bistro-conditions-preview.png)に、
@@ -4769,7 +4769,7 @@ Windows / LinuxのCPU・Vulkan、およびWindows presentationのcheck・Clippy�
 ### 製品版と開発用の検証分離
 
 ライブラリの最終確認点は`e96d270`、表示例の追補は`aa5f1eb`。
-`renderer-y7e`／`fa3`／`585`／`vmj`／`kyt`／`jp2`を統合した。
+`sashiko-y7e`／`fa3`／`585`／`vmj`／`kyt`／`jp2`を統合した。
 profileと独立した`development-validation`、`vulkan-diagnostics`、`graph-diagnostics`を実装した。
 製品の既定native modeはDisabledで、診断なしのRequired要求は明示的に拒否する。
 
@@ -4848,7 +4848,7 @@ terminal pending残留による回収停止は修正し、最終差分を再確�
 
 push後のLinux CIで、Instance拡張名をpointerの値で整列する実装がOSごとに異なる順序を返し、
 既存lifecycle試験が失敗した。C文字列の内容による整列・重複除去へ修正し、
-別heapの同名文字列を使う回帰試験を追加した（`renderer-u4h.14`）。
+別heapの同名文字列を使う回帰試験を追加した（`sashiko-u4h.14`）。
 修正後のVulkan／presentation全target check・Clippy・CPU試験と実GPU26件を再実行して成功した。
 
 ## 採用した基準と制限
@@ -4927,13 +4927,13 @@ frame回収後・永続meshとhistoryをまだ登録している時点のメモ�
 
 ## RenderGraphのAPIとcache改善
 
-`renderer-lup`でowner検査付きの`Graph::image_desc`を追加し、custom処理の幅・高さの別渡しを除去した。
-`renderer-bcf`でGraphErrorの8分類、pass/resource・名前・範囲、実際の有向循環のcontextを追加した。
+`sashiko-lup`でowner検査付きの`Graph::image_desc`を追加し、custom処理の幅・高さの別渡しを除去した。
+`sashiko-bcf`でGraphErrorの8分類、pass/resource・名前・範囲、実際の有向循環のcontextを追加した。
 CPUのみで一時/import画像とdepth、foreign handle、未初期化の穴とexport、同名passと循環の後続tail、
 構築前のpass名、customエラーを確認した。旧struct literalは`GraphError::custom`へ移行した。
 互換性維持を既定の制約にしない方針は`AGENTS.md`に明記した。
 
-`renderer-vxf`は同じdescriptorの再利用を優先し、件数上限までは異なる条件も保持する。
+`sashiko-vxf`は同じdescriptorの再利用を優先し、件数上限までは異なる条件も保持する。
 上限時の退避は最古の受理serial・同値ならindex順で、登録中・pending lease・世代上限を保護する。
 追加のstrict GPU回帰4件で、2×2/3×3画像の交互8回が**新規2・再利用6**になること、
 容量圧力、世代、未観測pending、置換先の命名失敗後の旧allocation維持と再利用を確認した。
@@ -5026,7 +5026,7 @@ cache単独変更時の比較は同じJSON内に元のsourceと条件で保持�
 Windows Application Errorのmoduleはunknown、offsetは`0xcb`で、直前のValidation警告・エラーはなかった。
 同時期に試作側のGPU suiteも実行していたが、並行実行を直接原因とは断定していない。
 Device単独、その後のpresentation全30件を2 run、headless全29件、上記比較と例の単独実行では再現しなかった。
-失敗ログを保存し、原因未確定の観測を`renderer-0pb`で追跡する。driver原因や解決済みとは扱わない。
+失敗ログを保存し、原因未確定の観測を`sashiko-0pb`で追跡する。driver原因や解決済みとは扱わない。
 batch本実装`97d41cc`のheadless 33件・表示込み34件、56比較runと各例でも再現しなかった。
 今回の`2e543b4`のheadless 40件・表示込み41件・公開負荷1件、release検証・計測と各例も単独実行し、再現していない。
 
@@ -5068,7 +5068,7 @@ trimは明示APIであり、この負荷へ暗黙のevictionを追加してい�
 
 M4の第二APIはD3D12を選定した。既存Windows実機とshaderツールを使って、
 同じ入力・Graph・GPUでVulkanと比較しやすいことが理由である。
-準備4課題（`renderer-we8.1`・`.2`、`renderer-6qc`・`renderer-k51`）に続き、
+準備4課題（`sashiko-we8.1`・`.2`、`sashiko-6qc`・`sashiko-k51`）に続き、
 M4-03の公開`D3D12Runtime`とM4-04の共有Graph buffer実行を追加した。
 Windows限定の`d3d12` featureで、単一DIRECT queueのupload／copy／readbackを使える。
 この旧M4-03/04受入点の後続範囲として、画像、import/export、上限付き再利用と一般RHIの実装は後続課題へ残す。

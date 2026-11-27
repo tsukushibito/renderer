@@ -1166,7 +1166,7 @@ fn source_scope(
             // A fresh, unaliased image permits an empty source scope by the API.
             // On the tested stack an earlier, unrelated buffer copy lost data
             // with an empty transition source; ordering COPY prevented this
-            // (renderer-j17). The driver-internal cause remains unconfirmed.
+            // (sashiko-j17). The driver-internal cause remains unconfirmed.
             // Order prior copies, including pending graphs on this same queue,
             // before that transition. This is execution-only, with no host wait
             // or claim that fresh images require a source memory dependency.

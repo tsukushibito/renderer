@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "status": "verified",
-  "issue": "renderer-dzz",
+  "issue": "sashiko-dzz",
   "objective": "通常フレームの確保・再確保・解放ゼロ",
   "memory_target_achieved_locally": true,
   "goal_achieved": true,
@@ -802,7 +802,7 @@
     "Optional native diagnostics are verified in separate strict runs; timings, physical VRAM, another GPU/driver, Linux real GPU, long-duration endurance and real native OOM/device loss are not claimed."
   ],
   "owned_compute_cpu": {
-    "issue": "renderer-7ft.2.2.2",
+    "issue": "sashiko-7ft.2.2.2",
     "verification_date": "2026-11-15",
     "implementation_commit": "65893fa003cd5f2e5787349318760ec4a22477ce",
     "scope": "CPU owned managed buffer dispatch planning only; native dispatch execution remains unsupported",
@@ -1344,7 +1344,7 @@
     }
   },
   "attachment_subresource_cpu": {
-    "issue": "renderer-7ft.2.2.3",
+    "issue": "sashiko-7ft.2.2.3",
     "verification_date": "2026-11-15",
     "implementation_commit": "f290cef42fc849228731b165b6fd553eb04ed323",
     "scope": "CPU single-subresource Views and owned zero-draw attachment arrays; native only original single-color+depth ClearStore form",
@@ -2115,7 +2115,7 @@
     ]
   },
   "owned_raster": {
-    "issue": "renderer-7ft.2.2.4",
+    "issue": "sashiko-7ft.2.2.4",
     "verification_date": "2026-11-15",
     "implementation_commit": "5d7fb6b49dfa30d7489ba70144fbdbe3f17386f4",
     "scope": "One real descriptor-free managed mesh Program and owned ordered draw sequences; shared public/Engine core and existing Vulkan mesh lowering, not generic graphics descriptor or D3D12 Raster support",
@@ -2908,8 +2908,8 @@
     ]
   },
   "owned_shader_bindings": {
-    "issue": "renderer-7ft.2.2.5",
-    "parent_issue": "renderer-7ft.2.2",
+    "issue": "sashiko-7ft.2.2.5",
+    "parent_issue": "sashiko-7ft.2.2",
     "implementation_commit": "52a5d748ed7593bab1c97dc0863b28e60b52b8f3",
     "scope": "CPU owned Graph composition/binding/access/stage planning; general native Raster/dispatch and Bloom remain subsequent work",
     "environment": {
@@ -3791,7 +3791,7 @@
     ]
   },
   "graph_review_cleanup": {
-    "issue": "renderer-0dm",
+    "issue": "sashiko-0dm",
     "source_checkpoint": "9f65b97584152bb79d53603261589a7287344efd",
     "baseline": "e10d730",
     "worker_commits": [
@@ -4200,7 +4200,7 @@
   },
   "owned_raster_native": {
     "date": "2026-11-15",
-    "issue": "renderer-7ft.2.3",
+    "issue": "sashiko-7ft.2.3",
     "source_checkpoint": "ccd838edd24117f570d39bf38f3a9d595c398a60",
     "environment": {
       "os": "Windows x64",
@@ -6478,7 +6478,7 @@
     ]
   },
   "owned_raster_review_fixes": {
-    "issue": "renderer-68c",
+    "issue": "sashiko-68c",
     "date": "2026-11-16",
     "implementation_commit": "33587ca3caef12c83788dfabaed8775ebdce07e2",
     "comparison_commit": "68b96da9b4ab4d4fc958b70b88743731672e2b50",
@@ -7653,7 +7653,7 @@
     }
   },
   "owned_compute_native": {
-    "issue": "renderer-7ft.2.4",
+    "issue": "sashiko-7ft.2.4",
     "date": "2026-11-16",
     "implementation_commit": "adb51d17e3c1f43b380163a444f750ee9ff9edf5",
     "source_note": "All measured source contents match this integration revision; documentation and verification evidence were finalized afterwards. Logs are local aids; tracked fixtures, source hashes and commands define reproducibility.",
@@ -8818,7 +8818,7 @@
       }
     ],
     "unexecuted": [
-      "CPU/GPU time-performance comparison (deferred to renderer-7ft.2.6)",
+      "CPU/GPU time-performance comparison (deferred to sashiko-7ft.2.6)",
       "real native OOM or Device loss/removal",
       "other GPU/driver or Linux real GPU",
       "Bistro lighting/Bloom algorithm",
@@ -8826,7 +8826,7 @@
     ]
   },
   "graph_input_connection": {
-    "issue": "renderer-7ft.2.7.2",
+    "issue": "sashiko-7ft.2.7.2",
     "date": "2026-11-16",
     "source_note": "SHA-256 over UTF-8 source with LF line endings; source hashes identify the tested implementation independently of the final documentation/integration commit.",
     "source_sha256_lf": {
@@ -10287,7 +10287,7 @@
     ]
   },
   "standard_graph": {
-    "issue": "renderer-7ft.2.7.3",
+    "issue": "sashiko-7ft.2.7.3",
     "date": "2026-11-16",
     "base_commit": "b903c84d947bdd729ff5a9a581305cd0ed8b5500",
     "source_identity": "SHA-256 of final source normalized to UTF-8 LF; identifies the tested integration without a self-referential commit hash",
@@ -12225,10 +12225,10 @@
     "preparation_adjustment": "Initial direct prepass probe correctly returned Draws capacity exhaustion at four draws; explicitly prepared eight draws for four objects across depth and color before the successful final run. No ordinary-frame growth or fallback was added.",
     "limits": [
       "Standard mesh is unlit vertex color times tint; no standard transparent blend, PBR, exposure or tone mapping.",
-      "The two-API post fixture uses two image copies. Full consumer migration and user Compute composition acceptance remain renderer-7ft.2.7.4.",
+      "The two-API post fixture uses two image copies. Full consumer migration and user Compute composition acceptance remain sashiko-7ft.2.7.4.",
       "Prepassed shader depth writes are disabled, but Graph depth accesses and native synchronization remain conservative read/write.",
       "No WSI or normal-frame timing claims; external layer injection and driver-internal allocations are unobserved.",
-      "General imports/history and user graphics shader/state remain renderer-7ft.2.5 and renderer-7ft.2.8."
+      "General imports/history and user graphics shader/state remain sashiko-7ft.2.5 and sashiko-7ft.2.8."
     ],
     "documentation": {
       "html_pages": 17,
@@ -12238,8 +12238,8 @@
     }
   },
   "standard_composition": {
-    "issue": "renderer-7ft.2.7.4",
-    "parent": "renderer-7ft.2.7",
+    "issue": "sashiko-7ft.2.7.4",
+    "parent": "sashiko-7ft.2.7",
     "date": "2026-11-16",
     "base_commit": "16607fb1301a114e29d93bda613793c0a4c02f66",
     "source_identity": "SHA-256 of final source normalized to UTF-8 LF; source hashes identify the tested integration without a self-referential final commit hash",
@@ -24555,8 +24555,8 @@
       "No library synchronization, lifetime, validation placement or shader binary changes. Existing creation/Graph guarantees and shipping capacity/native failure handling are maintained.",
       "Unchanged trusted Compute assets reuse the previously reviewed unsafe descriptors; shader generation was not repeated for this consumer-only integration.",
       "Native Disabled does not disprove external layer injection; driver/OS allocations outside configured hooks remain unobserved.",
-      "Existing consumer timing samples are preserved as raw reports, not accepted as a new normal-frame time-performance comparison. Presentation and expanded time measurement remain renderer-7ft.2.6.",
-      "General imports/history remain renderer-7ft.2.5; user graphics shaders/blend/depth and transparency remain renderer-7ft.2.8; PBR and tone mapping remain B2/B3.",
+      "Existing consumer timing samples are preserved as raw reports, not accepted as a new normal-frame time-performance comparison. Presentation and expanded time measurement remain sashiko-7ft.2.6.",
+      "General imports/history remain sashiko-7ft.2.5; user graphics shaders/blend/depth and transparency remain sashiko-7ft.2.8; PBR and tone mapping remain B2/B3.",
       "The standard fixture exercises temporary Graph resources and headless execution; existing engine_graph and Engine native regressions provide mesh-revision, multiple-View, pending and output-ownership coverage."
     ],
     "documentation": {
@@ -24568,7 +24568,7 @@
     }
   },
   "general_resources": {
-    "issue": "renderer-7ft.2.5",
+    "issue": "sashiko-7ft.2.5",
     "date": "2026-11-16",
     "base_commit": "a456b70",
     "source_hash_encoding": "UTF-8 LF; excludes verification prose and data to avoid self-reference",
@@ -26745,7 +26745,7 @@
     "output_encoding": "Lossless packed RGBA16F little-endian bytes, lower-case hexadecimal per readback; each run compared to independent expected pixels and between Vulkan/D3D12."
   },
   "general_resources_review_fix": {
-    "issue": "renderer-7ft.2.5.1",
+    "issue": "sashiko-7ft.2.5.1",
     "date": "2026-11-16",
     "review_base": "2ae684d0396c9ae1aa592b277c0e043f3cc6ae29",
     "source_sha256_utf8_lf": {
@@ -26952,7 +26952,7 @@
     "ci_memory_policy": "No mandatory real-GPU CI gate or timing threshold added; existing ignored acceptance is explicitly executed."
   },
   "custom_raster": {
-    "issue": "renderer-7ft.2.8",
+    "issue": "sashiko-7ft.2.8",
     "date": "2026-11-16",
     "comparison_base": "8636ffa",
     "source_hashes": {
@@ -29867,7 +29867,7 @@
     ]
   },
 "windowed_presentation": {
-  "issue": "renderer-7ft.2.6",
+  "issue": "sashiko-7ft.2.6",
   "date_jst": "2026-11-16",
   "source_commit": "a786508ae156af3863dde8697658c36a6b759c93",
   "source_hashes": "current-metrics.json#windowed_presentation.source_hashes_sha256",

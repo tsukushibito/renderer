@@ -149,7 +149,7 @@ Rustのedition、MSRV、シェーダーコンパイラー、ウィンドウ接�
 
 ### 3.3 Bistro到達から選んだ基盤と移行範囲
 
-`renderer-7ft.1.3`、調査日2026-11-14。**native基盤の改修と上位操作の置換を採用する。**
+`sashiko-7ft.1.3`、調査日2026-11-14。**native基盤の改修と上位操作の置換を採用する。**
 Vulkanはash 0.38／vk-mem 0.5、D3D12は現行の生成bindingsとDevice/Fence所有を出発点にする。
 第7章のA（構築時owned命令＋binding/attachment由来アクセス）を両APIへ接続し、
 利用側の画像変換やeffectは不変のProgramとGraph命令で記述する。
@@ -276,8 +276,8 @@ Forward/GGX、静的IBL、CSM/PCF、RGBA16F、Neutral、FXAAを第15章の出発
 
 ### 3.4 全体レビューから定めたソース整理の境界
 
-`renderer-420`で第一者のRust、shader、素材tool、生成・検証script、CIと文書構成を確認した。
-確定した不要な処理を修正し、残った4つの責務境界は`renderer-hyf`でB1の機能追加に先行して整理した。
+`sashiko-420`で第一者のRust、shader、素材tool、生成・検証script、CIと文書構成を確認した。
+確定した不要な処理を修正し、残った4つの責務境界は`sashiko-hyf`でB1の機能追加に先行して整理した。
 実行結果と確認限界は[現在の検証状況](../verification/current.md#repository-review)を参照する。
 
 | 整理前の結合 | 現在の責務境界 |
@@ -293,7 +293,7 @@ backendのnative型は既にprivateで、D3D12本番実装からVulkanへの依�
 行数だけを理由にmoduleを増やさず、crate分割、巨大なRHI trait、互換wrapperを先行条件にしない。
 公開入口はfacadeからの直接reexportで一つに保ち、所有者の内部状態は必要な操作へ閉じる。
 構成整理と一般Program/manifest/reflection、一般資源・owned passの機能追加は別commit/課題とする。
-後者は`renderer-7ft.2.1`以降で実装し、今回の整理をその機能の完了と扱わない。
+後者は`sashiko-7ft.2.1`以降で実装し、今回の整理をその機能の完了と扱わない。
 
 <a id="math-library-policy"></a>
 
@@ -430,7 +430,7 @@ Rendererが制御しないdriver内部の確保は保証と区別し、未観測
 
 ### 4.4 共通Graph・Engineの準備済み領域
 
-`renderer-7ft.2.2.1`は、前節の通常フレーム規約に従って共通の入力・命令・解析領域を予約する。
+`sashiko-7ft.2.2.1`は、前節の通常フレーム規約に従って共通の入力・命令・解析領域を予約する。
 実装した所有契約は[RenderGraphのslot設計](rendergraph.md#prepared-graph-storage)を正とする。
 これはMRT/mipや任意shaderを実装したという意味でも、native実行・表示・CPU結果まで含む
 全体のゼロ達成の宣言でもない。実行した構成と残る確認は[検証状況](../verification/current.md)へ記録する。
@@ -601,7 +601,7 @@ UXの受入条件は、入出力と処理を近くで読めること、同じ資
 
 ### 7.1 代表利用コードによる比較と第一案
 
-`renderer-7ft.1.2`の設計対象は利用側から見た契約である。以下は**B1で実証する第一案**であり、
+`sashiko-7ft.1.2`の設計対象は利用側から見た契約である。以下は**B1で実証する第一案**であり、
 現行`Graph`の実装済み機能や基盤採用の決定ではない。
 [当時のCPU試作](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer-core/examples/graph_api_comparison.rs)は二案を同じ入力で比較する。
 [当時の利用コードと試作本体](https://github.com/tsukushibito/sashiko/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer-core/examples/support/graph_api_comparison.rs)の`Study::add`が
@@ -865,7 +865,7 @@ Compute/copyの二API受入`.2.4`は完了した。公開APIの構成変更は�
 | `.2.8` 利用側Raster | `.2.7`と`.2.5`の後、独自graphics shader/ABIと必要なblend/depth設定を公開する。最小alpha fixtureで三経路を二API実証し、固定Program群の公開だけで自由なRaster対応を主張しない。 |
 | `.2.6` 表示・時間計測 | `.2.5`/`.2.8`の公開Graph・importを使う同じconsumerで、二API表示、自由camera／固定巡回、resize、pending終了を接続する。共通表示契約と任意の実windowed CPU／GPU／present計測は[表示設計](#d3d12-presentation)に従う。 |
 
-`.2.7.1`〜`.2.7.4`の親は`renderer-7ft.2.7`、`.2.8`はB1直下とする。上表の省略IDには`renderer-7ft`を前置する。
+`.2.7.1`〜`.2.7.4`の親は`sashiko-7ft.2.7`、`.2.8`はB1直下とする。上表の省略IDには`sashiko-7ft`を前置する。
 新APIと旧APIの互換wrapperや並行経路を互換性だけのために残さず、実装範囲のconsumerと文書を一緒に更新する。
 B2のPBR、B3の影・HDR・tone mappingは標準パスと標準グラフへ段階追加し、既存B2/B3の到達要件は変えない。
 
@@ -983,11 +983,11 @@ Canvas の試作は表示リニア空間で乗算済みアルファを合成す�
 
 | 順序・Beads | 成果物と次へ進む条件 |
 |---|---|
-| 1 · `renderer-p47.2` 利用コードの試作 | 現行 API を使う examples・外部 Toon・Bistro の直接パス・core 単独利用を比較元にする。上記の入口について最小の外部利用クレートを作り、依存と通常・失敗時の手順を比較する。代表となる画像・所有権は現行基盤で実行し、型だけの試作と区別する。採用する公開操作と棄却理由を記録してから改名する。 |
-| 2 · `renderer-p47.3` 二クレートへ再配置 | 旧 `sashiko-renderer` を `sashiko-renderer-core`、旧 `renderer-pipeline` の標準部品を新 `sashiko-renderer` に移す。manifest、feature 転送、lockfile、公開パス・マクロ、テストの相対参照、Bistro、外部プラグイン、シェーダー生成・CI・利用ガイドを同時に移す。CPU 単独・単一 backend・両 backend をビルドし、既存画像・実機経路を再現する。 |
-| 3 · `renderer-p47.4` 最小の画面を実装 | 共通 Frame、空から始まるシーン、通常の個体更新、Canvas 合成を既存 Graph で動かす。ウィンドウ・画面外・ホスト記録で共通の描画部品を使い、四つの UI 合成例を両 backend で実行する。 |
-| 4 · `renderer-p47.5` 動的な訓練場と拡張 | スキニング・部位材質・LOD、世代付き個体と差し替え、ビュー別の履歴・影・ピッキング、ECS 一括入力とホスト画像を順に実装し、上表の成功・失敗を再生する。独自 Toon・輪郭・Bistro の直接パスが上位シーンの所有を強制されないことを外部利用者から確認する。 |
-| 5 · `renderer-p47.6` 実機受入と移行完了 | 訓練場と既存 Bistro の回帰、公開 examples、rustdoc、ガイド、Cargo 機能表、ツール手順を新構成で通す。旧クレート名と互換専用の二重経路を現役の利用手順から除き、再現方法・計測値・未実行範囲を[現行の検証記録](../verification/current.md)に反映する。 |
+| 1 · `sashiko-p47.2` 利用コードの試作 | 現行 API を使う examples・外部 Toon・Bistro の直接パス・core 単独利用を比較元にする。上記の入口について最小の外部利用クレートを作り、依存と通常・失敗時の手順を比較する。代表となる画像・所有権は現行基盤で実行し、型だけの試作と区別する。採用する公開操作と棄却理由を記録してから改名する。 |
+| 2 · `sashiko-p47.3` 二クレートへ再配置 | 旧 `sashiko-renderer` を `sashiko-renderer-core`、旧 `renderer-pipeline` の標準部品を新 `sashiko-renderer` に移す。manifest、feature 転送、lockfile、公開パス・マクロ、テストの相対参照、Bistro、外部プラグイン、シェーダー生成・CI・利用ガイドを同時に移す。CPU 単独・単一 backend・両 backend をビルドし、既存画像・実機経路を再現する。 |
+| 3 · `sashiko-p47.4` 最小の画面を実装 | 共通 Frame、空から始まるシーン、通常の個体更新、Canvas 合成を既存 Graph で動かす。ウィンドウ・画面外・ホスト記録で共通の描画部品を使い、四つの UI 合成例を両 backend で実行する。 |
+| 4 · `sashiko-p47.5` 動的な訓練場と拡張 | スキニング・部位材質・LOD、世代付き個体と差し替え、ビュー別の履歴・影・ピッキング、ECS 一括入力とホスト画像を順に実装し、上表の成功・失敗を再生する。独自 Toon・輪郭・Bistro の直接パスが上位シーンの所有を強制されないことを外部利用者から確認する。 |
+| 5 · `sashiko-p47.6` 実機受入と移行完了 | 訓練場と既存 Bistro の回帰、公開 examples、rustdoc、ガイド、Cargo 機能表、ツール手順を新構成で通す。旧クレート名と互換専用の二重経路を現役の利用手順から除き、再現方法・計測値・未実行範囲を[現行の検証記録](../verification/current.md)に反映する。 |
 
 実機受入は Windows の Vulkan・D3D12 で、実ウィンドウとヘッドレス、開発検証ありと最適化した製品構成を分ける。
 ID は完全一致、色・深度・影は事前に定めた領域・許容差と基準画像で判定し、実行環境、入力列、差分、失敗フレームを保存する。
@@ -1332,7 +1332,7 @@ ROI後の画像capture/teardownはtraceへ含まれても、定常費用の集�
 
 ## 15. Bistroを到達目標にした実装計画と完了条件
 
-親課題は`renderer-7ft`。旧M0〜M4の固定操作による実証順序をB0〜B5へ置き換える。
+親課題は`sashiko-7ft`。旧M0〜M4の固定操作による実証順序をB0〜B5へ置き換える。
 旧M4は準備・Device・buffer実行の6/22課題まで実証済みで、残りを実装完了とは扱わない。
 実績は[現在の検証状況](../verification/current.md)に残し、旧課題は後継を示して置換する。
 既存コード、Graphの内部表現、ash・vk-mem、crate構成の維持は必須にしない。
@@ -1368,7 +1368,7 @@ path-traced参照画像との一致、レイトレーシング/GI、native HDR�
 
 ### Bistroの確定要件と素材検証
 
-`renderer-7ft.1.1`で合意した要件を次に固定する。下の描画方式と準備手順は出発案であり、
+`sashiko-7ft.1.1`で合意した要件を次に固定する。下の描画方式と準備手順は出発案であり、
 素材の実体検証は[検証結果と入力hash](../verification/bistro-assets.json)へ記録した。
 描画方式・API基盤の採用決定や、Renderer実装・実GPU受入の完了は意味しない。
 
@@ -1425,7 +1425,7 @@ alphaはopaque 120、mask 7、blend 5とした。maskのcutoff 0.5と分類は�
 ORM画像がない瓶ラベル1材質はnonmetal/roughness 0.5を明示した暫定値とし、元Phong値をPBR値と断定しない。
 
 使用中の`MASTER_Glass_Dirty_MASKED`と`Paris_LiquorBottle_01_Labels`は画像alphaが全0で、計222面に影響する。
-`renderer-7ft.1.1.2`では下記の根拠と近景比較から、**元alphaを保持し、不透明overrideを加えない**方針を確定した。
+`sashiko-7ft.1.1.2`では下記の根拠と近景比較から、**元alphaを保持し、不透明overrideを加えない**方針を確定した。
 PNGはbase mipだけの中間形式であり、元DDS・mip情報は保存する。
 B2の[実行用cook](#bistro-runtime-cook)では元DDSの全mipとMikkTSpace tangentを接続する。
 TANGENTは元にも検証glTFにもなく、[glTF仕様](https://github.com/KhronosGroup/glTF/blob/main/specification/2.0/Specification.adoc)に従いconsumerで生成する。
@@ -1501,7 +1501,7 @@ CSM資料のD3D10/11向け実装説明をD3D12のAPI契約へ流用しない。
 
 #### 固定した描画・比較入力
 
-`renderer-7ft.1.1`の再現入力は[conditions.json](../../tools/bistro/conditions.json)にまとめる。
+`sashiko-7ft.1.1`の再現入力は[conditions.json](../../tools/bistro/conditions.json)にまとめる。
 素材版・全mesh/material・alphaは上記の確定方針を引き継ぎ、屋外全体を対象とする。
 固定視点は全景、路地、Vespaの材質近景、glass、瓶のlabel、巡回中間・折返しの7件とした。
 全景は縦FOV 48度・JSONの仮想注視点を使い、全meshの保守的な境界を各辺5%以上の余白付きで画面内へ収める。
@@ -1569,19 +1569,19 @@ warm-up・複数runのp50/p95・揺れ・VSyncと表示待ちを記録する。
 準備の記録手順は[開発ガイド](../guides/development.md#bistro-preparation)に置く。
 素材の版/hash・全材質/画像の棚卸しと、glTF/全参照fileのbyte一致による変換再現性は確認した。
 全ゼロalphaと最終camera/path/light/IBL/露出を上記のとおり固定した。
-`renderer-7ft.1.1`は描画要求と再現・比較手順の固定を完了条件とし、Renderer実装・実GPU受入とは区別する。
+`sashiko-7ft.1.1`は描画要求と再現・比較手順の固定を完了条件とし、Renderer実装・実GPU受入とは区別する。
 画像閾値の校正と性能予算は各段階の実GPU結果で具体化し、最新の実行/未実行は
 [検証状況](../verification/current.md)へ記録する。
 
 ### B0: Bistro基準・公開APIのUX・採用基盤の設計
 
-`renderer-7ft.1`。次の具体的な課題を順に実施する。
+`sashiko-7ft.1`。次の具体的な課題を順に実施する。
 
 | 課題 | 成果 |
 |---|---|
-| `renderer-7ft.1.1` | 素材・描画要求を棚卸しし、最終対象・品質・再現条件・比較方法を固定する。 |
-| `renderer-7ft.1.2` | 第7章の代表利用コードを複数案で書き、UX、所有、資源アクセス、pipeline/binding/ABI、errorと拡張時の変更箇所を比較する。 |
-| `renderer-7ft.1.3` | 既存継続/改修・自前置換・外部基盤利用を一次資料と小試作で比較し、両APIのWindows表示も含む総工数・品質・保守負担から採用案と移行範囲を決める。 |
+| `sashiko-7ft.1.1` | 素材・描画要求を棚卸しし、最終対象・品質・再現条件・比較方法を固定する。 |
+| `sashiko-7ft.1.2` | 第7章の代表利用コードを複数案で書き、UX、所有、資源アクセス、pipeline/binding/ABI、errorと拡張時の変更箇所を比較する。 |
+| `sashiko-7ft.1.3` | 既存継続/改修・自前置換・外部基盤利用を一次資料と小試作で比較し、両APIのWindows表示も含む総工数・品質・保守負担から採用案と移行範囲を決める。 |
 
 **完了条件:** 利用コードと要求を根拠にAPI・採用基盤の第一案を説明できる。
 外部基盤へ委譲する範囲とRendererが保証する範囲も明示する。
@@ -1596,11 +1596,11 @@ B2 `.3.1`〜`.3.3`、B3 `.4.1`〜`.4.3`、B4 `.5.1`〜`.5.2`、B5 `.6.1`〜`.6.3
 
 ### B1: 公開パスと資源・shader契約の二API実証
 
-`renderer-7ft.2`。B0の採用案で、独自shader/pipeline/binding、複数drawのRaster、
+`sashiko-7ft.2`。B0の採用案で、独自shader/pipeline/binding、複数drawのRaster、
 depth-only/color-only、Compute/copy、import/exportとGPU寿命を段階実装する。
 資源format・範囲、shader信頼境界・ABI、宣言と実命令の整合、能力・errorを実証する。
 
-`renderer-7ft.2.1.1`のuniform作成から`.2.1.2`でUniform/Storageの共通buffer/layout/bindingへ
+`sashiko-7ft.2.1.1`のuniform作成から`.2.1.2`でUniform/Storageの共通buffer/layout/bindingへ
 進める。同じ管理下compute shaderを再利用し、storage出力も公開作成APIで用意する。
 native layout/root slotはmanifestから導出し、旧Uniform専用APIを置換する。
 `.2.1.4`はRGBA8画像/View/nearest-clamp samplerとsampled bindingへ進める。
@@ -1650,7 +1650,7 @@ Graph構築で範囲・ABI・重複subresource・dispatch/extentを保証する�
 
 ### B2: 利用側asset経路とテクスチャ付きBistro PBR
 
-`renderer-7ft.3`。利用側で素材を変換・読込し、Rendererの資源・material・描画入力へ接続する。
+`sashiko-7ft.3`。利用側で素材を変換・読込し、Rendererの資源・material・描画入力へ接続する。
 必要な頂点属性、texture/sampler/mip、材質とalpha、GPU常駐と更新を縦切りにし、部分実証から最終対象へ広げる。
 
 **完了条件:** geometry/material一覧と変換結果が対応し、対象Bistroをテクスチャ付きPBRで描ける。
@@ -1732,7 +1732,7 @@ HDR・SDR・depthの全byte一致で確認する。RGBA16F clearの基準をCPU�
 
 ### B2の資源差し替えとメモリ観測
 
-`renderer-7ft.3.3`では、全Bistroを保持した利用側の`bistro --resource-checks`を使う。
+`sashiko-7ft.3.3`では、全Bistroを保持した利用側の`bistro --resource-checks`を使う。
 通常frameの計測窓とは別に、異なるcamera Viewの同時投入、旧描画の所有が残る間の画像・材質の差し替え、
 古いsnapshotの拒否、準備済み容量の不足と回復、元の内容への復元を検査する。
 画像の全mipをuploadし、選択したmipごとのsamplingも照合する。
@@ -1768,7 +1768,7 @@ CPU/GPU計測と未確認範囲は[現行検証](../verification/current.md#bist
 
 #### Godotを基準にしたB2の暫定性能予算
 
-`renderer-yxz`でGodot 4.7.2 Forward+/Vulkanの全量Bistroを基準にする。
+`sashiko-yxz`でGodot 4.7.2 Forward+/Vulkanの全量Bistroを基準にする。
 同じ機材・1080p・固定route・影/IBL/AA/Bloomなしの範囲で、旧scopeのCPU参考p95 3.5ms、GPU p95 5.0msを
 Godot相当の予算の目安とする。独立3 runのうち最も遅いp95を0.5ms単位で切り上げた値であり、
 将来の機能込み、他機材、異なるshader品質、Graph単体のoverheadに共通の固定上限ではない。
@@ -1795,7 +1795,7 @@ native API方針の変更・vendor最適化の採用や、一般推奨からの�
 
 ### B3: 影・線形HDR・トーンマッピング
 
-`renderer-7ft.4`。B0で選ぶ照明・描画方式に従い、depth-only shadow、PBR照明、浮動小数点HDR中間画像、出力変換を組み合わせる。
+`sashiko-7ft.4`。B0で選ぶ照明・描画方式に従い、depth-only shadow、PBR照明、浮動小数点HDR中間画像、出力変換を組み合わせる。
 
 **完了条件:** 固定camera/lightsの対象Bistroで影・材質・色空間とHDRから出力まで確認できる。
 同じパス構成を二APIで実行し、機能ごとの内容照合と同期・寿命検証を実装時から行う。
@@ -1889,18 +1889,18 @@ Godotのpre/post draw elapsedはnative lowering・record・submit・present・ri
 wall/Nによるthroughput、iteration percentile、観測完了latency、実表示・ゲーム処理込みのFPSを分ける。
 CPUとGPUの時間を加算してFPSを求めない。旧B2予算は別の機能・材質mip条件として保持する。
 
-共通Graph buildは`renderer-7ft.9`で厳密な小writer照合とread再利用を実装し、
+共通Graph buildは`sashiko-7ft.9`で厳密な小writer照合とread再利用を実装し、
 [効果と一般入力の追加費用](../verification/current.md#rendergraph-hotspot-optimization)を確認した。
-残るpoll/retire・Vulkan prepareの内訳とD3D12 record（`renderer-c4y`）を次の改善調査とする。
-GPUもpass別に影・PBR・転送の費用を分け、4 cascadeのcaster負荷を含めて確認する（`renderer-7ft.8`）。
+残るpoll/retire・Vulkan prepareの内訳とD3D12 record（`sashiko-c4y`）を次の改善調査とする。
+GPUもpass別に影・PBR・転送の費用を分け、4 cascadeのcaster負荷を含めて確認する（`sashiko-7ft.8`）。
 個別timerは含まれる呼出側区間へ重複加算せず、必須の計画・同期・GPU/CPU寿命・容量・native失敗処理を維持する。
 今回の結果だけからaliasing、複数queue、vendor固有方式を採用せず、正しいbaselineと同条件で利益・代償を測る。
 実測、通常／計測有効の分離、反復変動と未確認範囲は[検証記録](../verification/current.md#bistro-b3-performance)を参照する。
-CPU範囲の再校正とGraph最適化の証拠は別cohortとして保持する。AgX追加と再比較は別課題`renderer-5io`で扱う。
+CPU範囲の再校正とGraph最適化の証拠は別cohortとして保持する。AgX追加と再比較は別課題`sashiko-5io`で扱う。
 
 ### B4: 利用側の独自Bloomとパスの合成・交換
 
-`renderer-7ft.5`。Renderer外のmodule/crateで独自shaderの多段Bloomを定義し、標準HDR出力へ接続する。
+`sashiko-7ft.5`。Renderer外のmodule/crateで独自shaderの多段Bloomを定義し、標準HDR出力へ接続する。
 中間資源はモジュール内部へ隠し、出力handleで他の処理と組み合わせる。
 完了済み`.2.4`のCompute/copyと公開構成`.2.7`が揃った時点で、`.5.1`の小HDR入力試作を始める。
 B1全体や二API表示の完成を待たず、`.2.5`以降と並行してUXを確認する。
@@ -1920,7 +1920,7 @@ Program作成と一時画像の容量は準備境界で確保する。入力は�
 
 ### B5: Bistro二APIの統合受入と組込性
 
-`renderer-7ft.6`。各段階の検証を継続したうえで、1920×1080の固定view/camera pathとoffscreen比較、
+`sashiko-7ft.6`。各段階の検証を継続したうえで、1920×1080の固定view/camera pathとoffscreen比較、
 両APIのWindows表示・自由移動、複数frame、更新・pending終了と補助sceneを統合確認する。
 初回受入は既存RTX 3060環境とし、初回読込と定常描画を分けて測定する。
 
@@ -1937,7 +1937,7 @@ buffer snapshotを取り直す。定常処理では準備済みのGraph、結果
 
 ### B5後の描画パイプライン拡張
 
-`renderer-7ft.13`。公開Graph・標準部品・入力接続の境界を使い、Forward系の4× MSAA、
+`sashiko-7ft.13`。公開Graph・標準部品・入力接続の境界を使い、Forward系の4× MSAA、
 Deferred用のMRTと描画区間内のProgram切り替え、Forward+用のライト一覧、直接インスタンシングとGPU生成の間接描画を順に実証する。
 Rendererはパス・資源・描画命令の契約、利用側は照明・G-buffer・Program選択・可視性を担当する。
 各機能を専用例とBistroで比較し、Vulkan／D3D12の製品構成と開発用検証、GPUの描画結果、
@@ -1945,7 +1945,7 @@ Rendererはパス・資源・描画命令の契約、利用側は照明・G-buff
 
 ### 実測から選ぶ後続の最適化
 
-`renderer-7ft.7`で物理aliasing、複数queue、並列記録、cacheやbarrier削減の必要性と採否を判断する。
+`sashiko-7ft.7`で物理aliasing、複数queue、並列記録、cacheやbarrier削減の必要性と採否を判断する。
 旧M4のaliasing/複数queue実験を実装完了とは扱わず、Bistroの基準値を判断材料にする。
 B0〜B5の一律blockerにはせず、採用時は能力・正しさ・利益と代償を確認して別課題へ分割する。
 正しい比較経路を保持し、検証・profiling・最適化は独立に選択する。
@@ -2024,8 +2024,8 @@ resourceごとのheapによるメモリ・作成費用を許容する単純な�
 旧M4-16の順序を新計画へ持ち越さず、物理aliasingはBistro実測から採否を判断する。
 準備probeは作成と破棄だけの確認であり、buffer投入後の寿命とreadback内容は製品runtimeの受入で扱う。
 
-準備は`renderer-we8.1`・`.2`、`renderer-6qc`（adapter・検証・shader経路）、
-`renderer-k51`（ローカル実GPU反復実行基盤）で実施した。
+準備は`sashiko-we8.1`・`.2`、`sashiko-6qc`（adapter・検証・shader経路）、
+`sashiko-k51`（ローカル実GPU反復実行基盤）で実施した。
 現在の`d3d12` featureはDevice・buffer／画像資源・一般Graph／Programを提供し、
 `presentation` feature併用時はWindows表示も提供する。
 同じ一般経路へ接続したB2 PBRも[実GPU受入](../verification/current.md#bistro-pbr)で確認した。

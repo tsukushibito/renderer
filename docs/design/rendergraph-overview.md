@@ -5,7 +5,7 @@ RenderGraphは、**何を読み、何を書き、何を結果として残すか*
 利用側の描画意図、CPU上の依存解析、backend固有の同期・資源管理を分けて扱います。
 
 基本実行モデルは実装確認点[`adb51d1`](https://github.com/tsukushibito/sashiko/tree/adb51d17e3c1f43b380163a444f750ee9ff9edf5)に基づき、
-入力接続の分離（`renderer-7ft.2.7.2`）を反映しています。
+入力接続の分離（`sashiko-7ft.2.7.2`）を反映しています。
 詳細な契約は[RenderGraph設計](rendergraph.md)、実行した確認の範囲は[現在の検証状況](../verification/current.md)を参照してください。
 後続のB1計画を、実装済みの機能としては扱いません。
 型の所有・compile・native実行等を詳しく追うには[設計図集](rendergraph-diagrams.md)を参照してください。

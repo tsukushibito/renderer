@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "issue": "renderer-7ft.1.1.2",
+  "issue": "sashiko-7ft.1.1.2",
   "scope": "Version-pinned asset interpretation and controlled CPU comparisons; not original artist-intent confirmation or runtime GPU acceptance",
   "decision": {
     "source_fbx_sha256": "471991629c7e35a88338c48f3565390ad19cc5d1d7c7e067fc2a60b4f3b5f195",

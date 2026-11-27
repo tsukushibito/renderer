@@ -284,7 +284,7 @@ VMAの配置は実測のbufferImageGranularityを満たしており、原因をa
 同じキューの先行submitも対象にできるため、Graph内だけの初期遷移の前倒しより優先した。
 物理画像を初めて使う際に独立したCOPYとの重なりを減らす可能性があり、GPU時間への影響と
 別GPU／driverでの比較は未計測である。再利用時の既存layout遷移にはこの追加依存を適用しない。
-回帰試験と追跡先は`renderer-j17`に記録する。
+回帰試験と追跡先は`sashiko-j17`に記録する。
 
 ## GraphのShaderと描画
 

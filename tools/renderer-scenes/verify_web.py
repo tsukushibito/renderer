@@ -359,7 +359,7 @@ def verify_indirect_shadows(page, args, result):
             expected = off["heap"].copy()
             if key == "indirect-shadow-half":
                 # wgpu 30.0.2 collects one color attachment Vec per additional
-                # render pass on the browser backend (renderer-v8bk).
+                # render pass on the browser backend (sashiko-v8bk).
                 expected[0] += on["frames"]
                 expected[3] += on["frames"]
             if on["heap"] != expected or any(on["resources"].values()):

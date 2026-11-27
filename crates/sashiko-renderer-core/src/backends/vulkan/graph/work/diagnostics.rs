@@ -89,7 +89,7 @@ fn reason(previous: &Snapshot, current: Use, layout_change: bool, emitted: bool)
         && previous.layout == vk::ImageLayout::UNDEFINED
         && (previous.stage | previous.writer_stage).is_empty()
     {
-        "initial image layout; prior COPY execution ordering workaround renderer-j17"
+        "initial image layout; prior COPY execution ordering workaround sashiko-j17"
     } else if layout_change {
         "prior accesses and writer before image layout transition"
     } else if current.writes {
@@ -239,7 +239,7 @@ mod tests {
             None,
             Some(&barrier),
         );
-        assert!(output.contains("workaround renderer-j17"));
+        assert!(output.contains("workaround sashiko-j17"));
         assert!(output.contains("old_layout=UNDEFINED new_layout=TRANSFER_DST_OPTIMAL"));
         output.clear();
         dependency(

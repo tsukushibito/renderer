@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "issue": "renderer-7ft.1.3",
+  "issue": "sashiko-7ft.1.3",
   "base_renderer_commit": "4585ccca17637fd2dd7a6d69f2bee03e62b65cba",
   "purpose": "Foundation feasibility experiment, not production backend acceptance or a performance comparison",
   "metadata": {

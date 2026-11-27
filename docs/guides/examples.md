@@ -105,7 +105,7 @@ python tools/landscape/coverage.py $scene build/landscape --candidate-mask build
 同じ `scene-film` 構成で、原形状に光を当てた静止画を撮影できます。Landscape のレシピは `pbrt.camera_sources` に列挙した5個のカメラと各フィルムを共通のパッケージに収録します。樹皮の変位を含む古いパッケージは、上記の `scene` コマンドで再度 cook すると変位の単位も保存されます。
 
 ```powershell
-$out = 'build/tasks/renderer-ief4.8'
+$out = 'build/tasks/sashiko-ief4.8'
 New-Item -ItemType Directory -Force $out | Out-Null
 target/release/scene-viewer.exe build/full-package view-0 --radiance 512 0,0,3840,2160 "$out/view-0.exr" "$out/view-0.png"
 target/release/scene-viewer.exe build/full-package view-4 --radiance 512 2420,1760,64,64 "$out/water.exr" "$out/water.png"
@@ -129,7 +129,7 @@ cargo test --release -p sashiko-asset --features vulkan-presentation,sashiko-ren
 原形状の全景を同じ条件で測るには、HDR環境光のみのパッケージから4Kフィルムをタイルに分けて撮影します。各タイルの通常撮影とAPI dumpを別々に実行し、完了したタイルのEXR・PNGと計測値を保存します。中断後は同じコマンドで続行できます。全タイルの照合後に `film.exr`、`film.png`、集計した `totals.json` が出力されます。
 
 ```powershell
-python tools/landscape/tiled_capture.py target/release/scene-viewer.exe build/full-package view-0 build/tasks/renderer-ief4.6/whole-raster --samples 1 --tile 384 216 --measure
+python tools/landscape/tiled_capture.py target/release/scene-viewer.exe build/full-package view-0 build/tasks/sashiko-ief4.6/whole-raster --samples 1 --tile 384 216 --measure
 ```
 
 光量・反射方向と焦点面を独立に検査するには次を実行します。PBRT v4 の実行ファイルを `pbrt` として指定しています。
@@ -165,7 +165,7 @@ python tools/landscape/compare.py "$scene/reference/landscape/view-0.png" build/
 全景の基準は公開 PNG・公開 EXR・別途描画した EXR の同一画素を比較して決定しました。RTX 3060 で使った GPU 版 PBRT と同じソースは `20e41fd83789f12550e2c31b2047898c9e20e46c` です。次の例では評価専用の参照を原寸で再生成し、チェックイン済みの合格線で候補画像を判定します。`--calibrate` は新しいファイルにのみ書き込めます。
 
 ```powershell
-$out = 'build/tasks/renderer-ief4.1'
+$out = 'build/tasks/sashiko-ief4.1'
 New-Item -ItemType Directory -Force $out | Out-Null
 & .tools/pbrt-v4-gpu/pbrt.exe --gpu --nthreads 2 --seed 0 --spp 512 --outfile "$out/independent-view-0.exr" "$scene/view-0.pbrt"
 python tools/landscape/frame_gates.py "$scene/reference/landscape/view-0.png" "$out/recomputed.json" --calibrate "$scene/reference/landscape/view-0.exr" "$out/independent-view-0.exr"

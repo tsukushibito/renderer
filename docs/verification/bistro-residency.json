@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "issue": "renderer-7ft.3.3",
+  "issue": "sashiko-7ft.3.3",
   "build": {
     "source_commit": "b5480f60b4fe1b26b38f404087b3e3d3801c70b7",
     "working_tree_status": "M docs/design/implementation-policy.md\n M docs/design/vulkan.md\n M docs/guides/development.md",

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "issue": "renderer-7ft.1.1",
+  "issue": "sashiko-7ft.1.1",
   "scope": "Fixed B0 rendering requirements, deterministic inputs and CPU composition evidence; not native Renderer/GPU or complete B0 foundation acceptance",
   "config": {
     "path": "tools/bistro/conditions.json",

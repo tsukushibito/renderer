@@ -75079,7 +75079,7 @@
     }
   },
   "alpha_interpretation": {
-    "issue": "renderer-7ft.1.1.2",
+    "issue": "sashiko-7ft.1.1.2",
     "report": "bistro-alpha.json",
     "report_sha256": "0871f659a309947857cb8996e1cfc19630cd8d0a694fb5f66e00cc1c03d6dcd5",
     "decision": {
@@ -75117,7 +75117,7 @@
     }
   },
   "render_conditions": {
-    "issue": "renderer-7ft.1.1",
+    "issue": "sashiko-7ft.1.1",
     "report": "bistro-conditions.json",
     "report_sha256": "3339010190960d244c895e9b715581c9f6421850cd27adfd2e13f3cb70d34c44",
     "config": {
@@ -75127,11 +75127,11 @@
   },
   "unresolved": [
     {
-      "issue": "renderer-7ft.3",
+      "issue": "sashiko-7ft.3",
       "problem": "Runtime/cook MikkTSpace generation, degenerate-input fallback and DDS/native mip policy remain required; source contains no tangents and this glTF stores base image mip only"
     },
     {
-      "issue": "renderer-7ft.6",
+      "issue": "sashiko-7ft.6",
       "problem": "Runtime image threshold calibration, GPU performance/VRAM budgets and integrated two-API acceptance remain unexecuted; fixed B0 camera/light conditions are inputs, not proof of runtime correctness"
     }
   ],
