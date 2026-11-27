@@ -37,8 +37,8 @@ pub use defaults::{DefaultResources, DefaultViews, Defaults, PreparedDefaults};
 pub use draw::{
     Draw, DrawLightmap, GraphMaterial, IndexedDraw, MaterialSamplers, MaterialTextures,
 };
-pub(crate) use history::MapHistory;
 pub use history::ShadowHistoryError;
+pub(crate) use history::{MapFrame, MapHistory, MapUpdates};
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::Transform;
 pub use material::{MaterialFactors, MaterialUniform, NormalEncoding, ResidentMaterialUniform};
@@ -170,6 +170,7 @@ pub struct Environment {
 
 /// A view calculated before selecting scene draws, cascade draws or history.
 pub struct PreparedView {
+    pub(crate) virtual_input: Option<(ViewInput, Sun, Bounds, ShadowSettings)>,
     pub(crate) shadow_limit: usize,
     pub(crate) shadow_light_tail: Option<sashiko_renderer_core::graph::ImageDesc>,
     pub(crate) shadow_view: Option<ImageView>,
@@ -221,6 +222,7 @@ impl PreparedView {
         uniform[460..464].copy_from_slice(&environment.diffuse_lighting.uniform()?.to_le_bytes());
         Ok(Self {
             sort_direction: view.forward(),
+            virtual_input: None,
             uniform,
             clear_override: None,
             shadow_limit: 0,
@@ -308,6 +310,7 @@ pub enum ShadowSource<'a> {
 #[derive(Clone, Copy, Debug)]
 pub enum SunShadows<'a> {
     Cascades([ShadowSource<'a>; CASCADE_COUNT]),
+    Virtual(crate::passes::virtual_shadow::VirtualSun),
     Disabled(UnshadowedView),
 }
 

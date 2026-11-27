@@ -1,0 +1,56 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "comp",
+            "workgroup_size" : [
+                8,
+                8,
+                1
+            ],
+            "workgroup_size_is_spec_constant_id" : [
+                false,
+                false,
+                false
+            ]
+        }
+    ],
+    "types" : {
+        "_4" : {
+            "name" : "type.StructuredBuffer.v4uint",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uvec4",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 16
+                }
+            ]
+        }
+    },
+    "images" : [
+        {
+            "type" : "image2D",
+            "name" : "page_image",
+            "set" : 0,
+            "binding" : 1,
+            "format" : "rgba16f"
+        }
+    ],
+    "ssbos" : [
+        {
+            "type" : "_4",
+            "name" : "entries",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 0
+        }
+    ]
+}

@@ -39,6 +39,9 @@ pub struct PageRequests {
     pub camera: BufferHandle,
     axes: [[f64; 3]; 2],
     origins: [[i32; 2]; LEVELS],
+    depth_plane: [f32; 4],
+    bias: [f32; 4],
+    distance: f32,
 }
 
 /// All buffer contents describe this frame. Export the slot buffer together
@@ -79,6 +82,11 @@ macro_rules! native_shader {
 
 mod receiver;
 pub use receiver::{reserve_visibility, resolve_visibility};
+mod invalidate;
+mod lighting;
+pub use lighting::{VirtualSun, lighting, reserve_lighting};
+mod scene;
+pub(crate) use scene::{CacheTargets, SceneShadows};
 
 const fn layout(binding: u32, kind: BindingType, min_size: usize) -> BindingLayout {
     BindingLayout {
@@ -467,5 +475,8 @@ pub fn request_pages(
         camera: uniform,
         axes: [x, y],
         origins,
+        depth_plane: plane,
+        bias,
+        distance: settings.distance,
     })
 }

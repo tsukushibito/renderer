@@ -37,6 +37,8 @@ pub struct SceneSettings {
     pub sky_color: [f32; 3],
     pub shadow_resolution: u32,
     pub shadow_distance: f32,
+    #[serde(default)]
+    pub virtual_shadows: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow_split_lambda: Option<f32>,
     #[serde(default)]

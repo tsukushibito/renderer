@@ -6,7 +6,10 @@ Texture2D<float> shadow_atlas : register(t3);
 [[vk::image_format("rgba16f")]]
 #endif
 RWTexture2D<float4> visibility : register(u4);
-#include "lookup.hlsli"
+int2 virtual_origin(uint level) { return page_origin[level].xy; }
+uint virtual_page_entry(uint level, uint2 page) { return page_table[(level * 128 + page.y) * 128 + page.x]; }
+float virtual_depth(uint2 address) { return shadow_atlas.Load(int3(address, 0)); }
+#include "virtual_shadow_lookup.hlsli"
 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
@@ -22,7 +25,8 @@ void main(uint3 id : SV_DispatchThreadID) {
         if (z >= 0.0 && z < 1.0 && abs(world.w) > 1e-20) {
             // Depth-only inspection has no geometric normals. Use normal
             // incidence; forward material shading supplies its actual normal.
-            value = virtual_visibility(world.xyz / world.w, cross(light_x.xyz, light_y.xyz));
+            value = virtual_visibility(world.xyz / world.w, cross(light_x.xyz, light_y.xyz),
+                eye_distance, light_x.xyz, light_y.xyz, depth_plane, shadow_bias);
         }
     }
     visibility[id.xy] = float4(value.xxx, 1.0);

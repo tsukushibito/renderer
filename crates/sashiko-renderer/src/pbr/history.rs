@@ -91,6 +91,11 @@ pub struct MapFrame<const N: usize> {
 }
 
 impl<const N: usize> MapFrame<N> {
+    /// Partial atlas updates republish the scheduled contents even when its
+    /// projection key matches. Per-tile owners decide which depths survive.
+    pub(crate) fn mark_written(&mut self, index: usize) {
+        self.cascades[index].reused = false;
+    }
     /// Return the selected cascade image. Use a reused target only for reads.
     ///
     /// Panics if `cascade` is outside `0..CASCADE_COUNT`.

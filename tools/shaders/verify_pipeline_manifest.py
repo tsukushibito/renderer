@@ -82,7 +82,8 @@ def verify(root: Path, package: Path) -> tuple[int, int]:
     pins = {"toolchain_sha256": core_shaders / "dxil-toolchain.json"}
     shared = {}
     if package == VIRTUAL_SHADOW_SHADERS:
-        for name in ("material_sampling.hlsli", "raster_abi.hlsli", "raster_vertex.hlsli"):
+        for name in ("material_sampling.hlsli", "raster_abi.hlsli", "raster_vertex.hlsli",
+                     "virtual_shadow_lookup.hlsli", "virtual_shadow_math.hlsli"):
             shared[f"../{name}"] = includes[name]
     local_includes = {name: digest for name, digest in includes.items() if f"../{name}" not in shared}
     expected = sources | local_includes | generated

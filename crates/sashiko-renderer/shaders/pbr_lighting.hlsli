@@ -69,8 +69,31 @@ float cascade_visibility(uint cascade, float3 position, float3 geometric_normal,
     return visible / 9.0;
 }
 
+#include "virtual_shadow_math.hlsli"
+
+// VSM and CSM use the same four image bindings and camera block. In VSM
+// mode, slots 0 and 1 carry the D32 atlas and packed 128x128x8 page table.
+int2 virtual_origin(uint level) {
+    return asint(camera.shadow_view_projection[1 + level / 4][level % 4].xy);
+}
+uint virtual_page_entry(uint level, uint2 page) {
+    float4 entries = shadow_image1.Load(int3(page.x / 4, level * 128 + page.y, 0));
+    return uint(entries[page.x % 4]);
+}
+float virtual_depth(uint2 address) { return shadow_image0.Load(int3(address, 0)).r; }
+#include "virtual_shadow_lookup.hlsli"
+
 float sun_visibility(float3 position, float3 geometric_normal, float3 light) {
     if (!(camera.environment.w > 0.0)) { return 1.0; }
+    if (camera.shadow_splits.w < 0.0) {
+        uint2 atlas_size, table_size;
+        shadow_image0.GetDimensions(atlas_size.x, atlas_size.y);
+        shadow_image1.GetDimensions(table_size.x, table_size.y);
+        if (any(atlas_size != 4096) || any(table_size != uint2(32, 1024))) return 1.0;
+        return virtual_visibility(position, geometric_normal, float4(camera.eye.xyz, -camera.shadow_splits.w),
+            camera.shadow_view_projection[0][0].xyz, camera.shadow_view_projection[0][1].xyz,
+            camera.shadow_view_projection[0][2], camera.shadow_view_projection[0][3]);
+    }
     float distance = dot(position - camera.eye.xyz, camera.camera_forward_blend.xyz);
     if (distance < camera.eye.w || distance > camera.shadow_splits.w) { return 1.0; }
     uint cascade = distance <= camera.shadow_splits.x ? 0u :

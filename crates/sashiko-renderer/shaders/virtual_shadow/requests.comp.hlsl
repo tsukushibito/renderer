@@ -15,8 +15,8 @@ void mark_receiver(float3 position) {
     float2 light_uv = float2(dot(light_x.xyz, position), dot(light_y.xyz, position));
     // Choose the finest valid level for this receiver. The reduced footprint
     // at distance preserves the finite pool. Ancestors can service a miss.
-    for (uint level = receiver_level(distance); level < 8; ++level) {
-        float2 texel = page_texel(light_uv, level);
+    for (uint level = virtual_receiver_level(distance); level < 8; ++level) {
+        float2 texel = virtual_page_texel(light_uv, level, page_origin[level].xy);
         if (!all(texel >= 0.0) || !all(texel < 16384.0)) continue;
         // Include any receiver normal offset in addition to the PCF taps.
         float radius = 1.0 + shadow_bias.z;

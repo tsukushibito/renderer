@@ -9,13 +9,20 @@ use std::{
 };
 /// Standard pipeline storage associated with one registered camera.
 pub struct StandardViewState {
+    virtual_history: Option<super::virtual_history::History>,
     parallel_next_view: bool,
     history: Option<History>,
     rect_history: Option<super::history::RectangleHistory>,
 }
 impl StandardViewState {
-    pub(super) fn new(shadow_capacity: Option<usize>, rectangles: usize, casters: usize) -> Self {
+    pub(super) fn new(
+        shadow_capacity: Option<usize>,
+        rectangles: usize,
+        casters: usize,
+        virtual_capacity: Option<usize>,
+    ) -> Self {
         Self {
+            virtual_history: virtual_capacity.map(super::virtual_history::History::new),
             parallel_next_view: false,
             history: shadow_capacity.map(History::new),
             rect_history: (rectangles > 0)
@@ -26,6 +33,9 @@ impl StandardViewState {
         &mut self,
         runtime: &mut sashiko_renderer_core::runtime::Runtime,
     ) -> Result<(), pbr::ShadowHistoryError> {
+        if let Some(history) = &mut self.virtual_history {
+            history.clear(runtime)?;
+        }
         if let Some(history) = &mut self.rect_history {
             history.maps.clear(runtime)?;
         }
@@ -58,6 +68,7 @@ pub struct StandardViewTimings {
 /// Graph-local outputs. Publish shadow history immediately after a successful submission.
 #[must_use]
 pub struct StandardViewOutput {
+    virtual_updates: Option<super::virtual_history::Updates>,
     pub scene: SceneImages,
     timings: Option<StandardViewTimings>,
     updates: Option<ShadowUpdates>,
@@ -83,6 +94,13 @@ impl StandardViewOutput {
         view: &StandardViewState,
         graph_id: u64,
     ) -> Result<(), pbr::ShadowHistoryError> {
+        if let Some(update) = &self.virtual_updates {
+            view.virtual_history
+                .as_ref()
+                .ok_or(pbr::ShadowHistoryError::ForeignUpdates)?
+                .maps
+                .check_updates(graph_id, &update.map)?;
+        }
         if let Some(update) = &self.rect_updates {
             view.rect_history
                 .as_ref()
@@ -104,6 +122,13 @@ impl StandardViewOutput {
         view: &mut StandardViewState,
         receipt: &sashiko_renderer_core::runtime::FrameSubmission,
     ) -> Result<(), pbr::ShadowHistoryError> {
+        if let Some(update) = &mut self.virtual_updates {
+            view.virtual_history
+                .as_mut()
+                .ok_or(pbr::ShadowHistoryError::ForeignUpdates)?
+                .accept(receipt, update)?;
+            self.virtual_updates = None;
+        }
         if let Some(updates) = &mut self.rect_updates {
             view.rect_history
                 .as_mut()
@@ -360,7 +385,7 @@ impl StandardPipeline {
             &self.connected,
             input.materials,
             &prepared,
-            self.config.shadows.is_some(),
+            self.config.shadows.is_some() && self.virtual_shadows.is_none(),
             input.lights,
             allow_jobs,
         )?;
@@ -368,6 +393,12 @@ impl StandardPipeline {
             timings.classify = next_phase();
         }
         let results = &self.classification.results[..self.connected.len()];
+        let virtual_frame = match (&mut view.virtual_history, prepared.virtual_input) {
+            (Some(history), Some((_, _, bounds, settings))) => {
+                Some(history.begin(graph, input, results, bounds, settings)?)
+            }
+            _ => None,
+        };
         let shadow = if let Some(history) = &mut view.history
             && prepared.shadow_matrices().is_some()
         {
@@ -395,6 +426,7 @@ impl StandardPipeline {
         let mut frame = GeometryDrawInput::new(&prepared, defaults, &connected);
         frame.rect_target = rect_frame.as_ref().map(|f| f.targets);
         frame.shadow_history = shadow.as_ref();
+        frame.virtual_cache = virtual_frame.as_ref().map(|f| f.targets);
         frame.lights = input.lights;
         frame.scene = Some(input);
         let scene =
@@ -415,6 +447,7 @@ impl StandardPipeline {
         }
         Ok(StandardViewOutput {
             scene: scene?,
+            virtual_updates: virtual_frame.map(|f| f.export(graph)).transpose()?,
             timings: self.timings,
             rect_updates: rect_frame.map(|f| f.export(graph)).transpose()?,
             updates: shadow.map(|s| s.export(graph)).transpose()?,
@@ -447,9 +480,13 @@ impl ViewPipeline for StandardPipeline {
     }
     fn create_view(&self, _: &CameraView) -> PipelineResult<StandardViewState> {
         Ok(StandardViewState::new(
-            self.config.shadows.map(|_| self.limits.max_shadow_casters),
+            self.config
+                .shadows
+                .filter(|_| self.virtual_shadows.is_none())
+                .map(|_| self.limits.max_shadow_casters),
             self.limits.max_shadowed_rect_lights,
             self.limits.max_shadow_casters,
+            self.virtual_shadows.as_ref().map(|_| self.limits.max_draws),
         ))
     }
     fn record(
@@ -492,6 +529,9 @@ impl ViewPipeline for StandardPipeline {
     }
     fn camera_cut(&mut self, view: &mut StandardViewState) -> PipelineResult<()> {
         view.parallel_next_view = false;
+        if let Some(history) = &mut view.virtual_history {
+            history.maps.invalidate()?;
+        }
         if let Some(history) = &mut view.history {
             history.maps.invalidate()?;
         }

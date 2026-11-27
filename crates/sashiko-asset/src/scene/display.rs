@@ -131,6 +131,7 @@ impl DisplayScene {
             [r, g, b, 1.]
         };
         config.shadows = self.settings.direct_shadows();
+        config.virtual_shadows = self.settings.virtual_shadows;
         config
     }
 

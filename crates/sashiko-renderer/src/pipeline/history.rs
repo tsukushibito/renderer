@@ -145,18 +145,14 @@ fn observe_caster(
 
 pub(super) struct RectangleHistory {
     pub(super) maps: pbr::RectShadowHistory,
-    accepted: Vec<(Caster, Option<Bounds>)>,
-    pending: Vec<(Caster, Option<Bounds>)>,
-    changed: Vec<Option<Bounds>>,
+    casters: CasterChanges,
 }
 
 impl RectangleHistory {
     pub(super) fn new(lights: usize, casters: usize) -> Self {
         Self {
             maps: pbr::RectShadowHistory::new(lights),
-            accepted: Vec::with_capacity(casters),
-            pending: Vec::with_capacity(casters),
-            changed: Vec::with_capacity(casters * 2),
+            casters: CasterChanges::new(casters),
         }
     }
     pub(super) fn begin<'a>(
@@ -173,6 +169,53 @@ impl RectangleHistory {
             )
         });
         self.maps.require_idle()?;
+        self.casters.observe(graph, input, results)?;
+        self.maps.begin(graph, input.lights, |face, previous| {
+            let previous = previous.unwrap_or(0);
+            if self
+                .casters
+                .changed
+                .iter()
+                .any(|b| b.is_none_or(|b| face.overlaps(b)))
+            {
+                previous
+                    .checked_add(1)
+                    .expect("rectangle caster revisions exhausted")
+            } else {
+                previous
+            }
+        })
+    }
+    pub(super) fn accept(
+        &mut self,
+        receipt: &sashiko_renderer_core::runtime::FrameSubmission,
+        updates: &mut pbr::RectShadowUpdates,
+    ) -> Result<(), pbr::ShadowHistoryError> {
+        self.maps.accept(receipt, updates)?;
+        self.casters.accept();
+        Ok(())
+    }
+}
+
+pub(super) struct CasterChanges {
+    accepted: Vec<(Caster, Option<Bounds>)>,
+    pending: Vec<(Caster, Option<Bounds>)>,
+    changed: Vec<Option<Bounds>>,
+}
+impl CasterChanges {
+    pub(super) fn new(casters: usize) -> Self {
+        Self {
+            accepted: Vec::with_capacity(casters),
+            pending: Vec::with_capacity(casters),
+            changed: Vec::with_capacity(casters * 2),
+        }
+    }
+    pub(super) fn observe(
+        &mut self,
+        graph: &mut Graph,
+        input: SceneInput<'_>,
+        results: &[Visibility],
+    ) -> Result<(), GraphError> {
         self.pending.clear();
         self.changed.clear();
         for (object, result) in input.objects.iter().zip(results) {
@@ -205,28 +248,12 @@ impl RectangleHistory {
                 self.changed.push(*b);
             }
         }
-        self.maps.begin(graph, input.lights, |face, previous| {
-            let previous = previous.unwrap_or(0);
-            if self
-                .changed
-                .iter()
-                .any(|b| b.is_none_or(|b| face.overlaps(b)))
-            {
-                previous
-                    .checked_add(1)
-                    .expect("rectangle caster revisions exhausted")
-            } else {
-                previous
-            }
-        })
-    }
-    pub(super) fn accept(
-        &mut self,
-        receipt: &sashiko_renderer_core::runtime::FrameSubmission,
-        updates: &mut pbr::RectShadowUpdates,
-    ) -> Result<(), pbr::ShadowHistoryError> {
-        self.maps.accept(receipt, updates)?;
-        std::mem::swap(&mut self.accepted, &mut self.pending);
         Ok(())
+    }
+    pub(super) fn changed(&self) -> &[Option<Bounds>] {
+        &self.changed
+    }
+    pub(super) fn accept(&mut self) {
+        std::mem::swap(&mut self.accepted, &mut self.pending);
     }
 }

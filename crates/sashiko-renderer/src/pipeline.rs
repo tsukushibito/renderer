@@ -22,6 +22,7 @@ use std::{
 mod classification;
 mod geometry;
 mod history;
+mod virtual_history;
 pub use geometry::{GeometryPipeline, Technique};
 mod input;
 mod view;
@@ -129,6 +130,8 @@ struct Resolved {
 /// Settings for the standard scene-linear HDR view.
 #[derive(Clone, Copy, Debug)]
 pub struct StandardConfig {
+    /// Use paged directional shadows for the PBR sun.
+    pub virtual_shadows: bool,
     /// Apply FXAA during the frame API's final SDR transfer.
     pub fxaa: bool,
     /// Prepare the equal-area sky and physical film output pass for the standard frame API.
@@ -143,6 +146,7 @@ impl StandardConfig {
     /// Single-sample view with an opaque black background.
     pub fn new(extent: [u32; 2]) -> Self {
         Self {
+            virtual_shadows: false,
             film_output: false,
             fxaa: false,
             extent,
@@ -155,6 +159,7 @@ impl StandardConfig {
 
 /// Prepared drawing techniques and bounded per-view scratch.
 pub struct StandardPipeline {
+    virtual_shadows: Option<crate::passes::virtual_shadow::SceneShadows>,
     resources: Option<pbr::DefaultResources>,
     recipe: GeometryPipeline,
     preparation: Preparation,
@@ -192,6 +197,7 @@ impl StandardPipeline {
                 "custom materials support Forward 1x indexed draws only",
             ));
         }
+        let virtual_enabled = config.virtual_shadows && config.shadows.is_some();
         let config = pbr::Config {
             extent: config.extent,
             clear_color: config.clear_color,
@@ -203,6 +209,15 @@ impl StandardPipeline {
         let recipe = GeometryPipeline::new(technique, config, limits)?;
         let mut preparation = Preparation::new(limits.frames_in_flight);
         preparation.add_alternatives(&[recipe.preparation()])?;
+        let virtual_shadows = virtual_enabled
+            .then(|| {
+                crate::passes::virtual_shadow::SceneShadows::prepare(
+                    &mut preparation,
+                    config.extent,
+                    limits.max_draws,
+                )
+            })
+            .transpose()?;
         let defaults = pbr::Defaults::for_recipe(config).prepare(&mut preparation)?;
         let unlit = ManagedRasterProgram::mesh_hdr();
         let mut raster = vec![sashiko_renderer_core::program::RasterPipelineRequest {
@@ -288,6 +303,7 @@ impl StandardPipeline {
             },
         )?;
         Ok(Self {
+            virtual_shadows,
             resources: None,
             recipe,
             preparation,
@@ -338,7 +354,14 @@ impl StandardPipeline {
         bounds: impl Into<Option<Bounds>>,
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
-        self.recipe.prepare_view(input, sun, bounds, environment)
+        let bounds = bounds.into();
+        let mut prepared = self.recipe.prepare_view(input, sun, bounds, environment)?;
+        if self.virtual_shadows.is_some() {
+            prepared.virtual_input = bounds
+                .zip(self.config.shadows)
+                .map(|(bounds, settings)| (input, sun, bounds, settings));
+        }
+        Ok(prepared)
     }
     pub fn draw_connected_hdr(
         &mut self,
@@ -378,7 +401,7 @@ impl StandardPipeline {
             frame.draws,
             materials,
             frame.view,
-            self.config.shadows.is_some(),
+            self.config.shadows.is_some() && self.virtual_shadows.is_none(),
             frame.lights,
             true,
         )
@@ -396,6 +419,7 @@ impl StandardPipeline {
         ) -> Result<SceneImages, GraphError>,
     ) -> Result<SceneImages, GraphError> {
         let GeometryDrawInput {
+            virtual_cache,
             view,
             defaults,
             draws,
@@ -407,6 +431,7 @@ impl StandardPipeline {
         } = frame;
         let render_shadow: [bool; pbr::CASCADE_COUNT] = std::array::from_fn(|i| {
             self.config.shadows.is_some()
+                && self.virtual_shadows.is_none()
                 && shadow_history.is_none_or(|history| !history.is_reused(i))
         });
         let rect_lights = if rect_target.is_some_and(|t| t.reused()) {
@@ -419,6 +444,9 @@ impl StandardPipeline {
             t.check(lights)?;
         }
         self.rect_casters.clear();
+        if let Some(state) = &mut self.virtual_shadows {
+            state.clear();
+        }
         for list in &mut self.forward.rect_shadow {
             list.clear();
         }
@@ -452,7 +480,11 @@ impl StandardPipeline {
             let result = self.classification.results[i];
             let cascades = std::array::from_fn(|i| result.cascades[i] && render_shadow[i]);
             let rect = result.rectangle && !rect_lights.is_empty();
-            if !result.camera && !cascades.contains(&true) && !rect {
+            if !result.camera
+                && !cascades.contains(&true)
+                && !rect
+                && !(self.virtual_shadows.is_some() && result.caster)
+            {
                 continue;
             }
             if let Some(depth) = result.sort_depth {
@@ -515,7 +547,19 @@ impl StandardPipeline {
             &self.rect_casters,
             defaults,
         )?;
-        if self.config.shadows.is_some() {
+        if let Some(state) = &mut self.virtual_shadows {
+            let (input, sun, bounds, settings) = view
+                .virtual_input
+                .ok_or_else(|| GraphError::invalid_input("missing virtual shadow view inputs"))?;
+            frame.sun_shadows = pbr::SunShadows::Virtual(state.append(
+                graph,
+                input,
+                sun,
+                bounds,
+                settings,
+                virtual_cache,
+            )?);
+        } else if self.config.shadows.is_some() {
             frame.sun_shadows = pbr::SunShadows::Cascades(std::array::from_fn(|i| {
                 let casters = self.casters[i].as_slice();
                 shadow_history.map_or(
@@ -564,6 +608,15 @@ impl StandardPipeline {
         let blend = instance.alpha_mode() == AlphaMode::Blend;
         let mesh = draw.mesh;
         if let Some(material) = resolved.pbr {
+            if !blend && let Some(state) = &mut self.virtual_shadows {
+                state.surface(
+                    mesh,
+                    draw.transform.unwrap_or(Transform::IDENTITY),
+                    self.materials[material],
+                    visible,
+                    draw.casts_shadow,
+                )?;
+            }
             let geometry = pbr::IndexedDraw {
                 vertices: mesh.vertices,
                 indices: mesh.indices,

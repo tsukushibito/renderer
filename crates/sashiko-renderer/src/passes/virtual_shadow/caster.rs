@@ -105,40 +105,7 @@ pub fn bind_caster(
             "virtual shadows require the PBR vertex stream",
         ));
     }
-    let projected = transform.bounds(mesh.bounds).map(|bounds| {
-        requests.axes.map(|axis| {
-            let mut lo = 0.;
-            let mut hi = 0.;
-            let mut magnitude = 0.;
-            for (a, (min, max)) in axis
-                .into_iter()
-                .zip(bounds.min().into_iter().zip(bounds.max()))
-            {
-                let (x, y) = (a * f64::from(min), a * f64::from(max));
-                lo += x.min(y);
-                hi += x.max(y);
-                magnitude += x.abs().max(y.abs());
-            }
-            let margin = magnitude * 16. * f64::from(f32::EPSILON) + f64::from(f32::MIN_POSITIVE);
-            [lo - margin, hi + margin]
-        })
-    });
-    let rectangles = std::array::from_fn(|level| {
-        let Some(bounds) = projected else {
-            return Some([0, 0, 128, 128]);
-        };
-        let [x, y] = std::array::from_fn(|i| {
-            bounds[i].map(|v| {
-                (v * (25. / (1u32 << level) as f64)).floor() - f64::from(requests.origins[level][i])
-            })
-        });
-        if x[1] < 0. || y[1] < 0. || x[0] >= 128. || y[0] >= 128. {
-            return None;
-        }
-        let [x0, x1] = x.map(|v| v.clamp(0., 127.) as u32);
-        let [y0, y1] = y.map(|v| v.clamp(0., 127.) as u32);
-        Some([x0, y0, x1 - x0 + 1, y1 - y0 + 1])
-    });
+    let rectangles = rectangles(requests, transform.bounds(mesh.bounds));
     if rectangles.iter().all(Option::is_none) {
         return Ok(None);
     }
@@ -211,4 +178,44 @@ impl CasterDraw {
         }
         Ok(())
     }
+}
+
+pub(super) fn rectangles(
+    requests: &PageRequests,
+    world: Option<crate::pbr::Bounds>,
+) -> [Option<[u32; 4]>; LEVELS] {
+    let projected = world.map(|bounds| {
+        requests.axes.map(|axis| {
+            let mut lo = 0.;
+            let mut hi = 0.;
+            let mut magnitude = 0.;
+            for (a, (min, max)) in axis
+                .into_iter()
+                .zip(bounds.min().into_iter().zip(bounds.max()))
+            {
+                let (x, y) = (a * f64::from(min), a * f64::from(max));
+                lo += x.min(y);
+                hi += x.max(y);
+                magnitude += x.abs().max(y.abs());
+            }
+            let margin = magnitude * 16. * f64::from(f32::EPSILON) + f64::from(f32::MIN_POSITIVE);
+            [lo - margin, hi + margin]
+        })
+    });
+    std::array::from_fn(|level| {
+        let Some(bounds) = projected else {
+            return Some([0, 0, 128, 128]);
+        };
+        let [x, y] = std::array::from_fn(|i| {
+            bounds[i].map(|v| {
+                (v * (25. / (1u32 << level) as f64)).floor() - f64::from(requests.origins[level][i])
+            })
+        });
+        if x[1] < 0. || y[1] < 0. || x[0] >= 128. || y[0] >= 128. {
+            return None;
+        }
+        let [x0, x1] = x.map(|v| v.clamp(0., 127.) as u32);
+        let [y0, y1] = y.map(|v| v.clamp(0., 127.) as u32);
+        Some([x0, y0, x1 - x0 + 1, y1 - y0 + 1])
+    })
 }

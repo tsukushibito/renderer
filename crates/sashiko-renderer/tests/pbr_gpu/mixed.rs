@@ -93,6 +93,7 @@ fn check(config: RuntimeConfig, technique: pbr::Technique) -> Result<()> {
     let mut standard = StandardPipeline::new(
         technique,
         StandardConfig {
+            virtual_shadows: false,
             film_output: false,
             fxaa: false,
             extent: [32, 16],

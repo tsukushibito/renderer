@@ -76,6 +76,7 @@ impl Draw {
 }
 /// Per-view inputs. Draws may freely mix material families in submission order.
 pub struct GeometryDrawInput<'a> {
+    pub(super) virtual_cache: Option<crate::passes::virtual_shadow::CacheTargets<'a>>,
     pub view: &'a PreparedView,
     pub defaults: DefaultViews,
     pub draws: &'a [Draw],
@@ -95,6 +96,7 @@ impl<'a> GeometryDrawInput<'a> {
     pub fn new(view: &'a PreparedView, defaults: DefaultViews, draws: &'a [Draw]) -> Self {
         Self {
             view,
+            virtual_cache: None,
             defaults,
             draws,
             scene: None,

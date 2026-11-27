@@ -574,7 +574,14 @@ impl PreparedScene {
             None => graph.buffer("pbr camera", camera_desc())?,
         };
         if self.config.camera_storage != CameraStorage::PreUploaded {
-            graph.upload_buffer("pbr camera upload", camera, 0, frame.view.uniform_bytes())?;
+            let virtual_bytes;
+            let bytes = if let SunShadows::Virtual(sun) = &frame.sun_shadows {
+                virtual_bytes = sun.camera_bytes(frame.view.uniform_bytes());
+                &virtual_bytes
+            } else {
+                frame.view.uniform_bytes()
+            };
+            graph.upload_buffer("pbr camera upload", camera, 0, bytes)?;
         }
         let transforms = match &mut self.instances {
             Some(instances) if transform_end != 0 => {
@@ -583,6 +590,9 @@ impl PreparedScene {
             _ => None,
         };
         let (shadow_views, shadow_images) = match (self.config.shadows, frame.sun_shadows) {
+            (Some(_), SunShadows::Virtual(sun)) => {
+                ([sun.atlas, sun.table, sun.atlas, sun.atlas], None)
+            }
             (Some(settings), SunShadows::Cascades(sources)) => {
                 let views =
                     self.add_shadows(graph, camera, &frame, settings, sources, transforms)?;
@@ -836,6 +846,15 @@ impl PreparedScene {
         )?;
         let mut transform_end = opaque_end.max(transparent_end);
         match (self.config.shadows, frame.sun_shadows) {
+            (Some(_), SunShadows::Virtual(sun)) => {
+                if self.config.camera_storage == CameraStorage::PreUploaded {
+                    return Err(GraphError::invalid_input(
+                        "virtual shadow lighting requires a recipe-uploaded camera",
+                    ));
+                }
+                graph.image_desc(sun.atlas.image())?;
+                graph.image_desc(sun.table.image())?;
+            }
             (Some(settings), SunShadows::Cascades(sources)) => {
                 validate_shadow_sources(graph, sources, shadow_desc(settings))?;
                 for (cascade, source) in sources.into_iter().enumerate() {
