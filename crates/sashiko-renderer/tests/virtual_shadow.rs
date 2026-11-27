@@ -33,8 +33,20 @@ fn check_requests(mut config: RuntimeConfig) {
     let mut prep = Preparation::new(NonZeroUsize::MIN);
     virtual_shadow::reserve_requests(&mut prep).unwrap();
     virtual_shadow::reserve_table(&mut prep).unwrap();
-    virtual_shadow::reserve_atlas(&mut prep).unwrap();
+    virtual_shadow::reserve_atlas(&mut prep, 1).unwrap();
+    virtual_shadow::reserve_camera_depth(&mut prep, [1, 1], 1).unwrap();
+    prep.add_working_set(sashiko_renderer_core::capacity::WorkingSet {
+        samplers: &[sashiko_renderer_core::program::SamplerDescriptor::LinearRepeat],
+        ..Default::default()
+    })
+    .unwrap();
     virtual_shadow::reserve_visibility(&mut prep, [1, 1]).unwrap();
+    prep.reserve_transient_image("coverage", ImageDesc::rgba8(2, 1))
+        .unwrap();
+    for size in [4 * 48, 24, 64, 64] {
+        prep.reserve_buffer(sashiko_renderer_core::graph::BufferDesc { size }, 1)
+            .unwrap();
+    }
     config
         .fit_preparation(&prep, 128 * 1024, 65 * 1024 * 1024)
         .unwrap();
@@ -127,20 +139,26 @@ fn check_requests(mut config: RuntimeConfig) {
     graph
         .upload_buffer("all fine and one coarse", mask_buffer, 0, &mask)
         .unwrap();
-    let camera_bytes = 272;
-    let uniform = graph
-        .buffer(
-            "zero origins",
-            sashiko_renderer_core::graph::BufferDesc { size: camera_bytes },
+    let sky = graph.image("empty view", depth).unwrap();
+    let sky = graph.image_view(sky, 0, 0).unwrap();
+    graph
+        .raster(
+            "sky",
+            RasterAttachments {
+                colors: &[],
+                color_resolves: &[],
+                depth: Some(Attachment {
+                    view: sky,
+                    load: LoadOp::Clear(1.),
+                    store: StoreOp::Store,
+                }),
+            },
+            |_| Ok(()),
         )
         .unwrap();
-    graph
-        .upload_buffer("origins", uniform, 0, &[0; 272])
-        .unwrap();
-    let requests = virtual_shadow::PageRequests {
-        mask: mask_buffer,
-        camera: uniform,
-    };
+    let mut requests =
+        virtual_shadow::request_pages(&mut graph, sky, camera, sun, bounds, settings(60.)).unwrap();
+    requests.mask = mask_buffer;
     let pages = virtual_shadow::assign_pages(&mut graph, requests, None).unwrap();
     let capture = graph
         .readback_buffer("table", pages.table, 0, TABLE_BYTES as u64)
@@ -293,6 +311,13 @@ fn check_requests(mut config: RuntimeConfig) {
             );
         }
     }
+    check_casters(
+        &mut runtime,
+        &mut pool,
+        camera,
+        sun,
+        Bounds::new([-2.; 3], [2.; 3]).unwrap(),
+    );
     match config {
         #[cfg(feature = "vulkan")]
         RuntimeConfig::Vulkan(_) => {
@@ -319,6 +344,156 @@ fn check_requests(mut config: RuntimeConfig) {
                 );
             }
         }
+    }
+}
+
+fn check_casters(
+    runtime: &mut Runtime,
+    pool: &mut GraphPool,
+    camera: ViewInput,
+    sun: Sun,
+    bounds: Bounds,
+) {
+    use sashiko_renderer::pbr::{
+        AlphaMode, GraphMaterial, MaterialFactors, MaterialTextures, MaterialUniform, Transform,
+    };
+    use sashiko_renderer_core::graph::BufferDesc;
+    // An opaque square or an alpha-tested leaf covers the receiver. Reversing
+    // its winding tests single-sided, double-sided, and mirrored placements.
+    for (mode, alpha, back, double_sided, mirror, expected) in [
+        (AlphaMode::Opaque, [0, 0], false, false, false, 0),
+        (AlphaMode::Mask, [0, 0], false, false, false, 0x3c00),
+        (AlphaMode::Mask, [255, 255], false, false, false, 0),
+        (AlphaMode::Mask, [255, 255], true, false, false, 0x3c00),
+        (AlphaMode::Mask, [255, 255], true, true, false, 0),
+        (AlphaMode::Mask, [255, 255], false, false, true, 0),
+        (AlphaMode::Mask, [0, 255], false, true, false, 0x3555),
+        (AlphaMode::Blend, [255, 255], false, true, false, 0x3c00),
+    ] {
+        let mut graph = pool.begin().unwrap();
+        let vertices = graph.buffer("square", BufferDesc { size: 4 * 48 }).unwrap();
+        let mut words = [0f32; 48];
+        for (v, (x, y)) in words.as_chunks_mut::<12>().0.iter_mut().zip([
+            (-0.02, -0.02),
+            (0.02, -0.02),
+            (0.02, 0.02),
+            (-0.02, 0.02),
+        ]) {
+            v[..3].copy_from_slice(&[x, y, 1.5]);
+            v[10] = x * 25. + 0.5;
+            v[11] = y * 25. + 0.5;
+        }
+        graph
+            .upload_buffer(
+                "positions and UVs",
+                vertices,
+                0,
+                words.map(f32::to_le_bytes).as_flattened(),
+            )
+            .unwrap();
+        let indices = graph.buffer("faces", BufferDesc { size: 24 }).unwrap();
+        let order = if back {
+            [0, 2, 1, 0, 3, 2]
+        } else {
+            [0, 1, 2, 0, 2, 3]
+        };
+        graph
+            .upload_buffer(
+                "winding",
+                indices,
+                0,
+                order.map(u32::to_le_bytes).as_flattened(),
+            )
+            .unwrap();
+        let texture = graph.image("coverage", ImageDesc::rgba8(2, 1)).unwrap();
+        graph
+            .upload_image(
+                "alpha texels",
+                texture,
+                &[255, 255, 255, alpha[0], 255, 255, 255, alpha[1]],
+            )
+            .unwrap();
+        let texture = graph.image_view(texture, 0, 0).unwrap();
+        let factors = MaterialUniform::upload(
+            &mut graph,
+            "factors",
+            MaterialFactors {
+                alpha_mode: mode,
+                double_sided,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let material = GraphMaterial::new(factors, MaterialTextures::uniform(texture));
+        let mesh = sashiko_renderer::pipeline::Mesh {
+            bounds: Bounds::new([-0.02, -0.02, 1.5], [0.02, 0.02, 1.5]).unwrap(),
+            vertex_stride: 48,
+            vertices,
+            indices,
+            first_index: 0,
+            index_count: 6,
+        };
+        let projection = virtual_shadow::camera_matrix(&mut graph, camera).unwrap();
+        let receiver_factors = MaterialUniform::upload(
+            &mut graph,
+            "receiver surface",
+            MaterialFactors {
+                double_sided: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let receiver = GraphMaterial::new(receiver_factors, MaterialTextures::uniform(texture));
+        let receiver_pose =
+            Transform::new([[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., -1.]]).unwrap();
+        let receiver =
+            virtual_shadow::bind_receiver(&mut graph, projection, mesh, receiver_pose, receiver)
+                .unwrap()
+                .unwrap();
+        let depth = virtual_shadow::draw_camera_depth(&mut graph, [1, 1], &[receiver]).unwrap();
+        let requests = virtual_shadow::request_pages(
+            &mut graph,
+            depth,
+            camera,
+            sun,
+            bounds,
+            ShadowSettings::default(),
+        )
+        .unwrap();
+        let pages = virtual_shadow::assign_pages(&mut graph, requests, None).unwrap();
+        let atlas = graph.image("atlas", virtual_shadow::ATLAS_DESC).unwrap();
+        let transform = if mirror {
+            Transform::new([[-1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]]).unwrap()
+        } else {
+            Transform::IDENTITY
+        };
+        let caster =
+            virtual_shadow::bind_caster(&mut graph, &requests, &pages, mesh, transform, material)
+                .unwrap();
+        virtual_shadow::draw_atlas(&mut graph, atlas, &pages, false, |pass| {
+            if let Some(caster) = caster {
+                caster.record(pass)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let image =
+            virtual_shadow::resolve_visibility(&mut graph, depth, requests, &pages, atlas).unwrap();
+        let capture = graph.readback_image("shadow", image).unwrap();
+        let plan = graph.compile().unwrap();
+        let id = runtime.submit(&plan).unwrap().id();
+        let mut pixel = [0u8; 8];
+        runtime
+            .wait_for_frame(id, Duration::from_secs(30))
+            .unwrap()
+            .unwrap()
+            .readback_into(capture, &mut pixel)
+            .unwrap();
+        assert_eq!(
+            u16::from_le_bytes([pixel[0], pixel[1]]),
+            expected,
+            "{mode:?} alpha {alpha:?} back {back} double {double_sided} mirror {mirror}"
+        );
     }
 }
 

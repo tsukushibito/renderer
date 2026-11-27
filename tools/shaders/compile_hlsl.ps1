@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)][hashtable[]]$Variants,
     [string]$SdkRoot = $env:VULKAN_SDK,
     [switch]$Verify,
+    [string[]]$SharedIncludes = @(),
     [System.Collections.IDictionary]$ManifestFiles = @{},
     [System.Collections.IDictionary]$ManifestFields = @{}
 )
@@ -97,9 +98,12 @@ try {
     $sourceDir = Join-Path $temporaryRoot 'source'
     $null = New-Item -ItemType Directory -Path $sourceDir
     $includes = [ordered]@{}
-    foreach ($file in (Get-ChildItem -LiteralPath $ShaderRoot -File | Sort-Object Name)) {
+    $files = @(Get-ChildItem -LiteralPath $ShaderRoot -File)
+    foreach ($include in $SharedIncludes) { $files += Get-Item -LiteralPath $include }
+    foreach ($file in ($files | Sort-Object Name)) {
         if ($file.Extension -cnotin @('.hlsl', '.hlsli')) { continue }
         $canonical = Join-Path $sourceDir $file.Name
+        if ([IO.File]::Exists($canonical)) { throw "Duplicate shader source name: $($file.Name)" }
         Write-Text $canonical ([IO.File]::ReadAllText($file.FullName))
         if ($file.Extension -ceq '.hlsli') { $includes[$file.Name] = Hash $canonical }
     }

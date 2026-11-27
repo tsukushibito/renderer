@@ -2,6 +2,10 @@
 
 mod atlas;
 pub use atlas::{ATLAS_DESC, draw_atlas, reserve_atlas};
+mod caster;
+pub use caster::{CasterDraw, bind_caster};
+mod camera_depth;
+pub use camera_depth::{bind_receiver, camera_matrix, draw_camera_depth, reserve_camera_depth};
 
 use crate::pbr::{Bounds, ShadowSettings, Sun, ViewInput};
 use sashiko_renderer_core::{
@@ -33,6 +37,8 @@ const TAG: &str = "identify dirty shadow pages";
 pub struct PageRequests {
     pub mask: BufferHandle,
     pub camera: BufferHandle,
+    axes: [[f64; 3]; 2],
+    origins: [[i32; 2]; LEVELS],
 }
 
 /// All buffer contents describe this frame. Export the slot buffer together
@@ -355,13 +361,20 @@ pub fn request_pages(
     for (slot, value) in camera[64..].as_chunks_mut::<4>().0.iter_mut().zip(axes) {
         slot.copy_from_slice(&value.to_le_bytes());
     }
+    let mut origins = [[0i32; 2]; LEVELS];
     for (level, origin) in camera[112..112 + LEVELS * 16]
         .as_chunks_mut::<16>()
         .0
         .iter_mut()
         .enumerate()
     {
-        for (slot, axis) in origin.as_chunks_mut::<4>().0.iter_mut().zip([x, y]) {
+        for ((slot, target), axis) in origin
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(&mut origins[level])
+            .zip([x, y])
+        {
             let projected: f64 = view
                 .eye()
                 .into_iter()
@@ -374,7 +387,8 @@ pub fn request_pages(
                     "virtual shadow page origin is out of range",
                 ));
             }
-            slot.copy_from_slice(&(page as i32).to_le_bytes());
+            *target = page as i32;
+            slot.copy_from_slice(&target.to_le_bytes());
         }
     }
     // Fixed while the light, padding and scene bounds are unchanged, including
@@ -451,5 +465,7 @@ pub fn request_pages(
     Ok(PageRequests {
         mask,
         camera: uniform,
+        axes: [x, y],
+        origins,
     })
 }

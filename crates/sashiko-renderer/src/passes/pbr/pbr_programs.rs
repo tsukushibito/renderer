@@ -191,7 +191,7 @@ pub(super) static BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
     },
     ..OPAQUE
 };
-pub(super) static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
+pub(crate) static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: VERTEX_BYTES as u32,
     secondary_vertex_stride: 0,

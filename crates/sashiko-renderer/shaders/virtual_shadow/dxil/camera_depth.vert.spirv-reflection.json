@@ -1,0 +1,83 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "vert"
+        }
+    ],
+    "types" : {
+        "_7" : {
+            "name" : "type.Projection",
+            "members" : [
+                {
+                    "name" : "clip_from_world",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                }
+            ]
+        },
+        "_9" : {
+            "name" : "type.ConstantBuffer.Transform",
+            "members" : [
+                {
+                    "name" : "model",
+                    "type" : "vec4",
+                    "array" : [
+                        3
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 16
+                },
+                {
+                    "name" : "mirrored",
+                    "type" : "uint",
+                    "offset" : 48
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec3",
+            "name" : "in.var.TEXCOORD0",
+            "location" : 0
+        },
+        {
+            "type" : "vec2",
+            "name" : "in.var.TEXCOORD3",
+            "location" : 3
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec2",
+            "name" : "out.var.TEXCOORD0",
+            "location" : 0
+        },
+        {
+            "type" : "uint",
+            "name" : "out.var.TEXCOORD1",
+            "location" : 1
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_7",
+            "name" : "type.Projection",
+            "block_size" : 64,
+            "set" : 0,
+            "binding" : 0
+        }
+    ],
+    "push_constants" : [
+        {
+            "type" : "_9",
+            "name" : "placement",
+            "push_constant" : true
+        }
+    ]
+}

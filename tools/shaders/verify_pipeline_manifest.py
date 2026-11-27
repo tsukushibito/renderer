@@ -10,6 +10,7 @@ from build_material_programs import hash_file, object_pairs
 
 
 RENDERER_SHADERS = Path("crates/sashiko-renderer/shaders")
+VIRTUAL_SHADOW_SHADERS = RENDERER_SHADERS / "virtual_shadow"
 BAKE_SHADERS = Path("crates/sashiko-lighting-bake/shaders")
 CORE_SHADERS = Path("crates/sashiko-renderer-core/shaders")
 ARTIFACT_SUFFIXES = ("spv", "dxil", "reflection.txt", "spirv-reflection.json")
@@ -79,7 +80,12 @@ def verify(root: Path, package: Path) -> tuple[int, int]:
             raise ValueError(f"Invalid shader include name: {name!r}")
 
     pins = {"toolchain_sha256": core_shaders / "dxil-toolchain.json"}
-    expected = sources | includes | generated
+    shared = {}
+    if package == VIRTUAL_SHADOW_SHADERS:
+        for name in ("material_sampling.hlsli", "raster_abi.hlsli", "raster_vertex.hlsli"):
+            shared[f"../{name}"] = includes[name]
+    local_includes = {name: digest for name, digest in includes.items() if f"../{name}" not in shared}
+    expected = sources | local_includes | generated
     if package == RENDERER_SHADERS:
         pins["renderer_shaders_sha256"] = core_shaders / "dxil/manifest.json"
     for field, path in pins.items():
@@ -96,6 +102,7 @@ def verify(root: Path, package: Path) -> tuple[int, int]:
         path.relative_to(shaders).as_posix()
         for path in shaders.rglob("*")
         if path.is_file() and (path.name.lower().endswith(ASSET_SUFFIXES) or path.is_relative_to(output))
+        and not (package == RENDERER_SHADERS and path.is_relative_to(root / VIRTUAL_SHADOW_SHADERS))
     }
     # The WebGPU manifest verifies these modules' digests and resource bindings.
     # Keep the shared output directory exhaustive for the browser variants too.
@@ -109,7 +116,7 @@ def verify(root: Path, package: Path) -> tuple[int, int]:
         unlisted = sorted(actual - inventory)
         raise ValueError(f"{package} shader inventory differs: missing={missing}, unlisted={unlisted}")
 
-    for name, digest in expected.items():
+    for name, digest in (expected | shared).items():
         path = shaders / name
         if path.suffix in (".spv", ".dxil"):
             actual_digest = hash_file(path)
@@ -128,7 +135,7 @@ def main():
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     args = parser.parse_args()
     try:
-        for package in (RENDERER_SHADERS, BAKE_SHADERS):
+        for package in (RENDERER_SHADERS, VIRTUAL_SHADOW_SHADERS, BAKE_SHADERS):
             artifacts, includes = verify(args.root, package)
             print(f"Verified {package} manifest for {artifacts} variants and {includes} includes.")
     except (KeyError, OSError, TypeError, ValueError) as error:

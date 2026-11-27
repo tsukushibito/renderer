@@ -149,6 +149,10 @@ impl Transform {
         self.model.map(|row| row.map(f32::to_bits))
     }
 
+    pub(crate) fn mirrored(self) -> bool {
+        self.normal[0][3] < 0.
+    }
+
     /// Encode the canonical 96-byte transform record.
     pub fn encode(self) -> [u8; TRANSFORM_BYTES] {
         let mut bytes = [0; TRANSFORM_BYTES];

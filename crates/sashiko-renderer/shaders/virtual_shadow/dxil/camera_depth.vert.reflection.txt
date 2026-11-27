@@ -1,0 +1,107 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyz         0     NONE   float   xyz
+; TEXCOORD                 3   xy          1     NONE   float   xy
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xy          0     NONE   float   xy
+; TEXCOORD                 1   x           1     NONE    uint   x
+; SV_Position              0   xyzw        2      POS   float   xyzw
+;
+; shader hash: 8f447225c404e7bf65f16a8c82b13d42
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Vertex Shader
+; OutputPositionPresent=1
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 2
+; SigOutputElements: 3
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 2
+; SigOutputVectors[0]: 3
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0
+; TEXCOORD                 3
+;
+; Output signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0                 linear
+; TEXCOORD                 1        nointerpolation
+; SV_Position              0          noperspective
+;
+; Buffer Definitions:
+;
+; cbuffer Projection
+; {
+;
+;   struct hostlayout.Projection
+;   {
+;
+;       row_major float4x4 clip_from_world;           ; Offset:    0
+;
+;   } Projection;                                     ; Offset:    0 Size:    64
+;
+; }
+;
+; cbuffer placement
+; {
+;
+;   struct placement
+;   {
+;
+;       struct struct.Transform
+;       {
+;
+;           float4 model[3];                          ; Offset:    0
+;           uint mirrored;                            ; Offset:   48
+;
+;       } placement;                                  ; Offset:    0
+;
+;
+;   } placement;                                      ; Offset:    0 Size:    52
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; Projection                        cbuffer      NA          NA     CB0            cb0     1
+; placement                         cbuffer      NA          NA     CB1            cb7     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 6, outputs: 12
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;   output 0 depends on inputs: { 4 }
+;   output 1 depends on inputs: { 5 }
+;   output 8 depends on inputs: { 0, 1, 2 }
+;   output 9 depends on inputs: { 0, 1, 2 }
+;   output 10 depends on inputs: { 0, 1, 2 }
+;   output 11 depends on inputs: { 0, 1, 2 }
+;

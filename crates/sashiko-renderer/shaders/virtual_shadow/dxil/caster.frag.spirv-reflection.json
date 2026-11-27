@@ -1,0 +1,77 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_8" : {
+            "name" : "type.ConstantBuffer.MaterialData",
+            "members" : [
+                {
+                    "name" : "base_factor",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "emissive_normal_scale",
+                    "type" : "vec4",
+                    "offset" : 16
+                },
+                {
+                    "name" : "metallic_roughness_occlusion_cutoff",
+                    "type" : "vec4",
+                    "offset" : 32
+                },
+                {
+                    "name" : "flags",
+                    "type" : "uvec4",
+                    "offset" : 48
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec2",
+            "name" : "in.var.TEXCOORD0",
+            "location" : 0
+        },
+        {
+            "type" : "uint",
+            "name" : "in.var.TEXCOORD1",
+            "location" : 1
+        },
+        {
+            "type" : "uint",
+            "name" : "in.var.TEXCOORD2",
+            "location" : 2
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "base_image",
+            "set" : 1,
+            "binding" : 0
+        }
+    ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "material_sampler",
+            "set" : 1,
+            "binding" : 4
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_8",
+            "name" : "type.ConstantBuffer.MaterialData",
+            "block_size" : 64,
+            "set" : 0,
+            "binding" : 1
+        }
+    ]
+}

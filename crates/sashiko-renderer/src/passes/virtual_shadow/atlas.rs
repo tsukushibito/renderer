@@ -74,8 +74,11 @@ fn clear_program() -> ManagedRasterProgram {
 }
 
 /// Reserve one shared atlas for a view and the per-frame dirty-tile clear.
-/// Caster programs and draws are budgeted by the caller.
-pub fn reserve_atlas(preparation: &mut Preparation) -> Result<(), GraphError> {
+/// Reserve at most one caster draw per clip level for each input mesh range.
+pub fn reserve_atlas(preparation: &mut Preparation, max_casters: usize) -> Result<(), GraphError> {
+    let max_draws = max_casters
+        .checked_mul(super::LEVELS)
+        .ok_or_else(|| GraphError::invalid_input("virtual shadow caster count overflow"))?;
     use sashiko_renderer_core::capacity::{ResourceClass, WorkingSet};
     preparation.add_working_set(WorkingSet {
         resources: &[ResourceClass::Image {
@@ -101,7 +104,11 @@ pub fn reserve_atlas(preparation: &mut Preparation) -> Result<(), GraphError> {
     })?;
     preparation.reserve_raster_pass(PASS, SampleCount::X1, |pass| {
         pass.attachment()?;
-        pass.draws(&clear_program(), 1)
+        pass.draws(&clear_program(), 1)?;
+        if max_draws > 0 {
+            pass.draws(&super::caster::program(), max_draws)?;
+        }
+        Ok(())
     })
 }
 
