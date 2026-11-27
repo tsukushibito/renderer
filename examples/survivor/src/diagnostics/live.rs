@@ -184,6 +184,12 @@ impl LiveWorld {
 /// The original game remains the owner of simulation state; all three controls
 /// advance this same Session and publish the same job status.
 pub(crate) struct Live {
+    presentation: u64,
+    presented_tick: u64,
+    readback_frame: Option<u64>,
+    stall_at: Option<u64>,
+    #[cfg(feature = "tracy")]
+    tracy: tracy_client::Client,
     history: Option<History>,
     layers: RenderLayers,
     pending_view: PickView,
@@ -209,6 +215,7 @@ impl Live {
         root: &Path,
         stdio: bool,
         clip_history: bool,
+        stall_at: Option<u64>,
     ) -> PipelineResult<Self> {
         std::fs::create_dir_all(root)?;
         let encoder = video::probe();
@@ -223,6 +230,7 @@ impl Live {
             actions.push(Action::Clip);
         }
         let origin = evidence.origin;
+        evidence.performance = Some(super::performance::Log::new(origin));
         let capabilities = Capabilities {
             actions,
             views: vec!["main".into()],
@@ -251,6 +259,12 @@ impl Live {
         session.world_mut().evidence.session = session.session_id().to_owned();
         let (send, done) = mpsc::channel();
         Ok(Self {
+            presentation: 0,
+            presented_tick: 0,
+            readback_frame: None,
+            stall_at,
+            #[cfg(feature = "tracy")]
+            tracy: tracy_client::Client::start(),
             layers: RenderLayers::default(),
             history: clip_history.then(History::new),
             pending_view: PickView::new("main", survivor::MAX_ENEMIES + 1),
@@ -275,6 +289,64 @@ impl Live {
     }
     pub(crate) fn overlay(&self) -> (RenderLayers, sashiko::math::Vec2) {
         (self.layers, self.session.world().velocity)
+    }
+    pub(crate) fn presented(
+        &mut self,
+        interval: std::time::Duration,
+        update: std::time::Duration,
+        draw: std::time::Duration,
+        extent: [u32; 2],
+        enemies: [usize; 2],
+        renderer: &mut WindowRenderer,
+    ) {
+        use super::performance::{Row, ns};
+        let frame = self.next_frame.saturating_sub(1);
+        let tick = self.game().tick;
+        let row = Row {
+            frame,
+            tick,
+            updates: tick.saturating_sub(self.presented_tick),
+            presentation: self.presentation,
+            elapsed_ns: ns(self.origin.elapsed()),
+            interval_ns: ns(interval),
+            update_ns: ns(update),
+            draw_ns: ns(draw),
+            extent,
+            visible_enemies: enemies[0],
+            drawn_enemies: enemies[1],
+            recording: self.video.is_some(),
+            history: self.history.is_some(),
+            readback: self.readback_frame == Some(frame),
+        };
+        self.session
+            .world_mut()
+            .evidence
+            .performance
+            .as_mut()
+            .unwrap()
+            .push(row, renderer);
+        self.presentation += 1;
+        self.presented_tick = tick;
+        #[cfg(feature = "tracy")]
+        if tracy_client::Client::is_connected() {
+            self.tracy.message(
+                &format!("{} frame {frame} tick {tick}", self.session.session_id()),
+                0,
+            );
+            self.tracy.frame_mark();
+        }
+    }
+    pub(crate) fn archive_metrics(&self, path: &Path, warmup: usize) -> PipelineResult<()> {
+        let session = self.session.session_id();
+        let file = format!("{session}.native.csv");
+        std::fs::copy(path, self.root.join(&file))?;
+        std::fs::write(
+            self.root.join(format!("{session}.native.json")),
+            serde_json::to_vec(
+                &serde_json::json!({"session":session,"warmup":warmup,"file":file}),
+            )?,
+        )?;
+        Ok(())
     }
     pub(crate) fn paused(&self) -> bool {
         self.session.is_paused()
@@ -492,6 +564,19 @@ impl Live {
             );
         }
         let mut submitted = None;
+        #[cfg(feature = "tracy")]
+        let _zone = tracy_client::Client::is_connected().then(|| {
+            let zone = self
+                .tracy
+                .clone()
+                .span(tracy_client::span_location!("survivor.diagnostic.draw"), 0);
+            zone.emit_value(self.next_frame);
+            zone
+        });
+        if self.stall_at == Some(self.next_frame) {
+            self.stall_at = None;
+            std::thread::sleep(std::time::Duration::from_millis(90));
+        }
         let game = self.game();
         let render = |frame: &mut sashiko_renderer::Frame<'_>| {
             draw(frame, game)?;
@@ -551,6 +636,7 @@ impl Live {
             }
             self.next_frame = tag.checked_add(1).ok_or("diagnostic frame overflow")?;
             if capturing {
+                self.readback_frame = Some(tag);
                 let report = if still {
                     let ticket = self.waiting.take().unwrap();
                     self.session
@@ -623,9 +709,12 @@ impl Live {
                 (image.plane == CapturePlane::DisplayColor).then_some(image.bytes),
             );
         }
-        let Some((ticket, evidence)) = report else {
+        let Some((ticket, mut evidence)) = report else {
             return Ok(());
         };
+        evidence
+            .performance
+            .clone_from(&self.session.world().evidence.performance);
         let mut stamp = sample.stamp();
         let plane = image.plane;
         let mut pixels = image.bytes.to_vec();

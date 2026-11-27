@@ -108,6 +108,8 @@ jobs:
         run: python -B -m unittest discover -s tools/tracy -p 'test_*.py'
       - name: Check survivor benchmark sample validation and aggregation
         run: python -B -m unittest discover -s tools/survivor -p 'test_*.py'
+      - name: Test diagnostic image thresholds and portable failure reports
+        run: python -B -m unittest discover -s tools/diagnostics -p 'test_*.py'
       - name: Validate pinned Bistro camera and lighting conditions without hydrating assets
         run: python -B tools/bistro/conditions.py tools/bistro/conditions.json
       - name: Check Bistro LFS pointers against the payload manifest
@@ -169,6 +171,14 @@ jobs:
         run: python -B tools/run_webgpu_tests.py --channel chromium --software --development-validation
       - name: Run the packaged viewer on Chromium with SwiftShader
         run: python -B tools/renderer-scenes/verify_web.py build/webgpu --channel chromium --software --output build/webgpu-result
+      - name: Compare the rendered fixture with its accepted SwiftShader image
+        run: python -B tools/diagnostics/visual_diff.py compare tools/diagnostics/fixture-shadowed.png build/webgpu-result/fixture-shadowed/canvas.png build/visual-comparison --channel-tolerance 2 --changed-fraction 0.001
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: diagnostic-visual-comparison
+          path: build/visual-comparison/
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: always()
         with:

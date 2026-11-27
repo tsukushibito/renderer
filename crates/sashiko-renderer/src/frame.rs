@@ -152,7 +152,17 @@ impl Renderer {
         let [w, h] = camera.extent;
         let target = ImageDesc::rgba8(w, h);
         #[cfg(feature = "window-capture")]
-        let readback_size = ImageDesc::rgba8(w.max(scene.extent[0]), h.max(scene.extent[1]));
+        let readback_size = {
+            let depth = ImageDesc::depth32(scene.extent[0], scene.extent[1]);
+            if scene.extent != camera.extent
+                && crate::pipeline::transfer_footprint(depth)?
+                    > crate::pipeline::transfer_footprint(target)?
+            {
+                depth
+            } else {
+                target
+            }
+        };
         #[cfg(not(feature = "window-capture"))]
         let readback_size = target;
         let prep = plan.preparation_mut();

@@ -189,6 +189,28 @@ Windows では `cargo run -p survivor --features diagnostics -- --debug-dir repo
 resize 時は次の表示成功まで選択範囲を失効させる。選択済み個体が消滅した後の
 `selected` は元の ID と `OBJECT_GONE` を返す。
 
+### フレーム性能とトレース
+
+ウィンドウの報告には直近 1,024 件の表示通知を保存する。`performance.ndjson` には
+通しフレーム、tick と更新回数、表示間隔、更新・シーン同期と描画の CPU 時間、
+寸法、個体数、録画・履歴・読み戻し状態が入る。プロセスと GPU のメモリは表示
+60 回ごとに観測する。ビューアは観測元フレームを返す。起動直後や未取得の指標は
+欠測のまま扱う。`timeline.py show REPORT --slowest` で最長の表示間隔を調べ、
+`--frame 40` のように個々のフレームを開ける。CPU の時系列は同梱の
+`cpu-trace.json` を Chrome Trace Event 形式のビューアで開く。
+
+`--metrics FILE --frames N --gpu-profile` を併用すると、終了時に出力先の親へ
+同じ session の native CSV と索引を保存する。ビューアはウォームアップを補正した
+表示通番で Graph・present の GPU 時間と CPU フェーズを照合する。報告を移すときは
+必要な session の CSV と索引を親ディレクトリに添える。GPU 値はコマンド区間の
+経過時間であり、画面に光が出る時刻との対応は測っていない。
+
+Windows CPU トレースには manifest の PID、QPC の生値・周波数・採取前後の
+session 経過時間を使う。精度の上限はこの採取幅とカウンターの分解能で決まる。
+任意の `tracy` 構成でコレクターを接続すると `survivor.diagnostic.draw` の zone
+にフレーム番号が入り、表示時には session・frame・tick のメッセージが残る。
+`--debug-stall-at 40` は frame 40 の描画直前に 90 ms の遅延を一度追加する。
+
 ### 前後クリップ
 
 `--debug-dir reports --clip-history` で 160×90・10 fps の RGB 履歴を準備する。

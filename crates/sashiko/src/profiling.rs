@@ -44,6 +44,25 @@ pub fn renderer_memory(runtime: &Runtime) -> PipelineResult<Value> {
            "graph_draws":limits.graph.draws,"graph_accesses":limits.graph.accesses}}))
 }
 
+/// Sample the system-wide counter used to correlate a session with Windows CPU traces.
+#[cfg(feature = "live-inspector")]
+#[allow(unsafe_code)]
+pub fn performance_counter() -> std::io::Result<(i64, i64)> {
+    use windows_sys::Win32::System::Performance::{
+        QueryPerformanceCounter, QueryPerformanceFrequency,
+    };
+    let mut tick = 0;
+    let mut hz = 0;
+    // SAFETY: both pointers reference writable aligned i64 outputs for these synchronous calls.
+    let ok = unsafe {
+        QueryPerformanceFrequency(&mut hz) != 0 && QueryPerformanceCounter(&mut tick) != 0
+    };
+    if !ok {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((tick, hz))
+}
+
 /// Current and lifetime peak Windows process working set at the instant of this call.
 pub fn working_set() -> std::io::Result<Value> {
     use windows_sys::Win32::System::{

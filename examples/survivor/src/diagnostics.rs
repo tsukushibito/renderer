@@ -35,6 +35,18 @@ pub(super) mod live;
     feature = "presentation",
     any(feature = "vulkan", feature = "d3d12")
 ))]
+pub(super) mod performance;
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+pub(super) mod sequence;
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
 mod video;
 
 #[cfg(all(
@@ -119,6 +131,12 @@ impl Tick {
 
 #[derive(Clone)]
 pub(super) struct Evidence {
+    #[cfg(all(
+        windows,
+        feature = "presentation",
+        any(feature = "vulkan", feature = "d3d12")
+    ))]
+    performance: Option<performance::Log>,
     #[cfg(all(
         windows,
         feature = "presentation",
@@ -230,6 +248,12 @@ impl Evidence {
                 feature = "presentation",
                 any(feature = "vulkan", feature = "d3d12")
             ))]
+            performance: None,
+            #[cfg(all(
+                windows,
+                feature = "presentation",
+                any(feature = "vulkan", feature = "d3d12")
+            ))]
             origin: std::time::Instant::now(),
             start: start.clone(),
             build: build_id()?,
@@ -298,6 +322,14 @@ impl Evidence {
         extra: impl FnOnce(&mut Manifest) -> Result<()>,
     ) -> Result<()> {
         let write = || -> Result<()> {
+            #[cfg(all(
+                windows,
+                feature = "presentation",
+                any(feature = "vulkan", feature = "d3d12")
+            ))]
+            if let Some(log) = self.performance {
+                log.write(directory, &mut m)?;
+            }
             let mut tape = BufWriter::new(File::create(directory.join("replay.json"))?);
             // Serialize the existing Replay wire format, including its immutable start.
             serde_json::to_writer(&mut tape, &Replay::new(&self.start, rate(), self.inputs))?;

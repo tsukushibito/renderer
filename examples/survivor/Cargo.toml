@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [features]
 diagnostics = ["sashiko/live-inspector", "sashiko-renderer?/window-capture", "dep:sha2", "dep:png"]
+tracy = ["dep:tracy-client", "sashiko-renderer?/tracy"]
 embed = []
 default = ["vulkan", "presentation"]
 vulkan = ["sashiko/vulkan", "sashiko-renderer/vulkan"]
@@ -18,6 +19,7 @@ development-validation = ["sashiko-renderer?/development-validation"]
 memory-profiling = ["sashiko-renderer?/memory-profiling"]
 
 [dependencies]
+tracy-client = { workspace = true, optional = true }
 sha2 = { version = "0.10.9", optional = true }
 png = { version = "0.18", optional = true }
 sashiko = { version = "0.1.0", path = "../../crates/sashiko", default-features = false, features = ["animation", "cli", "physics", "rendering"] }

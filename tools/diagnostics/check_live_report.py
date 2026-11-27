@@ -132,15 +132,44 @@ def check_history(request, executable, directory, session):
     return directory / (session + "-" + closing["job"].rsplit("/j",1)[1])
 
 
-def check(executable, backend, directory, video=False, layers=False, history=False):
+def performance_report(request):
+    def reach(frame):
+        deadline = time.monotonic() + 60
+        while int(request("hello")["displayed"]["frame"] or 0) < frame:
+            assert time.monotonic() < deadline
+            time.sleep(.03)
+
+    def wait(job, expected):
+        deadline = time.monotonic()+60
+        while True:
+            s = request("job",job=job)
+            if s["state"] in expected or s.get("phase") in expected:
+                return s
+            assert s["state"] in ("queued","running") and time.monotonic()<deadline,s
+            time.sleep(.02)
+
+    reach(10)
+    start = request("capture", request={"action":"start_video","extent":[160,90],"fps":10})
+    wait(start["job"],["recording"])
+    reach(55)
+    job = request("capture", request={"action":"report"})
+    report = Path(wait(job["job"],["complete"])["artifact"])
+    stop = request("capture", request={"action":"stop_video"})
+    wait(stop["job"],["complete","partial"])
+    return report
+
+
+def check(executable, backend, directory, video=False, layers=False, history=False, performance=False, tracy=None):
     directory.mkdir(parents=True, exist_ok=False)
     config = directory / "settings.json"
     config.write_text('{"jobs":{"parallelism":2}}', encoding="utf-8")
     command = [str(executable), "--backend", backend, "--debug-dir", str(directory),
                "--inspect-stdio", "--width", "320", "--height", "180",
-               "--config", str(config)]
+               "--config", str(config), "--user-dir",str(directory/"test-profile")]
     if history:
         command.append("--clip-history")
+    elif performance:
+        command.extend(["--frames","120","--metrics",str(directory/"native.csv"),"--gpu-profile","--debug-stall-at","40"])
     else:
         command.extend(["--frames", "500" if layers else "200"])
     with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -157,6 +186,8 @@ def check(executable, backend, directory, video=False, layers=False, history=Fal
         threading.Thread(target=receive, daemon=True).start()
         sequence = 0
         closing_clip = None
+        profiled = None
+        collector = None
 
         def request(op, **params):
             nonlocal sequence
@@ -170,6 +201,12 @@ def check(executable, backend, directory, video=False, layers=False, history=Fal
         try:
             hello = request("hello")
             assert "report" in hello["diagnostics"]["actions"], hello
+            if performance:
+                if tracy:
+                    trace = directory / (hello["session"] + ".tracy")
+                    collector = subprocess.Popen([str(tracy),"-a","127.0.0.1","-p","8086","-o",str(trace)],stdout=subprocess.DEVNULL)
+                profiled = performance_report(request)
+                return
             request("pause")
             request("step")
             if history:
@@ -285,6 +322,26 @@ def check(executable, backend, directory, video=False, layers=False, history=Fal
             if closing_clip is not None:
                 m = json.loads((closing_clip / "manifest.json").read_bytes())
                 assert m["outcome"]["state"] == "partial" and any(g["reason"]=="shutdown" for g in m["gaps"]), m
+            if collector is not None:
+                if collector.wait(timeout=60):
+                    raise RuntimeError("Tracy collector failed")
+                markers = subprocess.check_output([str(tracy.with_name("tracy-csvexport.exe")),"-m",str(trace)])
+                assert (hello["session"]+" frame 40 ").encode() in markers
+            if profiled:
+                from timeline import Report
+                saved = Report(profiled)
+                stalled = saved.at(frame=40)["performance"]
+                assert stalled["draw_ns"] >= 90_000_000 and stalled["interval_ns"] >= 90_000_000, stalled
+                assert stalled["clock"]["frequency_hz"] > 0 and stalled["memory"]["process"]["working_set_bytes"] > 0
+                assert float(stalled["native"]["graph_gpu_ms"]) >= 0
+                trace_events = json.loads(saved.path("cpu_trace").read_bytes())["traceEvents"]
+                assert any(e.get("args",{}).get("frame")==40 for e in trace_events)
+                import statistics
+                for recording in (False,True):
+                    times=[r["interval_ns"]/1e6 for r in saved.performance.values()
+                           if r["recording"]==recording and r["frame"] not in (0,40)]
+                    print(f"recording={recording} samples={len(times)} median_ms={statistics.median(times):.3f}",flush=True)
+                print(profiled,flush=True)
         if game.returncode:
             raise subprocess.CalledProcessError(game.returncode, command)
 
@@ -297,5 +354,8 @@ if __name__ == "__main__":
     parser.add_argument("--video", action="store_true")
     parser.add_argument("--layers", action="store_true")
     parser.add_argument("--history", action="store_true")
+    parser.add_argument("--performance", action="store_true")
+    parser.add_argument("--tracy-capture", type=Path)
     args = parser.parse_args()
-    check(args.survivor.resolve(), args.backend, args.output.resolve(), args.video, args.layers, args.history)
+    check(args.survivor.resolve(), args.backend, args.output.resolve(), args.video, args.layers, args.history,
+          args.performance, args.tracy_capture.resolve() if args.tracy_capture else None)

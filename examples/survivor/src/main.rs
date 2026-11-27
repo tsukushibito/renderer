@@ -54,6 +54,8 @@ fn arguments() -> Command {
     let command = profile::Player::arguments(sashiko::cli::game_command(Command::new("survivor")));
     #[cfg(feature = "diagnostics")]
     let command = command
+        .arg(flag("all-frames").requires_all(["record-report","backend"]).help("Wait for and save a PNG after each offline tick"))
+        .arg(Arg::new("debug-stall-at").long("debug-stall-at").requires("debug-dir").value_parser(value_parser!(u64)).help("Inject one 90 ms host stall before drawing the selected diagnostic frame"))
         .arg(
             path("debug-dir")
                 .conflicts_with_all(["headless", "replay-from"])
@@ -270,6 +272,36 @@ fn main() -> Result<(), Box<dyn Error>> {
             .get_one::<PathBuf>("record-report")
             .map(|_| diagnostics::Evidence::new(&initial, parallelism, ticks))
             .transpose()?;
+        #[cfg(all(
+            feature = "diagnostics",
+            windows,
+            feature = "presentation",
+            any(feature = "vulkan", feature = "d3d12")
+        ))]
+        let mut sequence = if args.get_flag("all-frames") {
+            let shadows = initial.visual.as_ref().is_some_and(|v| v.character_shadows);
+            let visual = survivor::visual::Visual::new(
+                &app.game,
+                &catalog_path,
+                &character,
+                survivor::visual::CharacterRendering {
+                    shadows,
+                    compute_skin: shadows,
+                },
+                sashiko::jobs::SharedJobs::from(sashiko::jobs::JobSystem::new(parallelism)?),
+            )?;
+            Some(diagnostics::sequence::Sequence::new(
+                args.get_one::<PathBuf>("record-report").unwrap(),
+                [profile.prefs.width, profile.prefs.height],
+                (backend(&args)?, args.get_one::<String>("backend").unwrap()),
+                &app.game,
+                visual,
+                evidence.as_mut().unwrap(),
+                &character,
+            )?)
+        } else {
+            None
+        };
         app.try_advance(
             ticks as u128,
             |tick, game| {
@@ -282,10 +314,33 @@ fn main() -> Result<(), Box<dyn Error>> {
                 #[cfg(feature = "diagnostics")]
                 if let Some(recorder) = &mut evidence {
                     recorder.observe(game, input, events);
+                    #[cfg(all(
+                        windows,
+                        feature = "presentation",
+                        any(feature = "vulkan", feature = "d3d12")
+                    ))]
+                    if let Some(s) = &mut sequence {
+                        s.frame(game, recorder)?;
+                    }
                 }
-                profile.observe(events.kills)
+                profile
+                    .observe(events.kills)
+                    .map_err(Box::<dyn Error>::from)
             },
         )?;
+        #[cfg(all(
+            feature = "diagnostics",
+            windows,
+            feature = "presentation",
+            any(feature = "vulkan", feature = "d3d12")
+        ))]
+        if let Some(mut sequence) = sequence {
+            let evidence = evidence.take().unwrap();
+            if ticks == 0 {
+                sequence.frame(&app.game, &evidence)?;
+            }
+            sequence.finish(evidence)?;
+        }
         #[cfg(feature = "diagnostics")]
         if let Some(evidence) = evidence {
             let directory = args.get_one::<PathBuf>("record-report").unwrap();
@@ -429,6 +484,8 @@ fn play(
             clip_history: args.get_flag("clip-history"),
             #[cfg(feature = "diagnostics")]
             clip_frame_ms: args.get_one::<u64>("clip-frame-ms").copied(),
+            #[cfg(feature = "diagnostics")]
+            stall_at: args.get_one::<u64>("debug-stall-at").copied(),
             config,
             parallelism,
             replay,

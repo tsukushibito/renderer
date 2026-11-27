@@ -1,5 +1,6 @@
 """Browse a Sashiko report or run a game with an interactive live inspector."""
 import argparse
+import csv
 import json
 from pathlib import Path
 import subprocess
@@ -18,8 +19,19 @@ class Report:
             for row in self.rows("frame_map"):
                 frame = dict(row["frame"], index=row["index"], pts=row["pts"])
                 self.frames[int(frame["frame"])] = frame
-        self.ticks = {int(t["snapshot"]["tick"]): t for t in self.rows("ticks")}
-        self.inputs = json.loads(self.path("replay").read_bytes())["inputs"]
+        self.ticks = {int(t["snapshot"]["tick"]): t for t in self.rows("ticks")} if "ticks" in self.manifest["files"] else {}
+        self.inputs = json.loads(self.path("replay").read_bytes())["inputs"] if "replay" in self.manifest["files"] else []
+        self.performance = {r["frame"]: r for r in self.rows("performance")} if "performance" in self.manifest["files"] else {}
+        self.native = {}
+        session = self.manifest["session"]
+        if Path(session).name == session:
+            index = self.root.parent / (session + ".native.json")
+            if index.is_file():
+                native = json.loads(index.read_bytes())
+                if native["session"] != session or native["file"] != session + ".native.csv":
+                    raise ValueError("native metrics session mismatch")
+                with (index.parent / native["file"]).open(encoding="utf-8", newline="") as source:
+                    self.native = {int(row["frame"]) + native["warmup"]:row for row in csv.DictReader(source)}
 
     def path(self, role):
         path = (self.root / self.manifest["files"][role]).resolve()
@@ -33,15 +45,38 @@ class Report:
 
     def at(self, *, tick=None, frame=None):
         if frame is not None:
-            if frame not in self.frames:
+            if frame in self.performance:
+                tick = self.performance[frame]["tick"]
+            elif frame not in self.frames:
                 return {"frame": frame, "status": "NOT_CAPTURED", "gaps": self.manifest["gaps"]}
-            tick = int(self.frames[frame]["tick"])
+            else:
+                tick = int(self.frames[frame]["tick"])
         row = self.ticks.get(tick)
         frames = [f for f in self.frames.values() if int(f["tick"]) == tick]
         detail = {"session": self.manifest["session"], "world": self.manifest["world"],
                   "tick": tick, "frames": frames, "outcome": self.manifest["outcome"],
-                  "media": {role: str(self.path(role)) for role in ("image", "video")
+                  "media": {role: str(self.path(role)) for role in ("video",)
                             if role in self.manifest["files"]}}
+        for f in frames:
+            if frame is not None and int(f["frame"]) != frame:
+                continue
+            role = f"frame_{int(f['frame']):06d}"
+            if role not in self.manifest["files"] and len(self.manifest["frames"]) == 1:
+                role = "image"
+            if role in self.manifest["files"]:
+                detail["media"][f["frame"]] = str(self.path(role))
+        if frame in self.performance:
+            sample = self.performance[frame]
+            settings = self.manifest["settings"]["performance"]
+            detail["performance"] = dict(sample, cpu_trace=str(self.path("cpu_trace")),
+                tracy_marker=f"{self.manifest['session']} frame {frame} tick {tick}",
+                clock=settings["clock"], native=self.native.get(sample["presentation"]),
+                memory=next((m for m in reversed(settings["memory_samples"]) if m["frame"] <= frame), None))
+            session = self.manifest["session"]
+            if Path(session).name == session and (trace := self.root.parent / (session + ".tracy")).is_file():
+                detail["performance"]["tracy"] = str(trace)
+        if self.manifest["world"]=="bistro" and frames:
+            return dict(detail, status="recorded_view", source=self.manifest["settings"]["source"])
         if row is None:
             return dict(detail, status="NOT_CAPTURED", gaps=self.manifest["gaps"])
         prefix = self.manifest["session"] + "/o"
@@ -149,6 +184,7 @@ def main():
     target = saved.add_mutually_exclusive_group()
     target.add_argument("--tick", type=int)
     target.add_argument("--frame", type=int)
+    target.add_argument("--slowest", action="store_true", help="Show the slowest recorded presentation with CPU and native data")
     live = sub.add_parser("live")
     live.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -159,7 +195,11 @@ def main():
         interactive(command)
     else:
         report = Report(args.directory)
-        if args.frame is not None or args.tick is not None:
+        if args.slowest:
+            if not report.performance:
+                parser.error("report has no presented frame timings")
+            emit(report.at(frame=max(report.performance.values(), key=lambda r:r["interval_ns"])["frame"]))
+        elif args.frame is not None or args.tick is not None:
             emit(report.at(frame=args.frame, tick=args.tick))
         else:
             emit({"session": report.manifest["session"], "outcome": report.manifest["outcome"],

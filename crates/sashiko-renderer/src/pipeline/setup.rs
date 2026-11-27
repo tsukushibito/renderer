@@ -585,7 +585,7 @@ pub(crate) fn reserve_texture_upload(
     Ok(footprint)
 }
 
-pub(super) fn transfer_footprint(desc: ImageDesc) -> PipelineResult<u64> {
+pub(crate) fn transfer_footprint(desc: ImageDesc) -> PipelineResult<u64> {
     if desc.sample_count != sashiko_renderer_core::graph::SampleCount::X1
         || desc.byte_len().is_none()
     {

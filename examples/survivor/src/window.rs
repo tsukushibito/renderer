@@ -10,7 +10,7 @@ mod validation {
     use sashiko_renderer::core as sashiko_renderer_core;
     include!("../../../crates/sashiko-renderer/examples/support/validation.rs");
 }
-use validation::check_validation;
+pub(super) use validation::check_validation;
 
 use crate::{RunStart, rate};
 #[cfg(feature = "memory-profiling")]
@@ -40,6 +40,8 @@ pub struct Options {
     pub clip_history: bool,
     #[cfg(feature = "diagnostics")]
     pub clip_frame_ms: Option<u64>,
+    #[cfg(feature = "diagnostics")]
+    pub stall_at: Option<u64>,
     pub config: RuntimeConfig,
     pub parallelism: std::num::NonZeroUsize,
     pub extent: [u32; 2],
@@ -301,6 +303,17 @@ impl sashiko::window::WindowGame<Controls> for PlayWindow<'_> {
     }
     fn presented(&mut self, interval: Duration) {
         #[cfg(feature = "diagnostics")]
+        if let PlayState::Observed(live) = &mut self.app.game {
+            live.presented(
+                interval,
+                self.update_time,
+                self.draw_time,
+                self.extent,
+                [self.visual.visible_enemies(), self.visual.drawn_enemies()],
+                self.renderer,
+            );
+        }
+        #[cfg(feature = "diagnostics")]
         if self
             .options
             .clip_frame_ms
@@ -422,6 +435,7 @@ pub fn run(
                 root,
                 o.inspect_stdio,
                 o.clip_history,
+                o.stall_at,
             )?))
         }
         None => PlayState::Normal(Box::new(game)),
@@ -463,6 +477,10 @@ pub fn run(
         }
         measured.poll(&mut renderer);
         measured.save(o.metrics.as_deref().expect("metrics path"), o.warmup)?;
+        #[cfg(feature = "diagnostics")]
+        if let PlayState::Observed(live) = &app.game {
+            live.archive_metrics(o.metrics.as_deref().expect("metrics path"), o.warmup)?;
+        }
     }
     if o.memory.is_some() {
         if !renderer.wait_idle(TIMEOUT)? {

@@ -5,6 +5,54 @@
 今後の方針は[実装方針](../design/implementation-policy.md)を参照してください。
 現在の実行結果と未確認範囲は[最新の検証結果](../verification/current.md)にまとめます。
 
+## Survivor の不具合を記録・再現・比較する
+
+Windows の開発ビルドで次を実行する。例の `reports` は保存先の親ディレクトリで、
+各ジョブはその直下に新しい報告を作る。
+
+```powershell
+cargo build --locked --release -p survivor --features diagnostics,d3d12
+target/release/survivor.exe --backend vulkan --debug-dir reports --clip-history
+```
+
+**F8** で HUD を含む PNG、入力、状態、イベントをまとめて保存する。**F9** は無音録画の
+開始・停止、**F10** は直前5秒と直後2秒の採取。動画を使う環境では Python に PyAV と
+NumPy を用意する。`--clip-history` を省くと過去の映像を保持しない。**右クリック**で
+個体を選び、`--inspect-stdio` を追加したプロセスには NDJSON で同じ操作を送れる。
+利用可能なビュー・深度・表示切替は `hello` が返す。
+
+次は報告の閲覧、再現、画像比較の例。PowerShell の変数には調査対象の報告を指定する。
+別マシンで再生する際は、記録したアセットに対応するゲームを使う。
+
+```powershell
+$report = 'reports/対象のジョブ'
+python tools/diagnostics/timeline.py show $report --frame 42
+target/release/survivor.exe --headless --verify-report $report
+target/release/survivor.exe --headless --backend vulkan --width 320 --height 180 --replay "$report/replay.json" --record-report reports/replayed --all-frames
+python tools/diagnostics/visual_diff.py compare reports/baseline reports/replayed reports/comparison
+```
+
+`--all-frames` は各固定更新後の PNG の読み戻しと保存を待つ。入力がゼロなら初期画面
+1枚を出力する。同一バックエンド・解像度のオフライン反復は既定の全チャンネル
+完全一致で比較する。単一時点は `--tick N` で指定できる。比較結果には各画像の
+tick・view・採取段階・差分画素数が入り、失敗時には基準・実画像、8倍に強調した
+差分、入力を含む両方の報告が残る。既知の差を許容する場合は
+`--channel-tolerance`（8 bit 値）と `--changed-fraction`（全画素に対する割合）を指定する。
+デスクトップの表示直前を経由する PNG は線形 RGBA8 の量子化を含むため、
+オフラインの基準とは採取経路も記録して比較する。
+
+Bistro の固定ビュー・巡回の `report.json` は
+`python tools/diagnostics/visual_diff.py bistro OUTPUT STREET_REPORT ROUTE_REPORT` で
+同じ閲覧・比較形式に取り込める。元画像のハッシュと寸法を照合し、カメラ・素材の
+識別情報を各フレームに保存する。描画が使えない環境では `--headless --record-report DIR`
+で入力・イベントを記録し、`--verify-report` で再現できる。
+[診断の形式・性能計測](../design/live-inspector.md)
+
+CI の WebGPU ジョブは SwiftShader が実際に表示した 320×180 の fixture を比較する。
+基準は [main の実行 45935142467](https://github.com/tsukushibito/sashiko/actions/runs/45935142467)
+の `webgpu-fixture/fixture-shadowed/canvas.png`。チャンネル差 2 を超える画素の
+許容割合は 0.001。失敗時は Actions の `diagnostic-visual-comparison` を開く。
+
 <a id="cpu-jobs"></a>
 
 ## CPU ジョブを検証する
