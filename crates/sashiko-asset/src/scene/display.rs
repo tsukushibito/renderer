@@ -94,11 +94,7 @@ impl DisplayScene {
         } else {
             [r, g, b, 1.]
         };
-        config.shadows = Some(sashiko_renderer::pbr::ShadowSettings {
-            resolution: self.settings.shadow_resolution,
-            distance: self.settings.shadow_distance,
-            ..Default::default()
-        });
+        config.shadows = self.settings.direct_shadows();
         config
     }
 
@@ -108,18 +104,43 @@ impl DisplayScene {
         extent: [u32; 2],
         backend: sashiko_renderer::core::runtime::RuntimeConfig,
     ) -> PipelineResult<(Self, sashiko_renderer::Renderer)> {
-        let mut scene = Self::open(directory, view, extent)?;
+        Self::open(directory, view, extent, None)?.prepare_headless(backend)
+    }
+
+    /// Prepare a fixed set of camera samples. The selected meshes and casters
+    /// cover all supplied views, including offscreen directional casters.
+    pub fn headless_views(
+        directory: &Path,
+        view: &str,
+        samples: &[CameraView],
+        backend: sashiko_renderer::core::runtime::RuntimeConfig,
+    ) -> PipelineResult<(Self, sashiko_renderer::Renderer)> {
+        let first = samples
+            .first()
+            .ok_or("fixed capture needs at least one view")?;
+        if samples.iter().any(|c| c.extent != first.extent) {
+            return Err("fixed capture views must share an extent".into());
+        }
+        let mut scene = Self::open(directory, view, first.extent, Some(samples))?;
+        scene.camera = *first;
+        scene.prepare_headless(backend)
+    }
+
+    fn prepare_headless(
+        mut self,
+        backend: sashiko_renderer::core::runtime::RuntimeConfig,
+    ) -> PipelineResult<(Self, sashiko_renderer::Renderer)> {
         let mut renderer = sashiko_renderer::Renderer::headless_configured(
             backend,
-            scene.camera,
-            scene.config(),
-            scene.assets(),
+            self.camera,
+            self.config(),
+            self.assets(),
             std::num::NonZeroUsize::MIN,
             |_| Ok(()),
         )?;
-        scene.upload_materials(&mut renderer)?;
-        renderer.prepare_scene(scene.assets())?;
-        Ok((scene, renderer))
+        self.upload_materials(&mut renderer)?;
+        renderer.prepare_scene(self.assets())?;
+        Ok((self, renderer))
     }
 
     #[cfg(all(windows, feature = "vulkan-presentation"))]
@@ -130,7 +151,7 @@ impl DisplayScene {
         window: impl raw_window_handle::HasWindowHandle + 'static,
         backend: sashiko_renderer::core::runtime::RuntimeConfig,
     ) -> PipelineResult<(Self, sashiko_renderer::WindowRenderer)> {
-        let mut scene = Self::open(directory, view, extent)?;
+        let mut scene = Self::open(directory, view, extent, None)?;
         let mut renderer = sashiko_renderer::WindowRenderer::new_configured(
             window,
             backend,
@@ -144,8 +165,19 @@ impl DisplayScene {
         renderer.prepare_scene(scene.assets())?;
         Ok((scene, renderer))
     }
-    fn open(directory: &Path, view: &str, extent: [u32; 2]) -> PipelineResult<Self> {
+    fn open(
+        directory: &Path,
+        view: &str,
+        extent: [u32; 2],
+        samples: Option<&[CameraView]>,
+    ) -> PipelineResult<Self> {
         let mut scene = ScenePackage::open(directory)?;
+        let store = ObjectStore::new(directory);
+        let all_bounds = if let Some(samples) = samples {
+            Some(super::spatial::select(&mut scene, &store, samples)?)
+        } else {
+            None
+        };
         let pose = *scene.view(view)?;
         let camera = pose.camera(extent, [0.02, 1500.])?;
         let film = scene
@@ -164,9 +196,8 @@ impl DisplayScene {
         }
         let settings = scene.settings;
         let sun = Sun::from_lux(settings.sun_direction, settings.sun_color, settings.sun_lux)?;
-        let store = ObjectStore::new(directory);
         let mut meshes = Meshes::new(MeshCapacity {
-            meshes: scene.primitives.len(),
+            meshes: scene.primitives.len().max(1),
             retired_mesh_versions: 1,
         })?;
         let mut materials = Materials::default();
@@ -180,13 +211,7 @@ impl DisplayScene {
                 std::collections::hash_map::Entry::Vacant(e) => {
                     let bytes = store.load(&part.mesh)?;
                     let blob = bytes.mesh()?;
-                    let mut min = Vec3::splat(f32::INFINITY);
-                    let mut max = Vec3::splat(f32::NEG_INFINITY);
-                    for v in &blob.vertices {
-                        min = min.min(v.position.into());
-                        max = max.max(v.position.into());
-                    }
-                    *e.insert((meshes.create(blob.mesh_data()?)?, min, max))
+                    *e.insert((meshes.create(blob.mesh_data()?)?, blob.local_bounds()?))
                 }
             };
             let material = match mat_handles.entry((part.material, part.images)) {
@@ -204,16 +229,16 @@ impl DisplayScene {
         let mut min = Vec3::splat(f32::INFINITY);
         let mut max = Vec3::splat(f32::NEG_INFINITY);
         for placement in scene.placements {
-            let ((mesh, lo, hi), material) = parts[placement.primitive];
+            let ((mesh, local), material) = parts[placement.primitive];
             let t = Transform::new(std::array::from_fn(|r| {
                 placement.transform.map(|col| col[r])
             }))?;
-            for bits in 0..8 {
-                let p = t.transform_point(std::array::from_fn(|i| {
-                    if bits & (1 << i) == 0 { lo[i] } else { hi[i] }
-                }));
-                min = min.min(p.into());
-                max = max.max(p.into());
+            if all_bounds.is_none() {
+                let world = t
+                    .bounds(local)
+                    .ok_or("unrepresentable static placement bounds")?;
+                min = min.min(world.min().into());
+                max = max.max(world.max().into());
             }
             objects.push(RenderObject::new(mesh, material).with_transform(t));
         }
@@ -232,7 +257,10 @@ impl DisplayScene {
             settings,
             camera,
             sun,
-            bounds: Bounds::new(min.to_array(), max.to_array())?,
+            bounds: match all_bounds {
+                Some(bounds) => bounds,
+                None => Bounds::new(min.to_array(), max.to_array())?,
+            },
         })
     }
 

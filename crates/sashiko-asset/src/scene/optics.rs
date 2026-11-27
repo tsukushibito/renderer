@@ -105,6 +105,45 @@ impl FilmProjection {
         self.sensor * radiance
     }
 
+    /// Restrict this sample to a top-origin rectangle on the original film.
+    /// Every retained pixel has the same ray, subpixel offset and lens sample.
+    pub fn crop(
+        full: sashiko_renderer::pipeline::CameraView,
+        [x, y, width, height]: [u32; 4],
+    ) -> sashiko_renderer::pipeline::PipelineResult<sashiko_renderer::pipeline::CameraView> {
+        use sashiko_renderer::pbr::{Projection, ViewInput};
+        let [w, h] = full.extent;
+        if width == 0
+            || height == 0
+            || x.checked_add(width).is_none_or(|v| v > w)
+            || y.checked_add(height).is_none_or(|v| v > h)
+        {
+            return Err("crop exceeds the full film".into());
+        }
+        let base = full.camera;
+        let mut matrix = Mat4::from_cols_array_2d(&base.clip_from_world())
+            .as_dmat4()
+            .to_cols_array_2d();
+        for col in &mut matrix {
+            col[0] = (f64::from(w) * col[0] + (f64::from(w - width) - 2. * f64::from(x)) * col[3])
+                / f64::from(width);
+            col[1] = (f64::from(h) * col[1] + (f64::from(h - height) - 2. * f64::from(y)) * col[3])
+                / f64::from(height);
+        }
+        let camera = ViewInput::new(
+            matrix.map(|c| c.map(|v| v as f32)),
+            base.eye(),
+            base.forward(),
+            base.near_far(),
+            Projection::Perspective,
+        )?;
+        Ok(sashiko_renderer::pipeline::CameraView {
+            extent: [width, height],
+            camera,
+            ..full
+        })
+    }
+
     pub(super) fn output<'a>(
         &self,
         sky: &'a sashiko_renderer::core::graph::ImportImage,

@@ -66,12 +66,72 @@ fn capture(package: &Path, view: &str, output: &Path) -> PipelineResult<()> {
     Ok(())
 }
 
+fn visibility(package: &Path, name: &str) -> PipelineResult<()> {
+    use sashiko_asset::{
+        ObjectStore,
+        scene::{ScenePackage, SceneSpatialIndex},
+    };
+    use sashiko_renderer::pbr::{ShadowSettings, Sun};
+    let scene = ScenePackage::open(package)?;
+    let index = SceneSpatialIndex::new(&scene, &ObjectStore::new(package), 8.)?;
+    let pose = scene.view(name)?.camera([3840, 2160], [0.02, 1500.])?;
+    let s = &scene.settings;
+    let sun = Sun::from_lux(s.sun_direction, s.sun_color, s.sun_lux)?;
+    // Count directional candidates even for an IBL-only authoring recipe, so
+    // switching the sun on can be compared with exactly the same spatial bins.
+    let view = pose.camera.culling(
+        index.bounds(),
+        sun,
+        Some(ShadowSettings {
+            resolution: s.shadow_resolution,
+            distance: s.shadow_distance,
+            ..Default::default()
+        }),
+    )?;
+    let mut camera = [0u64; 2];
+    let mut cascades = [[0u64; 2]; 4];
+    let mut offscreen_casters = 0;
+    index.visit(&view, |p| {
+        if p.camera {
+            camera[0] += 1;
+            camera[1] += u64::from(p.triangles);
+        } else {
+            offscreen_casters += 1;
+        }
+        for (sum, inside) in cascades.iter_mut().zip(p.cascades) {
+            if inside {
+                sum[0] += 1;
+                sum[1] += u64::from(p.triangles);
+            }
+        }
+    });
+    println!(
+        "{}",
+        serde_json::json!({
+            "unique_meshes":index.unique_meshes,"unique_triangles":index.unique_triangles,
+            "placements":scene.placements.len(),"placed_triangles":index.placed_triangles,
+            "cells":index.cell_count(),"cell_metres":8,"camera_placements_triangles":camera,
+            "cascade_placements_triangles":cascades,"offscreen_caster_candidates":offscreen_casters,
+        })
+    );
+    Ok(())
+}
+
 fn main() -> PipelineResult<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
+        [package, view, flag, samples, rect, exr, png] if flag == "--film-crop" => {
+            let rect: Vec<u32> = rect.to_str().ok_or("invalid film rectangle")?
+                .split(',').map(str::parse).collect::<Result<_,_>>()?;
+            film::capture(Path::new(package),view.to_str().ok_or("invalid view name")?,
+                samples.to_str().ok_or("invalid film sample count")?.parse()?,
+                Some(rect.try_into().map_err(|_| "expected x,y,width,height")?),
+                Path::new(exr),Path::new(png))
+        },
+        [package, view, flag] if flag == "--visibility" => visibility(Path::new(package), view.to_str().ok_or("invalid view name")?),
         [package, view, flag, samples, exr, png] if flag == "--film" => film::capture(
             Path::new(package), view.to_str().ok_or("invalid view name")?,
-            samples.to_str().ok_or("invalid film sample count")?.parse()?,
+            samples.to_str().ok_or("invalid film sample count")?.parse()?, None,
             Path::new(exr), Path::new(png),
         ),
         [package, view, flag, exr, png] if flag == "--sky" => film::sky(Path::new(package),view.to_str().ok_or("invalid view name")?,Path::new(exr),Path::new(png)),
@@ -98,7 +158,7 @@ fn main() -> PipelineResult<()> {
             None,
         ),
         _ => Err(
-            "usage: scene-viewer <package> <view> [--capture output.png | --film N linear.exr display.png | --sky linear.exr display.png | --present-frames N]"
+            "usage: scene-viewer <package> <view> [--capture output.png | --film N linear.exr display.png | --film-crop N x,y,width,height linear.exr display.png | --sky linear.exr display.png | --visibility | --present-frames N]"
                 .into(),
         ),
     }

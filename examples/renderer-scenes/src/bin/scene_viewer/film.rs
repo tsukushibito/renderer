@@ -21,10 +21,11 @@ pub(super) fn capture(
     package: &Path,
     name: &str,
     samples: NonZeroU32,
+    crop: Option<[u32; 4]>,
     exr: &Path,
     png: &Path,
 ) -> PipelineResult<()> {
-    let (extent, lens) = {
+    let (base, lens) = {
         let scene = ScenePackage::open(package)?;
         let film = scene
             .physical
@@ -32,17 +33,12 @@ pub(super) fn capture(
             .and_then(|p| p.cameras.get(name))
             .ok_or("view has no physical film")?;
         (
-            film.film_extent,
+            scene.view(name)?.camera(film.film_extent, [0.02, 1500.])?,
             FilmProjection::new(scene.view(name)?, film, film.film_extent)?,
         )
     };
-    let (scene, mut renderer) = DisplayScene::headless(package, name, extent, super::backend())?;
-    let pixels = (extent[0] as usize)
-        .checked_mul(extent[1] as usize)
-        .ok_or("film size overflow")?;
-    let mut sum = vec![[0f64; 3]; pixels];
-    let mut rgba = vec![0; pixels.checked_mul(8).ok_or("film size overflow")?];
-    for index in 1..=samples.get() {
+    let sample_view = |index| -> PipelineResult<_> {
+        let mut view = base;
         if samples.get() > 1 {
             let jitter = [
                 radical_inverse(index, 2) - 0.5,
@@ -50,12 +46,32 @@ pub(super) fn capture(
             ];
             let radius = radical_inverse(index, 5).sqrt();
             let (s, c) = (std::f32::consts::TAU * radical_inverse(index, 7)).sin_cos();
-            renderer.set_camera(lens.raster_sample(
-                &scene.camera,
-                jitter.into(),
-                [radius * c, radius * s].into(),
-            )?);
+            view.camera =
+                lens.raster_sample(&base, jitter.into(), [radius * c, radius * s].into())?;
         }
+        match crop {
+            Some(rect) => FilmProjection::crop(view, rect),
+            None => Ok(view),
+        }
+    };
+    let mut views = Vec::new();
+    views.try_reserve_exact(samples.get() as usize)?;
+    for index in 1..=samples.get() {
+        views.push(sample_view(index)?);
+    }
+    let extent = views[0].extent;
+    let (scene, mut renderer) = if crop.is_some() {
+        DisplayScene::headless_views(package, name, &views, super::backend())?
+    } else {
+        DisplayScene::headless(package, name, extent, super::backend())?
+    };
+    let pixels = (extent[0] as usize)
+        .checked_mul(extent[1] as usize)
+        .ok_or("film size overflow")?;
+    let mut sum = vec![[0f64; 3]; pixels];
+    let mut rgba = vec![0; pixels.checked_mul(8).ok_or("film size overflow")?];
+    for view in views {
+        renderer.set_camera(view.camera);
         let mut frame = renderer.begin_frame()?;
         scene.draw(&mut frame)?;
         let ticket = frame.capture_linear()?;
