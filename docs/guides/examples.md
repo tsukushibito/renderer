@@ -30,6 +30,21 @@ cargo run --locked --release -p renderer-scenes --features landscape --bin lands
 
 原作は Laubwerk の Jan-Walter Schliep、Burak Kahraman、Timm Dapper による **Landscape**（CC BY 4.0）。変換版では座標の再配置、テクスチャ縮小、反射色とカットアウトへの材質変換を行い、太陽光・一定の環境光・カスケードシャドウで描画しています。水の屈折、葉の透過散乱、原作の HDR 照明は省略しています。[固定版の配布元](https://github.com/mmp/pbrt-v4-scenes/tree/30cf4a0346ae5a80a2d7a530a3ef7d0fa4f70572/landscape)・[ライセンス](https://creativecommons.org/licenses/by/4.0/)
 
+### Landscape の原画と比較する
+
+評価用素材を取得するには、上記の Python 環境で次を実行します。取得ツールは固定版の Git blob とローカルの内容を照合し、既にあるジオメトリやテクスチャを再利用します。評価用画像はランタイムの入力から独立しています。
+
+```powershell
+python tools/landscape/reference.py
+$scene = 'build/landscape-cache/30cf4a0346ae5a80a2d7a530a3ef7d0fa4f70572'
+cargo run --locked --release -p renderer-scenes --features landscape --bin landscape -- build/landscape-overview build/cover-4k.png 1 view-0 4k
+python tools/landscape/compare.py "$scene/reference/landscape/view-0.png" build/cover-4k.png build/cover-difference.png
+```
+
+`view-0.pbrt` は 3840×2160 の全画面、垂直画角 44.095898°、レンズ半径 0.125 cm、焦点距離 3000 cm、ISO 150、ホワイトバランス 9000 K、Halton 512 spp を指定します。水面を含む比較視点は `view-4` です。末尾の視点名を変えて同じ簡略版を撮影できます。簡略版のカメラはピンホールです。配布元のカメラ行列を反転して得た位置をセンチメートルからシーン原点基準のメートルに変換しています。
+
+比較ツールは参照 PNG の SHA-256 を照合し、リサイズや位置合わせをせずに RGB の絶対差を PNG に保存します。全画面と前景の穂・二股の幹・林の暗部・空の固定矩形について、8 bit RGB のチャンネル別平均絶対差と、sRGB を線形化して求めた CIE L* の平均絶対差・平均符号付き差を出力します。正の符号は描画結果の方が明るいことを表します。
+
 ## ゲーム更新を Rust で書く
 
 小さな入力・更新ループは `cargo run --locked -p sashiko --example fixed_game` で実行できます。[サンプル](../../crates/sashiko/examples/fixed_game.rs)は右移動を 3 更新続け、その間のジャンプ押下を 1 回消費します。ゲームはキーとアクションの対応を `ActionMap` に渡し、固定更新ごとに `sample` で押下・解放・軸値を読み取ります。Windows ホストでは `WindowInput` が同じマップに物理キーの変化を渡します。

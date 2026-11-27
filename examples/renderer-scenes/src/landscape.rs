@@ -22,7 +22,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-const EXTENT: [u32; 2] = [960, 540];
 const WAIT: Duration = Duration::from_secs(120);
 
 fn load_meshes(
@@ -83,26 +82,31 @@ fn load_meshes(
     Ok((meshes, ids))
 }
 
-fn camera(name: &str) -> Result<CameraView, Error> {
+fn camera(name: &str, extent: [u32; 2]) -> Result<CameraView, Error> {
     let (position, forward, fov) = match name {
-        "cover" => (
+        "cover" | "view-0" => (
             [-8.99305, 1.51107, -19.81427],
             [0.39362455, 0.04013179, 0.9183949],
             44.0959,
+        ),
+        "view-4" => (
+            [16.439646, 21.71107, 71.46965],
+            [0.026704177, -0.4756242, -0.87924314],
+            28.409271,
         ),
         "meadow" => ([0., 0.83, 1.8], [0., -0.26, -0.9656], 55.),
         "panorama" => ([-4., 7., -10.], [0.40, -0.14, 0.90], 58.),
         _ => return Err("unknown Landscape camera".into()),
     };
     let near_far = [0.02, 1500.];
-    let aspect = EXTENT[0] as f32 / EXTENT[1] as f32;
+    let aspect = extent[0] as f32 / extent[1] as f32;
     let cam = Camera {
         position,
         target: std::array::from_fn(|i| position[i] + forward[i]),
         fov,
     };
     let mut matrix = cam.matrix(aspect, near_far[0], near_far[1])?;
-    if name == "cover" {
+    if matches!(name, "cover" | "view-0" | "view-4") {
         // PBRT's perspective camera looks along +Z with screen-right along +X.
         for column in &mut matrix {
             column[0] = -column[0];
@@ -110,7 +114,7 @@ fn camera(name: &str) -> Result<CameraView, Error> {
     }
     Ok(CameraView {
         id: ViewId(0),
-        extent: EXTENT,
+        extent,
         camera: ViewInput::new(
             matrix,
             position,
@@ -126,7 +130,7 @@ fn camera(name: &str) -> Result<CameraView, Error> {
 
 pub fn run() -> Result<(), Error> {
     let mut args = std::env::args().skip(1);
-    const USAGE: &str = "landscape SCENE_DIRECTORY OUTPUT.png [frames] [panorama|cover|meadow]";
+    const USAGE: &str = "landscape SCENE_DIRECTORY OUTPUT.png [frames] [panorama|cover|meadow|view-0|view-4] [540p|4k]";
     let input = args.next().ok_or(USAGE)?;
     if input == "--help" || input == "-h" {
         println!("{USAGE}");
@@ -134,7 +138,13 @@ pub fn run() -> Result<(), Error> {
     }
     let output = args.next().ok_or("missing output PNG path")?;
     let frames: usize = args.next().as_deref().unwrap_or("30").parse()?;
-    let cam = camera(&args.next().unwrap_or_else(|| "panorama".to_string()))?;
+    let view = args.next().unwrap_or_else(|| "panorama".to_string());
+    let extent = match args.next().as_deref() {
+        None | Some("540p") => [960, 540],
+        Some("4k") => [3840, 2160],
+        _ => return Err(USAGE.into()),
+    };
+    let cam = camera(&view, extent)?;
     if frames == 0 || args.next().is_some() {
         return Err("expected a positive frame count and a known camera".into());
     }
@@ -191,7 +201,7 @@ pub fn run() -> Result<(), Error> {
         let t = Transform::new(std::array::from_fn(|r| std::array::from_fn(|c| m[c][r])))?;
         objects.push(RenderObject::new(mesh, paints[material].0).with_transform(t));
     }
-    let mut config = StandardConfig::new(EXTENT);
+    let mut config = StandardConfig::new(extent);
     let bounds = Bounds::new(minimum, maximum)?;
     config.shadows = Some(ShadowSettings {
         resolution: 1024,
@@ -222,7 +232,7 @@ pub fn run() -> Result<(), Error> {
         textures.push((path, desc));
     }
     drop(doc);
-    plan.reserve_readback("landscape capture", ImageDesc::rgba8(EXTENT[0], EXTENT[1]))?;
+    plan.reserve_readback("landscape capture", ImageDesc::rgba8(extent[0], extent[1]))?;
     let mut backend = RuntimeConfig::Vulkan(VulkanConfig {
         validation: if cfg!(feature = "development-validation") {
             ValidationMode::Required
@@ -300,7 +310,7 @@ pub fn run() -> Result<(), Error> {
             let mut rgba = vec![0; done.readback_len(handle)?];
             done.readback_into(handle, &mut rgba)?;
             let mut encoder =
-                png::Encoder::new(BufWriter::new(File::create(&output)?), EXTENT[0], EXTENT[1]);
+                png::Encoder::new(BufWriter::new(File::create(&output)?), extent[0], extent[1]);
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
             encoder.write_header()?.write_image_data(&rgba)?;
