@@ -47,28 +47,40 @@ pub(super) fn program() -> ManagedRasterProgram {
             0,
             0,
         ],
-        shaders: sashiko_renderer_core::program::embedded_shader_binaries!(
-            sashiko_renderer_core::program::RasterShaderStages {
-                vertex: include_bytes!("../../../shaders/virtual_shadow/caster.vert.spv"),
-                fragment: Some(include_bytes!(
-                    "../../../shaders/virtual_shadow/caster.frag.spv"
-                )),
-            },
-            sashiko_renderer_core::program::D3D12RasterShaders {
-                stages: sashiko_renderer_core::program::RasterShaderStages {
-                    vertex: include_bytes!("../../../shaders/virtual_shadow/dxil/caster.vert.dxil"),
+        shaders: {
+            let binaries: sashiko_renderer_core::program::ShaderBinaries<
+                sashiko_renderer_core::program::RasterShaderStages,
+                sashiko_renderer_core::program::D3D12RasterShaders,
+            > = sashiko_renderer_core::program::embedded_shader_binaries!(
+                sashiko_renderer_core::program::RasterShaderStages {
+                    vertex: include_bytes!("../../../shaders/virtual_shadow/caster.vert.spv"),
                     fragment: Some(include_bytes!(
-                        "../../../shaders/virtual_shadow/dxil/caster.frag.dxil"
+                        "../../../shaders/virtual_shadow/caster.frag.spv"
                     )),
                 },
-                inline_constants: Some(
-                    sashiko_renderer_core::program::D3D12InlineConstantBinding {
-                        register: 7,
-                        space: 0
-                    }
-                ),
-            },
-        ),
+                sashiko_renderer_core::program::D3D12RasterShaders {
+                    stages: sashiko_renderer_core::program::RasterShaderStages {
+                        vertex: include_bytes!(
+                            "../../../shaders/virtual_shadow/dxil/caster.vert.dxil"
+                        ),
+                        fragment: Some(include_bytes!(
+                            "../../../shaders/virtual_shadow/dxil/caster.frag.dxil"
+                        )),
+                    },
+                    inline_constants: Some(
+                        sashiko_renderer_core::program::D3D12InlineConstantBinding {
+                            register: 7,
+                            space: 0
+                        }
+                    ),
+                },
+            );
+            #[cfg(feature = "vulkan")]
+            let binaries = binaries.with_clip_distance_vertex(include_bytes!(
+                "../../../shaders/virtual_shadow/caster_clipped.vert.spv"
+            ));
+            binaries
+        },
         ..SHADOW
     };
     // SAFETY: same stream, alpha texture lookup, sidedness and fixed-function
@@ -124,7 +136,10 @@ impl CasterBatch {
                 "virtual shadows require the PBR vertex stream",
             ));
         }
-        let bounds = rectangles(requests, transform.bounds(mesh.bounds));
+        let bounds = projected_rectangles(
+            requests,
+            Some(project_caster(requests.axes, transform, mesh.bounds)),
+        );
         if bounds.iter().all(Option::is_none) {
             return Ok(());
         }
@@ -231,6 +246,39 @@ fn bind(
     )
 }
 
+// Compose the model and light transforms before taking extrema. Enclosing a
+// rotated box in a world AABB first can include many unrelated fine pages.
+fn project_caster(
+    axes: [[f64; 3]; 2],
+    transform: Transform,
+    bounds: crate::pbr::Bounds,
+) -> [[f64; 2]; 2] {
+    let columns = transform.columns();
+    axes.map(|axis| {
+        let mut lo = 0.;
+        let mut hi = 0.;
+        let mut magnitude = 0.;
+        let min = bounds.min();
+        let max = bounds.max();
+        for (i, column) in columns.iter().enumerate() {
+            let (a, b) = if i == 3 {
+                (1., 1.)
+            } else {
+                (f64::from(min[i]), f64::from(max[i]))
+            };
+            let weighted = std::array::from_fn::<_, 3, _>(|j| axis[j] * f64::from(column[j]));
+            let coefficient = weighted.iter().sum::<f64>();
+            lo += (coefficient * a).min(coefficient * b);
+            hi += (coefficient * a).max(coefficient * b);
+            magnitude += a.abs().max(b.abs()) * weighted.iter().map(|v| v.abs()).sum::<f64>();
+        }
+        // The shader rounds both dot products in f32; include cancellation in
+        // either transform when bounding the rounding error.
+        let margin = magnitude * 32. * f64::from(f32::EPSILON) + f64::from(f32::MIN_POSITIVE);
+        [lo - margin, hi + margin]
+    })
+}
+
 pub(super) fn rectangles(
     requests: &PageRequests,
     world: Option<crate::pbr::Bounds>,
@@ -253,6 +301,13 @@ pub(super) fn rectangles(
             [lo - margin, hi + margin]
         })
     });
+    projected_rectangles(requests, projected)
+}
+
+fn projected_rectangles(
+    requests: &PageRequests,
+    projected: Option<[[f64; 2]; 2]>,
+) -> [Option<[u32; 4]>; LEVELS] {
     std::array::from_fn(|level| {
         let Some(bounds) = projected else {
             return Some([0, 0, 128, 128]);
@@ -272,4 +327,33 @@ pub(super) fn rectangles(
         let [y0, y1] = y.map(|v| v.clamp(0., 127.) as u32);
         Some([x0, y0, x1 - x0 + 1, y1 - y0 + 1])
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotated_thin_caster_keeps_its_projected_width_and_all_corners() {
+        let transform =
+            Transform::new([[1., 1., 0., 35.], [-1., 1., 0., -15.], [0., 0., -2., 3.]]).unwrap();
+        let bounds = crate::pbr::Bounds::new([-20., -0.1, -1.], [20., 0.1, 1.]).unwrap();
+        let axes = [[0.5, 0.5, 0.], [0., 0., 1.]];
+        let projected = project_caster(axes, transform, bounds);
+        assert!(projected[0][1] - projected[0][0] < 0.201);
+        for corner in 0..8 {
+            let local = std::array::from_fn(|i| {
+                if corner & (1 << i) == 0 {
+                    bounds.min()[i]
+                } else {
+                    bounds.max()[i]
+                }
+            });
+            let world = transform.transform_point(local);
+            for (axis, [lo, hi]) in axes.into_iter().zip(projected) {
+                let coordinate = f64::from((0..3).map(|i| world[i] * axis[i] as f32).sum::<f32>());
+                assert!((lo..=hi).contains(&coordinate));
+            }
+        }
+    }
 }

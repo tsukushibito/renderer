@@ -147,6 +147,7 @@ struct Candidate {
     features: RequiredFeatures,
     multi_draw_indirect: bool,
     texture_compression_bc: bool,
+    shader_clip_distance: bool,
     queues: Vec<vk::QueueFamilyProperties>,
     property_failures: Vec<RequirementFailure>,
 }
@@ -157,10 +158,20 @@ struct SelectedDevice {
     queue_family_index: u32,
     multi_draw_indirect: bool,
     texture_compression_bc: bool,
+    shader_clip_distance: bool,
 }
 
 fn supported_api(api: u32) -> bool {
     vk::api_version_variant(api) == 0 && api >= REQUIRED_API
+}
+
+impl SelectedDevice {
+    fn core_features(&self) -> vk::PhysicalDeviceFeatures {
+        vk::PhysicalDeviceFeatures::default()
+            .multi_draw_indirect(self.multi_draw_indirect)
+            .texture_compression_bc(self.texture_compression_bc)
+            .shader_clip_distance(self.shader_clip_distance)
+    }
 }
 
 impl Candidate {
@@ -209,6 +220,7 @@ impl Candidate {
                 queue_family_index: queue_family_index.expect("checked queue family") as u32,
                 multi_draw_indirect: self.multi_draw_indirect,
                 texture_compression_bc: self.texture_compression_bc,
+                shader_clip_distance: self.shader_clip_distance,
             })
         } else {
             Err(AdapterRejection {
@@ -287,6 +299,7 @@ fn inspect(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Can
     let mut features = RequiredFeatures::default();
     let mut multi_draw_indirect = false;
     let mut texture_compression_bc = false;
+    let mut shader_clip_distance = false;
     if supported_api(properties.api_version) {
         let mut driver = vk::PhysicalDeviceDriverProperties::default();
         let mut properties2 = vk::PhysicalDeviceProperties2::default().push_next(&mut driver);
@@ -317,6 +330,7 @@ fn inspect(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Can
         unsafe { instance.get_physical_device_features2(physical_device, &mut features2) };
         multi_draw_indirect = features2.features.multi_draw_indirect == vk::TRUE;
         texture_compression_bc = features2.features.texture_compression_bc == vk::TRUE;
+        shader_clip_distance = features2.features.shader_clip_distance == vk::TRUE;
         features = RequiredFeatures {
             timeline_semaphore: features12.timeline_semaphore == vk::TRUE,
             synchronization2: features13.synchronization2 == vk::TRUE,
@@ -338,6 +352,7 @@ fn inspect(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Can
         features,
         multi_draw_indirect,
         texture_compression_bc,
+        shader_clip_distance,
         queues,
         property_failures,
     }
@@ -354,8 +369,7 @@ fn with_create_info<T>(
         queue_family_index,
         false,
         false,
-        false,
-        false,
+        vk::PhysicalDeviceFeatures::default(),
         false,
         create,
     )
@@ -371,8 +385,7 @@ fn with_presentation_create_info<T>(
     queue_family_index: u32,
     presentation: bool,
     memory_budget: bool,
-    multi_draw_indirect: bool,
-    texture_compression_bc: bool,
+    features: vk::PhysicalDeviceFeatures,
     ray_query: bool,
     create: impl FnOnce(&vk::DeviceCreateInfo<'_>) -> T,
 ) -> T {
@@ -384,9 +397,6 @@ fn with_presentation_create_info<T>(
     let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
         .synchronization2(true)
         .dynamic_rendering(true);
-    let features = vk::PhysicalDeviceFeatures::default()
-        .multi_draw_indirect(multi_draw_indirect)
-        .texture_compression_bc(texture_compression_bc);
     let mut acceleration =
         vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default().acceleration_structure(true);
     let mut queries = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
@@ -422,7 +432,10 @@ fn with_presentation_create_info<T>(
             .push_next(&mut acceleration)
             .push_next(&mut queries);
     }
-    if multi_draw_indirect || texture_compression_bc {
+    if features.multi_draw_indirect != 0
+        || features.texture_compression_bc != 0
+        || features.shader_clip_distance != 0
+    {
         create_info = create_info.enabled_features(&features);
     }
     if presentation {
@@ -770,6 +783,10 @@ impl VulkanDevice {
         &self.limits
     }
 
+    pub(super) fn supports_clip_distance(&self) -> bool {
+        self.selected.shader_clip_distance
+    }
+
     pub(super) fn supports_bc(&self) -> bool {
         self.selected.texture_compression_bc
     }
@@ -979,8 +996,7 @@ impl VulkanDevice {
             selected.queue_family_index,
             presentation,
             memory_budget_enabled,
-            selected.multi_draw_indirect,
-            selected.texture_compression_bc,
+            selected.core_features(),
             ray_query,
             |create_info| {
                 #[cfg(feature = "memory-profiling")]
@@ -1185,6 +1201,7 @@ mod tests {
             },
             multi_draw_indirect: false,
             texture_compression_bc: false,
+            shader_clip_distance: false,
             queues: vec![vk::QueueFamilyProperties {
                 queue_flags: vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE,
                 queue_count: 1,
@@ -1297,26 +1314,20 @@ mod tests {
         let mut adapter = candidate(1, vk::PhysicalDeviceType::DISCRETE_GPU);
         adapter.multi_draw_indirect = true;
         adapter.texture_compression_bc = true;
+        adapter.shader_clip_distance = true;
         let selected = adapter
             .assess()
             .expect("optional feature does not reject Device");
-        with_presentation_create_info(
-            7,
-            false,
-            false,
-            selected.multi_draw_indirect,
-            selected.texture_compression_bc,
-            false,
-            |info| {
-                assert!(!info.p_enabled_features.is_null());
-                // SAFETY: The helper keeps explicitly selected core features live.
-                let features = unsafe { &*info.p_enabled_features };
-                assert_eq!(features.multi_draw_indirect, vk::TRUE);
-                assert_eq!(features.texture_compression_bc, vk::TRUE);
-                assert_eq!(features.draw_indirect_first_instance, vk::FALSE);
-                assert_eq!(features.robust_buffer_access, vk::FALSE);
-            },
-        );
+        with_presentation_create_info(7, false, false, selected.core_features(), false, |info| {
+            assert!(!info.p_enabled_features.is_null());
+            // SAFETY: The helper keeps explicitly selected core features live.
+            let features = unsafe { &*info.p_enabled_features };
+            assert_eq!(features.multi_draw_indirect, vk::TRUE);
+            assert_eq!(features.texture_compression_bc, vk::TRUE);
+            assert_eq!(features.shader_clip_distance, vk::TRUE);
+            assert_eq!(features.draw_indirect_first_instance, vk::FALSE);
+            assert_eq!(features.robust_buffer_access, vk::FALSE);
+        });
     }
 
     #[test]
@@ -1368,30 +1379,37 @@ mod tests {
     #[test]
     fn memory_budget_is_optional_and_coexists_with_presentation_extensions() {
         for presentation in [false, true] {
-            with_presentation_create_info(0, presentation, true, false, false, false, |info| {
-                // SAFETY: The helper retains the extension pointers and C strings.
-                let pointers = unsafe {
-                    std::slice::from_raw_parts(
-                        info.pp_enabled_extension_names,
-                        info.enabled_extension_count as usize,
-                    )
-                };
-                let names = pointers
-                    .iter()
-                    .map(|pointer| {
-                        // SAFETY: Each pointer refers to a static extension C string.
-                        unsafe { std::ffi::CStr::from_ptr(*pointer) }
-                    })
-                    .collect::<Vec<_>>();
-                assert!(names.contains(&ash::ext::memory_budget::NAME));
-                assert_eq!(names.len(), if presentation { 3 } else { 1 });
-                assert_eq!(names.contains(&ash::khr::swapchain::NAME), presentation);
-                assert_eq!(
-                    names.contains(&ash::ext::swapchain_maintenance1::NAME),
-                    presentation
-                );
-                assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
-            });
+            with_presentation_create_info(
+                0,
+                presentation,
+                true,
+                vk::PhysicalDeviceFeatures::default(),
+                false,
+                |info| {
+                    // SAFETY: The helper retains the extension pointers and C strings.
+                    let pointers = unsafe {
+                        std::slice::from_raw_parts(
+                            info.pp_enabled_extension_names,
+                            info.enabled_extension_count as usize,
+                        )
+                    };
+                    let names = pointers
+                        .iter()
+                        .map(|pointer| {
+                            // SAFETY: Each pointer refers to a static extension C string.
+                            unsafe { std::ffi::CStr::from_ptr(*pointer) }
+                        })
+                        .collect::<Vec<_>>();
+                    assert!(names.contains(&ash::ext::memory_budget::NAME));
+                    assert_eq!(names.len(), if presentation { 3 } else { 1 });
+                    assert_eq!(names.contains(&ash::khr::swapchain::NAME), presentation);
+                    assert_eq!(
+                        names.contains(&ash::ext::swapchain_maintenance1::NAME),
+                        presentation
+                    );
+                    assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+                },
+            );
         }
     }
 

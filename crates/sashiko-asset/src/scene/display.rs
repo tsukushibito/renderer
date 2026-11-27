@@ -270,8 +270,20 @@ impl DisplayScene {
         }
         let settings = scene.settings;
         let sun = Sun::from_lux(settings.sun_direction, settings.sun_color, settings.sun_lux)?;
+        let shadow_parts = if settings.virtual_shadows {
+            scene.virtual_shadow_meshes
+        } else {
+            Default::default()
+        };
+        let mesh_capacity = shadow_parts.values().try_fold(
+            scene.primitives.len() + scene.mesh_lods.len(),
+            |n, pieces| {
+                n.checked_add(pieces.len())
+                    .ok_or("shadow piece count overflow")
+            },
+        )?;
         let mut meshes = Meshes::new(MeshCapacity {
-            meshes: (scene.primitives.len() + scene.mesh_lods.len()).max(1),
+            meshes: mesh_capacity.max(1),
             retired_mesh_versions: 1,
         })?;
         let mut materials = Materials::default();
@@ -334,13 +346,26 @@ impl DisplayScene {
                 lod_pairs.push((mesh.0, material));
                 lod_pairs.push((low, material));
             }
-            parts.push((mesh, material, coarse));
+            let mut shadows = Vec::new();
+            if let Some(pieces) = shadow_parts.get(&part.mesh.hash) {
+                for &piece in pieces {
+                    let (handle, bounds) = load_mesh(piece)?;
+                    if (0..3).any(|axis| {
+                        bounds.min()[axis] < mesh.1.min()[axis]
+                            || bounds.max()[axis] > mesh.1.max()[axis]
+                    }) {
+                        return Err("shadow geometry extends beyond the source mesh".into());
+                    }
+                    shadows.push(handle);
+                }
+            }
+            parts.push((mesh, material, coarse, shadows));
         }
         let mut objects = Vec::with_capacity(scene.placements.len());
         let mut min = Vec3::splat(f32::INFINITY);
         let mut max = Vec3::splat(f32::NEG_INFINITY);
         for placement in scene.placements {
-            let ((mesh, local), material, coarse) = parts[placement.primitive];
+            let ((mesh, local), material, coarse, ref shadows) = parts[placement.primitive];
             let t = Transform::new(std::array::from_fn(|r| {
                 placement.transform.map(|col| col[r])
             }))?;
@@ -368,7 +393,15 @@ impl DisplayScene {
             if let Some(id) = placement.lightmap {
                 object = object.with_lightmap(id);
             }
+            object.casts_shadow = shadows.is_empty();
             objects.push(object);
+            for &piece in shadows {
+                let mut caster = RenderObject::new(piece, material).with_transform(t);
+                caster.camera_visible = false;
+                caster.indirect_shadow_source =
+                    sashiko_renderer::pipeline::IndirectShadowSource::Disabled;
+                objects.push(caster);
+            }
         }
         Ok(Self {
             bake,

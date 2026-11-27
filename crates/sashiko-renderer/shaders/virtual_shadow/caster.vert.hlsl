@@ -17,6 +17,9 @@ struct Vertex {
     BISTRO_LOCATION(1) nointerpolation uint tile : TEXCOORD1;
     BISTRO_LOCATION(2) nointerpolation uint mirrored : TEXCOORD2;
     float4 clip : SV_Position;
+#if !defined(__spirv__) || defined(VSM_CLIP_TILE)
+    float4 tile_planes : SV_ClipDistance0;
+#endif
 };
 
 Vertex main(BISTRO_LOCATION(0) float3 pos : TEXCOORD0,
@@ -25,6 +28,9 @@ Vertex main(BISTRO_LOCATION(0) float3 pos : TEXCOORD0,
     v.uv = uv;
     v.tile = 0;
     v.mirrored = placement.mirrored;
+#if !defined(__spirv__) || defined(VSM_CLIP_TILE)
+    v.tile_planes = -1.0;
+#endif
     v.clip = float4(2.0, 2.0, 1.0, 1.0);
     if (instance >= VSM_CAPACITY) return v;
     uint slot = caster_list[1 + instance];
@@ -40,6 +46,12 @@ Vertex main(BISTRO_LOCATION(0) float3 pos : TEXCOORD0,
     float2 xy = (virtual_tile_origin(slot) + VSM_GUTTER + local_uv * 128.0) / 2048.0 - 1.0;
 #ifndef __spirv__
     xy.y = -xy.y;
+#endif
+#if !defined(__spirv__) || defined(VSM_CLIP_TILE)
+    // Clip before rasterization. Keep one extra texel for derivative helpers;
+    // the fragment shader still enforces the exact physical tile boundary.
+    float2 tile_pixel = VSM_GUTTER + local_uv * 128.0;
+    v.tile_planes = float4(tile_pixel + 1.0, VSM_TILE + 1.0 - tile_pixel);
 #endif
     v.tile = slot;
     v.clip = float4(xy, dot(float4(world, 1.0), depth_plane), 1.0);

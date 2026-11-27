@@ -4,6 +4,7 @@ $variants = foreach ($name in 'requests.comp', 'count.comp', 'retain.comp', 'ass
     @{ Name = $name; Source = "$name.hlsl"; Defines = @() }
 }
 $variants += @{ Name = 'caster.vert'; Source = 'caster.vert.hlsl'; Defines = @(); HasInline = $true }
+$variants += @{ Name = 'caster_clipped.vert'; Source = 'caster.vert.hlsl'; Defines = @('VSM_CLIP_TILE=1'); HasInline = $true }
 $variants += @{ Name = 'caster.frag'; Source = 'caster.frag.hlsl'; Defines = @() }
 $variants += @{ Name = 'camera_depth.vert'; Source = 'camera_depth.vert.hlsl'; Defines = @(); HasInline = $true }
 $shared = @('raster_abi','raster_vertex','material_sampling','virtual_shadow_lookup','virtual_shadow_math') | ForEach-Object { "$PSScriptRoot/../$_.hlsli" }

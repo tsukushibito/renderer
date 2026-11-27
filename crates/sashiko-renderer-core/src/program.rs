@@ -31,6 +31,8 @@ pub use raster::{
 #[derive(Clone, Copy)]
 pub struct ShaderBinaries<V, D = V> {
     vulkan: Option<V>,
+    #[cfg(feature = "vulkan")]
+    clip_distance_vertex: Option<&'static [u8]>,
     d3d12: Option<D>,
     #[cfg(feature = "webgpu")]
     wgsl: Option<V>,
@@ -42,6 +44,8 @@ impl<V, D> ShaderBinaries<V, D> {
     pub const fn vulkan(spirv: V) -> Self {
         Self {
             vulkan: Some(spirv),
+            #[cfg(feature = "vulkan")]
+            clip_distance_vertex: None,
             d3d12: None,
             #[cfg(feature = "webgpu")]
             wgsl: None,
@@ -53,6 +57,8 @@ impl<V, D> ShaderBinaries<V, D> {
     pub const fn d3d12(dxil: D) -> Self {
         Self {
             vulkan: None,
+            #[cfg(feature = "vulkan")]
+            clip_distance_vertex: None,
             d3d12: Some(dxil),
             #[cfg(feature = "webgpu")]
             wgsl: None,
@@ -64,6 +70,8 @@ impl<V, D> ShaderBinaries<V, D> {
     pub const fn both(spirv: V, dxil: D) -> Self {
         Self {
             vulkan: Some(spirv),
+            #[cfg(feature = "vulkan")]
+            clip_distance_vertex: None,
             d3d12: Some(dxil),
             #[cfg(feature = "webgpu")]
             wgsl: None,
@@ -76,6 +84,8 @@ impl<V, D> ShaderBinaries<V, D> {
     pub const fn metadata_only() -> Self {
         Self {
             vulkan: None,
+            #[cfg(feature = "vulkan")]
+            clip_distance_vertex: None,
             d3d12: None,
             #[cfg(feature = "webgpu")]
             wgsl: None,
@@ -90,6 +100,8 @@ impl<V, D> ShaderBinaries<V, D> {
     pub const fn webgpu(wgsl: V, nonfiltering: &'static [(u32, u32)]) -> Self {
         Self {
             vulkan: None,
+            #[cfg(feature = "vulkan")]
+            clip_distance_vertex: None,
             d3d12: None,
             wgsl: Some(wgsl),
             nonfiltering,
@@ -121,6 +133,8 @@ impl<V, D> ShaderBinaries<V, D> {
     ) -> ShaderBinaries<U, E> {
         ShaderBinaries {
             vulkan: self.vulkan.map(&mut stage),
+            #[cfg(feature = "vulkan")]
+            clip_distance_vertex: self.clip_distance_vertex,
             d3d12: self.d3d12.map(d3d12),
             #[cfg(feature = "webgpu")]
             wgsl: self.wgsl.map(stage),
@@ -140,6 +154,8 @@ impl<V, D> ShaderBinaries<V, D> {
     fn as_ref(&self) -> ShaderBinaries<&V, &D> {
         ShaderBinaries {
             vulkan: self.vulkan.as_ref(),
+            #[cfg(feature = "vulkan")]
+            clip_distance_vertex: self.clip_distance_vertex,
             d3d12: self.d3d12.as_ref(),
             #[cfg(feature = "webgpu")]
             wgsl: self.wgsl.as_ref(),

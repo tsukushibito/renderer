@@ -1,0 +1,177 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "vert"
+        }
+    ],
+    "types" : {
+        "_10" : {
+            "name" : "type.Camera",
+            "members" : [
+                {
+                    "name" : "world_from_clip",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "eye_distance",
+                    "type" : "vec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "light_x",
+                    "type" : "vec4",
+                    "offset" : 80
+                },
+                {
+                    "name" : "light_y",
+                    "type" : "vec4",
+                    "offset" : 96
+                },
+                {
+                    "name" : "page_origin",
+                    "type" : "ivec4",
+                    "array" : [
+                        8
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 112,
+                    "array_stride" : 16
+                },
+                {
+                    "name" : "depth_plane",
+                    "type" : "vec4",
+                    "offset" : 240
+                },
+                {
+                    "name" : "shadow_bias",
+                    "type" : "vec4",
+                    "offset" : 256
+                }
+            ]
+        },
+        "_12" : {
+            "name" : "type.StructuredBuffer.v4uint",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uvec4",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 16
+                }
+            ]
+        },
+        "_14" : {
+            "name" : "type.StructuredBuffer.uint",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uint",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 4
+                }
+            ]
+        },
+        "_16" : {
+            "name" : "type.ConstantBuffer.Placement",
+            "members" : [
+                {
+                    "name" : "model",
+                    "type" : "vec4",
+                    "array" : [
+                        3
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 16
+                },
+                {
+                    "name" : "mirrored",
+                    "type" : "uint",
+                    "offset" : 48
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec3",
+            "name" : "in.var.TEXCOORD0",
+            "location" : 0
+        },
+        {
+            "type" : "vec2",
+            "name" : "in.var.TEXCOORD3",
+            "location" : 3
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec2",
+            "name" : "out.var.TEXCOORD0",
+            "location" : 0
+        },
+        {
+            "type" : "uint",
+            "name" : "out.var.TEXCOORD1",
+            "location" : 1
+        },
+        {
+            "type" : "uint",
+            "name" : "out.var.TEXCOORD2",
+            "location" : 2
+        }
+    ],
+    "ssbos" : [
+        {
+            "type" : "_12",
+            "name" : "slots",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 2
+        },
+        {
+            "type" : "_14",
+            "name" : "caster_list",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 3
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_10",
+            "name" : "type.Camera",
+            "block_size" : 272,
+            "set" : 0,
+            "binding" : 0
+        }
+    ],
+    "push_constants" : [
+        {
+            "type" : "_16",
+            "name" : "placement",
+            "push_constant" : true
+        }
+    ]
+}

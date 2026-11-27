@@ -70,6 +70,9 @@ pub struct ScenePackage {
     pub backdrop: Option<InfiniteSky>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_lods: Vec<MeshLod>,
+    /// Optional spatial pieces of a mesh for directional virtual shadow drawing.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub virtual_shadow_meshes: BTreeMap<crate::Digest, Vec<BlobRef>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribution: Option<Attribution>,
 }
@@ -256,6 +259,11 @@ impl ScenePackage {
             for image in &env.maps {
                 image.validate()?;
             }
+        }
+        if self.virtual_shadow_meshes.iter().any(|(source, pieces)| {
+            pieces.is_empty() || !self.primitives.iter().any(|p| p.mesh.hash == *source)
+        }) {
+            return Err(invalid("virtual shadow pieces require a source mesh"));
         }
         if !self.mesh_lods.is_empty() {
             let mut available: std::collections::HashSet<_> =

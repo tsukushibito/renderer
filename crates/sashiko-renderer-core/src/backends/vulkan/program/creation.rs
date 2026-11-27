@@ -369,7 +369,7 @@ impl Program {
         }
         let color_count = outputs.len();
         let shaders = program
-            .spirv()
+            .spirv_for_device(self.owner.device.supports_clip_distance())
             .ok_or_else(|| RuntimeError::unsupported("Raster Program has no SPIR-V shaders"))?;
         let vertex = ShaderModule::new(Arc::clone(&self.owner), shaders.vertex)?;
         let fragment = shaders

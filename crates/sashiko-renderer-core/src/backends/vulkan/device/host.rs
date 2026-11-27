@@ -13,6 +13,8 @@ pub struct VulkanHostFeatures {
     pub synchronization2: bool,
     pub dynamic_rendering: bool,
     pub multi_draw_indirect: bool,
+    /// The host enabled shaderClipDistance on its logical device.
+    pub shader_clip_distance: bool,
     /// The host enabled textureCompressionBC and permits this runtime to use it.
     pub texture_compression_bc: bool,
     /// VK_EXT_debug_utils was enabled on the instance. Diagnostic builds use
@@ -96,6 +98,12 @@ impl VulkanDevice {
             ));
         }
         selected.multi_draw_indirect = enabled.multi_draw_indirect;
+        if enabled.shader_clip_distance && !selected.shader_clip_distance {
+            return Err(RuntimeError::unsupported(
+                "host shaderClipDistance is unsupported by the physical device",
+            ));
+        }
+        selected.shader_clip_distance = enabled.shader_clip_distance;
         if enabled.texture_compression_bc && !selected.texture_compression_bc {
             return Err(RuntimeError::unsupported(
                 "host textureCompressionBC is unsupported by the physical device",
@@ -202,6 +210,7 @@ mod tests {
                 multi_draw_indirect: original.selected.multi_draw_indirect,
                 // Exercise a host that does not grant use of optional BC formats.
                 texture_compression_bc: false,
+                shader_clip_distance: false,
                 debug_utils: cfg!(feature = "vulkan-diagnostics"),
             },
         };

@@ -16,8 +16,9 @@
 ; TEXCOORD                 1   x           1     NONE    uint   x
 ; TEXCOORD                 2    y          1     NONE    uint    y
 ; SV_Position              0   xyzw        2      POS   float   xyzw
+; SV_ClipDistance          0   xyzw        3  CLIPDST   float   xyzw
 ;
-; shader hash: ae4d26d5cf27799fe6883f3d67844071
+; shader hash: b40c3744afc6a1a1da6a44b638facd1d
 ;
 ; Pipeline Runtime Information:
 ;
@@ -28,10 +29,10 @@
 ; MaximumExpectedWaveLaneCount: 4294967295
 ; UsesViewID: false
 ; SigInputElements: 3
-; SigOutputElements: 4
+; SigOutputElements: 5
 ; SigPatchConstOrPrimElements: 0
 ; SigInputVectors: 3
-; SigOutputVectors[0]: 3
+; SigOutputVectors[0]: 4
 ; SigOutputVectors[1]: 0
 ; SigOutputVectors[2]: 0
 ; SigOutputVectors[3]: 0
@@ -54,6 +55,7 @@
 ; TEXCOORD                 1        nointerpolation
 ; TEXCOORD                 2        nointerpolation
 ; SV_Position              0          noperspective
+; SV_ClipDistance          0                 linear
 ;
 ; Buffer Definitions:
 ;
@@ -121,7 +123,7 @@
 ;
 ; ViewId state:
 ;
-; Number of inputs: 9, outputs: 12
+; Number of inputs: 9, outputs: 16
 ; Outputs dependent on ViewId: {  }
 ; Inputs contributing to computation of Outputs:
 ;   output 0 depends on inputs: { 4, 8 }
@@ -132,4 +134,8 @@
 ;   output 9 depends on inputs: { 0, 1, 2, 8 }
 ;   output 10 depends on inputs: { 0, 1, 2, 8 }
 ;   output 11 depends on inputs: { 8 }
+;   output 12 depends on inputs: { 0, 1, 2, 8 }
+;   output 13 depends on inputs: { 0, 1, 2, 8 }
+;   output 14 depends on inputs: { 0, 1, 2, 8 }
+;   output 15 depends on inputs: { 0, 1, 2, 8 }
 ;

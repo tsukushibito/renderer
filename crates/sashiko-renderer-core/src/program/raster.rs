@@ -304,6 +304,15 @@ pub struct ManagedRasterProgram {
 
 type RasterBinaries<B> = ShaderBinaries<RasterShaderStages<B>, D3D12RasterShaders<B>>;
 
+#[cfg(feature = "vulkan")]
+impl ShaderBinaries<RasterShaderStages, D3D12RasterShaders> {
+    /// Alternate vertex stage with the same ABI, selected when shaderClipDistance is enabled.
+    pub const fn with_clip_distance_vertex(mut self, spirv: &'static [u8]) -> Self {
+        self.clip_distance_vertex = Some(spirv);
+        self
+    }
+}
+
 struct OwnedRasterProgram {
     vertex_stride: u32,
     secondary_vertex_stride: u32,
@@ -619,6 +628,12 @@ impl ManagedRasterProgram {
                 ));
             }
         }
+        #[cfg(feature = "vulkan")]
+        if let Some(vertex) = shaders.clip_distance_vertex
+            && (shaders.vulkan.is_none() || !binary::valid_spirv(vertex, binary::Stage::Vertex))
+        {
+            return Err(ShaderImportError::InvalidSpirv(ShaderStages::VERTEX));
+        }
         if let Some(spirv) = &shaders.vulkan {
             validate_stages(
                 spirv,
@@ -816,6 +831,17 @@ impl ManagedRasterProgram {
     #[cfg(feature = "vulkan")]
     pub(crate) fn spirv(&self) -> Option<RasterShaderStages<&[u8]>> {
         self.descriptor().shaders.vulkan
+    }
+    #[cfg(feature = "vulkan")]
+    pub(crate) fn spirv_for_device(
+        &self,
+        clip_distance: bool,
+    ) -> Option<RasterShaderStages<&[u8]>> {
+        let mut stages = self.spirv()?;
+        if clip_distance && let Some(vertex) = self.descriptor().shaders.clip_distance_vertex {
+            stages.vertex = vertex;
+        }
+        Some(stages)
     }
     #[cfg(all(feature = "d3d12", windows))]
     pub(crate) fn dxil(&self) -> Option<D3D12RasterShaders<&[u8]>> {

@@ -525,6 +525,8 @@ root bufferに対応するraw／structured ABIを使い、typed buffer、push co
 `SamplerDescriptor` のU/V、min/mag、mipを独立にVkSamplerへ写す。mipを使わずmin/magが異なる場合、
 nearest mipと最大LOD 0.25を指定する。縮小時にもminFilterを選べ、参照レベルはViewの先頭に保たれる。
 Deviceごとに要求されたdescriptorだけを作成し、実Deviceの生存sampler数をnative作成前に予約する。
+
+太陽VSMのキャスターは、デバイス作成時に有効化できた `shaderClipDistance` を使い、物理タイルの4辺で三角形をクリップする。アプリ所有のデバイスではホストが実際に有効化した機能を宣言する。未宣言・非対応時にはクリップ距離を含まない頂点シェーダーを使い、フラグメントの境界判定を維持する。両経路ともガターを含むタイルの外に1テクセルの補助領域を確保し、勾配評価後に正確な境界で書き込みを制限する。[RTX 3060の比較](../verification/current.md#vsm-caster)
 一括準備の失敗時は今回追加したhandleを破棄して予約を返し、成功済みのhandleは実行中のWorkと共有する。
 Rasterのtrusted `sampling_pairs` は実際の画像とsamplerの組を示し、linear samplingの能力をその組に対して確認する。
 不変binding集合はsubmit内で一度確認し、作業領域とdescriptor枠を実行枠の再利用時に返す。

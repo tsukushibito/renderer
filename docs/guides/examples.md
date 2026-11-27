@@ -68,6 +68,7 @@ target/release/scene-viewer.exe --api d3d12 "$ref/restored-stills" b --capture "
 $vsm = "build/tasks/sashiko-ya35.8/restored-walk"
 git lfs pull --include="assets/verification/namaqualand-vsm-evidence.zip"
 python tools/namaqualand/restore_near_csm.py "$ref/restored-walk" "$vsm" --archive assets/verification/namaqualand-vsm-evidence.zip
+python tools/namaqualand/partition_shadows.py "$vsm" --primitive 53 --cell-size 4
 target/release/scene-viewer.exe --api vulkan "$vsm" rock --walk-route assets/namaqualand/walk.json
 ```
 
