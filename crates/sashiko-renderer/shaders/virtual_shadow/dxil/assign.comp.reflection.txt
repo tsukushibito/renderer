@@ -10,7 +10,7 @@
 ; Name                 Index   Mask Register SysValue  Format   Used
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; no parameters
-; shader hash: 40840795c7886f1f0b0e5512a41c9e8c
+; shader hash: 072f0270f9de178e7d542275483f82bd
 ;
 ; Pipeline Runtime Information:
 ;
@@ -48,6 +48,13 @@
 ;
 ; }
 ;
+; Resource bind info for mapping
+; {
+;
+;   uint2 $Element;                                   ; Offset:    0 Size:     8
+;
+; }
+;
 ; Resource bind info for table
 ; {
 ;
@@ -62,5 +69,6 @@
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
 ; requests                          texture  struct         r/o      T0             t0     1
 ; counts                            texture  struct         r/o      T1             t1     1
+; mapping                           texture  struct         r/o      T2             t3     1
 ; table                                 UAV  struct         r/w      U0             u2     1
 ;

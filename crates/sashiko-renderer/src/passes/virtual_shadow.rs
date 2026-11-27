@@ -27,6 +27,9 @@ pub const TILE_TEXELS: usize = PAGE_TEXELS + 2 * GUTTER;
 pub const TILES_PER_AXIS: usize = 4096 / TILE_TEXELS;
 pub const PHYSICAL_PAGES: usize = TILES_PER_AXIS * TILES_PER_AXIS;
 pub const TABLE_BYTES: usize = LEVELS * PAGES_PER_AXIS * PAGES_PER_AXIS * 4;
+const MAP_BYTES: usize = PHYSICAL_PAGES * 8;
+const MAP: &str = "virtual shadow rank permutation";
+const RETAIN: &str = "retain resident virtual shadow pages";
 const BLOCK_BYTES: usize = 64 * 4;
 const CAMERA_BYTES: usize = 112 + LEVELS * 16 + 32;
 pub const SLOT_BYTES: usize = PHYSICAL_PAGES * 16;
@@ -148,17 +151,23 @@ fn assignment_programs() -> [ManagedProgram; 2] {
             layout(0, StorageRead, REQUEST_BYTES),
             layout(1, StorageRead, BLOCK_BYTES),
             layout(2, StorageWrite, TABLE_BYTES),
+            layout(3, StorageRead, MAP_BYTES),
         ],
         dispatch: DispatchContract {
             workgroups: DispatchWorkgroups::Fixed([64, 1, 1]),
-            bytes: &[REQUEST_BYTES as u64, BLOCK_BYTES as u64, TABLE_BYTES as u64],
+            bytes: &[
+                REQUEST_BYTES as u64,
+                BLOCK_BYTES as u64,
+                TABLE_BYTES as u64,
+                MAP_BYTES as u64,
+            ],
         },
         shaders: native_shader!("assign"),
     };
     // SAFETY: fixed launch sizes are the complete output domains. Count lanes read
     // a permuted 64-word block each. Assignment lanes read at most 63 previous
     // counts and 64 request words in their block, writing 32 disjoint entries.
-    // Neither shader derives a memory address from buffer contents.
+    // The rank-to-slot lookup clamps the rank to the bounded permutation.
     unsafe {
         [
             ManagedProgram::from_trusted_descriptor(&COUNT_PROGRAM),
@@ -178,6 +187,7 @@ fn slot_program() -> ManagedProgram {
             layout(2, BindingType::StorageRead, BLOCK_BYTES),
             layout(3, BindingType::StorageRead, SLOT_BYTES),
             layout(4, BindingType::StorageWrite, SLOT_BYTES),
+            layout(5, BindingType::StorageRead, MAP_BYTES),
         ],
         dispatch: DispatchContract {
             workgroups: DispatchWorkgroups::Fixed([16, 1, 1]),
@@ -187,6 +197,7 @@ fn slot_program() -> ManagedProgram {
                 BLOCK_BYTES as u64,
                 SLOT_BYTES as u64,
                 SLOT_BYTES as u64,
+                MAP_BYTES as u64,
             ],
         },
         shaders: native_shader!("page_state"),
@@ -194,6 +205,38 @@ fn slot_program() -> ManagedProgram {
     // SAFETY: the fixed dispatch covers all guarded physical slot records. All
     // search indices depend only on bounded loop counters. A rank smaller than
     // a word's population count selects one of its set bits.
+    unsafe { ManagedProgram::from_trusted_descriptor(&DESC) }
+}
+
+#[allow(unsafe_code)]
+fn retain_program() -> ManagedProgram {
+    use BindingType::{StorageRead, StorageWrite, Uniform};
+    static DESC: ComputeProgramDescriptor = ComputeProgramDescriptor {
+        entry: "main",
+        workgroup_size: [64, 1, 1],
+        bindings: &[
+            layout(0, Uniform, CAMERA_BYTES),
+            layout(1, StorageRead, REQUEST_BYTES),
+            layout(2, StorageRead, BLOCK_BYTES),
+            layout(3, StorageRead, SLOT_BYTES),
+            layout(4, StorageWrite, MAP_BYTES),
+        ],
+        dispatch: DispatchContract {
+            workgroups: DispatchWorkgroups::Fixed([1, 1, 1]),
+            bytes: &[
+                CAMERA_BYTES as u64,
+                REQUEST_BYTES as u64,
+                BLOCK_BYTES as u64,
+                SLOT_BYTES as u64,
+                MAP_BYTES as u64,
+            ],
+        },
+        shaders: native_shader!("retain"),
+    };
+    // SAFETY: bounded world coordinates and ranks precede all input reads.
+    // Atomic minimum chooses a unique claimant even for duplicate prior owners.
+    // Disjoint prefix ranges pair exactly one free slot per unmatched rank.
+    // One group synchronizes each phase and initializes the entire permutation.
     unsafe { ManagedProgram::from_trusted_descriptor(&DESC) }
 }
 
@@ -218,15 +261,27 @@ pub fn reserve_table(preparation: &mut Preparation) -> Result<(), GraphError> {
         },
         2,
     )?;
+    preparation.reserve_buffer(
+        BufferDesc {
+            size: MAP_BYTES as u64,
+        },
+        1,
+    )?;
+    preparation.reserve_dispatch(RETAIN, &retain_program())?;
     preparation.reserve_dispatch(TAG, &slot_program())?;
     preparation.reserve_dispatch(COUNT, &count)?;
     preparation.reserve_dispatch(ASSIGN, &assign)?;
     preparation.add_graph_requirements(GraphRequirements {
-        resources: 4,
+        resources: 5,
         passes: 1,
         accesses: 1,
         upload_bytes: SLOT_BYTES,
-        name_bytes: COUNTS.len() + TABLE.len() + SLOTS.len() + EMPTY.len() + RESET.len(),
+        name_bytes: COUNTS.len()
+            + TABLE.len()
+            + SLOTS.len()
+            + EMPTY.len()
+            + RESET.len()
+            + MAP.len(),
         ..Default::default()
     })
 }
@@ -272,21 +327,6 @@ pub fn assign_pages(
             slot(1, counts, BLOCK_BYTES),
         ],
     )?;
-    graph.dispatch(
-        ASSIGN,
-        &assign,
-        &[
-            slot(0, requests.mask, REQUEST_BYTES),
-            slot(1, counts, BLOCK_BYTES),
-            slot(2, table, TABLE_BYTES),
-        ],
-    )?;
-    let slots = graph.buffer(
-        SLOTS,
-        BufferDesc {
-            size: SLOT_BYTES as u64,
-        },
-    )?;
     let previous = match previous {
         Some(previous) => previous,
         None => {
@@ -300,6 +340,39 @@ pub fn assign_pages(
             empty
         }
     };
+    let mapping = graph.buffer(
+        MAP,
+        BufferDesc {
+            size: MAP_BYTES as u64,
+        },
+    )?;
+    graph.dispatch(
+        RETAIN,
+        &retain_program(),
+        &[
+            slot(0, requests.camera, CAMERA_BYTES),
+            slot(1, requests.mask, REQUEST_BYTES),
+            slot(2, counts, BLOCK_BYTES),
+            slot(3, previous, SLOT_BYTES),
+            slot(4, mapping, MAP_BYTES),
+        ],
+    )?;
+    graph.dispatch(
+        ASSIGN,
+        &assign,
+        &[
+            slot(0, requests.mask, REQUEST_BYTES),
+            slot(1, counts, BLOCK_BYTES),
+            slot(2, table, TABLE_BYTES),
+            slot(3, mapping, MAP_BYTES),
+        ],
+    )?;
+    let slots = graph.buffer(
+        SLOTS,
+        BufferDesc {
+            size: SLOT_BYTES as u64,
+        },
+    )?;
     graph.dispatch(
         TAG,
         &slot_program(),
@@ -309,6 +382,7 @@ pub fn assign_pages(
             slot(2, counts, BLOCK_BYTES),
             slot(3, previous, SLOT_BYTES),
             slot(4, slots, SLOT_BYTES),
+            slot(5, mapping, MAP_BYTES),
         ],
     )?;
     Ok(AssignedPages { table, slots })

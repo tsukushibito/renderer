@@ -3,6 +3,7 @@
 StructuredBuffer<uint> requests : register(t1);
 StructuredBuffer<uint> counts : register(t2);
 StructuredBuffer<uint4> previous : register(t3);
+StructuredBuffer<uint2> mapping : register(t5);
 #ifdef __spirv__
 [[vk::ext_decorate(25)]]
 #endif
@@ -40,7 +41,7 @@ uint4 owner(uint rank) {
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= VSM_CAPACITY) return;
-    uint4 current = owner(id.x);
+    uint4 current = owner(mapping[id.x].y);
     // Ignore the previous frame's dirty flag. Its depth is valid as soon as
     // the graph containing the corresponding tile raster has been accepted.
     current.w = current.x != 0 && any(current.xyz != previous[id.x].xyz) ? 1u : 0u;

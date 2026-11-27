@@ -34,6 +34,23 @@
             ]
         },
         "_7" : {
+            "name" : "type.StructuredBuffer.v2uint",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uvec2",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 8
+                }
+            ]
+        },
+        "_9" : {
             "name" : "type.RWStructuredBuffer.uint",
             "members" : [
                 {
@@ -70,6 +87,14 @@
         },
         {
             "type" : "_7",
+            "name" : "mapping",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 3
+        },
+        {
+            "type" : "_9",
             "name" : "table",
             "writeonly" : true,
             "block_size" : 0,

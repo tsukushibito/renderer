@@ -1,6 +1,7 @@
 #include "virtual_shadow_math.hlsli"
 StructuredBuffer<uint> requests : register(t0);
 StructuredBuffer<uint> counts : register(t1);
+StructuredBuffer<uint2> mapping : register(t3);
 #ifdef __spirv__
 [[vk::ext_decorate(25)]]
 #endif
@@ -21,7 +22,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     [unroll]
     for (uint bit = 0; bit < 32; ++bit) {
         bool hit = (mask & (1u << bit)) != 0;
-        table[word * 32 + bit] = hit && rank < VSM_CAPACITY ? rank + 1u : 0u;
+        table[word * 32 + bit] = hit && rank < VSM_CAPACITY ? min(mapping[min(rank, VSM_CAPACITY - 1u)].x, VSM_CAPACITY - 1u) + 1u : 0u;
         if (hit) ++rank;
     }
 }

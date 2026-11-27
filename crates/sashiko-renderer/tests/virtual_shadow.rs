@@ -258,7 +258,8 @@ fn check_requests(mut config: RuntimeConfig) {
                 .copy_from_slice([8u32, 0, 0, 1].map(u32::to_le_bytes).as_flattened());
         }
         if mode == 3 {
-            for (slot, page_x) in [(4, 0), (5, 4), (6, 16)] {
+            // Their current request ranks are 4..7; accepted physical slots must survive that change.
+            for (slot, page_x) in [(104, 0), (105, 4), (106, 16)] {
                 prior_bytes[slot * 16..(slot + 1) * 16]
                     .copy_from_slice([1u32, page_x, 0, 0].map(u32::to_le_bytes).as_flattened());
             }
@@ -282,7 +283,7 @@ fn check_requests(mut config: RuntimeConfig) {
             virtual_shadow::invalidate_casters(&mut graph, &requests, &pages, &changed).unwrap();
             Some(
                 graph
-                    .readback_buffer("three fine owners", pages.slots, 4 * 16, 3 * 16)
+                    .readback_buffer("three fine owners", pages.slots, 104 * 16, 3 * 16)
                     .unwrap(),
             )
         } else {
