@@ -254,6 +254,7 @@ fn top_level(
 #[cfg(feature = "film")]
 pub(super) struct MeshRange {
     pub vertices: u32,
+    pub vertex_stride: u32,
     pub vertex_count: u32,
     pub indices: u32,
     pub triangles: u32,
@@ -285,7 +286,7 @@ pub(super) fn placed_scene(
             .vertex_data(vk::DeviceOrHostAddressConstKHR {
                 device_address: address + u64::from(mesh.vertices),
             })
-            .vertex_stride(20)
+            .vertex_stride(u64::from(mesh.vertex_stride))
             .max_vertex(mesh.vertex_count - 1)
             .index_type(vk::IndexType::UINT32)
             .index_data(vk::DeviceOrHostAddressConstKHR {

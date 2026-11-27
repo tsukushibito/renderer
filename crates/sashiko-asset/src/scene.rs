@@ -11,7 +11,7 @@ pub use display::DisplayScene;
 #[cfg(feature = "renderer")]
 mod optics;
 #[cfg(feature = "renderer")]
-pub use optics::{FilmProjection, FilmRay, SkyRadiance};
+pub use optics::{FilmProjection, FilmRay, FilmRayBasis, SkyRadiance};
 #[cfg(feature = "renderer")]
 mod spatial;
 #[cfg(feature = "renderer")]
@@ -70,6 +70,9 @@ pub struct Attribution {
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct PhysicalScene {
+    /// Source displacement heights are measured in the imported scene's units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub displacement_unit_metres: Option<f32>,
     pub cameras: BTreeMap<String, FilmCamera>,
     pub sky: Option<InfiniteSky>,
     /// Same primitive index as the draw list. Values and images retain the
@@ -77,7 +80,7 @@ pub struct PhysicalScene {
     pub surfaces: Vec<Surface>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct FilmCamera {
     pub lens_radius_metres: f32,
     pub focus_metres: f32,
@@ -193,6 +196,23 @@ impl ScenePackage {
             }
         }
         if let Some(physical) = &self.physical {
+            if physical
+                .displacement_unit_metres
+                .is_some_and(|unit| !unit.is_finite() || unit <= 0.)
+            {
+                return Err(invalid("invalid displacement unit"));
+            }
+            if physical.surfaces.iter().any(|s| {
+                !s.eta.is_finite()
+                    || s.eta <= 0.
+                    || !s.roughness.is_finite()
+                    || s.roughness < 0.
+                    || !s.scale.is_finite()
+                    || s.scale < 0.
+                    || s.reflectance.iter().any(|v| !v.is_finite())
+            }) {
+                return Err(invalid("invalid physical surface parameters"));
+            }
             if physical.surfaces.len() != self.primitives.len()
                 || physical
                     .cameras

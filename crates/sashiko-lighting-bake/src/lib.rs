@@ -6,7 +6,7 @@ mod gpu;
 #[cfg(feature = "vulkan")]
 mod ray_query;
 #[cfg(feature = "film")]
-pub use ray_query::film::{FilmIntersection, FilmTracer};
+pub use ray_query::film::{FilmIntersection, FilmLighting, FilmSampler, FilmTracer};
 
 /// Automatic selection tries available GPU backends and falls back to CPU at
 /// device preparation. Explicit selections propagate setup and execution errors.

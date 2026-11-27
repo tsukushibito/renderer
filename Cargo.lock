@@ -2259,6 +2259,8 @@ name = "sashiko-lighting-bake"
 version = "0.1.0"
 dependencies = [
  "ash",
+ "glam 0.30.10",
+ "half",
  "sashiko-asset",
  "sashiko-renderer",
  "sha2",

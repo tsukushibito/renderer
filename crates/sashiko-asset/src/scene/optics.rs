@@ -11,18 +11,27 @@ pub struct FilmRay {
 
 /// A prepared film, lens and linear-sRGB sensor response.
 pub struct FilmProjection {
-    eye: Vec3,
-    forward: Vec3,
-    right: Vec3,
-    up: Vec3,
-    pixel_scale: f32,
-    centre: Vec2,
-    radius: f32,
-    focus: f32,
+    basis: FilmRayBasis,
     sensor: Mat3,
 }
 
+/// World-space vectors for evaluating the same film projection on a device.
+pub struct FilmRayBasis {
+    pub eye: Vec3,
+    pub forward: Vec3,
+    pub right: Vec3,
+    pub up: Vec3,
+    pub centre: Vec2,
+    pub pixel_scale: f32,
+    pub radius: f32,
+    pub focus: f32,
+}
+
 impl FilmProjection {
+    pub fn ray_basis(&self) -> &FilmRayBasis {
+        &self.basis
+    }
+
     pub fn new(view: &PerspectiveView, film: &FilmCamera, extent: [u32; 2]) -> io::Result<Self> {
         let eye = Vec3::from(view.position);
         let forward = Vec3::from(view.forward)
@@ -47,14 +56,16 @@ impl FilmProjection {
             return Err(invalid("invalid film geometry or exposure"));
         }
         Ok(Self {
-            eye,
-            forward,
-            up,
-            right: if view.mirror_x { -right } else { right },
-            centre,
-            pixel_scale: (0.5 * view.vertical_fov_degrees.to_radians()).tan() / centre.y,
-            radius: film.lens_radius_metres,
-            focus: film.focus_metres,
+            basis: FilmRayBasis {
+                eye,
+                forward,
+                up,
+                right: if view.mirror_x { -right } else { right },
+                centre,
+                pixel_scale: (0.5 * view.vertical_fov_degrees.to_radians()).tan() / centre.y,
+                radius: film.lens_radius_metres,
+                focus: film.focus_metres,
+            },
             sensor: white_balance(film.white_balance_kelvin)? * (film.iso / 100.),
         })
     }
@@ -62,12 +73,13 @@ impl FilmProjection {
     /// Continuous film coordinates have their origin at the top left. The
     /// aperture sample is a point on the unit disk, with zero at lens centre.
     pub fn ray(&self, pixel: Vec2, aperture: Vec2) -> FilmRay {
-        let film = (pixel - self.centre) * self.pixel_scale;
-        let pinhole = self.forward + film.x * self.right - film.y * self.up;
-        let offset = self.radius * (aperture.x * self.right + aperture.y * self.up);
+        let film = (pixel - self.basis.centre) * self.basis.pixel_scale;
+        let pinhole = self.basis.forward + film.x * self.basis.right - film.y * self.basis.up;
+        let offset =
+            self.basis.radius * (aperture.x * self.basis.right + aperture.y * self.basis.up);
         FilmRay {
-            origin: self.eye + offset,
-            direction: (pinhole - offset / self.focus).normalize(),
+            origin: self.basis.eye + offset,
+            direction: (pinhole - offset / self.basis.focus).normalize(),
         }
     }
 
@@ -83,17 +95,20 @@ impl FilmProjection {
         use sashiko_renderer::pbr::{Projection, ViewInput};
         let base = centred.camera;
         let matrix = Mat4::from_cols_array_2d(&base.clip_from_world()).as_dmat4();
-        let offset = (self.radius * (aperture.x * self.right + aperture.y * self.up)).as_dvec3();
-        let focus = self.eye.as_dvec3() + self.forward.as_dvec3() * f64::from(self.focus);
+        let offset = (self.basis.radius
+            * (aperture.x * self.basis.right + aperture.y * self.basis.up))
+            .as_dvec3();
+        let focus =
+            self.basis.eye.as_dvec3() + self.basis.forward.as_dvec3() * f64::from(self.basis.focus);
         let w = (matrix * focus.extend(1.)).w;
         let lens_shift = (matrix * offset.extend(0.)).truncate().truncate() / w;
-        let shift = lens_shift - (pixel_offset / self.centre).as_dvec2();
+        let shift = lens_shift - (pixel_offset / self.basis.centre).as_dvec2();
         let sampled = glam::DMat4::from_translation(shift.extend(0.))
             * matrix
             * glam::DMat4::from_translation(-offset);
         Ok(ViewInput::new(
             sampled.as_mat4().to_cols_array_2d(),
-            (self.eye.as_dvec3() + offset).as_vec3().into(),
+            (self.basis.eye.as_dvec3() + offset).as_vec3().into(),
             base.forward(),
             base.near_far(),
             Projection::Perspective,

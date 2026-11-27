@@ -124,7 +124,7 @@ pub(super) fn sky(package: &Path, name: &str, exr: &Path, png: &Path) -> Pipelin
     write_film(width, height, &linear, exr, png)
 }
 
-fn write_film(
+pub(super) fn write_film(
     width: u32,
     height: u32,
     linear: &[[f32; 3]],

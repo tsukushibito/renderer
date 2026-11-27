@@ -138,9 +138,22 @@ fn main() -> PipelineResult<()> {
     match args.as_slice() {
         #[cfg(feature = "scene-film")]
         [package, view, flag, samples, rect, png] if flag == "--coverage" => {
-            tracing::coverage(Path::new(package),view.to_str().ok_or("invalid view name")?,
+            tracing::capture(Path::new(package),view.to_str().ok_or("invalid view name")?,
                 samples.to_str().ok_or("invalid sample count")?.parse()?,
-                film_rect(rect)?, Path::new(png))
+                film_rect(rect)?, tracing::Output::Coverage(Path::new(png)))
+        },
+        #[cfg(feature = "scene-film")]
+        [package, view, flag, samples, rect, exr, png] if matches!(flag.to_str(), Some("--radiance" | "--direct" | "--indirect" | "--unshadowed")) => {
+            use sashiko_lighting_bake::FilmLighting;
+            let lighting = match flag.to_str() {
+                Some("--direct") => FilmLighting::Direct,
+                Some("--indirect") => FilmLighting::Indirect,
+                Some("--unshadowed") => FilmLighting::Unshadowed,
+                _ => FilmLighting::Combined,
+            };
+            tracing::capture(Path::new(package),view.to_str().ok_or("invalid view name")?,
+                samples.to_str().ok_or("invalid sample count")?.parse()?,
+                film_rect(rect)?, tracing::Output::Radiance {lighting, exr: Path::new(exr), png: Path::new(png)})
         },
         [package, view, flag, samples, rect, exr, png] if flag == "--film-crop" => {
             film::capture(Path::new(package),view.to_str().ok_or("invalid view name")?,
@@ -178,7 +191,7 @@ fn main() -> PipelineResult<()> {
             None,
         ),
         _ => Err(
-            "usage: scene-viewer <package> <view> [--capture output.png | --film N linear.exr display.png | --film-crop N x,y,width,height linear.exr display.png | --sky linear.exr display.png | --visibility | --present-frames N]; scene-film also supports --coverage N x,y,width,height mask.png"
+            "usage: scene-viewer <package> <view> [--capture output.png | --film N linear.exr display.png | --film-crop N x,y,width,height linear.exr display.png | --sky linear.exr display.png | --visibility | --present-frames N]; scene-film also supports --coverage N x,y,width,height mask.png and --radiance N x,y,width,height linear.exr display.png"
                 .into(),
         ),
     }

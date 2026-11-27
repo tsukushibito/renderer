@@ -17,6 +17,7 @@
 /crates/sashiko-renderer-core/tests/support/shaders/dxil/*.json text eol=lf
 /crates/sashiko-renderer-core/tests/support/shaders/*-manifest.json text eol=lf
 /crates/sashiko-lighting-bake/shaders/*.hlsl text eol=lf
+/crates/sashiko-lighting-bake/shaders/*.hlsli text eol=lf
 /crates/sashiko-lighting-bake/shaders/dxil/*.reflection.txt text eol=lf
 /crates/sashiko-lighting-bake/shaders/dxil/*.json text eol=lf
 /crates/sashiko-lighting-bake/shaders/manifest.json text eol=lf

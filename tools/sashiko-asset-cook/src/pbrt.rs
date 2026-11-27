@@ -36,6 +36,7 @@ fn change_basis() -> Mat4 {
 pub(super) struct Options {
     pub metres_per_unit: Option<f32>,
     pub origin: [f32; 3],
+    pub camera_sources: Vec<String>,
     pub region_xz_metres: Option<[f32; 4]>,
 }
 
@@ -111,6 +112,86 @@ impl Command<'_> {
 }
 
 impl Import {
+    fn new(root: &Path) -> Self {
+        Self {
+            root: root.to_owned(),
+            state: State {
+                matrix: Mat4::IDENTITY,
+                material: Arc::default(),
+                reverse: false,
+            },
+            world: false,
+            stack: Vec::new(),
+            active_files: HashSet::new(),
+            definitions: HashMap::new(),
+            definition: None,
+            shapes: Vec::new(),
+            direct: Vec::new(),
+            instances: Vec::new(),
+            textures: Textures::default(),
+            materials: HashMap::new(),
+            notes: Vec::new(),
+            camera: None,
+            film: FilmCamera {
+                lens_radius_metres: 0.,
+                focus_metres: 1e6,
+                iso: 100.,
+                white_balance_kelvin: None,
+                film_extent: [1280, 720],
+                samples_per_pixel: 16,
+            },
+            sky: None,
+        }
+    }
+
+    fn add_camera(
+        &self,
+        file: &Path,
+        origin: Vec3,
+        scale: f32,
+        settings: &mut sashiko_asset::scene::SceneSettings,
+        physical: &mut PhysicalScene,
+    ) -> Result<()> {
+        let (pose, fov) = self.camera.ok_or("missing PBRT camera")?;
+        let name = file
+            .file_stem()
+            .and_then(|v| v.to_str())
+            .ok_or("invalid camera filename")?
+            .to_owned();
+        let [width, height] = self.film.film_extent;
+        let vfov = if height > width {
+            (2. * ((fov.to_radians() / 2.).tan() * height as f32 / width as f32).atan())
+                .to_degrees()
+        } else {
+            fov
+        };
+        settings.views.insert(
+            name.clone(),
+            PerspectiveView {
+                position: change_basis()
+                    .transform_vector3((pose.w_axis.truncate() - origin) * scale)
+                    .into(),
+                forward: change_basis()
+                    .transform_vector3(pose.z_axis.truncate())
+                    .normalize()
+                    .into(),
+                up: change_basis()
+                    .transform_vector3(pose.y_axis.truncate())
+                    .normalize()
+                    .into(),
+                vertical_fov_degrees: vfov,
+                mirror_x: false,
+            },
+        );
+        let mut film = self.film.clone();
+        film.lens_radius_metres *= scale;
+        film.focus_metres *= scale;
+        if physical.cameras.insert(name, film).is_some() {
+            return Err("duplicate physical camera name".into());
+        }
+        Ok(())
+    }
+
     fn path(&self, name: &str) -> Result<PathBuf> {
         let path = self
             .root
@@ -405,73 +486,35 @@ pub(super) fn cook(
     {
         return Err("invalid PBRT origin or region bounds".into());
     }
-    let mut source = Import {
-        root: file.parent().ok_or("missing scene directory")?.to_owned(),
-        state: State {
-            matrix: Mat4::IDENTITY,
-            material: Arc::default(),
-            reverse: false,
-        },
-        world: false,
-        stack: Vec::new(),
-        active_files: HashSet::new(),
-        definitions: HashMap::new(),
-        definition: None,
-        shapes: Vec::new(),
-        direct: Vec::new(),
-        instances: Vec::new(),
-        textures: Textures::default(),
-        materials: HashMap::new(),
-        notes: Vec::new(),
-        camera: None,
-        film: FilmCamera {
-            lens_radius_metres: 0.,
-            focus_metres: 1e6,
-            iso: 100.,
-            white_balance_kelvin: None,
-            film_extent: [1280, 720],
-            samples_per_pixel: 16,
-        },
-        sky: None,
-    };
+    let mut source = Import::new(file.parent().ok_or("missing scene directory")?);
     source.file(file)?;
     if !source.world || !source.stack.is_empty() {
         return Err("incomplete PBRT world or graphics state".into());
     }
-    let (pose, fov) = source.camera.ok_or("missing PBRT camera")?;
-    let name = file
-        .file_stem()
-        .and_then(|v| v.to_str())
-        .ok_or("invalid camera filename")?
-        .to_owned();
-    let [width, height] = source.film.film_extent;
-    let vfov = if height > width {
-        (2. * ((fov.to_radians() / 2.).tan() * height as f32 / width as f32).atan()).to_degrees()
-    } else {
-        fov
+    let mut physical = PhysicalScene {
+        displacement_unit_metres: Some(scale),
+        ..Default::default()
     };
-    scene.settings.views.insert(
-        name.clone(),
-        PerspectiveView {
-            position: change_basis()
-                .transform_vector3((pose.w_axis.truncate() - origin) * scale)
-                .into(),
-            forward: change_basis()
-                .transform_vector3(pose.z_axis.truncate())
-                .normalize()
-                .into(),
-            up: change_basis()
-                .transform_vector3(pose.y_axis.truncate())
-                .normalize()
-                .into(),
-            vertical_fov_degrees: vfov,
-            mirror_x: false,
-        },
-    );
-    source.film.lens_radius_metres *= scale;
-    source.film.focus_metres *= scale;
-    let mut physical = PhysicalScene::default();
-    physical.cameras.insert(name, source.film);
+    source.add_camera(file, origin, scale, &mut scene.settings, &mut physical)?;
+    for filename in &options.camera_sources {
+        let path = source.path(filename)?;
+        if path == file {
+            continue;
+        }
+        // Only the camera preamble is imported; the main file owns the world.
+        let mut camera = Import::new(&source.root);
+        syntax::visit(&fs::read_to_string(&path)?, &path, |cmd| {
+            if camera.world {
+                Ok(())
+            } else {
+                camera.command(&path, cmd)
+            }
+        })?;
+        if !camera.world {
+            return Err(format!("{}: missing WorldBegin", path.display()).into());
+        }
+        camera.add_camera(&path, origin, scale, &mut scene.settings, &mut physical)?;
+    }
     physical.sky = source
         .sky
         .map(|(path, transform, s)| {

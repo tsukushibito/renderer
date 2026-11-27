@@ -102,6 +102,19 @@ target/release/scene-viewer.exe build/full-package view-0 --coverage 512 1420,52
 python tools/landscape/coverage.py $scene build/landscape --candidate-mask build/canopy.png
 ```
 
+同じ `scene-film` 構成で、原形状に光を当てた静止画を撮影できます。Landscape のレシピは `pbrt.camera_sources` に列挙した5個のカメラと各フィルムを共通のパッケージに収録します。樹皮の変位を含む古いパッケージは、上記の `scene` コマンドで再度 cook すると変位の単位も保存されます。
+
+```powershell
+$out = 'build/tasks/renderer-ief4.8'
+New-Item -ItemType Directory -Force $out | Out-Null
+target/release/scene-viewer.exe build/full-package view-0 --radiance 512 0,0,3840,2160 "$out/view-0.exr" "$out/view-0.png"
+target/release/scene-viewer.exe build/full-package view-4 --radiance 512 2420,1760,64,64 "$out/water.exr" "$out/water.png"
+python tools/landscape/frame_gates.py "$scene/reference/landscape/view-0.png" tools/landscape/view-0-frame-gates.json --evaluate "$out/view-0.png"
+python tools/landscape/calibrate.py $scene $out --capture "$out/view-0.png"
+```
+
+`--direct`、`--indirect`、`--unshadowed` は `--radiance` と同じ引数を取ります。direct は空と最初の散乱まで、indirect は2回以上の散乱を通った光です。線形 EXR では両者の和を全光と比較できます。unshadowed は最初の面までの被覆・材質を保ったまま、その面から空への遮蔽を外します。PNG は各出力を個別に sRGB へ現像します。
+
 Windows で実際の描画命令を数える場合は、Vulkan SDK の API dump と Python の `psutil` を準備し、製品構成の実行ファイルを次のように起動します。1回目で所要時間とプロセスのメモリを測り、2回目で各キュー送信の直接描画命令とヒープの確保・解放を記録します。トレースには新しいファイル名を指定します。
 
 ```powershell

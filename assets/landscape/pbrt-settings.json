@@ -2,6 +2,7 @@
   "views": {},
   "pbrt": {
     "metres_per_unit": 0.01,
+    "camera_sources": ["view-0.pbrt", "view-1.pbrt", "view-2.pbrt", "view-3.pbrt", "view-4.pbrt"],
     "origin": [-2138.9744, 28.89301, -1707.7404]
   },
   "sun_direction": [-0.55, 0.78, 0.30],
