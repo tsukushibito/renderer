@@ -435,7 +435,9 @@ jobs:
         if: matrix.backend == 'vulkan,d3d12,presentation'
         run: cargo clippy --locked --workspace --all-targets --no-default-features --features vulkan,d3d12,presentation,memory-profiling -- -D warnings
       - name: Exercise capture history and backpressure without a desktop
-        if: matrix.backend == 'vulkan,d3d12,presentation'
+        # Keep both native features in the test binary. The presentation lane
+        # finishes its existing checks earlier than the combined-backend lane.
+        if: matrix.backend == 'presentation'
         run: >-
           cargo test --locked -p survivor --no-default-features
           --features vulkan,d3d12,presentation,diagnostics --bin survivor -- diagnostics::
