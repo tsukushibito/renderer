@@ -106,6 +106,60 @@ pub struct SceneStreaming {
     pub transfer_bytes: u64,
     pub max_resident: usize,
     pub details: Vec<StreamDetail>,
+    #[serde(default)]
+    pub reservation: StreamReservation,
+}
+
+/// Optional initial GPU resource classes for the authored area of interest.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StreamReservation {
+    pub buffers: Vec<u64>,
+    pub images: Vec<StreamImage>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StreamImage {
+    pub width: u32,
+    pub height: u32,
+    pub levels: u32,
+    pub srgb: bool,
+}
+
+impl StreamReservation {
+    fn fits(&self, bytes: u64, slots: usize) -> bool {
+        if self.buffers.len() > slots.saturating_mul(4)
+            || self.images.len() > slots.saturating_mul(4)
+        {
+            return false;
+        }
+        let mut room = bytes;
+        for &size in &self.buffers {
+            if size == 0 || size > room {
+                return false;
+            }
+            room -= size;
+        }
+        for img in &self.images {
+            if img.width == 0
+                || img.height == 0
+                || img.levels == 0
+                || img.levels > img.width.max(img.height).ilog2() + 1
+            {
+                return false;
+            }
+            for level in 0..img.levels {
+                let pixels = u64::from((img.width >> level).max(1))
+                    * u64::from((img.height >> level).max(1));
+                if pixels > room / 4 {
+                    return false;
+                }
+                room -= pixels * 4;
+            }
+        }
+        true
+    }
 }
 
 #[cfg(feature = "metrics")]
@@ -313,6 +367,9 @@ impl ScenePackage {
             if stream.resident_bytes == 0
                 || stream.transfer_bytes < 64
                 || stream.max_resident == 0
+                || !stream
+                    .reservation
+                    .fits(stream.resident_bytes, stream.max_resident)
                 || stream.details.is_empty()
                 || stream.details.iter().any(|detail| {
                     detail.primitive >= self.primitives.len()

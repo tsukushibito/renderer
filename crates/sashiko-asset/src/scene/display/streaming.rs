@@ -26,6 +26,19 @@ use std::{
 };
 
 type Pair = (MeshHandle, MaterialHandle);
+// Called only when admitting a new immutable version. Counts matter when several
+// simultaneously live images or buffers use the same native resource class.
+fn covers<T: PartialEq>(prepared: &[T], requested: &[T]) -> bool {
+    let mut available = prepared.iter().collect::<Vec<_>>();
+    requested.iter().all(|desc| {
+        if let Some(index) = available.iter().position(|&item| item == desc) {
+            available.swap_remove(index);
+            true
+        } else {
+            false
+        }
+    })
+}
 struct Member {
     object: usize,
     center: Vec3,
@@ -81,6 +94,8 @@ pub(super) struct Stream {
     bytes: u64,
     transfer: u64,
     images: Vec<ImageDesc>,
+    prepared_buffers: Vec<BufferDesc>,
+    prepared_images: Vec<ImageDesc>,
     samplers: Vec<SamplerDescriptor>,
     change: Option<Change>,
     #[cfg(feature = "metrics")]
@@ -259,6 +274,26 @@ impl Stream {
             bytes: config.resident_bytes,
             transfer: config.transfer_bytes,
             images: Vec::new(),
+            prepared_buffers: config
+                .reservation
+                .buffers
+                .into_iter()
+                .map(|size| BufferDesc { size })
+                .collect(),
+            prepared_images: config
+                .reservation
+                .images
+                .into_iter()
+                .map(|img| {
+                    let mut desc = if img.srgb {
+                        ImageDesc::rgba8_srgb(img.width, img.height)
+                    } else {
+                        ImageDesc::rgba8(img.width, img.height)
+                    };
+                    desc.mip_levels = img.levels;
+                    desc
+                })
+                .collect(),
             samplers: Vec::new(),
             change: None,
             #[cfg(feature = "metrics")]
@@ -339,6 +374,7 @@ impl Stream {
         samplers: &[SamplerDescriptor],
     ) {
         self.images = images.to_vec();
+        self.prepared_images.extend_from_slice(images);
         self.samplers = samplers.to_vec();
         for group in &mut self.groups {
             let cell = |p: &Member| (p.center / 8.).floor().as_ivec3().to_array();
@@ -361,6 +397,9 @@ impl Stream {
                 first = end;
             }
         }
+    }
+    pub(super) fn initial_classes(&self) -> (&[BufferDesc], &[ImageDesc]) {
+        (&self.prepared_buffers, &self.prepared_images)
     }
     pub(super) fn preload_live(&self, assets: &mut SceneAssets<'_>) {
         for group in &self.groups {
@@ -419,6 +458,9 @@ impl Stream {
         });
         let mut room = self.bytes;
         let mut slots = self.assets;
+        let loading = self.change.as_ref().map(|change| match change {
+            Change::Read(i, _) | Change::Upload(i, _) | Change::Register(i, _, _) => *i,
+        });
         for texture in &mut self.textures {
             texture.selected = false;
         }
@@ -431,7 +473,7 @@ impl Stream {
                     break;
                 }
                 let eligible = if retain_cached {
-                    g.live.is_some()
+                    g.live.is_some() || loading == Some(index)
                 } else {
                     full || g.weight >= 0.8
                 };
@@ -610,16 +652,22 @@ impl Stream {
                             images.push(img.texture_desc(slot)?);
                         }
                     }
-                    match renderer.replace_asset_reservations(
-                        "scene texture",
-                        &buffers,
-                        &images,
-                        &self.samplers,
-                    ) {
-                        Ok(Poll::Ready(())) => {}
-                        Ok(Poll::Pending) => return Ok(Some(Change::Upload(i, d))),
-                        Err(e) if retryable(&e) => return Ok(Some(Change::Upload(i, d))),
-                        Err(e) => return Err(e.into()),
+                    if !covers(&self.prepared_buffers, &buffers)
+                        || !covers(&self.prepared_images, &images)
+                    {
+                        match renderer.replace_asset_reservations(
+                            "scene texture",
+                            &buffers,
+                            &images,
+                            &self.samplers,
+                        ) {
+                            Ok(Poll::Ready(())) => {}
+                            Ok(Poll::Pending) => return Ok(Some(Change::Upload(i, d))),
+                            Err(e) if retryable(&e) => return Ok(Some(Change::Upload(i, d))),
+                            Err(e) => return Err(e.into()),
+                        }
+                        self.prepared_buffers = buffers;
+                        self.prepared_images = images;
                     }
                     d.reserved = true;
                 }
@@ -629,6 +677,7 @@ impl Stream {
                         && d.uploaded[k].is_none()
                     {
                         let desc = img.texture_desc(slot)?;
+                        renderer.check_texture_support(desc, true)?;
                         let (frame, owner) = match renderer.upload_texture_mips(
                             "scene texture",
                             desc,
@@ -772,6 +821,26 @@ impl Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn class_reservation_counts_overlapping_native_objects() {
+        assert!(covers(&[3, 7, 3], &[3, 3, 7]));
+        assert!(!covers(&[3, 7, 3], &[7, 7]));
+        let mut plan = crate::scene::StreamReservation {
+            buffers: vec![64],
+            images: vec![crate::scene::StreamImage {
+                width: 8,
+                height: 2,
+                levels: 4,
+                srgb: true,
+            }],
+        };
+        assert!(plan.fits(156, 1));
+        assert!(!plan.fits(155, 1));
+        plan.images[0].width = u32::MAX;
+        plan.images[0].height = u32::MAX;
+        assert!(!plan.fits(u64::MAX, 1));
+    }
 
     #[test]
     fn transfer_budget_selects_complete_rectangular_mip_suffix() {

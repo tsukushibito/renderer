@@ -457,17 +457,15 @@ impl WindowRenderer {
         draw: impl FnOnce(&mut Frame<'_>) -> PipelineResult<()>,
     ) -> PipelineResult<PresentOutcome> {
         self.presenter.poll()?;
+        self.retire_graph(Duration::ZERO)?;
         if self.presenter.has_pending_frame() {
-            return Ok(self
-                .presenter
-                .present_frame(self.renderer.drawing.runtime())?);
+            return self.present_pending();
         }
         // Leave one opportunity to change the working set after the presented
         // frame retires. A canceled request cannot suppress a subsequent draw.
         if std::mem::take(&mut self.defer_for_asset_change) {
             return Ok(PresentOutcome::NotReady);
         }
-        self.retire_graph(Duration::ZERO)?;
         // Asset transfers share the native execution slots with window frames.
         if self.accepted.len() >= self.max_accepted
             || self.renderer.drawing.runtime().pending_frames() >= self.max_accepted
@@ -517,8 +515,26 @@ impl WindowRenderer {
         };
         self.accepted.push_back(receipt.id());
         self.presenter.queue_frame(&mut receipt)?;
-        Ok(self
+        self.present_pending()
+    }
+
+    fn present_pending(&mut self) -> PipelineResult<PresentOutcome> {
+        use sashiko_renderer_core::capacity::{CapacityRecovery, RuntimeCapacityKind};
+        match self
             .presenter
-            .present_frame(self.renderer.drawing.runtime())?)
+            .present_frame(self.renderer.drawing.runtime())
+        {
+            // The Vulkan blit and asset transfers can still own native execution
+            // slots after a render result is ready. Keep the queued image intact.
+            Err(e)
+                if e.capacity().is_some_and(|c| {
+                    c.resource == RuntimeCapacityKind::ExecutionSlots
+                        && c.recovery == CapacityRecovery::ReleaseOwners
+                }) =>
+            {
+                Ok(PresentOutcome::NotReady)
+            }
+            result => Ok(result?),
+        }
     }
 }

@@ -547,14 +547,17 @@ impl DisplayScene {
             .iter()
             .flat_map(|(_, p, _)| MaterialSlot::ALL.map(|s| *s.texture(&p.samplers)))
             .collect();
+        let (buffers, initial_images) = if let Some(stream) = &mut self.stream {
+            stream.base_reservations(&descs, &samplers);
+            stream.initial_classes()
+        } else {
+            (&[][..], descs.as_slice())
+        };
         if renderer
-            .replace_asset_reservations("scene texture", &[], &descs, &samplers)?
+            .replace_asset_reservations("scene texture", buffers, initial_images, &samplers)?
             .is_pending()
         {
             return Err("scene upload requires an idle renderer".into());
-        }
-        if let Some(stream) = &mut self.stream {
-            stream.base_reservations(&descs, &samplers);
         }
         for (reference, (desc, object)) in descriptors {
             let image = object.image()?;

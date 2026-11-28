@@ -25,7 +25,7 @@ python -B tools/namaqualand/package_windows.py "$vsm" target/release/scene-viewe
 メッシュと画像を段階的に読む開発用シーンは、固定常駐の歩行パッケージから新しい出力先へ生成する。既定では最低詳細の画像は最長辺512 px、原型の追加予算は768 MiB・40件、転送予算は1回32 MiB。動作の比較には両パッケージに同じカメラ経路を渡す。
 
 ```powershell
-python -B tools/namaqualand/prepare_stream.py "$vsm" build/tasks/sashiko-ief4.10/stream
+python -B tools/namaqualand/prepare_stream.py "$vsm" build/tasks/sashiko-ief4.10/stream --route assets/namaqualand/walk.json
 target/release/scene-viewer.exe --api d3d12 build/tasks/sashiko-ief4.10/stream rock --walk-route assets/namaqualand/walk.json
 ```
 

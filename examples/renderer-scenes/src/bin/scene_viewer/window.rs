@@ -124,7 +124,19 @@ impl Display {
             }
             outcome
         } else {
-            self.renderer.draw(draw)?
+            match self.renderer.draw(draw) {
+                Ok(outcome) => outcome,
+                Err(error) if self.benchmark && error
+                    .downcast_ref::<sashiko_renderer::core::runtime::ExecutionError>()
+                    .and_then(|e| e.capacity())
+                    .is_some_and(|c| c.resource == sashiko_renderer::core::capacity::RuntimeCapacityKind::TimingSamples
+                        && c.recovery == sashiko_renderer::core::capacity::CapacityRecovery::ReleaseResults) => {
+                    // The benchmark drains presentation samples after every draw
+                    // attempt. The presenter retains the accepted image for retry.
+                    PresentOutcome::NotReady
+                }
+                Err(error) => return Err(error),
+            }
         };
         if matches!(
             outcome,
