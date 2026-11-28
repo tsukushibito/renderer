@@ -124,6 +124,22 @@ $script = (Resolve-Path "tools/namaqualand/prepare_ue_sky_reference.py").Path
 
 静止画は `/Game/Photometry39z5/AnchorsSky`、30秒歩行は `/Game/Photometry39z5/WalkSky` を開く。各レベルでは元のシーケンスを複製先のカメラにバインドし、半径250 mのRoglandの空が入るようSky Lightの `Sky Distance Threshold` を10,000 cmにして再キャプチャする。太陽は6 lx。以前の画質・影・FPSを再現する場合は元のレベルを使う。[同一9視点での測光と歩行比較](../verification/current.md#namaqualand-sky-light)
 
+<a id="namaqualand-contact"></a>
+
+### Namaqualandの岩と地面を同じ形状で比較する
+
+植物や照明を同じ視点で見比べるときは、上記の空を設定したレベルから、岩・崖・地面の19メッシュを元の詳細度で描く比較用レベルを作る。静止画には `/Game/ContactGeometry/AnchorsExact`、歩行には `/Game/ContactGeometry/WalkExact` を使う。UEでは比較用に複製したStatic MeshとFoliage Typeに元の配置を引き継ぐ。Sashikoでは同じ対象だけ簡略メッシュへの切り替えを外す。
+
+```powershell
+$script = (Resolve-Path "tools/namaqualand/prepare_ue_contact_reference.py").Path
+& "C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" $project -run=pythonscript "-script=$script" -AllowCommandletRendering -dx12 -RenderOffscreen -unattended -nop4
+$aligned = "build/tasks/sashiko-bgq3/aligned-sashiko"
+python tools/namaqualand/prepare_contact_reference.py build/tasks/sashiko-ya35.12/reduced-walk-vsm build/tasks/sashiko-ya35.5/source/WalkMeshes.gltf $aligned
+target/release/scene-viewer.exe --api vulkan $aligned rock
+```
+
+Sashikoの生成先には新しいディレクトリを指定する。入力は焼き込み済みのVSMパッケージと、それと同じプリミティブ順を持つ元のglTF。撮影では植物のLOD、マテリアル、ライトマップ、プローブ、太陽とカメラの設定を引き継ぐ。[接地境界の検証と比較写真](../verification/current.md#namaqualand-contact)
+
 <a id="landscape"></a>
 
 ## Landscape の草原を描画する
