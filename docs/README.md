@@ -12,7 +12,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 
 | 読みたいこと | 入口 |
 |---|---|
-| Namaqualand の屋外区画を歩いて植生 LOD を比較する | [準備・操作](guides/examples.md#namaqualand)・[UE5との影と性能の比較](verification/current.md#vsm-walk)・[太陽光と明暗差の測光](verification/current.md#namaqualand-photometry)・[ストリーミング](verification/current.md#namaqualand-residency) |
+| Namaqualand の屋外区画を歩いて植生 LOD を比較する | [準備・操作](guides/examples.md#namaqualand)・[UE5との影と性能の比較](verification/current.md#vsm-walk)・[太陽光の測光](verification/current.md#namaqualand-photometry)・[空の照明と明暗差](verification/current.md#namaqualand-sky-light)・[ストリーミング](verification/current.md#namaqualand-residency) |
 | ブラウザで Bistro と Sponza を開く、Canvas に組み込む | [WebGPU ビューアーの起動と操作](guides/examples.md#webgpu-scenes) |
 | 人と LLM がゲームとエンジンを一緒に改修し、複数作品で使うには | [Sashiko ゲームエンジン設計](design/game-engine.md)（作品ごとの組み込み、プレイ評価、編集データ、受け入れ条件） |
 | プレイ中の個体を人と LLM が同じ時点で調べるには | [ライブインスペクタの設計](design/live-inspector.md) |

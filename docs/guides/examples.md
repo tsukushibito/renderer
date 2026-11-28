@@ -110,6 +110,20 @@ python tools/namaqualand/partition_shadows.py "$vsm" --primitive 53 --cell-size 
 target/release/scene-viewer.exe --api vulkan "$vsm" rock --walk-route assets/namaqualand/walk.json
 ```
 
+<a id="namaqualand-ue-sky"></a>
+
+### UE5でNamaqualandの空を照明に使う
+
+9視点の影比較用レベル `/Game/Ya35ShadowAcceptance/Anchors` と固定時刻の歩行レベル `/Game/VSMComparisonCapture/NamaqualandWalk` を用意した参照プロジェクトで実行する。エディターと撮影プロセスを閉じてから、Python Editor Script Pluginを有効にしたUE5のコマンドレットで比較用レベルを作る。
+
+```powershell
+$project = (Resolve-Path "build/tasks/sashiko-ya35/NamaqualandReference/NamaqualandReference.uproject").Path
+$script = (Resolve-Path "tools/namaqualand/prepare_ue_sky_reference.py").Path
+& "C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" $project -run=pythonscript "-script=$script" -AllowCommandletRendering -dx12 -RenderOffscreen -unattended -nop4
+```
+
+静止画は `/Game/Photometry39z5/AnchorsSky`、30秒歩行は `/Game/Photometry39z5/WalkSky` を開く。各レベルでは元のシーケンスを複製先のカメラにバインドし、半径250 mのRoglandの空が入るようSky Lightの `Sky Distance Threshold` を10,000 cmにして再キャプチャする。太陽は6 lx。以前の画質・影・FPSを再現する場合は元のレベルを使う。[同一9視点での測光と歩行比較](../verification/current.md#namaqualand-sky-light)
+
 <a id="landscape"></a>
 
 ## Landscape の草原を描画する
