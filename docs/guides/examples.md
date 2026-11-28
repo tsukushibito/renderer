@@ -10,6 +10,30 @@
 
 Poly Haven の Blender シーンから岩場・花畑・遠景の低木を含む区画を作る。素材は CC0。配布ページの「Download the Blender Scene」から取得できる。公式 UE5 ショーケースは景観の比較に使う。[公式素材](https://polyhaven.com/collections/namaqualand)・[ライセンス](https://polyhaven.com/license)・[ショーケースと画像](https://www.fab.com/listings/295ed897-fe78-4711-a583-d9b80fde554a)
 
+### Windows配布版
+
+Windows 11 x64 と D3D12 対応 GPU で `Start-Namaqualand.exe` を起動する。初回は約643 MiBのシーンとビューアをダウンロードし、SHA-256を照合して展開する。キャッシュ先は `%LOCALAPPDATA%\Sashiko\Namaqualand`。次回から同じ版をオフラインで起動できる。同じフォルダに公開ZIPを置くと初回もローカルからインストールする。空き容量は取得中のZIPと展開先の両方に必要で、3 GiBを目安とする。比較機はRTX 3060 12 GB。既定はD3D12で、Vulkanには `Start-Namaqualand.exe --vulkan` を使う。素材の出典・改変・利用条件はZIPの `attribution.json`、依存ライブラリは `notices/` に収録した。[版付き配布ファイル](https://github.com/tsukushibito/sashiko/releases/tag/namaqualand-v1)
+
+### アプリに組み込む
+
+既存アプリが所有するWindowsウィンドウを `DisplayScene::window` に渡す。次のコードは作成済みイベントループの描画ハンドラーで使う公開APIを示す。`pose` はパッケージの名前付きビューまたはアプリから渡した `PerspectiveView`、`extent` はクライアント領域のピクセル寸法。
+
+```rust
+let (mut scene, mut renderer) = DisplayScene::window(
+    &package, "rock", extent, window.clone(), backend,
+)?;
+let pose = scene.settings.views["rock"];
+renderer.set_camera(pose.camera(extent, [0.02, 1500.0])?.camera);
+renderer.draw(|frame| {
+    scene.select_lods(&pose, frame.scene_view().extent[1]);
+    scene.draw(frame)
+})?;
+```
+
+イベントループではサイズ変更を `renderer.resize(extent, scene.assets())` に通知し、準備中のフレームは次の描画イベントで再試行する。終了時は `renderer.into_runtime()` と `scene.release(&mut runtime)` で資源を解放する。[入力・リサイズ・終了処理を含む実装](../../examples/renderer-scenes/src/bin/scene_viewer/window.rs)
+
+### 元素材からの再生成
+
 Windows、Vulkan、Python 3.11、Node.js を使う。ZIP を `build/namaqualand-cache/namaqualand.zip` に置き、初回のみハッシュを照合して展開し、ツールを用意する。
 
 ```powershell
