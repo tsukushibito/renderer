@@ -1711,7 +1711,7 @@ impl VulkanRuntime {
         let mut textured_raster = false;
         for &pass in &storage.order {
             let count = match &storage.passes[pass].operation {
-                Operation::Raster { batches, depth, .. } => {
+                Operation::Raster { batches, .. } => {
                     uses_raster = true;
                     let count = storage
                         .raster_batches(batches)
@@ -1720,10 +1720,7 @@ impl VulkanRuntime {
                         // A batch contains at least one draw and uses one Program ABI.
                         .filter(|draws| !draws[0].bindings.is_empty())
                         .flatten()
-                        .filter(|draw| {
-                            work.raster_bindings
-                                .require(&draw.bindings, depth.is_some())
-                        })
+                        .filter(|draw| work.raster_bindings.require(&draw.bindings))
                         .count();
                     textured_raster |= count != 0;
                     count

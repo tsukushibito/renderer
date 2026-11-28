@@ -102,6 +102,13 @@ struct PlacementLod {
 }
 
 impl DisplayScene {
+    /// Select the original camera meshes for a full-detail comparison.
+    pub fn select_full_detail(&mut self) {
+        for lod in &self.lods {
+            self.objects[lod.object].mesh = lod.full;
+        }
+    }
+
     /// Choose from the geometry prepared at scene load. The same draw is used for
     /// the visible surface and its directional shadow in this frame.
     pub fn select_lods(&mut self, view: &PerspectiveView, height: u32) {
@@ -192,13 +199,18 @@ impl DisplayScene {
         backend: sashiko_renderer::core::runtime::RuntimeConfig,
     ) -> PipelineResult<(Self, sashiko_renderer::WindowRenderer)> {
         let mut scene = Self::open(directory, view, extent, None)?;
+        let frames = if scene.settings.virtual_shadows {
+            std::num::NonZeroUsize::new(2).unwrap()
+        } else {
+            std::num::NonZeroUsize::MIN
+        };
         let mut renderer = sashiko_renderer::WindowRenderer::new_configured(
             window,
             backend,
             scene.camera,
             scene.config(),
             scene.assets(),
-            std::num::NonZeroUsize::MIN,
+            frames,
             |_| Ok(()),
         )?;
         scene.upload_materials(&mut renderer)?;

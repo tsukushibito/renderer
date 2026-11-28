@@ -56,11 +56,13 @@ impl Bounds {
     }
 }
 
-/// Four-cascade directional shadow settings. Bias and receiver normal offset
-/// are measured in world-space texels at the current cascade.
+/// Directional shadow settings. Depth bias and receiver normal offset are
+/// measured in world-space texels at the selected cascade or virtual level.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowSettings {
     pub resolution: u32,
+    /// Positive levels request coarser virtual pages at the same distance.
+    pub virtual_lod_bias: i8,
     pub distance: f32,
     pub split_lambda: f32,
     pub blend_fraction: f32,
@@ -75,6 +77,7 @@ impl Default for ShadowSettings {
     fn default() -> Self {
         Self {
             resolution: 2048,
+            virtual_lod_bias: 0,
             distance: 120.0,
             split_lambda: 0.6,
             blend_fraction: 0.1,
@@ -88,7 +91,8 @@ impl Default for ShadowSettings {
 
 impl ShadowSettings {
     pub(crate) fn validate(&self) -> Result<(), GraphError> {
-        if self.resolution < 8
+        if !(-7..=7).contains(&self.virtual_lod_bias)
+            || self.resolution < 8
             || !self.distance.is_finite()
             || self.distance <= 0.0
             || !(0.0..=1.0).contains(&self.split_lambda)

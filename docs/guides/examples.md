@@ -33,7 +33,7 @@ target/release/sashiko-asset-cook.exe scene "$task/gltf/section.gltf" "$task/rec
 target/release/scene-viewer.exe "$task/package" rock --walk-route assets/namaqualand/walk.json
 ```
 
-R で30秒の固定経路と自由移動を切り替える。自由移動では WASD で前後左右へ移動し、矢印キーで視線を変える。Esc で終了する。静止画の視点名は `rock`、`flowers`、`vista`。最高詳細は書き出した各配置の元形状、通常は同じ位置・材質・テクスチャで距離に応じて簡略形状を使う。どちらも対象資産を起動時に常駐させる。
+R で30秒の固定経路と自由移動を切り替える。Home で初期視点に戻り、L で通常と最高詳細を切り替える。F12 で現在のカメラの PNG を作業ディレクトリに保存する。自由移動では WASD で前後左右へ移動し、矢印キーで視線を変える。Esc で終了する。静止画の視点名は `rock`、`flowers`、`vista`。最高詳細は書き出した各配置の元形状、通常は同じ位置・材質・テクスチャで距離に応じて簡略形状を使う。どちらも対象資産を起動時に常駐させる。
 
 ```powershell
 $viewer = "target/release/scene-viewer.exe"
@@ -68,7 +68,7 @@ target/release/scene-viewer.exe --api d3d12 "$ref/restored-stills" b --capture "
 $vsm = "build/tasks/sashiko-ya35.8/restored-walk"
 git lfs pull --include="assets/verification/namaqualand-vsm-evidence.zip"
 python tools/namaqualand/restore_near_csm.py "$ref/restored-walk" "$vsm" --archive assets/verification/namaqualand-vsm-evidence.zip
-python tools/namaqualand/partition_shadows.py "$vsm" --primitive 53 --cell-size 4
+python tools/namaqualand/partition_shadows.py "$vsm" --primitive 53 --cell-size 4 --shadow-lods 65 38 64 48 --lod-bias 1
 target/release/scene-viewer.exe --api vulkan "$vsm" rock --walk-route assets/namaqualand/walk.json
 ```
 

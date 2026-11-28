@@ -894,12 +894,7 @@ impl GraphWork {
                             }
                         }
                     }
-                    Operation::Raster {
-                        batches,
-                        draws,
-                        depth,
-                        ..
-                    } => {
+                    Operation::Raster { batches, draws, .. } => {
                         #[cfg(feature = "tracy")]
                         let _span = tracy_client::Client::running().map(|client| {
                             client.span(
@@ -953,40 +948,32 @@ impl GraphWork {
                                         })?;
                                 }
                                 let sets = if let Some(key) = binding_layout {
-                                    raster_bindings.resolve(
-                                        &draw.bindings,
-                                        depth.is_some(),
-                                        key,
-                                        |validate_sampled| {
-                                            if validate_sampled {
-                                                validate_sampled_operands(
-                                                    program.bindings(),
-                                                    storage.raster_bindings(&draw.bindings),
-                                                    physical,
-                                                    Some(program.sampling_pairs()),
-                                                )?;
-                                            }
-                                            #[cfg(feature = "tracy")]
-                                            let _span =
-                                                tracy_client::Client::running().map(|client| {
-                                                    client.span(
-                                                        tracy_client::span_location!(
-                                                            "renderer.vulkan.raster.descriptors"
-                                                        ),
-                                                        0,
-                                                    )
-                                                });
-                                            let operands = program
-                                                .bindings()
-                                                .iter()
-                                                .copied()
-                                                .zip(storage.raster_bindings(&draw.bindings))
-                                                .map(|(slot, operand)| {
-                                                    (slot, native_raster_binding(operand, physical))
-                                                });
-                                            bindings.as_mut().unwrap().raster(key, operands)
-                                        },
-                                    )?
+                                    raster_bindings.resolve(&draw.bindings, || {
+                                        validate_sampled_operands(
+                                            program.bindings(),
+                                            storage.raster_bindings(&draw.bindings),
+                                            physical,
+                                            Some(program.sampling_pairs()),
+                                        )?;
+                                        #[cfg(feature = "tracy")]
+                                        let _span = tracy_client::Client::running().map(|client| {
+                                            client.span(
+                                                tracy_client::span_location!(
+                                                    "renderer.vulkan.raster.descriptors"
+                                                ),
+                                                0,
+                                            )
+                                        });
+                                        let operands = program
+                                            .bindings()
+                                            .iter()
+                                            .copied()
+                                            .zip(storage.raster_bindings(&draw.bindings))
+                                            .map(|(slot, operand)| {
+                                                (slot, native_raster_binding(operand, physical))
+                                            });
+                                        bindings.as_mut().unwrap().raster(key, operands)
+                                    })?
                                 } else {
                                     [vk::DescriptorSet::null();
                                         crate::program::MAX_RASTER_BIND_GROUPS]

@@ -21,6 +21,11 @@ struct Display {
     route: Option<Route>,
     playback: Option<Instant>,
     benchmark: bool,
+    full_detail: bool,
+    camera_cut: bool,
+    capture_requested: bool,
+    capture_prepared: bool,
+    capture_pending: bool,
 }
 
 impl Display {
@@ -53,9 +58,39 @@ impl Display {
         if let (Some(route), Some(start)) = (&self.route, self.playback) {
             self.view = route.pose(start.elapsed().as_secs_f32() % route.duration());
         }
-        self.renderer
-            .set_camera(self.view.camera(extent, [0.02, 1500.])?.camera);
-        let outcome = self.renderer.draw(|frame| {
+        let camera = self.view.camera(extent, [0.02, 1500.])?.camera;
+        if std::mem::take(&mut self.camera_cut) {
+            self.renderer.cut_camera(camera)?;
+        } else {
+            self.renderer.set_camera(camera);
+        }
+        if self.capture_pending
+            && let Some(image) = self.renderer.take_capture()?
+        {
+            let lut: [u8; 256] = std::array::from_fn(|i| {
+                let x = i as f32 / 255.;
+                let encoded = if x <= 0.0031308 {
+                    x * 12.92
+                } else {
+                    1.055 * x.powf(1. / 2.4) - 0.055
+                };
+                (255. * encoded).round() as u8
+            });
+            let mut rgba = image.bytes.to_vec();
+            for pixel in rgba.as_chunks_mut::<4>().0 {
+                for v in &mut pixel[..3] {
+                    *v = lut[usize::from(*v)];
+                }
+            }
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis();
+            let path = format!("sashiko-{stamp}.png");
+            super::write_capture(std::fs::File::create_new(&path)?, image.extent, &rgba)?;
+            println!("Saved {}", std::path::absolute(path)?.display());
+            self.capture_pending = false;
+        }
+        let draw = |frame: &mut sashiko_renderer::Frame<'_>| {
             if self.benchmark
                 && (extent != [1920, 1080] || frame.scene_view().extent != [1920, 1080])
             {
@@ -65,15 +100,38 @@ impl Display {
                 )
                 .into());
             }
-            self.scene
-                .select_lods(&self.view, frame.scene_view().extent[1]);
+            if !self.full_detail {
+                self.scene
+                    .select_lods(&self.view, frame.scene_view().extent[1]);
+            }
             self.scene.draw(frame)
-        })?;
+        };
+        let outcome = if self.capture_requested && self.renderer.capture_available() {
+            let outcome = self.renderer.draw_with_capture(
+                0,
+                sashiko_renderer::CapturePlane::DisplayColor,
+                draw,
+            )?;
+            if !self.renderer.capture_available() {
+                self.capture_pending = true;
+                self.capture_requested = false;
+            }
+            outcome
+        } else {
+            self.renderer.draw(draw)?
+        };
         if matches!(
             outcome,
             PresentOutcome::RecreateRequired | PresentOutcome::Presented { suboptimal: true }
         ) {
             self.renderer.resize(extent, self.scene.assets())?;
+        }
+        if self.capture_requested
+            && !self.capture_prepared
+            && matches!(outcome, PresentOutcome::Presented { .. })
+        {
+            self.renderer.prepare_capture(self.scene.assets())?;
+            self.capture_prepared = true;
         }
         self.window.request_redraw();
         Ok(matches!(outcome, PresentOutcome::Presented { .. }))
@@ -140,6 +198,11 @@ impl App {
             view,
             keys: [false; 8],
             benchmark,
+            full_detail: false,
+            camera_cut: false,
+            capture_requested: false,
+            capture_prepared: false,
+            capture_pending: false,
             playback: self.route.as_ref().map(|_| Instant::now()),
             route: self.route.take(),
             last: Instant::now(),
@@ -235,6 +298,24 @@ impl ApplicationHandler for App {
                     KeyCode::ArrowDown,
                 ];
                 if let PhysicalKey::Code(code) = event.physical_key {
+                    if event.state.is_pressed() && !event.repeat && self.report.is_none() {
+                        match code {
+                            KeyCode::F12 => display.capture_requested = true,
+                            KeyCode::Home => {
+                                display.playback = None;
+                                display.keys.fill(false);
+                                display.view = display.scene.settings.views[&self.view_name];
+                                display.camera_cut = true;
+                            }
+                            KeyCode::KeyL => {
+                                display.full_detail = !display.full_detail;
+                                if display.full_detail {
+                                    display.scene.select_full_detail();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     if let Some(i) = controls.iter().position(|&c| c == code) {
                         display.keys[i] = event.state.is_pressed();
                     }

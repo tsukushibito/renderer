@@ -95,11 +95,14 @@ fn capture(package: &Path, view: &str, extent: [u32; 2], output: &Path) -> Pipel
         return Err("scene capture timed out".into());
     }
     finish(scene, renderer.into_runtime()?)?;
-    let mut encoder =
-        png::Encoder::new(BufWriter::new(File::create(output)?), extent[0], extent[1]);
+    write_capture(File::create(output)?, extent, &rgba)
+}
+
+fn write_capture(file: File, extent: [u32; 2], rgba: &[u8]) -> PipelineResult<()> {
+    let mut encoder = png::Encoder::new(BufWriter::new(file), extent[0], extent[1]);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header()?.write_image_data(&rgba)?;
+    encoder.write_header()?.write_image_data(rgba)?;
     Ok(())
 }
 

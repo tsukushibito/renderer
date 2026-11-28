@@ -11,6 +11,7 @@ use sashiko_renderer_core::{
     runtime::{FrameId, Runtime, RuntimeConfig, WindowPresenter, WindowReadiness},
 };
 use std::{
+    collections::VecDeque,
     num::NonZeroUsize,
     time::{Duration, Instant},
 };
@@ -18,8 +19,9 @@ use std::{
 pub struct WindowRenderer {
     presenter: WindowPresenter,
     renderer: Renderer,
-    accepted: Option<FrameId>,
-    profile: Option<Box<Option<SubmissionMetrics>>>,
+    accepted: VecDeque<FrameId>,
+    max_accepted: usize,
+    profile: Option<VecDeque<SubmissionMetrics>>,
     defer_for_asset_change: bool,
     #[cfg(feature = "window-capture")]
     capture: Option<CaptureBuffer>,
@@ -29,7 +31,12 @@ pub struct WindowRenderer {
 struct CaptureBuffer {
     plane: super::CapturePlane,
     bytes: Vec<u8>,
-    pending: Option<(sashiko_renderer_core::graph::PassHandle, u64, [u32; 2])>,
+    pending: Option<(
+        FrameId,
+        sashiko_renderer_core::graph::PassHandle,
+        u64,
+        [u32; 2],
+    )>,
     ready: Option<(u64, [u32; 2], usize)>,
 }
 
@@ -138,7 +145,8 @@ impl WindowRenderer {
                 destination,
                 host,
             },
-            accepted: None,
+            accepted: VecDeque::with_capacity(frames_in_flight.get()),
+            max_accepted: frames_in_flight.get(),
             profile: None,
             defer_for_asset_change: false,
             #[cfg(feature = "window-capture")]
@@ -237,14 +245,14 @@ impl WindowRenderer {
             self.renderer.drawing.runtime().set_profiling(!enabled)?;
             return Err(error.into());
         }
-        self.profile = enabled.then(|| Box::new(None));
+        self.profile = enabled.then(|| VecDeque::with_capacity(self.max_accepted));
         Ok(())
     }
 
-    /// Take the most recently retired graph sample. Drain after each draw
-    /// attempt and after the final idle wait to retain every measured frame.
+    /// Take the oldest retained graph sample. The queue retains up to the
+    /// configured frame count. Drain after draws and after the final idle wait.
     pub fn take_graph_profile(&mut self) -> Option<SubmissionMetrics> {
-        self.profile.as_deref_mut()?.take()
+        self.profile.as_mut()?.pop_front()
     }
 
     /// Drain completed presentation samples after draw attempts and idle waits.
@@ -260,22 +268,29 @@ impl WindowRenderer {
     }
 
     fn retire_graph(&mut self, timeout: Duration) -> PipelineResult<bool> {
-        if let Some(id) = self.accepted {
+        let start = Instant::now();
+        while let Some(&id) = self.accepted.front() {
             let Some(result) = self
                 .renderer
                 .drawing
                 .runtime()
-                .wait_for_frame(id, timeout)?
+                .wait_for_frame(id, timeout.saturating_sub(start.elapsed()))?
             else {
                 return Ok(false);
             };
-            if let Some(slot) = self.profile.as_deref_mut() {
-                *slot = result.metrics().copied();
+            if let Some(samples) = &mut self.profile
+                && let Some(sample) = result.metrics().copied()
+            {
+                if samples.len() == self.max_accepted {
+                    samples.pop_front();
+                }
+                samples.push_back(sample);
             }
-            self.accepted = None;
+            self.accepted.pop_front();
             #[cfg(feature = "window-capture")]
             if let Some(buffer) = &mut self.capture
-                && let Some((pixels, tag, extent)) = buffer.pending.take()
+                && buffer.pending.is_some_and(|pending| pending.0 == id)
+                && let Some((_, pixels, tag, extent)) = buffer.pending.take()
             {
                 let mut result = result;
                 let size = result.readback_len(pixels)?;
@@ -338,15 +353,7 @@ impl WindowRenderer {
     /// Close presentation and return the device for releasing host-owned assets.
     pub fn into_runtime(mut self) -> PipelineResult<Runtime> {
         while !self.presenter.close(Duration::from_secs(1))? {}
-        if let Some(id) = self.accepted {
-            while self
-                .renderer
-                .drawing
-                .runtime()
-                .wait_for_frame(id, Duration::from_secs(1))?
-                .is_none()
-            {}
-        }
+        while !self.retire_graph(Duration::from_secs(1))? {}
         self.renderer.into_runtime()
     }
 
@@ -451,7 +458,7 @@ impl WindowRenderer {
         if std::mem::take(&mut self.defer_for_asset_change) {
             return Ok(PresentOutcome::NotReady);
         }
-        if !self.retire_graph(Duration::ZERO)? {
+        if !self.retire_graph(Duration::ZERO)? && self.accepted.len() >= self.max_accepted {
             return Ok(PresentOutcome::NotReady);
         }
         match self.presenter.prepare()? {
@@ -490,12 +497,12 @@ impl WindowRenderer {
             #[cfg(feature = "window-capture")]
             if let Some(readback) = readback {
                 let buffer = self.capture.as_mut().expect("capture prepared");
-                buffer.pending = Some(readback);
+                buffer.pending = Some((submission.id(), readback.0, readback.1, readback.2));
                 buffer.plane = tag.expect("requested capture").1;
             }
             submission
         };
-        self.accepted = Some(receipt.id());
+        self.accepted.push_back(receipt.id());
         self.presenter.queue_frame(&mut receipt)?;
         Ok(self
             .presenter

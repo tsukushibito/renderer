@@ -44,6 +44,7 @@ pub(super) enum RasterProgramSlot {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct RasterLayout {
+    pool_index: usize,
     layouts: [vk::DescriptorSetLayout; RASTER_GROUP_COUNT],
     groups: usize,
     // Uniform, StorageRead, SampledImage, Sampler totals for this pipeline.
@@ -153,6 +154,16 @@ impl ShaderPrograms {
                         }] += 1;
                     }
                     RasterLayout {
+                        // All set layout creation parameters come from this immutable
+                        // binding list. Depth and sample count only affect the pipeline.
+                        pool_index: self.rasters[..key]
+                            .iter()
+                            .position(|slot| {
+                                slot.get().is_some_and(|other| {
+                                    other.raster_asset.bindings() == program.raster_asset.bindings()
+                                })
+                            })
+                            .unwrap_or(key),
                         layouts: program.raster_layouts,
                         groups: program.raster_groups,
                         copies: self.bindings.copies(program.raster_asset.bindings().len()),

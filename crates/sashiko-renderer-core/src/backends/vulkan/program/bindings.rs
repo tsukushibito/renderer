@@ -29,15 +29,23 @@ pub(in crate::backends::vulkan) enum RasterBinding {
 struct DescriptorArena {
     owner: Arc<MemoryOwner>,
     pool: vk::DescriptorPool,
+    pool_indices: [usize; RASTER_VARIANT_COUNT],
     raster: [Vec<[vk::DescriptorSet; RASTER_GROUP_COUNT]>; RASTER_VARIANT_COUNT],
 }
 
 impl DescriptorArena {
     fn new(
         owner: Arc<MemoryOwner>,
-        raster: [Option<RasterLayout>; RASTER_VARIANT_COUNT],
+        mut raster: [Option<RasterLayout>; RASTER_VARIANT_COUNT],
         #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_variables))] ordinal: usize,
     ) -> Result<Self, RuntimeError> {
+        let pool_indices = std::array::from_fn(|key| {
+            let index = raster[key].map_or(key, |layout| layout.pool_index);
+            if index != key {
+                raster[key] = None;
+            }
+            index
+        });
         let types = [
             vk::DescriptorType::UNIFORM_BUFFER,
             vk::DescriptorType::STORAGE_BUFFER,
@@ -80,6 +88,7 @@ impl DescriptorArena {
         let mut result = Self {
             owner,
             pool,
+            pool_indices,
             raster: std::array::from_fn(|_| Vec::new()),
         };
         for (index, layouts) in raster.into_iter().enumerate() {
@@ -208,7 +217,7 @@ impl BindingPool {
     }
 
     // Each new operand range of this layout occupies its full width in the Graph.
-    // A depth variant has its own cache and therefore its own bound.
+    // All programs sharing the layout consume this common range budget.
     pub(super) fn copies(&self, width: usize) -> u32 {
         let ranges = self.max_operands / width;
         (self.max_bindings as usize).min(ranges.max(1)) as u32
@@ -356,6 +365,7 @@ impl ShaderBindings {
             ));
         }
         let arena = self.arena.as_ref().expect("live descriptor lease");
+        let key = arena.pool_indices[key];
         let sets = *arena.raster[key]
             .get(self.raster_used[key])
             .ok_or_else(|| {

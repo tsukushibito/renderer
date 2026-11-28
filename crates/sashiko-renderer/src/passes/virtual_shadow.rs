@@ -44,6 +44,7 @@ pub struct PageRequests {
     pub mask: BufferHandle,
     pub camera: BufferHandle,
     axes: [[f64; 3]; 2],
+    lod_distance_scale: f32,
     origins: [[i32; 2]; LEVELS],
     depth_plane: [f32; 4],
     bias: [f32; 4],
@@ -428,6 +429,7 @@ pub fn request_pages(
     )?);
     let [x, y, z] = sun.light_basis()?;
     let [ex, ey, ez] = view.eye();
+    let lod_distance_scale = 2.0_f32.powi(i32::from(settings.virtual_lod_bias));
     let axes = [
         ex,
         ey,
@@ -436,7 +438,7 @@ pub fn request_pages(
         x[0] as f32,
         x[1] as f32,
         x[2] as f32,
-        0.,
+        lod_distance_scale,
         y[0] as f32,
         y[1] as f32,
         y[2] as f32,
@@ -550,6 +552,7 @@ pub fn request_pages(
         mask,
         camera: uniform,
         axes: [x, y],
+        lod_distance_scale,
         origins,
         depth_plane: plane,
         bias,

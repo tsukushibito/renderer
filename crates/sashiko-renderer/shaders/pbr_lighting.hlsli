@@ -103,7 +103,7 @@ float sun_visibility(float3 position, float3 geometric_normal, float3 light) {
         shadow_image1.GetDimensions(table_size.x, table_size.y);
         if (any(atlas_size != 4096) || any(table_size != uint2(32, 1024))) return 1.0;
         return virtual_visibility(position, geometric_normal, float4(camera.eye.xyz, -camera.shadow_splits.w),
-            camera.shadow_view_projection[0][0].xyz, camera.shadow_view_projection[0][1].xyz,
+            camera.shadow_view_projection[0][0], camera.shadow_view_projection[0][1].xyz,
             camera.shadow_view_projection[0][2], camera.shadow_view_projection[0][3]);
     }
     float distance = dot(position - camera.eye.xyz, camera.camera_forward_blend.xyz);

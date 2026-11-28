@@ -64,7 +64,12 @@ fn check_requests(mut config: RuntimeConfig) {
         .unwrap();
     let mut runtime = Runtime::new(config, limits, prep.working_set()).unwrap();
     let mut pool = GraphPool::new(limits.graph, 1).unwrap();
-    for (z, distance, marked) in [(0.5, 60., true), (1., 60., false), (0.5, 0.1, false)] {
+    for (z, distance, bias, first_level) in [
+        (0.5, 60., 0, 0),
+        (0.5, 60., 2, 1),
+        (1., 60., 0, LEVELS),
+        (0.5, 0.1, 0, LEVELS),
+    ] {
         let mut graph = pool.begin().unwrap();
         let depth = graph.image("depth", depth).unwrap();
         let view = graph.image_view(depth, 0, 0).unwrap();
@@ -89,7 +94,10 @@ fn check_requests(mut config: RuntimeConfig) {
             camera,
             sun,
             bounds,
-            settings(distance),
+            ShadowSettings {
+                virtual_lod_bias: bias,
+                ..settings(distance)
+            },
         )
         .unwrap();
         let pages = virtual_shadow::assign_pages(&mut graph, requests, None).unwrap();
@@ -106,9 +114,9 @@ fn check_requests(mut config: RuntimeConfig) {
             .readback_into(capture, &mut bits)
             .unwrap();
         let mut expected = vec![0u32; TABLE_BYTES / 4];
-        if marked {
+        if first_level < LEVELS {
             let mut slot = 1;
-            for level in std::iter::once(LEVELS - 1).chain(0..LEVELS - 1) {
+            for level in std::iter::once(LEVELS - 1).chain(first_level..LEVELS - 1) {
                 for y in [63, 64] {
                     for x in [63, 64] {
                         expected[(level * PAGES_PER_AXIS + y) * PAGES_PER_AXIS + x] = slot;

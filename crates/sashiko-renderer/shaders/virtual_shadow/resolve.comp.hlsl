@@ -29,7 +29,7 @@ void main(uint3 id : SV_DispatchThreadID) {
             // Depth-only inspection has no geometric normals. Use normal
             // incidence; forward material shading supplies its actual normal.
             value = virtual_visibility(world.xyz / world.w, cross(light_x.xyz, light_y.xyz),
-                eye_distance, light_x.xyz, light_y.xyz, depth_plane, shadow_bias);
+                eye_distance, light_x, light_y.xyz, depth_plane, shadow_bias);
         }
     }
     visibility[id.xy] = float4(value.xxx, 1.0);

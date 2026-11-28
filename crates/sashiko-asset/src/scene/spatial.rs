@@ -13,6 +13,7 @@ impl super::SceneSettings {
         (self.sun_lux > 0.).then_some(sashiko_renderer::pbr::ShadowSettings {
             resolution: self.shadow_resolution,
             distance: self.shadow_distance,
+            virtual_lod_bias: self.virtual_shadow_lod_bias,
             split_lambda: self.shadow_split_lambda.unwrap_or(defaults.split_lambda),
             ..defaults
         })

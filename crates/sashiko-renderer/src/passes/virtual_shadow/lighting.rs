@@ -109,6 +109,7 @@ pub fn lighting(
     for (row, axis) in projection[..2].iter_mut().zip(requests.axes) {
         row[..3].copy_from_slice(&axis.map(|v| (v as f32).to_bits()));
     }
+    projection[0][3] = requests.lod_distance_scale.to_bits();
     projection[2] = requests.depth_plane.map(f32::to_bits);
     projection[3] = requests.bias.map(f32::to_bits);
     for (row, origin) in projection[4..].iter_mut().zip(requests.origins) {

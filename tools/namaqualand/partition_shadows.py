@@ -35,7 +35,7 @@ def pieces(raw, cell_size):
                + vertices[used].tobytes() + remap.astype("<u4").tobytes())
 
 
-def partition(directory, primitive, cell_size):
+def partition(directory, primitive, cell_size, shadow_lods=(), lod_bias=None):
     manifest = directory / "scene.json"
     store = directory / "objects"
     scene = json.loads(manifest.read_bytes())
@@ -59,7 +59,20 @@ def partition(directory, primitive, cell_size):
         elif blob.read_bytes() != data:
             raise ValueError(f"Corrupt existing object {key}")
         refs.append({"hash": key, "size": len(data)})
-    scene.setdefault("virtual_shadow_meshes", {})[digest] = refs
+    shadow_meshes = scene.setdefault("virtual_shadow_meshes", {})
+    shadow_meshes[digest] = refs
+    lods = {r["source"]["hash"]: r["reduced"] for r in scene.get("mesh_lods", [])}
+    for index in shadow_lods:
+        if not 0 <= index < len(scene["primitives"]) or index == primitive:
+            raise ValueError(f"Invalid shadow LOD primitive {index}")
+        source_hash = scene["primitives"][index]["mesh"]["hash"]
+        if source_hash not in lods:
+            raise ValueError(f"No reduced mesh for primitive {index}")
+        shadow_meshes[source_hash] = [lods[source_hash]]
+    if lod_bias is not None:
+        if not -7 <= lod_bias <= 7:
+            raise ValueError("Shadow LOD bias must be between -7 and 7")
+        scene["settings"]["virtual_shadow_lod_bias"] = lod_bias
     with tempfile.NamedTemporaryFile(dir=directory, delete=False) as tmp:
         tmp.write(json.dumps(scene, separators=(",", ":")).encode())
     Path(tmp.name).replace(manifest)
@@ -71,5 +84,8 @@ if __name__ == "__main__":
     parser.add_argument("package", type=Path, help="cooked package to update in place")
     parser.add_argument("--primitive", type=int, required=True)
     parser.add_argument("--cell-size", type=float, required=True, help="in source mesh units")
+    parser.add_argument("--shadow-lods", nargs="+", default=(), type=int,
+                        help="primitives to shadow using their cooked reduced meshes")
+    parser.add_argument("--lod-bias", type=int, help="virtual shadow clipmap level offset")
     args = parser.parse_args()
-    print(f"Prepared {partition(args.package, args.primitive, args.cell_size)} shadow pieces")
+    print(f"Prepared {partition(args.package, args.primitive, args.cell_size, args.shadow_lods, args.lod_bias)} shadow pieces")

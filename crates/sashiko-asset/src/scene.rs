@@ -39,6 +39,8 @@ pub struct SceneSettings {
     pub shadow_distance: f32,
     #[serde(default)]
     pub virtual_shadows: bool,
+    #[serde(default)]
+    pub virtual_shadow_lod_bias: i8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow_split_lambda: Option<f32>,
     #[serde(default)]
@@ -209,6 +211,11 @@ impl ScenePackage {
     pub fn validate(&self) -> io::Result<()> {
         if self.version != 1 || self.settings.views.is_empty() || self.placements.is_empty() {
             return Err(invalid("unsupported or empty scene package"));
+        }
+        if !(-7..=7).contains(&self.settings.virtual_shadow_lod_bias) {
+            return Err(invalid(
+                "virtual shadow LOD bias is outside the clipmap range",
+            ));
         }
         if self
             .settings

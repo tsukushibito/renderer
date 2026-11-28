@@ -12,18 +12,18 @@ bool virtual_address(float2 light_uv, uint level, out float2 atlas_texel) {
     return true;
 }
 
-float virtual_visibility(float3 world, float3 normal, float4 eye_distance, float3 axis_x,
+float virtual_visibility(float3 world, float3 normal, float4 eye_distance, float4 axis_x,
                          float3 axis_y, float4 depth_plane, float4 shadow_bias) {
     float distance = length(world - eye_distance.xyz);
     if (!(distance <= eye_distance.w)) return 1.0;
-    float2 uv = float2(dot(axis_x, world), dot(axis_y, world));
-    float2 normal_uv = float2(dot(axis_x, normal), dot(axis_y, normal));
-    float slope = 1.0 - saturate(dot(normal, cross(axis_x, axis_y)));
+    float2 uv = float2(dot(axis_x.xyz, world), dot(axis_y, world));
+    float2 normal_uv = float2(dot(axis_x.xyz, normal), dot(axis_y, normal));
+    float slope = 1.0 - saturate(dot(normal, cross(axis_x.xyz, axis_y)));
     float normal_depth = dot(depth_plane.xyz, normal);
     float depth = dot(float4(world, 1.0), depth_plane);
     if (!(depth >= 0.0 && depth <= 1.0)) return 1.0;
 
-    for (uint level = virtual_receiver_level(distance); level < 8; ++level) {
+    for (uint level = virtual_receiver_level(distance * axis_x.w); level < 8; ++level) {
         float pitch = float(1u << level) / 3200.0;
         float offset = pitch * shadow_bias.z * slope;
         float2 center = uv + normal_uv * offset;
