@@ -57,7 +57,7 @@ def notices(archive, repo):
 
 def build(args):
     if not re.fullmatch(r"[A-Za-z0-9._-]+", args.version):
-        raise ValueError("Expected a release tag without path separators")
+        raise ValueError("Expected a version without path separators")
     repo = Path(__file__).resolve().parents[2]
     scene = json.loads((args.scene / "scene.json").read_bytes())
     args.output.mkdir(parents=True, exist_ok=False)
@@ -75,9 +75,7 @@ def build(args):
                 raise ValueError(f"Cooked object mismatch {key}")
             archive.write(blob, "scene/objects/" + key)
         notices(archive, repo)
-    url = f"https://github.com/tsukushibito/sashiko/releases/download/{args.version}/{bundle.name}"
-    constants = {"Version": args.version, "FileName": bundle.name,
-                 "Url": url, "Sha256": digest(bundle)}
+    constants = {"FileName": bundle.name, "Sha256": digest(bundle)}
     with tempfile.TemporaryDirectory(dir=args.output) as temp:
         settings = Path(temp) / "Package.cs"
         settings.write_text("internal static class Package {\n" + "".join(
@@ -95,6 +93,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scene", type=Path)
     parser.add_argument("viewer", type=Path)
-    parser.add_argument("version", help="GitHub release tag")
+    parser.add_argument("version", help="local distribution version")
     parser.add_argument("output", type=Path, help="new output directory")
     build(parser.parse_args())

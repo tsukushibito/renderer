@@ -12,7 +12,13 @@ Poly Haven の Blender シーンから岩場・花畑・遠景の低木を含む
 
 ### Windows配布版
 
-Windows 11 x64 と D3D12 対応 GPU で `Start-Namaqualand.exe` を起動する。初回は約643 MiBのシーンとビューアをダウンロードし、SHA-256を照合して展開する。キャッシュ先は `%LOCALAPPDATA%\Sashiko\Namaqualand`。次回から同じ版をオフラインで起動できる。同じフォルダに公開ZIPを置くと初回もローカルからインストールする。空き容量は取得中のZIPと展開先の両方に必要で、3 GiBを目安とする。比較機はRTX 3060 12 GB。既定はD3D12で、Vulkanには `Start-Namaqualand.exe --vulkan` を使う。素材の出典・改変・利用条件はZIPの `attribution.json`、依存ライブラリは `notices/` に収録した。[版付き配布ファイル](https://github.com/tsukushibito/sashiko/releases/tag/namaqualand-v1)
+Windows 11 x64 と D3D12 対応 GPU で、ローカル配布の `Start-Namaqualand.exe` と `namaqualand-v1-win64.zip` を同じフォルダに置き、EXEを起動する。初回は約643 MiBのZIPのSHA-256を照合し、約1.25 GiBのシーンとビューアを `%LOCALAPPDATA%\Sashiko\Namaqualand` に展開する。次回はローカルキャッシュから起動するためZIPは不要。RTX 3060の既存Windows環境で空のキャッシュを指定し、別の作業フォルダから初回の展開と3フレームの表示・終了まで14.34秒、ZIPを置かない場所から再起動して6.59秒だった。初回からネットワーク接続・Python・手動展開は不要。比較機はRTX 3060 12 GB。既定はD3D12で、Vulkanには `Start-Namaqualand.exe --vulkan` を使う。素材の出典・改変・利用条件はZIPの `attribution.json`、依存ライブラリは `notices/` に収録した。
+
+配布担当者は本節の手順で構築した歩行シーンと製品構成のビューアから、次のコマンドでローカル配布用の新規フォルダを生成できる。
+
+```powershell
+python -B tools/namaqualand/package_windows.py "$vsm" target/release/scene-viewer.exe namaqualand-v1 "build/tasks/sashiko-ief4.11/Namaqualand-v1"
+```
 
 ### アプリに組み込む
 

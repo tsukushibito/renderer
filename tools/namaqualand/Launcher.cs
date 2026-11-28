@@ -15,7 +15,7 @@ internal static class Launcher
             return BitConverter.ToString(sha.ComputeHash(input)).Replace("-", "").ToLowerInvariant();
     }
 
-    // Only paths created by the launcher, validated URLs, and fixed arguments
+    // Only paths created by the launcher and fixed arguments
     // are passed to child processes. All path arguments terminate in a file name.
     private static string Quote(string path)
     {
@@ -48,12 +48,8 @@ internal static class Launcher
             string archive = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, Package.FileName);
             if (!File.Exists(archive))
             {
-                Console.WriteLine("Downloading Namaqualand " + Package.Version);
-                archive = Path.Combine(temp, Package.FileName);
-                string curl = Path.Combine(Environment.SystemDirectory, "curl.exe");
-                if (Run(curl, "--fail --location --retry 3 --progress-bar --output " +
-                        Quote(archive) + " " + Quote(Package.Url), temp) != 0)
-                    throw new IOException("Download failed. Start the launcher again to retry.");
+                throw new FileNotFoundException("Place " + Package.FileName +
+                    " next to Start-Namaqualand.exe and start it again.", archive);
             }
             Console.WriteLine("Verifying " + Package.FileName);
             if (Digest(archive) != Package.Sha256)
