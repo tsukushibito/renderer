@@ -1,0 +1,365 @@
+{
+  "calibration": {
+    "ue": {
+      "0": {
+        "lambert": 0.0
+      },
+      "3": {
+        "lambert": 0.1708984375,
+        "delta": 0.1708984375,
+        "expected": 0.17188733853924698,
+        "relative_error": -0.0057531930370845474
+      },
+      "6": {
+        "lambert": 0.341796875,
+        "delta": 0.341796875,
+        "expected": 0.34377467707849396,
+        "relative_error": -0.0057531930370845474
+      },
+      "ratio_6_to_3": 2.0
+    },
+    "vulkan": {
+      "0": {
+        "lambert": 0.0,
+        "black": 0.0,
+        "gray": 0.0,
+        "matched": 0.0,
+        "diffuse_by_subtraction": 0.0
+      },
+      "3": {
+        "lambert": 0.171875,
+        "black": 0.009552001953125,
+        "gray": 0.174560546875,
+        "matched": 0.181396484375,
+        "diffuse_by_subtraction": 0.171844482421875,
+        "delta": 0.171875,
+        "expected": 0.17188733853924698,
+        "relative_error": -7.178271158214677e-05
+      },
+      "6": {
+        "lambert": 0.34375,
+        "black": 0.01910400390625,
+        "gray": 0.34912109375,
+        "matched": 0.36279296875,
+        "diffuse_by_subtraction": 0.34368896484375,
+        "delta": 0.34375,
+        "expected": 0.34377467707849396,
+        "relative_error": -7.178271158214677e-05
+      },
+      "ratio_6_to_3": 2.0
+    },
+    "d3d12": {
+      "0": {
+        "lambert": 0.0,
+        "black": 0.0,
+        "gray": 0.0,
+        "matched": 0.0,
+        "diffuse_by_subtraction": 0.0
+      },
+      "3": {
+        "lambert": 0.171875,
+        "black": 0.009552001953125,
+        "gray": 0.174560546875,
+        "matched": 0.181396484375,
+        "diffuse_by_subtraction": 0.171844482421875,
+        "delta": 0.171875,
+        "expected": 0.17188733853924698,
+        "relative_error": -7.178271158214677e-05
+      },
+      "6": {
+        "lambert": 0.34375,
+        "black": 0.01910400390625,
+        "gray": 0.34912109375,
+        "matched": 0.36279296875,
+        "diffuse_by_subtraction": 0.34368896484375,
+        "delta": 0.34375,
+        "expected": 0.34377467707849396,
+        "relative_error": -7.178271158214677e-05
+      },
+      "ratio_6_to_3": 2.0
+    }
+  },
+  "ue_game_buffer_check": {
+    "unit_emitter": 1.0,
+    "gray_game": 0.341796875
+  },
+  "ue_gray_settings": {
+    "sun": {
+      "0": 0.0,
+      "3": 3.0,
+      "6": 6.0
+    },
+    "pre_exposure_override": 1.0
+  },
+  "walk": {
+    "b": {
+      "roi_1080p": [
+        800,
+        775,
+        1120,
+        935
+      ],
+      "s_on": 0.16830413043498993,
+      "s_off": 0.03649350255727768,
+      "Sashiko_reference_sdr": 109.62930297851562,
+      "UE_reference_sdr": 182.89920043945312,
+      "fixed_scene": 0.2563398480415344,
+      "fixed_pre": 0.2550531029701233,
+      "fixed_post": 0.5493035316467285,
+      "fixed_sdr": 142.46347045898438,
+      "fixedcurveoff_scene": 0.2563316822052002,
+      "fixedcurveoff_pre": 0.2550446391105652,
+      "fixedcurveoff_post": 0.5343624353408813,
+      "fixedcurveoff_sdr": 137.9489288330078,
+      "authored_scene": 0.5040103197097778,
+      "authored_pre": 0.5015639066696167,
+      "authored_post": 0.7116571068763733,
+      "authored_sdr": 182.81600952148438,
+      "nolocal_scene": 0.48494064807891846,
+      "nolocal_pre": 0.48257291316986084,
+      "nolocal_post": 0.7210129499435425,
+      "nolocal_sdr": 185.21994018554688,
+      "nosun_scene": 0.0010193674825131893,
+      "nosun_pre": 0.0010140403173863888,
+      "nosun_post": 0.0004345041234046221,
+      "nosun_sdr": 0.0,
+      "nogidirect_scene": 0.24525249004364014,
+      "nogidirect_pre": 0.2440125048160553,
+      "nogidirect_post": 0.5357929468154907,
+      "nogidirect_sdr": 139.33279418945312,
+      "noginoemit_scene": 0.0,
+      "noginoemit_pre": 0.0,
+      "noginoemit_post": 0.0,
+      "noginoemit_sdr": 0.0,
+      "fixed_scene_common_srgb": 136.35922241210938,
+      "s_on_common_srgb": 109.28544616699219,
+      "ue_sun_toggle_delta": 0.2552271783351898,
+      "s_sun_toggle_delta": 0.1346336305141449,
+      "ue_isolated_direct_delta": 0.24525249004364014
+    },
+    "h": {
+      "roi_1080p": [
+        840,
+        450,
+        1260,
+        520
+      ],
+      "s_on": 0.21455198526382446,
+      "s_off": 0.039288558065891266,
+      "Sashiko_reference_sdr": 127.38080596923828,
+      "UE_reference_sdr": 183.0402069091797,
+      "fixed_scene": 0.20782169699668884,
+      "fixed_pre": 0.20680388808250427,
+      "fixed_post": 0.5199646949768066,
+      "fixed_sdr": 132.89349365234375,
+      "fixedcurveoff_scene": 0.20783507823944092,
+      "fixedcurveoff_pre": 0.20677997171878815,
+      "fixedcurveoff_post": 0.5071505308151245,
+      "fixedcurveoff_sdr": 129.521484375,
+      "authored_scene": 0.44800490140914917,
+      "authored_pre": 0.4458198547363281,
+      "authored_post": 0.7171308398246765,
+      "authored_sdr": 182.95477294921875,
+      "nolocal_scene": 0.42526260018348694,
+      "nolocal_pre": 0.42315322160720825,
+      "nolocal_post": 0.721505343914032,
+      "nolocal_sdr": 184.11473083496094,
+      "nosun_scene": 0.003354621585458517,
+      "nosun_pre": 0.0033384428825229406,
+      "nosun_post": 0.004422538913786411,
+      "nosun_sdr": 1.1403999328613281,
+      "nogidirect_scene": 0.20230022072792053,
+      "nogidirect_pre": 0.20122256875038147,
+      "nogidirect_post": 0.5118772983551025,
+      "nogidirect_sdr": 130.82754516601562,
+      "noginoemit_scene": 0.0,
+      "noginoemit_pre": 0.0,
+      "noginoemit_post": 0.0,
+      "noginoemit_sdr": 0.0,
+      "fixed_scene_common_srgb": 125.30044555664062,
+      "s_on_common_srgb": 127.37649536132812,
+      "ue_sun_toggle_delta": 0.20449897646903992,
+      "s_sun_toggle_delta": 0.1750701367855072,
+      "ue_isolated_direct_delta": 0.20230022072792053
+    },
+    "i": {
+      "roi_1080p": [
+        1550,
+        520,
+        1720,
+        730
+      ],
+      "s_on": 0.01875205710530281,
+      "s_off": 0.01875205710530281,
+      "Sashiko_reference_sdr": 36.9827995300293,
+      "UE_reference_sdr": 9.253199577331543,
+      "fixed_scene": 0.0021408996544778347,
+      "fixed_pre": 0.0021291468292474747,
+      "fixed_post": 0.0016151408199220896,
+      "fixed_sdr": 0.2125999927520752,
+      "fixedcurveoff_scene": 0.002138496143743396,
+      "fixedcurveoff_pre": 0.002127536339685321,
+      "fixedcurveoff_post": 0.025391552597284317,
+      "fixedcurveoff_sdr": 6.359889030456543,
+      "authored_scene": 0.007488969713449478,
+      "authored_pre": 0.007452067919075489,
+      "authored_post": 0.03635363280773163,
+      "authored_sdr": 9.175464630126953,
+      "nolocal_scene": 0.006827369332313538,
+      "nolocal_pre": 0.006793279200792313,
+      "nolocal_post": 0.012456899508833885,
+      "nolocal_sdr": 3.0973997116088867,
+      "nosun_scene": 0.0010809747036546469,
+      "nosun_pre": 0.001075600739568472,
+      "nosun_post": 0.0002597749116830528,
+      "nosun_sdr": 0.0,
+      "nogidirect_scene": 0.0,
+      "nogidirect_pre": 0.0,
+      "nogidirect_post": 0.0,
+      "nogidirect_sdr": 0.0,
+      "noginoemit_scene": 0.0,
+      "noginoemit_pre": 0.0,
+      "noginoemit_post": 0.0,
+      "noginoemit_sdr": 0.0,
+      "fixed_scene_common_srgb": 6.962890625,
+      "s_on_common_srgb": 36.930179595947266,
+      "ue_sun_toggle_delta": 0.0009814569493755698,
+      "s_sun_toggle_delta": 0.0,
+      "ue_isolated_direct_delta": 0.0
+    }
+  },
+  "nine_view_screen_means": {
+    "b": {
+      "ue": {
+        "scene_Y": 0.23494300246238708,
+        "common_srgb_Y": 119.45417022705078,
+        "reference_srgb_Y": 149.7974395751953
+      },
+      "sashiko": {
+        "scene_Y": 0.22410546243190765,
+        "common_srgb_Y": 119.98454284667969,
+        "reference_srgb_Y": 120.08128356933594
+      }
+    },
+    "h": {
+      "ue": {
+        "scene_Y": 0.2581222355365753,
+        "common_srgb_Y": 119.64603424072266,
+        "reference_srgb_Y": 149.85186767578125
+      },
+      "sashiko": {
+        "scene_Y": 0.2541116178035736,
+        "common_srgb_Y": 123.9338150024414,
+        "reference_srgb_Y": 124.36180114746094
+      }
+    },
+    "i": {
+      "ue": {
+        "scene_Y": 0.1948159635066986,
+        "common_srgb_Y": 97.63240051269531,
+        "reference_srgb_Y": 140.96273803710938
+      },
+      "sashiko": {
+        "scene_Y": 0.19634781777858734,
+        "common_srgb_Y": 106.273193359375,
+        "reference_srgb_Y": 106.96525573730469
+      }
+    },
+    "d": {
+      "ue": {
+        "scene_Y": 0.2968500554561615,
+        "common_srgb_Y": 134.55117797851562,
+        "reference_srgb_Y": 151.41128540039062
+      },
+      "sashiko": {
+        "scene_Y": 0.30210602283477783,
+        "common_srgb_Y": 139.2012939453125,
+        "reference_srgb_Y": 139.38662719726562
+      }
+    },
+    "e": {
+      "ue": {
+        "scene_Y": 0.251714825630188,
+        "common_srgb_Y": 104.65333557128906,
+        "reference_srgb_Y": 136.03553771972656
+      },
+      "sashiko": {
+        "scene_Y": 0.2759583294391632,
+        "common_srgb_Y": 124.4129867553711,
+        "reference_srgb_Y": 125.11212921142578
+      }
+    },
+    "f": {
+      "ue": {
+        "scene_Y": 0.07670878618955612,
+        "common_srgb_Y": 59.162471771240234,
+        "reference_srgb_Y": 142.6502685546875
+      },
+      "sashiko": {
+        "scene_Y": 0.10567256808280945,
+        "common_srgb_Y": 79.9146957397461,
+        "reference_srgb_Y": 80.4844741821289
+      }
+    },
+    "c": {
+      "ue": {
+        "scene_Y": 0.201570063829422,
+        "common_srgb_Y": 107.78231811523438,
+        "reference_srgb_Y": 148.6903839111328
+      },
+      "sashiko": {
+        "scene_Y": 0.20096515119075775,
+        "common_srgb_Y": 113.59715270996094,
+        "reference_srgb_Y": 113.72876739501953
+      }
+    },
+    "g": {
+      "ue": {
+        "scene_Y": 0.4512045085430145,
+        "common_srgb_Y": 93.3946304321289,
+        "reference_srgb_Y": 147.11907958984375
+      },
+      "sashiko": {
+        "scene_Y": 0.244532510638237,
+        "common_srgb_Y": 105.47850036621094,
+        "reference_srgb_Y": 105.8204345703125
+      }
+    },
+    "j": {
+      "ue": {
+        "scene_Y": 0.19401881098747253,
+        "common_srgb_Y": 107.04997253417969,
+        "reference_srgb_Y": 148.24456787109375
+      },
+      "sashiko": {
+        "scene_Y": 0.1868407279253006,
+        "common_srgb_Y": 109.886962890625,
+        "reference_srgb_Y": 109.8657455444336
+      }
+    }
+  },
+  "conditions": {
+    "source_commit": "c214158c",
+    "ue_version": "5.8.4-58902052",
+    "device": "GeForce RTX 3060 12 GB",
+    "gray_roi_xywh": [
+      56,
+      56,
+      16,
+      16
+    ],
+    "gray_extent": [
+      128,
+      128
+    ],
+    "gray_units": "cd/m2",
+    "relative_tolerance": 0.015,
+    "black_absolute_tolerance": 0.0001,
+    "doubling_ratio_tolerance": 0.01,
+    "hdr": "fixed SceneColor with PreExposure=1; Sashiko linear film with ISO=100, identity sensor",
+    "sdr": "sRGB-weighted value on 0-255 scale; post is a display-encoded visualization on 0-1 scale",
+    "resolve": "mean of 2x2 linear RGB samples at 3840x2160; ROI statistic median of per-pixel Rec.709 Y",
+    "common_display": "clip to [0,1] and apply sRGB OETF per channel; unit luminance maps to white",
+    "view_keys_in_capture_order": "bhidefcgj"
+  }
+}
