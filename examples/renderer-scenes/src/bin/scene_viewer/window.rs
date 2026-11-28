@@ -90,6 +90,12 @@ impl Display {
             println!("Saved {}", std::path::absolute(path)?.display());
             self.capture_pending = false;
         }
+        self.scene.advance_streaming(
+            &mut self.renderer,
+            &self.view,
+            extent[1],
+            self.full_detail,
+        )?;
         let draw = |frame: &mut sashiko_renderer::Frame<'_>| {
             if self.benchmark
                 && (extent != [1920, 1080] || frame.scene_view().extent != [1920, 1080])
@@ -399,6 +405,11 @@ fn execute(
         result: Ok(()),
     };
     EventLoop::new()?.run_app(&mut app)?;
+    #[cfg(feature = "scene-stream-metrics")]
+    let stream_metrics = app
+        .display
+        .as_ref()
+        .and_then(|d| d.scene.streaming_metrics());
     if let Some(display) = app.display {
         finish(display.scene, display.renderer.into_runtime()?)?;
     }
@@ -416,6 +427,12 @@ fn execute(
             "first_present_seconds":app.first_present.unwrap().duration_since(app.startup).as_secs_f64(),
             "presented_seconds_and_interval_ms":app.intervals,"profile_enabled":app.profile,
             "graph_samples_seconds_gpu_record_other_cpu_ms":app.graph_timings});
+        #[cfg(feature = "scene-stream-metrics")]
+        let report = {
+            let mut r = report;
+            r["streaming"] = serde_json::to_value(stream_metrics)?;
+            r
+        };
         std::fs::write(path, serde_json::to_vec(&report)?)?;
     }
     if app.frames_left.is_some_and(|n| n != 0) {

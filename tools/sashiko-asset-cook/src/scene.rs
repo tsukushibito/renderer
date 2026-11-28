@@ -88,6 +88,7 @@ pub(super) fn cook(source: &Path, settings: &Path, directory: &Path) -> Result<(
         physical: None,
         backdrop: None,
         mesh_lods: Vec::new(),
+        streaming: None,
         virtual_shadow_meshes: Default::default(),
         attribution: recipe.attribution,
     };

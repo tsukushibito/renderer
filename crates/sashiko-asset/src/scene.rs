@@ -72,6 +72,9 @@ pub struct ScenePackage {
     pub backdrop: Option<InfiniteSky>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_lods: Vec<MeshLod>,
+    /// Optional full-detail assets for a package whose primitives are resident fallbacks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub streaming: Option<SceneStreaming>,
     /// Optional spatial pieces of a mesh for directional virtual shadow drawing.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub virtual_shadow_meshes: BTreeMap<crate::Digest, Vec<BlobRef>>,
@@ -93,6 +96,38 @@ pub struct SceneBake {
 pub struct MeshLod {
     pub source: BlobRef,
     pub reduced: BlobRef,
+    pub min_pixels: f32,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SceneStreaming {
+    pub resident_bytes: u64,
+    pub transfer_bytes: u64,
+    pub max_resident: usize,
+    pub details: Vec<StreamDetail>,
+}
+
+#[cfg(feature = "metrics")]
+#[derive(Clone, Copy, Default, Serialize)]
+pub struct StreamingMetrics {
+    pub promotions: u64,
+    pub evictions: u64,
+    pub cancellations: u64,
+    pub read_errors: u64,
+    pub submitted_texture_bytes: u64,
+    pub resident_groups: usize,
+    pub charged_bytes: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StreamDetail {
+    pub primitive: usize,
+    pub bounds: [[f32; 3]; 2],
+    pub mesh: BlobRef,
+    pub lightmap_uvs: Option<BlobRef>,
+    pub images: [Option<BlobRef>; 4],
     pub min_pixels: f32,
 }
 
@@ -265,6 +300,39 @@ impl ScenePackage {
             }
             for image in &env.maps {
                 image.validate()?;
+            }
+        }
+        if let Some(stream) = &self.streaming {
+            let mut seen = std::collections::BTreeSet::new();
+            let receivers: std::collections::BTreeSet<_> = self
+                .placements
+                .iter()
+                .filter(|p| p.lightmap.is_some())
+                .map(|p| p.primitive)
+                .collect();
+            if stream.resident_bytes == 0
+                || stream.transfer_bytes < 64
+                || stream.max_resident == 0
+                || stream.details.is_empty()
+                || stream.details.iter().any(|detail| {
+                    detail.primitive >= self.primitives.len()
+                        || lods.contains_key(&self.primitives[detail.primitive].mesh.hash)
+                        || receivers.contains(&detail.primitive)
+                            && !self.baked.as_ref().is_some_and(|bake| {
+                                detail.lightmap_uvs.is_some()
+                                    && bake.mesh_uvs.get(&detail.mesh.hash)
+                                        == detail.lightmap_uvs.as_ref()
+                            })
+                        || detail.bounds[0]
+                            .iter()
+                            .zip(detail.bounds[1])
+                            .any(|(&lo, hi)| !lo.is_finite() || !hi.is_finite() || lo > hi)
+                        || !seen.insert(detail.primitive)
+                        || !detail.min_pixels.is_finite()
+                        || detail.min_pixels <= 0.0
+                })
+            {
+                return Err(invalid("invalid scene streaming configuration"));
             }
         }
         if self.virtual_shadow_meshes.iter().any(|(source, pieces)| {

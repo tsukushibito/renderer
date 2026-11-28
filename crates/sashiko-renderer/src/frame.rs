@@ -147,7 +147,9 @@ impl Renderer {
         setup.frames_in_flight = frames_in_flight;
         // Small scenes commonly load the first models after showing their UI.
         // Reserve instance operands here; geometry sizes are known at model load.
-        setup.additional_objects = 16usize.saturating_sub(assets.draws);
+        setup.additional_objects = 16usize
+            .saturating_sub(assets.draws)
+            .max(assets.streaming_slots);
         let mut plan = setup.prepare(assets)?;
         let [w, h] = camera.extent;
         let target = ImageDesc::rgba8(w, h);

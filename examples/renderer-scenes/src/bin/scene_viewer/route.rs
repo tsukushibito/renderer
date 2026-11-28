@@ -71,6 +71,7 @@ pub(super) fn record(package: &Path, name: &str, path: &Path, fps: u32) -> Pipel
     let mut stdout = io::stdout().lock();
     for frame_index in 0..(route.duration() * fps as f32).ceil() as u32 {
         let pose = route.pose(frame_index as f32 / fps as f32);
+        scene.advance_streaming(&mut renderer, &pose, extent[1], false)?;
         scene.select_lods(&pose, extent[1]);
         let view = pose.camera(extent, [0.02, 1500.])?;
         renderer.set_camera(view.camera);

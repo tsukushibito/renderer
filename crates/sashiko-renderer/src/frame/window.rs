@@ -59,6 +59,15 @@ impl crate::pipeline::AssetTarget for WindowRenderer {
     fn asset_renderer(&mut self) -> &mut crate::pipeline::SceneRenderer {
         &mut self.renderer.drawing
     }
+    fn poll_draws_before_asset_transfer(&mut self) -> PipelineResult<()> {
+        self.retire_graph(Duration::ZERO)?;
+        if !self.accepted.is_empty()
+            && self.renderer.drawing.runtime().pending_frames() >= self.max_accepted
+        {
+            self.defer_for_asset_change = true;
+        }
+        Ok(())
+    }
     fn poll_presentation_for_asset_change(&mut self) -> PipelineResult<bool> {
         let ready = self.wait_idle(Duration::ZERO)?;
         self.defer_for_asset_change = !ready;
@@ -458,7 +467,11 @@ impl WindowRenderer {
         if std::mem::take(&mut self.defer_for_asset_change) {
             return Ok(PresentOutcome::NotReady);
         }
-        if !self.retire_graph(Duration::ZERO)? && self.accepted.len() >= self.max_accepted {
+        self.retire_graph(Duration::ZERO)?;
+        // Asset transfers share the native execution slots with window frames.
+        if self.accepted.len() >= self.max_accepted
+            || self.renderer.drawing.runtime().pending_frames() >= self.max_accepted
+        {
             return Ok(PresentOutcome::NotReady);
         }
         match self.presenter.prepare()? {

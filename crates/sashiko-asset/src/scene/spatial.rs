@@ -57,6 +57,19 @@ pub(super) fn select(
         let mut keep = remap.iter();
         physical.surfaces.retain(|_| keep.next().unwrap().is_some());
     }
+    if let Some(stream) = &mut scene.streaming {
+        stream.details.retain_mut(|detail| {
+            if let Some(index) = remap[detail.primitive] {
+                detail.primitive = index;
+                true
+            } else {
+                false
+            }
+        });
+        if stream.details.is_empty() {
+            scene.streaming = None;
+        }
+    }
     for p in &mut scene.placements {
         p.primitive = remap[p.primitive].unwrap();
     }
@@ -111,8 +124,8 @@ impl SceneSpatialIndex {
         let mut meshes = HashMap::new();
         let mut parts = Vec::with_capacity(scene.primitives.len());
         let mut unique_triangles = 0;
-        for part in &scene.primitives {
-            let mesh = match meshes.entry(part.mesh) {
+        for (index, part) in scene.primitives.iter().enumerate() {
+            let mut mesh = match meshes.entry(part.mesh) {
                 std::collections::hash_map::Entry::Occupied(e) => *e.get(),
                 std::collections::hash_map::Entry::Vacant(e) => {
                     let obj = store.load(&part.mesh)?;
@@ -122,6 +135,19 @@ impl SceneSpatialIndex {
                     *e.insert((mesh.local_bounds()?, triangles))
                 }
             };
+            if let Some(detail) = scene
+                .streaming
+                .as_ref()
+                .and_then(|s| s.details.iter().find(|d| d.primitive == index))
+            {
+                if (0..3).any(|axis| {
+                    detail.bounds[0][axis] > mesh.0.min()[axis]
+                        || detail.bounds[1][axis] < mesh.0.max()[axis]
+                }) {
+                    return Err("stream bounds exclude fallback geometry".into());
+                }
+                mesh.0 = Bounds::new(detail.bounds[0], detail.bounds[1])?;
+            }
             parts.push(mesh);
         }
         let mut cells: Vec<Cell> = Vec::new();

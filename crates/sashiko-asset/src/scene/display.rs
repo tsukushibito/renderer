@@ -20,6 +20,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod streaming;
+
 impl PerspectiveView {
     pub fn camera(&self, extent: [u32; 2], clip: [f32; 2]) -> PipelineResult<CameraView> {
         let eye = Vec3::from(self.position);
@@ -73,6 +75,7 @@ pub struct DisplayScene {
     )>,
     lighting: Option<sashiko_renderer::pipeline::ResidentBakedLighting>,
     store: ObjectStore,
+    stream: Option<streaming::Stream>,
     meshes: Meshes,
     materials: Materials,
     objects: Vec<RenderObject>,
@@ -127,6 +130,32 @@ impl DisplayScene {
             };
         }
     }
+    /// Poll one bounded streaming change before recording the next frame.
+    /// The fallback stays visible during reads, transfer backpressure and retries.
+    pub fn advance_streaming(
+        &mut self,
+        renderer: &mut impl AssetPreparation,
+        view: &PerspectiveView,
+        height: u32,
+        full_detail: bool,
+    ) -> PipelineResult<()> {
+        if let Some(mut stream) = self.stream.take() {
+            let result = stream.tick(self, renderer, view, height, full_detail);
+            self.stream = Some(stream);
+            result?;
+        }
+        Ok(())
+    }
+
+    /// Whether the previous view selection has finished loading or reached its fallback.
+    pub fn streaming_settled(&self) -> bool {
+        self.stream.as_ref().is_none_or(streaming::Stream::settled)
+    }
+    #[cfg(feature = "metrics")]
+    pub fn streaming_metrics(&self) -> Option<crate::scene::StreamingMetrics> {
+        self.stream.as_ref().map(streaming::Stream::metrics)
+    }
+
     fn config(&self) -> sashiko_renderer::pipeline::StandardConfig {
         let mut config = sashiko_renderer::pipeline::StandardConfig::new(self.camera.extent);
         let [r, g, b] = self.settings.sky_color;
@@ -174,12 +203,14 @@ impl DisplayScene {
         mut self,
         backend: sashiko_renderer::core::runtime::RuntimeConfig,
     ) -> PipelineResult<(Self, sashiko_renderer::Renderer)> {
+        let frames =
+            std::num::NonZeroUsize::new(if self.stream.is_some() { 2 } else { 1 }).unwrap();
         let mut renderer = sashiko_renderer::Renderer::headless_configured(
             backend,
             self.camera,
             self.config(),
             self.assets(),
-            std::num::NonZeroUsize::MIN,
+            frames,
             |_| Ok(()),
         )?;
         self.upload_materials(&mut renderer)?;
@@ -199,7 +230,7 @@ impl DisplayScene {
         backend: sashiko_renderer::core::runtime::RuntimeConfig,
     ) -> PipelineResult<(Self, sashiko_renderer::WindowRenderer)> {
         let mut scene = Self::open(directory, view, extent, None)?;
-        let frames = if scene.settings.virtual_shadows {
+        let frames = if scene.settings.virtual_shadows || scene.stream.is_some() {
             std::num::NonZeroUsize::new(2).unwrap()
         } else {
             std::num::NonZeroUsize::MIN
@@ -294,9 +325,18 @@ impl DisplayScene {
                     .ok_or("shadow piece count overflow")
             },
         )?;
+        let mut stream = scene
+            .streaming
+            .take()
+            .map(|config| streaming::Stream::new(config, &scene.primitives))
+            .transpose()?;
+        let spare = stream.as_ref().map_or(0, streaming::Stream::slots);
         let mut meshes = Meshes::new(MeshCapacity {
-            meshes: mesh_capacity.max(1),
-            retired_mesh_versions: 1,
+            meshes: mesh_capacity
+                .checked_add(spare)
+                .ok_or("stream capacity overflow")?
+                .max(1),
+            retired_mesh_versions: spare.max(1),
         })?;
         let mut materials = Materials::default();
         let mut mesh_handles = HashMap::new();
@@ -342,8 +382,16 @@ impl DisplayScene {
         }
         let mut lod_pairs = Vec::new();
         let mut lods = Vec::new();
-        for part in scene.primitives {
-            let mesh = load_mesh(part.mesh)?;
+        for (primitive, part) in scene.primitives.into_iter().enumerate() {
+            let mut mesh = load_mesh(part.mesh)?;
+            if let Some(bounds) = stream.as_ref().and_then(|s| s.bounds(primitive)) {
+                if (0..3).any(|axis| {
+                    bounds[0][axis] > mesh.1.min()[axis] || bounds[1][axis] < mesh.1.max()[axis]
+                }) {
+                    return Err("fallback mesh exceeds streaming bounds".into());
+                }
+                mesh.1 = Bounds::new(bounds[0], bounds[1])?;
+            }
             let material = match mat_handles.entry((part.material, part.images)) {
                 std::collections::hash_map::Entry::Occupied(e) => *e.get(),
                 std::collections::hash_map::Entry::Vacant(e) => {
@@ -401,6 +449,10 @@ impl DisplayScene {
                     diameter: (hi - lo).length(),
                 });
             }
+            if let Some(stream) = &mut stream {
+                let world = t.bounds(local).ok_or("unrepresentable streaming bounds")?;
+                stream.placement(placement.primitive, objects.len(), world, mesh, material);
+            }
             let mut object = RenderObject::new(mesh, material).with_transform(t);
             if let Some(id) = placement.lightmap {
                 object = object.with_lightmap(id);
@@ -419,6 +471,7 @@ impl DisplayScene {
             bake,
             lighting: None,
             store,
+            stream,
             meshes,
             materials,
             objects,
@@ -444,6 +497,10 @@ impl DisplayScene {
 
     pub fn assets(&mut self) -> SceneAssets<'_> {
         let mut assets = SceneAssets::new(&mut self.meshes, &mut self.materials, &self.objects);
+        if let Some(stream) = &self.stream {
+            assets.reserve_streaming_slots(stream.slots());
+            stream.preload_live(&mut assets);
+        }
         for &(mesh, material) in &self.lod_pairs {
             assets.preload_pair(mesh, material);
         }
@@ -495,6 +552,9 @@ impl DisplayScene {
             .is_pending()
         {
             return Err("scene upload requires an idle renderer".into());
+        }
+        if let Some(stream) = &mut self.stream {
+            stream.base_reservations(&descs, &samplers);
         }
         for (reference, (desc, object)) in descriptors {
             let image = object.image()?;
@@ -560,6 +620,9 @@ impl DisplayScene {
     }
 
     pub fn release(mut self, runtime: &mut Runtime) -> PipelineResult<()> {
+        if let Some(stream) = &mut self.stream {
+            stream.finish(runtime)?;
+        }
         self.meshes.release_gpu(runtime)?;
         self.materials.clear(runtime)?;
         Ok(())

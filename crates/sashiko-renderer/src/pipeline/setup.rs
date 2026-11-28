@@ -30,6 +30,7 @@ pub struct SceneAssets<'a> {
     pub(crate) materials: &'a mut Materials,
     pub(crate) objects: Cow<'a, [RenderObject]>,
     pub(crate) draws: usize,
+    pub(crate) streaming_slots: usize,
     pub(crate) extra_meshes: Cow<'a, [MeshHandle]>,
     pub(crate) extra_materials: Cow<'a, [MaterialHandle]>,
     pub(crate) lights: &'a [LocalLight],
@@ -45,11 +46,17 @@ impl<'a> SceneAssets<'a> {
             materials,
             objects: objects.into(),
             draws: objects.len(),
+            streaming_slots: 0,
             extra_meshes: Cow::Borrowed(&[]),
             extra_materials: Cow::Borrowed(&[]),
             lights: &[],
         }
     }
+    /// Reserve additional draw and material registrations for streamed replacements.
+    pub fn reserve_streaming_slots(&mut self, count: usize) {
+        self.streaming_slots = count;
+    }
+
     pub(crate) fn shadow_count(&self) -> Result<usize, GraphError> {
         self.objects.iter().try_fold(0usize, |count, object| {
             count
@@ -89,6 +96,7 @@ impl<'a> SceneAssets<'a> {
             materials: self.materials,
             objects: self.objects.as_ref().into(),
             draws: self.draws,
+            streaming_slots: self.streaming_slots,
             extra_meshes: Cow::Borrowed(&self.extra_meshes),
             extra_materials: Cow::Borrowed(&self.extra_materials),
             lights: self.lights,

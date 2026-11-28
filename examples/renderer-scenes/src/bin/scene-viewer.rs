@@ -86,6 +86,17 @@ fn finish(
 fn capture(package: &Path, view: &str, extent: [u32; 2], output: &Path) -> PipelineResult<()> {
     let (mut scene, mut renderer) = DisplayScene::headless(package, view, extent, backend())?;
     let pose = scene.settings.views[view];
+    let start = std::time::Instant::now();
+    loop {
+        scene.advance_streaming(&mut renderer, &pose, extent[1], false)?;
+        if scene.streaming_settled() {
+            break;
+        }
+        if start.elapsed() >= Duration::from_secs(120) {
+            return Err("static view streaming timed out".into());
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
     scene.select_lods(&pose, extent[1]);
     let mut frame = renderer.begin_frame()?;
     scene.draw(&mut frame)?;

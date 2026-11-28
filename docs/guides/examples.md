@@ -22,6 +22,13 @@ python -B tools/namaqualand/package_windows.py "$vsm" target/release/scene-viewe
 
 ### アプリに組み込む
 
+メッシュと画像を段階的に読む開発用シーンは、固定常駐の歩行パッケージから新しい出力先へ生成する。既定では最低詳細の画像は最長辺512 px、原型の追加予算は768 MiB・40件、転送予算は1回32 MiB。動作の比較には両パッケージに同じカメラ経路を渡す。
+
+```powershell
+python -B tools/namaqualand/prepare_stream.py "$vsm" build/tasks/sashiko-ief4.10/stream
+target/release/scene-viewer.exe --api d3d12 build/tasks/sashiko-ief4.10/stream rock --walk-route assets/namaqualand/walk.json
+```
+
 既存アプリが所有するWindowsウィンドウを `DisplayScene::window` に渡す。次のコードは作成済みイベントループの描画ハンドラーで使う公開APIを示す。`pose` はパッケージの名前付きビューまたはアプリから渡した `PerspectiveView`、`extent` はクライアント領域のピクセル寸法。
 
 ```rust
@@ -30,6 +37,7 @@ let (mut scene, mut renderer) = DisplayScene::window(
 )?;
 let pose = scene.settings.views["rock"];
 renderer.set_camera(pose.camera(extent, [0.02, 1500.0])?.camera);
+scene.advance_streaming(&mut renderer, &pose, extent[1], false)?;
 renderer.draw(|frame| {
     scene.select_lods(&pose, frame.scene_view().extent[1]);
     scene.draw(frame)

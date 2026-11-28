@@ -269,6 +269,9 @@ impl Transfers {
 pub(crate) trait AssetTarget {
     type Device: BorrowMut<Runtime>;
     fn asset_renderer(&mut self) -> &mut SceneRenderer<Self::Device>;
+    fn poll_draws_before_asset_transfer(&mut self) -> PipelineResult<()> {
+        Ok(())
+    }
     fn poll_presentation_for_asset_change(&mut self) -> PipelineResult<bool> {
         Ok(true)
     }
@@ -399,6 +402,7 @@ impl<T: AssetTarget> AssetPreparation for T {
         levels: std::ops::Range<u32>,
         bytes: &[u8],
     ) -> Result<(FrameId, ManagedImage), AssetPrepareError> {
+        self.poll_draws_before_asset_transfer()?;
         let (_, pool, runtime) = self.asset_renderer().parts_mut();
         Ok(runtime.upload_texture_mips(pool, name, desc, None, levels, bytes)?)
     }
@@ -465,6 +469,7 @@ impl<T: AssetTarget> AssetPreparation for T {
         materials: &mut Materials,
         budget: UploadBudget,
     ) -> Result<Poll<()>, AssetPrepareError> {
+        self.poll_draws_before_asset_transfer()?;
         self.asset_renderer()
             .advance_candidate(candidate, meshes, materials, budget, Duration::ZERO)
             .map_err(Into::into)
