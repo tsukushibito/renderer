@@ -1,0 +1,904 @@
+{
+  "hardware": "Windows 11, Core i5-14600KF, GeForce RTX 3060 12 GB, system RAM 32 GB",
+  "scene": "Namaqualand, 5328 placements, 1920x1080 native, FXAA, sun VSM, vsync off",
+  "camera": "assets/namaqualand/walk.json",
+  "full_route": "30 s warm-up, then 3 consecutive laps",
+  "lap_columns": [
+    "average_present_fps",
+    "p95_present_interval_ms",
+    "p99_present_interval_ms",
+    "max_present_interval_ms"
+  ],
+  "memory_columns": [
+    "peak_process_private_bytes",
+    "peak_process_working_set_bytes",
+    "peak_process_dedicated_gpu_bytes"
+  ],
+  "memory_sample_period_seconds": 0.25,
+  "variants": {
+    "normal": "Initial prototype, 256 MiB, redundant resource uploads",
+    "shared": "768 MiB with shared meshes and mip chains",
+    "planned": "Shared resources with preallocated native resource classes",
+    "final": "8859f13a, planned resource classes, retained outstanding transfers, presentation retries",
+    "low": "16 MiB, 3 detail slots, 1 MiB per submission tick, rapid camera changes",
+    "repair-cut": "Private corrupt detail object repaired after read error; D3D12 rapid cut route",
+    "final-evict-vulkan": "Two sections 100 m apart, single high detail slot, 2 repetitions"
+  },
+  "full_route_runs": [
+    {
+      "name": "normal-d3d12",
+      "start_seconds": 2.4707705,
+      "laps": [
+        [
+          57.6296593155315,
+          18.39046000000053,
+          461.5511660000008,
+          1336.902000000002
+        ],
+        [
+          53.98980495111628,
+          18.493760000006887,
+          458.2179820000021,
+          1311.9310000000014
+        ],
+        [
+          56.095386245830824,
+          18.079775000005316,
+          462.14103800000134,
+          1082.4327999999923
+        ]
+      ],
+      "streaming": {
+        "cancellations": 6,
+        "charged_bytes": 233310288,
+        "evictions": 91,
+        "promotions": 95,
+        "read_errors": 0,
+        "resident_groups": 4,
+        "submitted_texture_bytes": 2343217456
+      },
+      "peak_private_rss_dedicated": [
+        4518858752.0,
+        1737146368.0,
+        2366009344.0
+      ]
+    },
+    {
+      "name": "normal-vulkan",
+      "start_seconds": 2.537482,
+      "laps": [
+        [
+          59.06231246046531,
+          16.818779999995552,
+          400.97915800000095,
+          440.0601999999978
+        ],
+        [
+          59.83810842001656,
+          17.099149999999952,
+          398.89480000000066,
+          421.2461999999988
+        ],
+        [
+          59.83354840639138,
+          16.653900000001443,
+          398.42927999999347,
+          420.4179000000039
+        ]
+      ],
+      "streaming": {
+        "cancellations": 8,
+        "charged_bytes": 233310288,
+        "evictions": 96,
+        "promotions": 100,
+        "read_errors": 0,
+        "resident_groups": 4,
+        "submitted_texture_bytes": 2427103516
+      },
+      "peak_private_rss_dedicated": [
+        6921981952.0,
+        3874979840.0,
+        2129248256.0
+      ]
+    },
+    {
+      "name": "shared-d3d12",
+      "start_seconds": 3.3698937,
+      "laps": [
+        [
+          60.491783390193305,
+          12.374399999998786,
+          31.56325999999724,
+          1404.853499999998
+        ],
+        [
+          90.3019994309907,
+          12.379060000004927,
+          18.288789999988037,
+          572.4444000000091
+        ],
+        [
+          93.32661177225813,
+          12.768039999997427,
+          15.608115999997949,
+          1397.394399999996
+        ]
+      ],
+      "streaming": {
+        "cancellations": 13,
+        "charged_bytes": 589051056,
+        "evictions": 0,
+        "promotions": 36,
+        "read_errors": 0,
+        "resident_groups": 36,
+        "submitted_texture_bytes": 581610096
+      },
+      "peak_private_rss_dedicated": [
+        5838688256.0,
+        2052485120.0,
+        3643084800.0
+      ]
+    },
+    {
+      "name": "shared-vulkan",
+      "start_seconds": 2.9632218999999997,
+      "laps": [
+        [
+          74.51071708244605,
+          17.10340499999745,
+          18.783863000002015,
+          628.2989999999984
+        ],
+        [
+          82.66508692207212,
+          18.534370000001843,
+          19.947839999996113,
+          489.86760000001084
+        ],
+        [
+          89.2535991663954,
+          12.699150000003101,
+          19.93910000000554,
+          454.23719999999435
+        ]
+      ],
+      "streaming": {
+        "cancellations": 7,
+        "charged_bytes": 589051056,
+        "evictions": 0,
+        "promotions": 36,
+        "read_errors": 0,
+        "resident_groups": 36,
+        "submitted_texture_bytes": 542463260
+      },
+      "peak_private_rss_dedicated": [
+        7701975040.0,
+        4043956224.0,
+        2791563264.0
+      ]
+    },
+    {
+      "name": "planned-d3d12",
+      "start_seconds": 3.1913857,
+      "laps": [
+        [
+          97.92649172738538,
+          13.197380000001145,
+          21.1438080000002,
+          28.424499999999853
+        ],
+        [
+          99.03307836861617,
+          12.837705000001876,
+          15.547562999997522,
+          28.9649000000054
+        ],
+        [
+          99.1220011193685,
+          12.70981999999492,
+          14.98964800000067,
+          32.87060000000963
+        ]
+      ],
+      "streaming": {
+        "cancellations": 1,
+        "charged_bytes": 665356004,
+        "evictions": 0,
+        "promotions": 37,
+        "read_errors": 0,
+        "resident_groups": 37,
+        "submitted_texture_bytes": 536870856
+      },
+      "peak_private_rss_dedicated": [
+        4403355648.0,
+        1368670208.0,
+        2501648384.0
+      ]
+    },
+    {
+      "name": "planned-vulkan",
+      "start_seconds": 4.8426757,
+      "laps": [
+        [
+          92.2717920571428,
+          12.314755000004496,
+          16.040340000002185,
+          22.49949999999501
+        ],
+        [
+          94.0256687140414,
+          12.013740000008966,
+          13.948931999992455,
+          22.168800000002875
+        ],
+        [
+          93.25812600613206,
+          11.876539999997247,
+          13.30664400000444,
+          17.66089999999565
+        ]
+      ],
+      "streaming": {
+        "cancellations": 0,
+        "charged_bytes": 665356004,
+        "evictions": 0,
+        "promotions": 37,
+        "read_errors": 0,
+        "resident_groups": 37,
+        "submitted_texture_bytes": 520093644
+      },
+      "peak_private_rss_dedicated": [
+        7253327872.0,
+        3840888832.0,
+        2115502080.0
+      ]
+    },
+    {
+      "name": "final-d3d12",
+      "start_seconds": 3.5649177,
+      "laps": [
+        [
+          98.46171393775874,
+          12.740159999998468,
+          15.214771999999925,
+          33.80070000000046
+        ],
+        [
+          98.68181044377444,
+          12.84338000000389,
+          15.530334000001623,
+          36.46269999998708
+        ],
+        [
+          98.58979879115704,
+          12.881179999993718,
+          15.922655999995646,
+          30.716200000000526
+        ]
+      ],
+      "streaming": {
+        "cancellations": 0,
+        "charged_bytes": 665356004,
+        "evictions": 0,
+        "promotions": 37,
+        "read_errors": 0,
+        "resident_groups": 37,
+        "submitted_texture_bytes": 520093644
+      },
+      "peak_private_rss_dedicated": [
+        4769529856.0,
+        1443205120.0,
+        2775109632.0
+      ]
+    },
+    {
+      "name": "final-vulkan",
+      "start_seconds": 2.795215,
+      "laps": [
+        [
+          92.83544890671352,
+          12.435980000001122,
+          14.25624000000355,
+          17.612700000000814
+        ],
+        [
+          93.38983730790169,
+          12.249199999999405,
+          14.768500000002405,
+          19.73499999999717
+        ],
+        [
+          93.16846498754929,
+          12.00145000000461,
+          13.694917000003121,
+          19.524300000000494
+        ]
+      ],
+      "streaming": {
+        "cancellations": 0,
+        "charged_bytes": 665356004,
+        "evictions": 0,
+        "promotions": 37,
+        "read_errors": 0,
+        "resident_groups": 37,
+        "submitted_texture_bytes": 520093644
+      },
+      "peak_private_rss_dedicated": [
+        7255920640.0,
+        3911933952.0,
+        2115502080.0
+      ]
+    }
+  ],
+  "stress_runs": [
+    {
+      "name": "low-d3d12",
+      "start_seconds": 1.8963385000000001,
+      "laps": [
+        [
+          106.12509606818256,
+          10.233260000000044,
+          12.79169200000012,
+          22.942999999999714
+        ],
+        [
+          103.73211658310107,
+          11.087399999998654,
+          18.27466600000031,
+          24.76810000000107
+        ],
+        [
+          104.69261536020569,
+          10.425790000000564,
+          16.267629999999276,
+          24.055099999999996
+        ]
+      ],
+      "streaming": {
+        "cancellations": 0,
+        "charged_bytes": 16591728,
+        "evictions": 0,
+        "promotions": 1,
+        "read_errors": 0,
+        "resident_groups": 1,
+        "submitted_texture_bytes": 0
+      },
+      "peak_private_rss_dedicated": [
+        3522969600.0,
+        1722892288.0,
+        1332330496.0
+      ]
+    },
+    {
+      "name": "low-vulkan",
+      "start_seconds": 4.261469,
+      "laps": [
+        [
+          91.30535296591344,
+          12.327999999999895,
+          14.269260000000244,
+          21.587000000000245
+        ],
+        [
+          92.02122469547598,
+          12.53464500000074,
+          15.19368300000084,
+          21.026199999999662
+        ],
+        [
+          92.56929274408354,
+          12.000270000000326,
+          13.98305500000033,
+          19.26549999999949
+        ]
+      ],
+      "streaming": {
+        "cancellations": 0,
+        "charged_bytes": 16591728,
+        "evictions": 0,
+        "promotions": 1,
+        "read_errors": 0,
+        "resident_groups": 1,
+        "submitted_texture_bytes": 0
+      },
+      "peak_private_rss_dedicated": [
+        5664501760.0,
+        3357990912.0,
+        1491017728.0
+      ]
+    },
+    {
+      "name": "repair-cut",
+      "start_seconds": 2.5484901,
+      "laps": [
+        [
+          104.6157390074574,
+          10.315454999999794,
+          13.586349000000064,
+          26.997999999999855
+        ],
+        [
+          105.14328744898582,
+          10.334999999999539,
+          13.313800000000253,
+          24.199400000000537
+        ],
+        [
+          105.85210758928334,
+          10.226100000000393,
+          13.918657999999448,
+          30.28150000000096
+        ]
+      ],
+      "streaming": {
+        "cancellations": 0,
+        "charged_bytes": 21723788,
+        "evictions": 0,
+        "promotions": 1,
+        "read_errors": 1,
+        "resident_groups": 1,
+        "submitted_texture_bytes": 16777212
+      },
+      "peak_private_rss_dedicated": [
+        3561992192.0,
+        1603559424.0,
+        1420578816.0
+      ]
+    },
+    {
+      "name": "final-evict-vulkan-0",
+      "start_seconds": 2.5108634,
+      "laps": [
+        [
+          1197.1545498516343,
+          1.2180999999999997,
+          1.3839800000003062,
+          10.616899999998708
+        ],
+        [
+          1246.6265325930578,
+          1.1730100000011845,
+          1.3274979999997785,
+          10.735300000000336
+        ],
+        [
+          1245.6098587219694,
+          1.1653999999994724,
+          1.3126450000005718,
+          10.573600000000738
+        ]
+      ],
+      "streaming": {
+        "cancellations": 0,
+        "charged_bytes": 21723788,
+        "evictions": 8,
+        "promotions": 9,
+        "read_errors": 0,
+        "resident_groups": 1,
+        "submitted_texture_bytes": 150994908
+      },
+      "peak_private_rss_dedicated": [
+        1970970624.0,
+        998338560.0,
+        820813824.0
+      ]
+    },
+    {
+      "name": "final-evict-vulkan-1",
+      "start_seconds": 0.5419636,
+      "laps": [
+        [
+          1195.4118718933169,
+          1.2383600000001491,
+          1.3883799999999091,
+          11.507500000000448
+        ],
+        [
+          1201.0582114657934,
+          1.213279999999628,
+          1.3898279999995111,
+          11.40250000000087
+        ],
+        [
+          1232.1754412465762,
+          1.1693900000018687,
+          1.301336000001605,
+          10.86959999999948
+        ]
+      ],
+      "streaming": {
+        "cancellations": 0,
+        "charged_bytes": 21723788,
+        "evictions": 8,
+        "promotions": 9,
+        "read_errors": 0,
+        "resident_groups": 1,
+        "submitted_texture_bytes": 150994908
+      },
+      "peak_private_rss_dedicated": [
+        1927217152.0,
+        1030651904.0,
+        808742912.0
+      ]
+    }
+  ],
+  "d3d12_single_slot_eviction": {
+    "cancellations": 0,
+    "charged_bytes": 21723788,
+    "evictions": 8,
+    "promotions": 9,
+    "read_errors": 0,
+    "resident_groups": 1,
+    "submitted_texture_bytes": 150994908
+  },
+  "native_1080p_d3d12_fixed_reference_rgb_error_0_255": [
+    {
+      "variant": "low",
+      "view": "b",
+      "mean": 11.725561181841563,
+      "p95": 47.0,
+      "p99": 85.0
+    },
+    {
+      "variant": "low",
+      "view": "d",
+      "mean": 4.066879822530864,
+      "p95": 18.0,
+      "p99": 35.0
+    },
+    {
+      "variant": "low",
+      "view": "h",
+      "mean": 14.54708108281893,
+      "p95": 60.0,
+      "p99": 128.0
+    },
+    {
+      "variant": "low",
+      "view": "i",
+      "mean": 8.609328382201646,
+      "p95": 32.0,
+      "p99": 61.0
+    },
+    {
+      "variant": "planned",
+      "view": "b",
+      "mean": 3.8403803369341563,
+      "p95": 13.0,
+      "p99": 39.0
+    },
+    {
+      "variant": "planned",
+      "view": "c",
+      "mean": 2.527366737397119,
+      "p95": 10.0,
+      "p99": 15.0
+    },
+    {
+      "variant": "planned",
+      "view": "d",
+      "mean": 2.1444433191872427,
+      "p95": 10.0,
+      "p99": 14.0
+    },
+    {
+      "variant": "planned",
+      "view": "e",
+      "mean": 2.6849139981995886,
+      "p95": 14.0,
+      "p99": 27.0
+    },
+    {
+      "variant": "planned",
+      "view": "f",
+      "mean": 1.8424652777777777,
+      "p95": 9.0,
+      "p99": 21.0
+    },
+    {
+      "variant": "planned",
+      "view": "g",
+      "mean": 3.0605865805041153,
+      "p95": 14.0,
+      "p99": 28.0
+    },
+    {
+      "variant": "planned",
+      "view": "h",
+      "mean": 3.7222038966049382,
+      "p95": 16.0,
+      "p99": 49.0
+    },
+    {
+      "variant": "planned",
+      "view": "i",
+      "mean": 3.1816811342592595,
+      "p95": 12.0,
+      "p99": 18.0
+    },
+    {
+      "variant": "planned",
+      "view": "j",
+      "mean": 3.3891227816358023,
+      "p95": 12.0,
+      "p99": 23.0
+    }
+  ],
+  "independent_headless_consumer": {
+    "d3d12": {
+      "first_capture_seconds": 3.556,
+      "detail_settled_seconds": 10.262,
+      "frame_at_settle": 242,
+      "measured_static_frames": 60,
+      "cpu_calls": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "native_calls": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        120
+      ]
+    },
+    "vulkan": {
+      "first_capture_seconds": 3.5,
+      "detail_settled_seconds": 9.677,
+      "frame_at_settle": 244,
+      "measured_static_frames": 60,
+      "cpu_calls": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "native_calls": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        120
+      ]
+    }
+  },
+  "strict_development_capture": [
+    {
+      "backend": "d3d12",
+      "exit": 0,
+      "private": 5603602432,
+      "seconds": 28.25,
+      "log": ""
+    },
+    {
+      "backend": "vulkan",
+      "exit": 0,
+      "private": 8408969216,
+      "seconds": 13.829000000027008,
+      "log": ""
+    }
+  ],
+  "baking": {
+    "seconds": 5.171999999962281,
+    "bytes": 37143380,
+    "reproduced": {
+      "2882c202ad49539e369945c3cee754ae0c9fd0bf6de12bc1cc9d8416311ae2e8": true,
+      "diffuse": true,
+      "e10c1e64d82ce3f80306d39a3acd4471b1bc75800fbe9ef2385dc0092c3a7c71": true,
+      "reflections": true,
+      "surface": true
+    }
+  },
+  "foliage_flower_mask_by_motion_phase": {
+    "approach": {
+      "iou": 0.7897894078480684,
+      "area_ratio": 0.8915758986724315,
+      "normal_screen_percent": 1.0266336677900325,
+      "highest_screen_percent": 1.1514820772058822,
+      "adjacent_change_ratio": 0.9516478779126162
+    },
+    "cross": {
+      "iou": 0.8611779246716078,
+      "area_ratio": 0.9427844008682409,
+      "normal_screen_percent": 1.4011220894607843,
+      "highest_screen_percent": 1.4861532373366013,
+      "adjacent_change_ratio": 0.9736003092562541
+    },
+    "turn": {
+      "iou": 0.46973186553130347,
+      "area_ratio": 0.5599286843610186,
+      "normal_screen_percent": 0.1593615962009804,
+      "highest_screen_percent": 0.2846105238970588,
+      "adjacent_change_ratio": 0.5908981732296072
+    },
+    "return": {
+      "iou": 0.6789237682663963,
+      "area_ratio": 0.7648973638941206,
+      "normal_screen_percent": 0.7180335350285948,
+      "highest_screen_percent": 0.9387318729575165,
+      "adjacent_change_ratio": 0.9274105095223851
+    }
+  },
+  "foliage_same_point_luma_changes_normal_then_highest": {
+    "flowers": {
+      "samples": 131550,
+      "mean_luma_change": [
+        12.025070315469403,
+        12.397240592930444
+      ],
+      "fraction_over_32": [
+        0.07819840364880273,
+        0.07969593310528317
+      ]
+    },
+    "leaves": {
+      "samples": 108062,
+      "mean_luma_change": [
+        12.501378838074439,
+        10.683311432325887
+      ],
+      "fraction_over_32": [
+        0.08722770261516537,
+        0.061455460754011586
+      ]
+    },
+    "bark": {
+      "samples": 976,
+      "mean_luma_change": [
+        8.635245901639344,
+        7.640368852459017
+      ],
+      "fraction_over_32": [
+        0.0389344262295082,
+        0.02663934426229508
+      ]
+    },
+    "low_plants": {
+      "samples": 57604,
+      "mean_luma_change": [
+        12.37516491910284,
+        10.887177973751824
+      ],
+      "fraction_over_32": [
+        0.08803208110547879,
+        0.06662731754739254
+      ]
+    },
+    "other": {
+      "samples": 870988,
+      "mean_luma_change": [
+        4.514118449393103,
+        4.709278428635067
+      ],
+      "fraction_over_32": [
+        0.008617799556365874,
+        0.008423767032381617
+      ]
+    }
+  },
+  "fixed_presets_sunlit_regression": [
+    {
+      "view": "b",
+      "samples": 80558,
+      "mae": 0.022877926462921125,
+      "p99": 1.0,
+      "fraction_above8": 0.0
+    },
+    {
+      "view": "h",
+      "samples": 138663,
+      "mae": 0.02323138352216044,
+      "p99": 1.0,
+      "fraction_above8": 0.0
+    },
+    {
+      "view": "i",
+      "samples": 128330,
+      "mae": 0.018265409491155616,
+      "p99": 1.0,
+      "fraction_above8": 0.0
+    },
+    {
+      "view": "d",
+      "samples": 48196,
+      "mae": 0.02544471187097131,
+      "p99": 1.0,
+      "fraction_above8": 0.0
+    },
+    {
+      "view": "e",
+      "samples": 4462,
+      "mae": 0.022635589421783953,
+      "p99": 1.0,
+      "fraction_above8": 0.0
+    },
+    {
+      "view": "f",
+      "samples": 1466,
+      "mae": 0.006366530241018645,
+      "p99": 1.0,
+      "fraction_above8": 0.0
+    },
+    {
+      "view": "c",
+      "samples": 34570,
+      "mae": 0.02596663773985151,
+      "p99": 1.0,
+      "fraction_above8": 0.0
+    },
+    {
+      "view": "g",
+      "samples": 46166,
+      "mae": 0.02191367384366561,
+      "p99": 1.0,
+      "fraction_above8": 0.0
+    },
+    {
+      "view": "j",
+      "samples": 25766,
+      "mae": 0.024657817796061993,
+      "p99": 1.0,
+      "fraction_above8": 0.0
+    }
+  ],
+  "d3d12_fixed_material_controls": [
+    {
+      "category": "base",
+      "samples": 575,
+      "median_ms": 9.140224,
+      "p95_ms": 13.649510399999999
+    },
+    {
+      "category": "flower",
+      "samples": 583,
+      "median_ms": 8.856576,
+      "p95_ms": 13.785804799999996
+    },
+    {
+      "category": "leaf",
+      "samples": 578,
+      "median_ms": 8.974336,
+      "p95_ms": 13.867212799999995
+    },
+    {
+      "category": "bark",
+      "samples": 575,
+      "median_ms": 9.239552,
+      "p95_ms": 14.1592576
+    },
+    {
+      "category": "rock",
+      "samples": 574,
+      "median_ms": 9.355264,
+      "p95_ms": 14.247782400000004
+    },
+    {
+      "category": "flower-mask",
+      "samples": 578,
+      "median_ms": 9.101824,
+      "p95_ms": 14.236825599999998
+    },
+    {
+      "category": "leaf-mask",
+      "samples": 567,
+      "median_ms": 9.345024,
+      "p95_ms": 14.346751999999993
+    },
+    {
+      "category": "base",
+      "samples": 571,
+      "median_ms": 9.373696,
+      "p95_ms": 14.23616
+    }
+  ]
+}
